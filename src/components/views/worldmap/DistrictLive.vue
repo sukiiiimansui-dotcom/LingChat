@@ -415,7 +415,15 @@
       }
       case "debug": {
         const s = ev.stats || {};
-        pushLog("", `流统计：${s.chunks ?? 0} 块 / ${s.chars ?? 0} 字符 / ${s.lines ?? 0} 行`);
+        pushLog(
+          "",
+          `流统计：${s.chunks ?? 0} 块 / ${s.chars ?? 0} 字符 / ${s.lines ?? 0} 行` +
+            (ev.retries ? ` / 自动重试 ${ev.retries} 次` : "")
+        );
+        // 原始输出前缀：空输出时是 <空>，格式漂移时能直接看出模型吐了什么。
+        // 只在这一轮还没画出一个元素时才带出来（debug 在 done 之前到，正好是排查时机）。
+        const drawn = counts.buildings + counts.roads + counts.parks + counts.water;
+        if (ev.preview && drawn === 0) pushLog("", `模型原始输出：${ev.preview}`);
         break;
       }
       case "done": {

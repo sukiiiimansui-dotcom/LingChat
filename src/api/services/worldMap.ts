@@ -471,6 +471,17 @@ export interface DistrictStreamEvent {
   message?: string;
   /** debug */
   stats?: { chunks?: number; chars?: number; lines?: number };
+  /**
+   * debug：本轮自动重试了几次（0 = 一次就成）。空输出兜底用（T3-1 step2）。
+   * 后端重试上限 1 次，所以这里是 0 或 1。
+   */
+  retries?: number;
+  /**
+   * debug：**模型原始输出**的前若干字符（空输出时是 `<空>`）。
+   * 用途：真机上一次失败就能分清「一个字没吐」「吐了半截」还是「吐了但格式不对」——
+   * 不用再重跑一轮去复现。见 Rust 侧 `stream::preview_of`。
+   */
+  preview?: string;
   /** done */
   layout?: DistrictLayout;
   counts?: DistrictCounts;

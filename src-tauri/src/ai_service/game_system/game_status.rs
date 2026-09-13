@@ -225,6 +225,9 @@ impl GameStatus {
     // ============ 存档状态快照 ============
 
     /// 将当前 GameStatus 中需要持久化的字段导出为可序列化的快照
+    ///
+    /// P3-1：顺带把**当前这张地图**（世界模拟的 scene 书签）也导出去 ——
+    /// 「地图存档跟着对话存档走」。书签是 `Option`：没开世界模拟就是 `None`。
     pub fn to_snapshot(&self) -> GameStatusSnapshot {
         GameStatusSnapshot {
             present_role_ids: self.present_role_ids.iter().copied().collect(),
@@ -237,10 +240,14 @@ impl GameStatus {
             completed_scripts: self.completed_scripts.iter().cloned().collect(),
             last_dialog_time: self.last_dialog_time.map(|dt| dt.to_rfc3339()),
             scene_awareness_enabled: self.scene_awareness_enabled,
+            world_map: crate::world_map::state::bookmark_snapshot(),
         }
     }
 
     /// 从快照恢复场景状态
+    ///
+    /// P3-1：读档时把地图书签推回世界模拟的运行时（场景 / 小区名 / adcode 链路）。
+    /// 地图库本体（图片、布局）本来就在本地缓存里按 key 索引，不用跟着存档复制。
     pub fn apply_snapshot(&mut self, snapshot: &GameStatusSnapshot) {
         self.background = snapshot.background.clone();
         self.background_music = snapshot.background_music.clone();
@@ -257,6 +264,7 @@ impl GameStatus {
         self.present_role_ids = snapshot.present_role_ids.iter().copied().collect();
         self.onstage_role_ids = snapshot.present_role_ids.clone();
         self.scene_awareness_enabled = snapshot.scene_awareness_enabled;
+        crate::world_map::state::restore_bookmark(snapshot.world_map.as_ref());
     }
 }
 
@@ -281,6 +289,14 @@ pub struct GameStatusSnapshot {
     pub last_dialog_time: Option<String>,
     #[serde(default = "default_true")]
     pub scene_awareness_enabled: bool,
+    /// 世界模拟（P3-1）：存档里那张地图的**书签**（不是地图本体）。
+    ///
+    /// `#[serde(default)]` 是硬要求：老存档（改造前写的）里没有 `world_map` 键，
+    /// 没有它整个存档会反序列化失败 —— 读档直接报错比丢一张地图严重得多。
+    /// 用 `Option` 而不是非 Option + default：`{}` 与非 Option 值分不清"没地图"
+    /// 和"空地图"（`WorldMapBookmark` 的 `is_empty` 会退化成"有一张空地图"）。
+    #[serde(default)]
+    pub world_map: Option<crate::world_map::bookmark::WorldMapBookmark>,
 }
 
 fn default_true() -> bool {

@@ -349,6 +349,16 @@ impl GameRoleManager {
                 .with_continue_user(self.memory_inject_continue_user)
                 .build(&final_sliced);
 
+            // 阶段 3.5: 世界模拟的地图上下文（P3）
+            //
+            // ⚠️ 这里在 `game_status` 锁内（`api/chat.rs` 拿锁 → `add_line` →
+            // `refresh_memories` → 本函数），**绝不能 await 网络**。
+            // `injection_for` 是**同步**函数：只读进程内那份 `MapRuntime` 缓存
+            // （天气用的是已抓好的快照，过期就不用），拿不到锁就沿用上一次的文本。
+            // 世界模拟没开（前端从不推 scene）时它返回空串 —— 下面的分支会保证
+            // 老路径**逐字节不变**。
+            let map_addendum = crate::world_map::state::injection_for(&display_name);
+
             // 阶段 4: 写入角色记忆
             if let Some(role) = self.loaded_roles.get_mut(&rid) {
                 let use_mb = mb_exists && mb_enabled && !system_addendum.is_empty();
@@ -357,9 +367,16 @@ impl GameRoleManager {
                         built,
                         &system_addendum,
                         &short_term_prefix,
+                        &map_addendum,
                     )
-                } else {
+                } else if map_addendum.is_empty() {
+                    // 没有地图上下文（绝大多数会话）：与改动前完全一致
                     built
+                } else {
+                    // 永久记忆关闭、但地图开着：只做"把这段拼进第一条 system"，
+                    // 不跑 `merge_memory_bank_into_context`（它还会合并连续 system
+                    // 消息，那属于改变既有行为，不能顺带做）。
+                    Self::append_system_addendum(built, &map_addendum)
                 };
             }
         }
@@ -603,12 +620,14 @@ impl GameRoleManager {
     ///
     /// - `system_addendum`：合并到第一条 system 消息末尾
     /// - `short_term_prefix`：前置到第一条 user 消息；没有 user 时在 system 后插入
+    /// - `map_addendum`：世界模拟的地图上下文（P3），同样拼到第一条 system 末尾
     ///
     /// 另会合并连续出现的多条 system 消息为一条。
     fn merge_memory_bank_into_context(
         memory: Vec<LlmMessage>,
         system_addendum: &str,
         short_term_prefix: &str,
+        map_addendum: &str,
     ) -> Vec<LlmMessage> {
         let mut out = memory;
 
@@ -656,7 +675,33 @@ impl GameRoleManager {
             }
             cleaned.push(msg);
         }
-        cleaned
+
+        // 世界模拟的地图上下文（P3）：放在**合并之后**，只拼第一条 system，
+        // 不参与上面的连续 system 合并（`append_system_addendum` 自身幂等：
+        // 已经含这段文本就不再追加）。
+        Self::append_system_addendum(cleaned, map_addendum)
+    }
+
+    /// 把一段文本追加到第一条 system 消息末尾（幂等）。
+    ///
+    /// 单独抽出来是因为它有**两个**调用点：`merge_memory_bank_into_context` 的收尾，
+    /// 以及「永久记忆关着、但地图开着」那条分支 —— 后者故意**不走** merge
+    /// （merge 还会合并连续 system 消息，那属于改变既有行为，不能顺带做）。
+    fn append_system_addendum(memory: Vec<LlmMessage>, addendum: &str) -> Vec<LlmMessage> {
+        if addendum.trim().is_empty() {
+            return memory;
+        }
+        let mut out = memory;
+        match out.first_mut() {
+            Some(first) if first.role == "system" => {
+                if !first.content.contains(addendum) {
+                    first.content = format!("{}{}", first.content, addendum);
+                }
+            }
+            Some(_) => out.insert(0, LlmMessage::system(addendum.to_string())),
+            None => out.push(LlmMessage::system(addendum.to_string())),
+        }
+        out
     }
 
     // ── 内部辅助方法（已有，未修改） ──

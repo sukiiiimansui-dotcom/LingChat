@@ -47,7 +47,26 @@ pub const TOOL_GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("character", &["character_list", "character_switch"]),
-    ("scene", &["scene_list", "scene_switch"]),
+    // P3-4：**世界模拟专属**的三个地图工具并进 scene 组，跟「场景」开关同一个开关。
+    //
+    // 为什么不新建一个 `world_map` 组：设置页的工具组列表是前端**硬编码**的
+    // （`src/api/services/tool-settings.ts` 的组名 + i18n），后端新建一个组名，
+    // 用户在那个页面上根本看不到它 → 组永远关着 → 工具还是拿不到。
+    // 并进 scene 组是**零前端改动**就能让用户开得起来的唯一做法。
+    //
+    // 语义上也站得住：这三个工具干的事与 scene_list/scene_switch 是同一类 ——
+    // 让 AI 知道「我现在在哪、周围有什么」（get_my_location / get_nearby_facilities）
+    // 与改变「我处在什么情境」（move_to），都属于情境感知。
+    (
+        "scene",
+        &[
+            "scene_list",
+            "scene_switch",
+            "get_my_location",
+            "get_nearby_facilities",
+            "move_to",
+        ],
+    ),
     ("status", &["status_get_current", "status_get_scene"]),
     ("clock", &["get_current_time"]),
     ("skills", &["list_skills", "read_skill"]),

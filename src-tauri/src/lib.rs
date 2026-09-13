@@ -12,6 +12,10 @@ mod migration;
 mod plugins;
 mod resource_sync;
 pub mod utils;
+// 世界模拟（地图系统）Rust 后端：地理数据 / 渲染 / 地图库 / 实时流 / 移动状态机 /
+// 事件引擎，全部以 `world_map_*` 命令暴露给前端（见文件末尾 invoke_handler）。
+// 它不是「插件」而是普通模块，所以这里直接 `mod`，不进 plugins 目录。
+mod world_map;
 
 use std::sync::Arc;
 
@@ -282,7 +286,12 @@ pub fn run() {
         .plugin(tauri_plugin_screenshots::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_android_fs::init());
+        .plugin(tauri_plugin_android_fs::init())
+        // 世界模拟：Android 真实定位桥（`world_map_location` 的第 ② 条路）。
+        // 它**不注册任何 Tauri 命令**，只把 Kotlin 侧 `LocationPlugin` 挂进 PluginManager，
+        // 所以既不进 invoke_handler、也不需要 capabilities 权限 —— 前端可调用面**零变化**。
+        // 非 Android 平台上它是一个空插件（没有 setup、没有命令），不产生任何行为。
+        .plugin(world_map::loc_android::init());
 
     // 桌面端额外插件
     #[cfg(desktop)]
@@ -307,6 +316,12 @@ pub fn run() {
             app.manage(utils::cpu_perf::CpuDetectionCache::new());
             app.manage(utils::gpu_perf::GpuDetectionCache::new());
             app.manage(api::role_archive::RoleArchiveState::default());
+            // 世界模拟的地图运行时状态。
+            // 单独一个状态壳、**不并进 AppState**：地图是旁路模块，塞进 AppState
+            // 会让它从「可整块删除」变成牵着对话主干（理由详见 world_map/state.rs
+            // 的模块注释）。这里 manage 的 `Arc` 与 `state.rs` 里那个进程级 static
+            // 是**同一个**，所以注入路径（拿不到 AppHandle）读到的是同一份数据。
+            app.manage(world_map::state::handle());
 
             // Android 修复：Tauri 在 setup 闭包执行前已创建 webview 窗口，前端 invoke
             // 命令会在 IPC runtime worker 上立即 dispatch；如果 AppState 还没 manage
@@ -673,6 +688,55 @@ pub fn run() {
         })
         // 注册所有 API 命令
         .invoke_handler(tauri::generate_handler![
+            // ══════════ 世界模拟（地图系统）══════════
+            // ⚠️ 前缀不是装饰：`#[tauri::command]` 除了函数本体，还会在**定义它的模块里**
+            // 生成 `pub use {__cmd__xxx, __tauri_command_name_xxx}`，
+            // `generate_handler!` 就是拿这条路径去找宏的。所以凡是命令定义在子模块里的，
+            // 都必须写全路径（`world_map::live::world_map_location`），
+            // 写短成 `world_map::world_map_location` 会在编译期直接 E0433（本项目踩过）。
+            world_map::world_map_blocks,
+            world_map::world_map_blocks_at,
+            world_map::world_map_geo_status,
+            world_map::world_map_coord_selftest,
+            world_map::world_map_render_svg,
+            world_map::world_map_push_events,
+            world_map::world_map_recent_events,
+            // ── 真源 world_map_rs 模块搬入后新暴露的命令 ──
+            world_map::world_map_render,
+            world_map::world_map_geo_svg,
+            world_map::world_map_stats,
+            world_map::world_map_maplib_stats,
+            world_map::world_map_maplib_list,
+            world_map::world_map_maplib_cleanup,
+            // P5-4：离线可用清单（纯读本地：geo 缓存 + 地图库 + 布局缓存）
+            world_map::world_map_offline_available,
+            world_map::world_map_schedule,
+            world_map::world_map_transport_plan,
+            world_map::world_map_osm_summary,
+            world_map::world_map_time,
+            // ── 应用内实时绘制（Channel 版；浏览器/调试服务的 SSE 路并存）──
+            world_map::bridge::world_map_district_stream,
+            world_map::bridge::world_map_district_stream_cancel,
+            // ── 实时数据：定位 / 天气（前端 worldMapApi.location / .weather）──
+            world_map::live::world_map_location,
+            world_map::live::world_map_weather,
+            // ── 世界模拟运行时状态（P3：前端推状态 / 读状态）──
+            world_map::state::world_map_update_runtime,
+            world_map::state::world_map_runtime,
+            // ── 世界模拟移动状态机（P4：AI 位置指令 → 角色在地图上移动）──
+            world_map::move_cmd::world_map_trip_status,
+            world_map::move_cmd::world_map_trip_start,
+            world_map::move_cmd::world_map_trip_cancel,
+            world_map::move_cmd::world_map_trip_speedup,
+            // ── 世界模拟现实事件引擎（P5-2/P5-3：驱动器 / 读最近事件 / 取待写记忆）──
+            world_map::event_cmd::world_map_tick,
+            world_map::event_cmd::world_map_events_recent,
+            world_map::event_cmd::world_map_take_pending_memory,
+            // ── 城市级**真拼接**大图（T5-1：区县街区图按经纬度拼成一张大 SVG）──
+            // 与 `world_map_geo_svg`（行政区划总览）是两件事，不互相替代。
+            world_map::stitch_cmd::world_map_bigmap_svg,
+            world_map::stitch_cmd::world_map_bigmap_plan,
+            // ══════════ 以下是上游既有命令 ══════════
             utils::log_bridge::get_log_history,
             utils::log_bridge::open_log_window,
             utils::log_bridge::is_log_window_open,

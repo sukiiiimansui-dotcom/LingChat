@@ -20,6 +20,10 @@
 //! `start` →（`meta` / `size` 各一次）→ `building`/`road`/`park`/`water`（增量，一栋一条）
 //! →（读流出错时一条 `warn`）→ `debug` → `done`；**任何失败都走 `error` 事件**。
 //!
+//! 空结果会**自动重试一次**（T3-1 step2）：一轮跑完一个元素都没有时先补一条 `warn`
+//! 说明「正在重试」，再整个重跑一轮；上限 [`MAX_RETRIES`]。`debug` 事件里带
+//! `retries` 与 `preview`（模型原始输出前缀），供前端打进绘制日志做定性。
+//!
 //! 「没配 LLM」也走 `error` 事件、命令正常返回 Ok —— 若让命令返回 Err，前端只会拿到
 //! 一个字符串，分不清「没配模型」「网络断」「模型抽风」这三种情况。
 
@@ -141,42 +145,48 @@ fn drain_items(
 
 // ───────────────────────── 干活的后台任务 ─────────────────────────
 
-/// 把 LLM 的增量文本变成一条条绘制事件。
+/// 空结果的自动重试上限。
 ///
-/// 不返回 Err：错误一律变成 `error` 事件（前端要的是可读原因，不是一个字符串）。
-async fn run_stream(
-    ch: Channel<Value>,
-    cancel: Arc<AtomicBool>,
-    llm: Arc<LlmClient>,
-    messages: Vec<LlmMessage>,
-    area: String,
+/// 实测（真机 4 次里 2 次）「流正常结束但 0 个元素」——模型输出漂移，不是解析 bug。
+/// 重试**只给一次**：再空说明这一轮模型/网络确实不行，继续重试就是把用户的等待
+/// 和 token 无限拉长；前端还留着「0 元素 → 提示重试」的兜底，由用户决定要不要再来。
+const MAX_RETRIES: usize = 1;
+
+/// 一轮流式请求的收成。
+struct Attempt {
+    /// 组装好的布局（权威结果）
+    layout: Value,
+    /// 原始输出（诊断用）
+    buf: String,
+    /// (分片数, 正文字符数)
+    dbg: (usize, usize),
+    /// 本轮推给前端的元素条数（增量推送的那份计数）
+    pushed: usize,
+    /// 被取消 / 前端走了
+    aborted: bool,
+}
+
+/// 跑的**一轮**流式请求，边收边把元素推给前端。返回这一轮的收成。
+///
+/// 为什么不返回 Err：请求失败与读流异常是两种不同的收场，调用方（[`run_stream`]）
+/// 要能区分「没开起来」和「开起来了又断」，前者可以重试。
+/// 取消/通道断开时返回 `aborted = true` 的半成品，调用方据此**不再重试**。
+///
+/// 读流异常在这一层就报给前端（`warn`）并 `tracing::warn` 落一条 —— 不能等循环结束后
+/// 统一报：重试时第一轮的异常会被第二轮的收成盖掉，而它恰恰是最有价值的诊断。
+async fn stream_once(
+    pump: &mut Pump<'_>,
+    cancel: &AtomicBool,
+    llm: &LlmClient,
+    messages: &[LlmMessage],
+    area: &str,
     base: i32,
-    model: String,
-) {
+) -> Result<Attempt, String> {
     let t0 = Instant::now();
-    let mut pump = Pump {
-        ch: &ch,
-        dead: false,
-    };
-
-    // 先报 start：前端据此把阶段条推到「AI 思考中」，并校对网格大小
-    if !pump.send(Event::Start {
-        area: area.clone(),
-        size: base,
-        model,
-    }) {
-        return;
-    }
-
-    let mut chunk_stream = match llm.complete_stream(&messages).await {
-        Ok(s) => s,
-        Err(e) => {
-            pump.send(Event::Error {
-                message: format!("LLM 请求失败：{e}"),
-            });
-            return;
-        }
-    };
+    let mut chunk_stream = llm
+        .complete_stream(messages)
+        .await
+        .map_err(|e| format!("LLM 请求失败：{e}"))?;
 
     let mut buf = String::new();
     let mut consumed: HashMap<String, usize> = HashMap::new();
@@ -186,11 +196,10 @@ async fn run_stream(
         counts.insert(k.to_string(), 0);
     }
     let mut name_sent = false;
-    // (分片数, 正文字符数, 元素条数)。SSE 版第三项是 data 行数，这里没有「行」的概念，
-    // 用「已产出的元素条数」顶上；前端只是把这组数字打印进绘制日志。
-    let mut dbg = (0usize, 0usize, 0usize);
+    // (分片数, 正文字符数)。SSE 版第三项是 data 行数，这里没有「行」的概念，
+    // 用「已产出的元素条数」顶上（下面单独算 pushed）；前端只是把这组数字打印进绘制日志。
+    let mut dbg = (0usize, 0usize);
     let mut aborted = false;
-    let mut read_error: Option<String> = None;
 
     loop {
         // 取消 / 前端没了 → 收摊（下一轮循环的检查点，配合下面的 120ms 兜底）
@@ -232,7 +241,7 @@ async fn run_stream(
                     }
                 }
 
-                dbg.2 += drain_items(&mut pump, &buf, &mut consumed, &mut counts, t0);
+                let _ = drain_items(pump, &buf, &mut consumed, &mut counts, t0);
                 if pump.dead {
                     aborted = true;
                     break;
@@ -246,27 +255,148 @@ async fn run_stream(
                 // ToolCalls / ToolCallProgress / StreamEnd：实时绘制用不到
             }
             Err(e) => {
-                // 与 SSE 版一致：读流异常只丢一条 warn，已经画出来的继续用
-                read_error = Some(format!("读流异常：{e}"));
+                // 与 SSE 版一致：读流异常只丢一条 warn，已经画出来的继续用。
+                // 这里当场就报（而不是攒到收尾）：重试会把第一轮的异常盖掉（见文档注释）。
+                let msg = format!("读流异常：{e}");
+                tracing::warn!("实时绘制：{msg}");
+                let _ = pump.send(Event::Warn { message: msg });
                 break;
             }
         }
     }
 
-    if let Some(msg) = read_error {
-        let _ = pump.send(Event::Warn { message: msg });
+    let layout = stream::assemble_layout(&buf, area, base);
+    Ok(Attempt {
+        layout,
+        buf,
+        dbg,
+        pushed: counts.values().sum(),
+        aborted,
+    })
+}
+
+/// 把 LLM 的增量文本变成一条条绘制事件。
+///
+/// 不返回 Err：错误一律变成 `error` 事件（前端要的是可读原因，不是一个字符串）。
+///
+/// ## 空结果自动重试（T3-1 step2）
+///
+/// 「流正常跑完却一个元素都没有」是实测里最常见的一种失败（4 次里 2 次）：
+/// 模型这次没按格式吐 JSON（有时一个字都没有）。这种失败**重试一次几乎都能出图**，
+/// 而让用户自己再点一次「重绘」等于白等 20~30 秒。
+///
+/// 所以这里在 `assemble_layout` 之后判一次空：
+///   · 一个元素都没推出去（`pushed == 0`）且没重试过 → 发一条 `warn` + 重来一轮；
+///   · 重试上限 [`MAX_RETRIES`] = 1 次（再空就认了，交给前端兜底）。
+///
+/// 为什么用 `pushed == 0` 而不是只看 `buildings.is_empty()`：重试会**重跑整条流**，
+/// 要是第一轮已经推出去几条（哪怕只推了一条路），重跑就会把同样的元素再推一遍 ——
+/// 前端是按事件逐条画画的，重复推送会画重影。元素一条都没推出去时才重试，
+/// 这在语义上完全覆盖「0 个元素」的失败场景，且天然不会重复。
+async fn run_stream(
+    ch: Channel<Value>,
+    cancel: Arc<AtomicBool>,
+    llm: Arc<LlmClient>,
+    messages: Vec<LlmMessage>,
+    area: String,
+    base: i32,
+    model: String,
+) {
+    let t0 = Instant::now();
+    let mut pump = Pump {
+        ch: &ch,
+        dead: false,
+    };
+
+    // 先报 start：前端据此把阶段条推到「AI 思考中」，并校对网格大小。
+    // ⚠️ 重试时**不再补发** start：语义上还是「同一次生成」，前端已经把阶段条推上去了。
+    if !pump.send(Event::Start {
+        area: area.clone(),
+        size: base,
+        model,
+    }) {
+        return;
     }
+
+    // 最后一轮的收成（用它发 debug / done）；重试过几轮记在 retries 里
+    let mut last: Option<Attempt> = None;
+    let mut retries = 0usize;
+    // 每轮的诊断留痕：空输出排查全靠它（见 stream::preview_of）
+    let mut tries: Vec<String> = Vec::new();
+
+    loop {
+        let attempt = match stream_once(&mut pump, &cancel, &llm, &messages, &area, base).await {
+            Ok(a) => a,
+            Err(e) => {
+                // 请求就没开起来（网络 / 401 / 没配模型）
+                pump.send(Event::Error { message: e });
+                return;
+            }
+        };
+
+        // 每轮留一条诊断：空输出排查就靠它（原文前缀由 stream::preview_of 统一口径）
+        let total = {
+            let c = stream::layout_counts(&attempt.layout);
+            c.buildings + c.roads + c.parks + c.water
+        };
+        tries.push(format!(
+            "第{}次：{} 块 / {} 字 / 收到 {} 元素 / 解析出 {} 元素 / {}",
+            retries + 1,
+            attempt.dbg.0,
+            attempt.dbg.1,
+            attempt.pushed,
+            total,
+            stream::preview_of(&attempt.buf),
+        ));
+
+        // 取消 / 前端走了：不重试，直接收摊
+        if attempt.aborted {
+            last = Some(attempt);
+            break;
+        }
+        // 一个元素都没推出去 + 还有重试额度 → 重来一轮
+        if attempt.pushed == 0 && total == 0 && retries < MAX_RETRIES {
+            retries += 1;
+            tracing::warn!(
+                retries,
+                chunks = attempt.dbg.0,
+                chars = attempt.dbg.1,
+                preview = %stream::preview_of(&attempt.buf),
+                "实时绘制：这一轮没有可解析的元素，自动重试"
+            );
+            // 先让前端把「正在重试」记进绘制日志，再去发下一个请求
+            let _ = pump.send(Event::Warn {
+                message: "模型这一轮没给出可解析的布局，正在自动重试一次…".to_string(),
+            });
+            last = Some(attempt);
+            continue;
+        }
+        last = Some(attempt);
+        break;
+    }
+
+    // 循环一定会赋一次值；给个兜底免得将来有人改了退出路径之后 unwrap 炸掉
+    let Some(attempt) = last else { return };
+
+    // 诊断：本轮返回了什么。空输出时 preview 是 `<空>`，格式错时是原文前 160 字。
     let _ = pump.send(Event::Debug {
-        chunks: dbg.0,
-        chars: dbg.1,
-        lines: dbg.2,
+        chunks: attempt.dbg.0,
+        chars: attempt.dbg.1,
+        lines: attempt.pushed,
+        retries,
+        preview: stream::preview_of(&attempt.buf),
     });
-    if aborted {
+    if retries > 0 {
+        let _ = pump.send(Event::Warn {
+            message: format!("生成尝试记录：{}", tries.join("；")),
+        });
+    }
+    if attempt.aborted {
         // 用户停止 / 页面走了：**不发 done** —— 前端已按「中断」收尾，
         // 再补一条 done 等于把半截布局说成成品
         return;
     }
-    let layout = stream::assemble_layout(&buf, &area, base);
+    let layout = attempt.layout;
 
     // ── 世界模拟：布局落地 = 这个小区「成为现实」的那一刻 ──
     // 顺手把设施铺出来写进 MapRuntime（为什么不交给前端：见

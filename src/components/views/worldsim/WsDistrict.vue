@@ -359,6 +359,18 @@
       case "warn":
         if (ev.message) log(`⚠ ${ev.message}`);
         break;
+      case "debug": {
+        // 流统计 + 「这一轮模型到底返回了什么」（T3-1 step2 的诊断）：
+        // 空输出时 preview 是 <空>，格式漂移时是原文前 160 字 —— 真机上一眼定性。
+        const s = ev.stats || {};
+        log(
+          `流统计：${s.chunks ?? 0} 块 / ${s.chars ?? 0} 字符 / ${s.lines ?? 0} 项` +
+            (ev.retries ? ` / 自动重试 ${ev.retries} 次` : "")
+        );
+        // 只有在**一个元素都没画出来**时才带出原文：正常出图时它是纯噪音
+        if (ev.preview && paint.total === 0) log(`模型原始输出：${ev.preview}`);
+        break;
+      }
       case "error":
         aiError.value = ev.message || "AI 绘制失败";
         break;

@@ -22,7 +22,20 @@ pub enum Event {
     Size { size: i32 },
     Item { kind: String, item: Value, index: usize, elapsed: f64 },
     Warn { message: String },
-    Debug { chunks: usize, chars: usize, lines: usize },
+    /// 一轮生成结束后的流统计 + 诊断。
+    ///
+    /// `retries` / `preview` 是「空输出」排查用的（T3-1 step2）：前者说明这条流里
+    /// 重试过几次，后者是**原始输出**的前若干字符 —— 空输出时它就是空的，格式漂移时
+    /// 一眼能看出模型吐了什么，不用再重跑一轮去复现。
+    Debug {
+        chunks: usize,
+        chars: usize,
+        lines: usize,
+        /// 本轮的自动重试次数（0 = 一次成功；SSE 路不做重试，恒为 0）
+        retries: usize,
+        /// 原始输出前缀（截断后），供前端打进绘制日志
+        preview: String,
+    },
     Done { layout: Value, elapsed: f64 },
     Error { message: String },
 }
@@ -37,18 +50,29 @@ impl Event {
                 "type": kind, "item": item, "index": index, "elapsed": elapsed
             }),
             Event::Warn { message } => json!({"type":"warn","message":message}),
-            Event::Debug { chunks, chars, lines } => json!({
-                "type":"debug","stats":{"chunks":chunks,"chars":chars,"lines":lines}
+            Event::Debug {
+                chunks,
+                chars,
+                lines,
+                retries,
+                preview,
+            } => json!({
+                "type":"debug","stats":{"chunks":chunks,"chars":chars,"lines":lines},
+                "retries": retries,
+                "preview": preview,
             }),
-            Event::Done { layout, elapsed } => json!({
-                "type":"done","layout":layout,"elapsed":elapsed,
-                "counts": {
-                    "buildings": layout.get("buildings").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
-                    "roads": layout.get("roads").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
-                    "parks": layout.get("parks").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
-                    "water": layout.get("water").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
-                }
-            }),
+            Event::Done { layout, elapsed } => {
+                let c = layout_counts(layout);
+                json!({
+                    "type":"done","layout":layout,"elapsed":elapsed,
+                    "counts": {
+                        "buildings": c.buildings,
+                        "roads": c.roads,
+                        "parks": c.parks,
+                        "water": c.water,
+                    }
+                })
+            }
             Event::Error { message } => json!({"type":"error","message":message}),
         }
     }
@@ -163,6 +187,63 @@ pub fn assemble_layout(buf: &str, area: &str, fallback_size: i32) -> Value {
         }
     }
     layout
+}
+
+/// 一份布局里四类元素各有多少。
+///
+/// 判「这一轮是不是空输出」与 `Done` 事件里的 counts 必须是**同一套口径**，
+/// 所以只此一份实现：bridge.rs 的重试判定与 stream.rs 的 `to_json` 都用它。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutCounts {
+    pub buildings: usize,
+    pub roads: usize,
+    pub parks: usize,
+    pub water: usize,
+}
+
+impl LayoutCounts {
+    /// 四类相加。判空一律用它，别在调用方各写各的加法（漏一类就是 bug）。
+    pub fn total(self) -> usize {
+        self.buildings + self.roads + self.parks + self.water
+    }
+}
+
+/// 数组长度；键不存在 / 不是数组都算 0（半截布局里缺键很正常）。
+fn arr_len(layout: &Value, key: &str) -> usize {
+    layout
+        .get(key)
+        .and_then(Value::as_array)
+        .map_or(0, |a| a.len())
+}
+
+/// 数一份布局里的元素（见 [`LayoutCounts`]）。
+pub fn layout_counts(layout: &Value) -> LayoutCounts {
+    LayoutCounts {
+        buildings: arr_len(layout, "buildings"),
+        roads: arr_len(layout, "roads"),
+        parks: arr_len(layout, "parks"),
+        water: arr_len(layout, "water"),
+    }
+}
+
+/// 原始输出前缀（诊断用）：**空输出记 `<空>`**，非空截前 `PREVIEW_CHARS` 个字符。
+///
+/// 为什么要这个：真机实测 4 次里有 2 次「流正常结束但 0 个元素」，光看计数分不清
+/// 是「模型一个字没吐」「吐了半截没闭合」还是「吐了完整 JSON 但解析不出来」——
+/// 把原文前一段带上，下次一测就能定性，不用再重跑一轮去复现。
+pub const PREVIEW_CHARS: usize = 160;
+
+/// 见 [`PREVIEW_CHARS`]。两条通路（SSE / Tauri）共用同一份实现，避免口径不一致。
+pub fn preview_of(buf: &str) -> String {
+    if buf.trim().is_empty() {
+        return "<空>".to_string();
+    }
+    let head: String = buf.chars().take(PREVIEW_CHARS).collect();
+    if buf.chars().count() > PREVIEW_CHARS {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 // ───────────────────────── LLM 配置与请求 ─────────────────────────
@@ -408,7 +489,17 @@ pub fn spawn_stream(
             }
         }
 
-        let _ = tx.send(Event::Debug { chunks: dbg.0, chars: dbg.1, lines: dbg.2 }).await;
+        // SSE 路不做自动重试（浏览器调试用，重试语义留给 Tauri 正路），
+        // 但把同样的诊断字段报出去，两条通路的前端处理逻辑保持一致。
+        let _ = tx
+            .send(Event::Debug {
+                chunks: dbg.0,
+                chars: dbg.1,
+                lines: dbg.2,
+                retries: 0,
+                preview: preview_of(&buf),
+            })
+            .await;
         let layout = assemble_layout(&buf, &area, base);
         let _ = tx
             .send(Event::Done { layout, elapsed: (t0.elapsed().as_millis() as f64) / 1000.0 })
@@ -519,6 +610,53 @@ mod tests {
         assert_eq!(dj["counts"]["buildings"], json!(2));
         assert_eq!(dj["counts"]["roads"], json!(1));
         assert_eq!(dj["counts"]["water"], json!(0));
+    }
+
+    #[test]
+    fn preview_marks_empty_and_truncates() {
+        // 空输出必须能被一眼认出（这是「空输出 vs 格式错」的判定依据）
+        assert_eq!(preview_of(""), "<空>");
+        assert_eq!(preview_of("   \n "), "<空>");
+        // 非空：原样带出
+        assert_eq!(preview_of(r#"{"buildings":[]}"#), r#"{"buildings":[]}"#);
+        // 超长：截断并加省略号，且按**字符**截（中文不能截出半个字）
+        let long = "汉".repeat(PREVIEW_CHARS + 50);
+        let p = preview_of(&long);
+        assert_eq!(p.chars().count(), PREVIEW_CHARS + 1);
+        assert!(p.ends_with('…'));
+    }
+
+    #[test]
+    fn layout_counts_totals_all_four_kinds() {
+        let c = layout_counts(&json!({"buildings":[1,2],"roads":[1],"parks":[],"water":[1,2,3]}));
+        assert_eq!(c.buildings, 2);
+        assert_eq!(c.roads, 1);
+        assert_eq!(c.parks, 0);
+        assert_eq!(c.water, 3);
+        assert_eq!(c.total(), 6);
+        // 键缺失 / 值不是数组 → 0，不能 panic
+        assert_eq!(layout_counts(&json!({"buildings": "oops"})).total(), 0);
+        assert_eq!(layout_counts(&json!({})).total(), 0);
+    }
+
+    #[test]
+    fn debug_event_carries_retry_diagnostics() {
+        let e = Event::Debug {
+            chunks: 7,
+            chars: 120,
+            lines: 3,
+            retries: 1,
+            preview: "<空>".into(),
+        };
+        let j = e.to_json();
+        assert_eq!(j["type"], json!("debug"));
+        // 老字段原样保留（两条通路的前端都在读它）
+        assert_eq!(j["stats"]["chunks"], json!(7));
+        assert_eq!(j["stats"]["chars"], json!(120));
+        assert_eq!(j["stats"]["lines"], json!(3));
+        // 新字段：重试次数 + 原始输出前缀（空输出时是 <空>）
+        assert_eq!(j["retries"], json!(1));
+        assert_eq!(j["preview"], json!("<空>"));
     }
 
     #[test]

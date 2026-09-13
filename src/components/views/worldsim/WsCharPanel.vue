@@ -251,7 +251,6 @@
 <script setup lang="ts">
   import { computed, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
-  import { invoke } from "@tauri-apps/api/core";
   import WsCollapse from "./WsCollapse.vue";
   import WsLoading from "./WsLoading.vue";
   import { useWsIntervene, facilityNames } from "./wsIntervene";

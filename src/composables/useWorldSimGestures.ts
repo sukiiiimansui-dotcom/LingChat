@@ -21,12 +21,9 @@
 // ⑤ 手感：拖动中禁用过渡（`is-drag`），松手立刻恢复（CSS 里那条 0.28s 缓动）——
 //    拖动跟手、复位动画顺滑，两者不能互相干扰。
 //
-// ⚠️ 浏览器原生手势（touch-action / overscroll-behavior / 默认滚动）
-//    **不在这里**，也不在 worldsim.css 里，而是单独一个文件：
-//    由使用方自行决定要不要额外加样式；本文件只负责地图手势本身。
-//    本文件只做一件事与 B 相关：挂载时给舞台所在的 `.ws-root` 打上 `ws-nogesture` 类
-//    （B 的样式全部以这个类为前缀，所以那份 CSS 一旦删掉，这个类就是个没有任何规则的死类，
-//    留在 PR 里也无害 —— 这是刻意设计成「删除点只有一个文件」）。
+// ⚠️ 浏览器原生手势抑制（touch-action / overscroll-behavior / 默认滚动）**不在本文件**：
+//    本文件只负责地图手势本身（缩放/平移/双击/滚轮）。要不要额外压住浏览器的默认手势，
+//    由使用方自己决定、自己加样式。
 
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
 
@@ -440,8 +437,6 @@ export function useWorldSimGestures(opts: UseWorldSimGesturesOptions) {
     b.el.removeEventListener("wheel", onWheel);
     b.el.removeEventListener("dblclick", onDblClick);
     window.removeEventListener("resize", onResize);
-    // 卸掉 B 的开关类（换个舞台时由新舞台重新打）
-    b.root?.classList.remove("ws-nogesture");
     bound = null;
   }
 
@@ -457,9 +452,7 @@ export function useWorldSimGestures(opts: UseWorldSimGesturesOptions) {
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("dblclick", onDblClick);
     window.addEventListener("resize", onResize);
-    // 对外暴露的开关类：使用方可以据此挂自己的样式
     const root = el.closest(".ws-root") as HTMLElement | null;
-    root?.classList.add("ws-nogesture");
     bound = { el, root };
   }
 

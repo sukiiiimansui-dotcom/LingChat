@@ -105,9 +105,27 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
+/// 世界模拟在应用数据目录下的**根目录**（`geo/`、`maplib/`、`osm/`、`events.json` 都在它下面）。
+///
+/// ## 为什么是点开头的 `.world_map`（而别的数据都是 `data/<名字>/`）
+///
+/// `lan_sync` 的同步语义是**镜像 + 删除**：`manifest.rs` 递归扫 `data_dir()`，
+/// 凡是「本地有、对端没有」的文件，pull 时会 `rename` 进 `data/.trash/`
+/// （`sync_engine.rs`），push 时还会通知对端删。而它的 `scan_dir` **跳过所有点开头的条目**
+/// （`lan_sync/manifest.rs:64`）—— 点前缀就是"不参与同步"的官方开关。
+///
+/// 地图的这些东西全是**本地生成物**：geojson 缓存、地图库（AI 生成的小区布局）、
+/// OSM 快照、事件流。它们不该因为用户开了一次局域网同步就被搬进回收站。
+/// 改个目录名就能让整套同步逻辑看不见它们，**零主干改动**（比去改排除表安全得多）。
+///
+/// `WM_MAPLIB_DIR` / `WM_OSM_DIR` 仍可单独覆盖（测试隔离用），优先级高于这里。
+fn world_root() -> PathBuf {
+    crate::api::data_dir().join(".world_map")
+}
+
 /// 地理数据缓存目录（应用数据目录下）
 pub fn cache_dir(_app: &AppHandle) -> PathBuf {
-    crate::api::data_dir().join("world_map").join("geo")
+    world_root().join("geo")
 }
 
 /// 额外的**只读**地理数据目录：开发期沿用已经下好的缓存，避免重复下载。
@@ -154,10 +172,10 @@ fn make_source(app: &AppHandle) -> geo::GeoSource {
 /// 世界地图数据根目录：`geo/`（geojson 缓存）、`maplib/`、`osm/`、`events.json` 都在它下面。
 ///
 /// 注意：`docs/world-map/07` 里规划的是 `<data_dir>/game_data/world_map/`，
-/// 而这里（沿用 T6-5 早期实现 + `events.json` 的落盘位置）是 `<data_dir>/world_map/`。
-/// 新模块跟着**已有代码**走，避免同一个功能出现两个数据根。
+/// 而这里是 [`world_root`]（`<data_dir>/.world_map/`，点前缀是为了不被 `lan_sync` 同步，
+/// 理由见那个函数的文档）。新模块跟着**已有代码**走，避免同一个功能出现两个数据根。
 fn world_dir(_app: &AppHandle) -> PathBuf {
-    crate::api::data_dir().join("world_map")
+    world_root()
 }
 
 /// 地图库根目录（索引 index.json + 布局 layouts/*.json）。
@@ -464,7 +482,7 @@ pub async fn world_map_push_events(app: AppHandle, events: Vec<Value>) -> Result
     if events.is_empty() {
         return Ok(0);
     }
-    let p = crate::api::data_dir().join("world_map").join("events.json");
+    let p = world_dir(&app).join("events.json");
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -485,7 +503,7 @@ pub async fn world_map_push_events(app: AppHandle, events: Vec<Value>) -> Result
 /// 读最近的世界事件（主动系统 / 调试用）
 #[tauri::command]
 pub async fn world_map_recent_events(app: AppHandle, limit: Option<usize>) -> Result<Vec<Value>, String> {
-    let p = crate::api::data_dir().join("world_map").join("events.json");
+    let p = world_dir(&app).join("events.json");
     let all: Vec<Value> = std::fs::read_to_string(&p)
         .ok()
         .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())

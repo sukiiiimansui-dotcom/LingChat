@@ -90,7 +90,12 @@
 .ws-loading__bar.is-indet > i {
   width: 38%;
   transform: none;
-  background: linear-gradient(90deg, transparent 0%, var(--ws-primary-ink, var(--ws-primary)) 50%, transparent 100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ws-primary-ink, var(--ws-primary)) 50%,
+    transparent 100%
+  );
   animation: ws-load-sweep 1.5s ease-in-out infinite;
 }
 
@@ -116,7 +121,7 @@
   white-space: nowrap;
 }
 .ws-loading__stage::before {
-  content: '';
+  content: "";
   width: 0.42em;
   height: 0.42em;
   border-radius: 50%;
@@ -250,7 +255,7 @@
 /* 高光扫过：走 ::after + translateX（**不是** background-position：
  * 动 background-position 每帧都要重画那一块渐变）。 */
 .ws-sk::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background: linear-gradient(90deg, transparent 0%, var(--ws-panel-2) 50%, transparent 100%);
@@ -265,7 +270,9 @@
  * 骨架淡出的同时真内容已经在原位上淡入，两者重叠而不是「先空一下再出现」——
  * 这就是「交叉淡入不跳版」的做法（离开元素还在流里的话，两段内容会同时占位、高度抖一下）。 */
 .ws-swap-enter-active {
-  transition: opacity 0.24s ease, transform 0.24s ease;
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s ease;
 }
 .ws-swap-leave-active {
   position: absolute;
@@ -285,39 +292,88 @@
   animation: ws-load-in 0.3s ease both;
   animation-delay: calc(var(--ws-i, 0) * 36ms);
 }
-.ws-stagger > *:nth-child(1) { --ws-i: 0; }
-.ws-stagger > *:nth-child(2) { --ws-i: 1; }
-.ws-stagger > *:nth-child(3) { --ws-i: 2; }
-.ws-stagger > *:nth-child(4) { --ws-i: 3; }
-.ws-stagger > *:nth-child(5) { --ws-i: 4; }
-.ws-stagger > *:nth-child(6) { --ws-i: 5; }
-.ws-stagger > *:nth-child(7) { --ws-i: 6; }
-.ws-stagger > *:nth-child(8) { --ws-i: 7; }
-.ws-stagger > *:nth-child(9) { --ws-i: 8; }
-.ws-stagger > *:nth-child(10) { --ws-i: 9; }
-.ws-stagger > *:nth-child(11) { --ws-i: 10; }
-.ws-stagger > *:nth-child(n + 12) { --ws-i: 11; }
+.ws-stagger > *:nth-child(1) {
+  --ws-i: 0;
+}
+.ws-stagger > *:nth-child(2) {
+  --ws-i: 1;
+}
+.ws-stagger > *:nth-child(3) {
+  --ws-i: 2;
+}
+.ws-stagger > *:nth-child(4) {
+  --ws-i: 3;
+}
+.ws-stagger > *:nth-child(5) {
+  --ws-i: 4;
+}
+.ws-stagger > *:nth-child(6) {
+  --ws-i: 5;
+}
+.ws-stagger > *:nth-child(7) {
+  --ws-i: 6;
+}
+.ws-stagger > *:nth-child(8) {
+  --ws-i: 7;
+}
+.ws-stagger > *:nth-child(9) {
+  --ws-i: 8;
+}
+.ws-stagger > *:nth-child(10) {
+  --ws-i: 9;
+}
+.ws-stagger > *:nth-child(11) {
+  --ws-i: 10;
+}
+.ws-stagger > *:nth-child(n + 12) {
+  --ws-i: 11;
+}
 
 /* ── 关键帧：只有 transform / opacity ─────────────────────────────────────── */
 @keyframes ws-load-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes ws-load-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 @keyframes ws-load-sweep {
-  from { transform: translateX(-110%); }
-  to   { transform: translateX(300%); }
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
 }
 @keyframes ws-load-shimmer {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(100%); }
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
 }
 @keyframes ws-load-dot {
-  0%, 100% { opacity: 0.45; transform: scale(0.82); }
-  50%      { opacity: 1;    transform: scale(1.12); }
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
 }
 
 /* 地图遮罩上的那一块：给指示器一张**自己的底卡**。

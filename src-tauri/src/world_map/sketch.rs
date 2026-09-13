@@ -8,6 +8,7 @@
 //!   · 有路网骨架（主/次干道）、沿街建筑、中心绿地，不是随机撒点
 //!   · 名字留空，交给 AI 覆盖（前端可显示占位）
 use rand::{Rng, SeedableRng};
+use sha2::{Digest, Sha256};
 use rand::rngs::StdRng;
 use serde_json::{json, Value};
 
@@ -58,11 +59,12 @@ impl OsmHint {
 }
 
 fn seed_of(area: &str, seed: Option<u64>) -> [u8; 32] {
-    let d = md5::compute(format!("{}|{}", area, seed.map(|s| s.to_string()).unwrap_or_default()).as_bytes());
+    let d = Sha256::digest(
+        format!("{}|{}", area, seed.map(|s| s.to_string()).unwrap_or_default()).as_bytes(),
+    );
+    // sha256 输出 32 字节，正好直接当 StdRng 种子
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[i] = d.0[i % 16];
-    }
+    out.copy_from_slice(&d);
     out
 }
 

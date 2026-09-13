@@ -5,6 +5,7 @@
 //!
 //! 坐标系：与布局一致，网格坐标 0..size。
 use rand::{Rng, SeedableRng};
+use sha2::{Digest, Sha256};
 use rand::rngs::StdRng;
 use serde_json::{json, Map, Value};
 
@@ -25,11 +26,10 @@ fn arr(v: &Value, key: &str) -> Vec<Value> {
 fn rng_of(layout: &Value) -> StdRng {
     let name = layout.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let size = num(layout, "size", 20.0);
-    let d = md5::compute(format!("{name}|{size}|detail").as_bytes());
+    let d = Sha256::digest(format!("{name}|{size}|detail").as_bytes());
+    // sha256 输出本身就是 32 字节，正好是一个 StdRng 种子（旧实现是 md5 的 16 字节循环补齐）
     let mut seed = [0u8; 32];
-    for i in 0..32 {
-        seed[i] = d.0[i % 16];
-    }
+    seed.copy_from_slice(&d);
     StdRng::from_seed(seed)
 }
 

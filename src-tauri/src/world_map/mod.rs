@@ -110,22 +110,26 @@ pub fn cache_dir(_app: &AppHandle) -> PathBuf {
     crate::api::data_dir().join("world_map").join("geo")
 }
 
-/// 额外的只读数据目录（开发期沿用 Python 项目已下好的缓存，避免重复下载）
+/// 额外的**只读**地理数据目录：开发期沿用已经下好的缓存，避免重复下载。
+///
+/// 只认环境变量 `WM_EXTRA_DIRS`（用 `:` 或 `;` 分隔多个路径），**不猜任何机器上的路径**。
+///
+/// ⚠️ 这里原先硬编码过 `$HOME/rikka/Dsh-SYuki/world_map/worlddata/cn` 之类的候选目录 ——
+/// 那是开发机的私有布局，写进上游仓库等于让每个用户的启动路径都去 stat 一串
+/// 根本不存在的目录（移动端 `$HOME` 更是应用私有目录，永远不命中）。
+/// 现在不设这个变量就返回空表，行为与没有这段逻辑完全一致；
+/// 需要预热的开发者在自己的 shell 里 `export WM_EXTRA_DIRS=...` 即可。
 fn extra_dirs() -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        let h = PathBuf::from(home);
-        for rel in [
-            "rikka/Dsh-SYuki/world_map/worlddata/cn",
-            "Dsh-SYuki/world_map/worlddata/cn",
-        ] {
-            let p = h.join(rel);
-            if p.is_dir() {
-                v.push(p);
-            }
-        }
-    }
-    v
+    let Some(raw) = std::env::var_os("WM_EXTRA_DIRS") else {
+        return Vec::new();
+    };
+    raw.to_string_lossy()
+        .split(|c| c == ':' || c == ';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .collect()
 }
 
 /// 建一个地理数据源：主缓存目录 + 额外只读目录（后者会按需复制进主缓存）

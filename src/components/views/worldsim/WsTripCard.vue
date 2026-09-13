@@ -14,7 +14,14 @@
   -->
   <div
     class="ws-trip"
-    :class="[`is-${status}`, { 'is-floating': floating, 'is-right': floating && floatingSide === 'right', 'is-busy': busy }]"
+    :class="[
+      `is-${status}`,
+      {
+        'is-floating': floating,
+        'is-right': floating && floatingSide === 'right',
+        'is-busy': busy,
+      },
+    ]"
     role="group"
     :aria-label="S.title"
   >
@@ -86,7 +93,9 @@
           {{ fastText }}
         </button>
 
-        <span v-if="fast" class="ws-trip__hint">{{ S.slowEta }} {{ fmtDuration(slowEtaSecs) }}</span>
+        <span v-if="fast" class="ws-trip__hint"
+          >{{ S.slowEta }} {{ fmtDuration(slowEtaSecs) }}</span
+        >
         <span class="ws-trip__spacer" />
 
         <button
@@ -104,269 +113,276 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  tripDoneM,
-  tripEtaSecs,
-  tripProgress,
-  tripRemainingM,
-  type WsTrip,
-} from '@/composables/useWorldTrips'
-import { vehicleIconOf, kindLabelOf } from './wsVehicles'
-// 样式走**独立 css 文件**（与 P1~P3 的 worldsim.css 分开，避免和并行改同一份样式的代理打架）
-import '@/assets/styles/worldsim-trip.css'
+  import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+  import {
+    tripDoneM,
+    tripEtaSecs,
+    tripProgress,
+    tripRemainingM,
+    type WsTrip,
+  } from "@/composables/useWorldTrips";
+  import { vehicleIconOf, kindLabelOf } from "./wsVehicles";
+  // 样式走**独立 css 文件**（与 P1~P3 的 worldsim.css 分开，避免和并行改同一份样式的代理打架）
+  import "@/assets/styles/worldsim-trip.css";
 
-/* ── 文案：全部是组件内常量（i18n 由接入方统一收，这里不碰 locales）─────── */
-const ZH = {
-  title: '行程',
-  empty: '现在没有行程',
-  progress: '进度',
-  remain: '还剩',
-  eta: '预计',
-  mileage: '已走 / 全程',
-  autoKind: '（按距离自动选）',
-  fastLabel: '{n}× 加速中',
-  fastLabelOff: '{n}× 加速',
-  fastOnTip: '打开 {n}× 加速（后端会重锚行程，剩余时间立刻缩短）',
-  fastOffTip: '关掉加速，回到真实速度',
-  slowEta: '常速还需',
-  cancel: '取消行程',
-  cancelling: '正在取消…',
-  departing: '等待出发',
-  moving: '在路上',
-  arriving: '即将到达',
-  arrived: '已到达',
-  cancelled: '已取消',
-  unknownPlace: '未知地点',
-  lessThanSec: '不到 1 秒',
-  sec: '秒',
-  min: '分',
-  hour: '小时',
-  meter: '米',
-  km: '公里',
-  clockArrive: '到达',
-}
+  /* ── 文案：全部是组件内常量（i18n 由接入方统一收，这里不碰 locales）─────── */
+  const ZH = {
+    title: "行程",
+    empty: "现在没有行程",
+    progress: "进度",
+    remain: "还剩",
+    eta: "预计",
+    mileage: "已走 / 全程",
+    autoKind: "（按距离自动选）",
+    fastLabel: "{n}× 加速中",
+    fastLabelOff: "{n}× 加速",
+    fastOnTip: "打开 {n}× 加速（后端会重锚行程，剩余时间立刻缩短）",
+    fastOffTip: "关掉加速，回到真实速度",
+    slowEta: "常速还需",
+    cancel: "取消行程",
+    cancelling: "正在取消…",
+    departing: "等待出发",
+    moving: "在路上",
+    arriving: "即将到达",
+    arrived: "已到达",
+    cancelled: "已取消",
+    unknownPlace: "未知地点",
+    lessThanSec: "不到 1 秒",
+    sec: "秒",
+    min: "分",
+    hour: "小时",
+    meter: "米",
+    km: "公里",
+    clockArrive: "到达",
+  };
 
-/** 文案表（`strings` prop 覆盖时用的键集；`<script setup>` 不许 export，接入方按需自取） */
-type WsTripCardStrings = Record<keyof typeof ZH, string>
+  /** 文案表（`strings` prop 覆盖时用的键集；`<script setup>` 不许 export，接入方按需自取） */
+  type WsTripCardStrings = Record<keyof typeof ZH, string>;
 
-const props = withDefaults(
-  defineProps<{
-    /** 要显示的行程（`useWorldTrips` 的 `active`；没有就传 null） */
-    trip?: WsTrip | null
-    /** 后端权威的加速倍率（1 = 常速，100 = 100×）—— 组件的选中态只认它 */
-    speedup?: number
-    /** 父组件正在拨开关 / 取消（禁用按钮，防连点） */
-    busy?: boolean
-    /** 「加速」的目标倍率（默认 100，与后端 `SPEEDUP_FAST` 一致） */
-    fastSpeedup?: number
-    /** 是否浮在地图某个角上（默认 false：当普通卡片，由父组件决定放哪） */
-    floating?: boolean
-    /** floating 时靠哪边（默认左；`.ws-people` 在右下角，行程卡默认放左下角不打架） */
-    floatingSide?: 'left' | 'right'
-    /** 是否给「取消行程」按钮（只读展示时关掉） */
-    showCancel?: boolean
-    /** 覆盖任意文案（i18n 接进来时用，缺的键自动落回内置中文） */
-    strings?: Partial<WsTripCardStrings>
-  }>(),
-  {
-    trip: null,
-    speedup: 1,
-    busy: false,
-    fastSpeedup: 100,
-    floating: false,
-    floatingSide: 'left',
-    showCancel: true,
-    strings: () => ({}),
-  },
-)
+  const props = withDefaults(
+    defineProps<{
+      /** 要显示的行程（`useWorldTrips` 的 `active`；没有就传 null） */
+      trip?: WsTrip | null;
+      /** 后端权威的加速倍率（1 = 常速，100 = 100×）—— 组件的选中态只认它 */
+      speedup?: number;
+      /** 父组件正在拨开关 / 取消（禁用按钮，防连点） */
+      busy?: boolean;
+      /** 「加速」的目标倍率（默认 100，与后端 `SPEEDUP_FAST` 一致） */
+      fastSpeedup?: number;
+      /** 是否浮在地图某个角上（默认 false：当普通卡片，由父组件决定放哪） */
+      floating?: boolean;
+      /** floating 时靠哪边（默认左；`.ws-people` 在右下角，行程卡默认放左下角不打架） */
+      floatingSide?: "left" | "right";
+      /** 是否给「取消行程」按钮（只读展示时关掉） */
+      showCancel?: boolean;
+      /** 覆盖任意文案（i18n 接进来时用，缺的键自动落回内置中文） */
+      strings?: Partial<WsTripCardStrings>;
+    }>(),
+    {
+      trip: null,
+      speedup: 1,
+      busy: false,
+      fastSpeedup: 100,
+      floating: false,
+      floatingSide: "left",
+      showCancel: true,
+      strings: () => ({}),
+    }
+  );
 
-const emit = defineEmits<{
-  (e: 'cancel'): void
-  /** 拨加速开关：true = 要 100×，false = 回常速（父组件调 setSpeedup 并重读） */
-  (e: 'speedup', fast: boolean): void
-}>()
+  const emit = defineEmits<{
+    (e: "cancel"): void;
+    /** 拨加速开关：true = 要 100×，false = 回常速（父组件调 setSpeedup 并重读） */
+    (e: "speedup", fast: boolean): void;
+  }>();
 
-const S = computed<WsTripCardStrings>(() => ({ ...ZH, ...(props.strings || {}) }))
+  const S = computed<WsTripCardStrings>(() => ({ ...ZH, ...(props.strings || {}) }));
 
-/* ── 时钟状态（先声明：下面的派生量要依赖 `textNow` 才会随文字刷新重算）────── */
+  /* ── 时钟状态（先声明：下面的派生量要依赖 `textNow` 才会随文字刷新重算）────── */
 
-/** 文本重算间隔（毫秒）：逐帧改文字在手机上纯属浪费 */
-const TEXT_MS = 240
+  /** 文本重算间隔（毫秒）：逐帧改文字在手机上纯属浪费 */
+  const TEXT_MS = 240;
 
-const barEl = ref<HTMLElement | null>(null)
-/** 文字用的时间（节流后的 Date.now()）—— 进度条的**逐帧**插值不经过它 */
-const textNow = ref(Date.now())
-/** 进度条的百分比（节流后给文字/aria 用；逐帧的条宽直接写 DOM，不走响应式） */
-const pctShown = ref(0)
-const remainShown = ref(0)
-const doneShown = ref(0)
-const slowEtaSecs = ref(0)
+  const barEl = ref<HTMLElement | null>(null);
+  /** 文字用的时间（节流后的 Date.now()）—— 进度条的**逐帧**插值不经过它 */
+  const textNow = ref(Date.now());
+  /** 进度条的百分比（节流后给文字/aria 用；逐帧的条宽直接写 DOM，不走响应式） */
+  const pctShown = ref(0);
+  const remainShown = ref(0);
+  const doneShown = ref(0);
+  const slowEtaSecs = ref(0);
 
-let rafId = 0
-let lastText = 0
+  let rafId = 0;
+  let lastText = 0;
 
-/* ── 展示派生量 ─────────────────────────────────────────────────────────── */
+  /* ── 展示派生量 ─────────────────────────────────────────────────────────── */
 
-const status = computed(() => String(props.trip?.status || 'pending'))
-const live = computed(() => status.value === 'pending' || status.value === 'moving')
-const fast = computed(() => Number(props.speedup) > 1)
-/** 按钮文字：`{n}` 用 `fastSpeedup` 填（默认 100，与后端 `SPEEDUP_FAST` 一致） */
-const fastText = computed(() => fill(fast.value ? S.value.fastLabel : S.value.fastLabelOff))
-/** 按钮 tooltip：同一个 `{n}` 口径 */
-const fastTip = computed(() => fill(fast.value ? S.value.fastOffTip : S.value.fastOnTip))
-function fill(tpl: string): string {
-  return String(tpl).replace('{n}', String(props.fastSpeedup))
-}
-
-const icon = computed(() => vehicleIconOf(props.trip?.kind))
-const kindText = computed(() => kindLabelOf(props.trip?.kind, props.trip?.kind_zh))
-
-const fromName = computed(() => String(props.trip?.from?.name || '').trim() || S.value.unknownPlace)
-const toName = computed(() => String(props.trip?.to?.name || '').trim() || S.value.unknownPlace)
-const totalM = computed(() => Math.max(0, Number(props.trip?.distance_m) || 0))
-
-const statusText = computed(() => {
-  void textNow.value // 依赖节流时钟：进度跨过 99.9% 时文案要跟着从「在路上」变「即将到达」
-  if (status.value === 'arrived') return S.value.arrived
-  if (status.value === 'cancelled') return S.value.cancelled
-  if (status.value === 'pending') return S.value.departing
-  // 还剩最后一帧（≥99.9%）时换个说法，避免「进度 100% 还在路上」
-  return progressNow() >= 0.999 ? S.value.arriving : S.value.moving
-})
-
-/* ── rAF：逐帧插值（真相同一时间戳函数）────────────────────────────────── */
-
-function progressNow(): number {
-  const t = props.trip
-  if (!t) return 0
-  return tripProgress(t, Date.now())
-}
-
-/** 逐帧：只改 bar 的 transform（合成层）+ 按节流刷新文字 */
-function frame() {
-  rafId = window.requestAnimationFrame(frame)
-  const t = props.trip
-  if (!t) return
-  const nowMs = Date.now()
-  const p = tripProgress(t, nowMs)
-  const el = barEl.value
-  if (el) el.style.transform = `scaleX(${p.toFixed(4)})`
-  if (nowMs - lastText >= TEXT_MS) {
-    lastText = nowMs
-    textNow.value = nowMs
-    pctShown.value = Math.round(p * 100)
-    remainShown.value = tripRemainingM(t, nowMs)
-    doneShown.value = tripDoneM(t, nowMs)
-    slowEtaSecs.value = tripEtaSecs(t, nowMs, false)
+  const status = computed(() => String(props.trip?.status || "pending"));
+  const live = computed(() => status.value === "pending" || status.value === "moving");
+  const fast = computed(() => Number(props.speedup) > 1);
+  /** 按钮文字：`{n}` 用 `fastSpeedup` 填（默认 100，与后端 `SPEEDUP_FAST` 一致） */
+  const fastText = computed(() => fill(fast.value ? S.value.fastLabel : S.value.fastLabelOff));
+  /** 按钮 tooltip：同一个 `{n}` 口径 */
+  const fastTip = computed(() => fill(fast.value ? S.value.fastOffTip : S.value.fastOnTip));
+  function fill(tpl: string): string {
+    return String(tpl).replace("{n}", String(props.fastSpeedup));
   }
-}
 
-/** 立刻对齐一次（回到前台 / 换了一条行程 / 倍率变了，都要马上反映，不等下一帧节流） */
-function realign() {
-  const t = props.trip
-  const nowMs = Date.now()
-  lastText = nowMs
-  textNow.value = nowMs
-  if (!t) {
-    pctShown.value = 0
-    remainShown.value = 0
-    doneShown.value = 0
-    slowEtaSecs.value = 0
-    if (barEl.value) barEl.value.style.transform = 'scaleX(0)'
-    return
+  const icon = computed(() => vehicleIconOf(props.trip?.kind));
+  const kindText = computed(() => kindLabelOf(props.trip?.kind, props.trip?.kind_zh));
+
+  const fromName = computed(
+    () => String(props.trip?.from?.name || "").trim() || S.value.unknownPlace
+  );
+  const toName = computed(() => String(props.trip?.to?.name || "").trim() || S.value.unknownPlace);
+  const totalM = computed(() => Math.max(0, Number(props.trip?.distance_m) || 0));
+
+  const statusText = computed(() => {
+    void textNow.value; // 依赖节流时钟：进度跨过 99.9% 时文案要跟着从「在路上」变「即将到达」
+    if (status.value === "arrived") return S.value.arrived;
+    if (status.value === "cancelled") return S.value.cancelled;
+    if (status.value === "pending") return S.value.departing;
+    // 还剩最后一帧（≥99.9%）时换个说法，避免「进度 100% 还在路上」
+    return progressNow() >= 0.999 ? S.value.arriving : S.value.moving;
+  });
+
+  /* ── rAF：逐帧插值（真相同一时间戳函数）────────────────────────────────── */
+
+  function progressNow(): number {
+    const t = props.trip;
+    if (!t) return 0;
+    return tripProgress(t, Date.now());
   }
-  const p = tripProgress(t, nowMs)
-  pctShown.value = Math.round(p * 100)
-  remainShown.value = tripRemainingM(t, nowMs)
-  doneShown.value = tripDoneM(t, nowMs)
-  slowEtaSecs.value = tripEtaSecs(t, nowMs, false)
-  if (barEl.value) barEl.value.style.transform = `scaleX(${p.toFixed(4)})`
-}
 
-function startRaf() {
-  if (rafId || typeof window === 'undefined' || !window.requestAnimationFrame) return
-  rafId = window.requestAnimationFrame(frame)
-}
-function stopRaf() {
-  if (rafId) window.cancelAnimationFrame(rafId)
-  rafId = 0
-}
-
-/** 页面隐藏 → 停 rAF；回到前台 → 立刻按时间戳对齐并重启（手机息屏冻定时器也不怕） */
-function onVisibility() {
-  if (typeof document === 'undefined') return
-  if (document.visibilityState === 'hidden') {
-    stopRaf()
-  } else {
-    realign()
-    startRaf()
+  /** 逐帧：只改 bar 的 transform（合成层）+ 按节流刷新文字 */
+  function frame() {
+    rafId = window.requestAnimationFrame(frame);
+    const t = props.trip;
+    if (!t) return;
+    const nowMs = Date.now();
+    const p = tripProgress(t, nowMs);
+    const el = barEl.value;
+    if (el) el.style.transform = `scaleX(${p.toFixed(4)})`;
+    if (nowMs - lastText >= TEXT_MS) {
+      lastText = nowMs;
+      textNow.value = nowMs;
+      pctShown.value = Math.round(p * 100);
+      remainShown.value = tripRemainingM(t, nowMs);
+      doneShown.value = tripDoneM(t, nowMs);
+      slowEtaSecs.value = tripEtaSecs(t, nowMs, false);
+    }
   }
-}
 
-onMounted(() => {
-  realign()
-  startRaf()
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
-})
-
-onBeforeUnmount(() => {
-  stopRaf()
-  if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
-})
-
-// 换行程 / 换倍率（后端重锚过）：立刻对齐，避免旧进度闪一下
-watch(() => [props.trip?.id, props.trip?.status, props.speedup, props.trip?.at_ms], () => {
-  realign()
-  if (typeof document === 'undefined' || document.visibilityState !== 'hidden') startRaf()
-})
-
-/* ── 动作 ───────────────────────────────────────────────────────────────── */
-
-function toggleFast() {
-  if (props.busy || !live.value) return
-  // 只发意图，不改本地状态：真正的倍率由父组件 setSpeedup() 后从后端重读回来
-  emit('speedup', !fast.value)
-}
-
-/* ── 格式化（纯展示，不参与任何计算）────────────────────────────────────── */
-
-function fmtDistance(m: number): string {
-  const v = Math.max(0, Number(m) || 0)
-  if (v < 1000) return `${Math.round(v)} ${S.value.meter}`
-  if (v < 10_000) return `${(v / 1000).toFixed(1)} ${S.value.km}`
-  return `${Math.round(v / 1000)} ${S.value.km}`
-}
-
-function fmtDuration(secs: number): string {
-  const v = Math.max(0, Number(secs) || 0)
-  if (v < 1) return S.value.lessThanSec
-  if (v < 60) return `${Math.ceil(v)} ${S.value.sec}`
-  if (v < 3600) {
-    const m = Math.floor(v / 60)
-    const s = Math.round(v % 60)
-    return s > 0 ? `${m} ${S.value.min} ${s} ${S.value.sec}` : `${m} ${S.value.min}`
+  /** 立刻对齐一次（回到前台 / 换了一条行程 / 倍率变了，都要马上反映，不等下一帧节流） */
+  function realign() {
+    const t = props.trip;
+    const nowMs = Date.now();
+    lastText = nowMs;
+    textNow.value = nowMs;
+    if (!t) {
+      pctShown.value = 0;
+      remainShown.value = 0;
+      doneShown.value = 0;
+      slowEtaSecs.value = 0;
+      if (barEl.value) barEl.value.style.transform = "scaleX(0)";
+      return;
+    }
+    const p = tripProgress(t, nowMs);
+    pctShown.value = Math.round(p * 100);
+    remainShown.value = tripRemainingM(t, nowMs);
+    doneShown.value = tripDoneM(t, nowMs);
+    slowEtaSecs.value = tripEtaSecs(t, nowMs, false);
+    if (barEl.value) barEl.value.style.transform = `scaleX(${p.toFixed(4)})`;
   }
-  const h = Math.floor(v / 3600)
-  const m = Math.round((v % 3600) / 60)
-  return m > 0 ? `${h} ${S.value.hour} ${m} ${S.value.min}` : `${h} ${S.value.hour}`
-}
 
-/** ETA 文案：加速时按**有效速度**算（100× 下「还要 47 秒」是错的），并附到达钟点 */
-const etaText = computed(() => {
-  void textNow.value // 依赖节流时钟：每次文字刷新都重算
-  const t = props.trip
-  if (!t) return '—'
-  if (status.value === 'arrived') return S.value.arrived
-  if (status.value === 'cancelled') return S.value.cancelled
-  const secs = tripEtaSecs(t, textNow.value, true)
-  const clock = fmtClock(textNow.value + secs * 1000)
-  return `${fmtDuration(secs)} · ${S.value.clockArrive} ${clock}`
-})
+  function startRaf() {
+    if (rafId || typeof window === "undefined" || !window.requestAnimationFrame) return;
+    rafId = window.requestAnimationFrame(frame);
+  }
+  function stopRaf() {
+    if (rafId) window.cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
 
-function fmtClock(ms: number): string {
-  const d = new Date(ms)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}`
-}
+  /** 页面隐藏 → 停 rAF；回到前台 → 立刻按时间戳对齐并重启（手机息屏冻定时器也不怕） */
+  function onVisibility() {
+    if (typeof document === "undefined") return;
+    if (document.visibilityState === "hidden") {
+      stopRaf();
+    } else {
+      realign();
+      startRaf();
+    }
+  }
+
+  onMounted(() => {
+    realign();
+    startRaf();
+    if (typeof document !== "undefined")
+      document.addEventListener("visibilitychange", onVisibility);
+  });
+
+  onBeforeUnmount(() => {
+    stopRaf();
+    if (typeof document !== "undefined")
+      document.removeEventListener("visibilitychange", onVisibility);
+  });
+
+  // 换行程 / 换倍率（后端重锚过）：立刻对齐，避免旧进度闪一下
+  watch(
+    () => [props.trip?.id, props.trip?.status, props.speedup, props.trip?.at_ms],
+    () => {
+      realign();
+      if (typeof document === "undefined" || document.visibilityState !== "hidden") startRaf();
+    }
+  );
+
+  /* ── 动作 ───────────────────────────────────────────────────────────────── */
+
+  function toggleFast() {
+    if (props.busy || !live.value) return;
+    // 只发意图，不改本地状态：真正的倍率由父组件 setSpeedup() 后从后端重读回来
+    emit("speedup", !fast.value);
+  }
+
+  /* ── 格式化（纯展示，不参与任何计算）────────────────────────────────────── */
+
+  function fmtDistance(m: number): string {
+    const v = Math.max(0, Number(m) || 0);
+    if (v < 1000) return `${Math.round(v)} ${S.value.meter}`;
+    if (v < 10_000) return `${(v / 1000).toFixed(1)} ${S.value.km}`;
+    return `${Math.round(v / 1000)} ${S.value.km}`;
+  }
+
+  function fmtDuration(secs: number): string {
+    const v = Math.max(0, Number(secs) || 0);
+    if (v < 1) return S.value.lessThanSec;
+    if (v < 60) return `${Math.ceil(v)} ${S.value.sec}`;
+    if (v < 3600) {
+      const m = Math.floor(v / 60);
+      const s = Math.round(v % 60);
+      return s > 0 ? `${m} ${S.value.min} ${s} ${S.value.sec}` : `${m} ${S.value.min}`;
+    }
+    const h = Math.floor(v / 3600);
+    const m = Math.round((v % 3600) / 60);
+    return m > 0 ? `${h} ${S.value.hour} ${m} ${S.value.min}` : `${h} ${S.value.hour}`;
+  }
+
+  /** ETA 文案：加速时按**有效速度**算（100× 下「还要 47 秒」是错的），并附到达钟点 */
+  const etaText = computed(() => {
+    void textNow.value; // 依赖节流时钟：每次文字刷新都重算
+    const t = props.trip;
+    if (!t) return "—";
+    if (status.value === "arrived") return S.value.arrived;
+    if (status.value === "cancelled") return S.value.cancelled;
+    const secs = tripEtaSecs(t, textNow.value, true);
+    const clock = fmtClock(textNow.value + secs * 1000);
+    return `${fmtDuration(secs)} · ${S.value.clockArrive} ${clock}`;
+  });
+
+  function fmtClock(ms: number): string {
+    const d = new Date(ms);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
 </script>

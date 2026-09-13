@@ -227,7 +227,10 @@
   border-radius: 999px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: transform 0.12s ease, box-shadow 0.16s ease, background 0.16s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.16s ease,
+    background 0.16s ease;
 }
 .ws-trip__fast {
   color: var(--ws-fg, #4a5b63);

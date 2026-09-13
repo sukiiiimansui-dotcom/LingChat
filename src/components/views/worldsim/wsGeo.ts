@@ -11,12 +11,12 @@
 
 /** 一个可点击的行政区划（从 geo_svg 文本里读出来的） */
 export interface GeoRegion {
-  adcode: string
-  name: string
+  adcode: string;
+  name: string;
 }
 
 /** 行政级别，取值规则与 Rust `geo.rs::level_of` **逐字对齐**（别处别再抄一遍规则） */
-export type GeoLevel = 'country' | 'province' | 'city' | 'district' | 'street'
+export type GeoLevel = "country" | "province" | "city" | "district" | "street";
 
 /**
  * adcode → 行政级别。
@@ -26,25 +26,25 @@ export type GeoLevel = 'country' | 'province' | 'city' | 'district' | 'street'
  * 所以流程里绝不能写死「省→市→区」三级，只能按「当前区域的子级」一层层走（见 useWorldSim）。
  */
 export function geoLevelOf(adcode: string): GeoLevel {
-  const a = String(adcode || '').trim()
-  if (!a || a === '100000' || a === '0') return 'country'
-  if (a.endsWith('0000')) return 'province'
-  if (a.endsWith('00')) return 'city'
-  return 'district'
+  const a = String(adcode || "").trim();
+  if (!a || a === "100000" || a === "0") return "country";
+  if (a.endsWith("0000")) return "province";
+  if (a.endsWith("00")) return "city";
+  return "district";
 }
 
 export function levelLabel(level: GeoLevel): string {
   switch (level) {
-    case 'country':
-      return '全国'
-    case 'province':
-      return '省'
-    case 'city':
-      return '市'
-    case 'district':
-      return '区县'
+    case "country":
+      return "全国";
+    case "province":
+      return "省";
+    case "city":
+      return "市";
+    case "district":
+      return "区县";
     default:
-      return '街镇'
+      return "街镇";
   }
 }
 
@@ -60,32 +60,32 @@ export function levelLabel(level: GeoLevel): string {
  * Rust 侧直接跳过，这里统一兜住）。
  */
 export function parseGeoRegions(svg: string): GeoRegion[] {
-  const out: GeoRegion[] = []
-  const seen = new Set<string>()
-  const tagRe = /<g\b[^>]*class="geo-region"[^>]*>/g
-  let m: RegExpExecArray | null
-  while ((m = tagRe.exec(String(svg || '')))) {
-    const tag = m[0]
-    const ad = /data-adcode="([^"]*)"/.exec(tag)
-    const nm = /data-name="([^"]*)"/.exec(tag)
-    const adcode = unescapeXml(ad ? ad[1] : '')
-    const name = unescapeXml(nm ? nm[1] : '')
-    if (!adcode || !name.trim()) continue
-    if (seen.has(adcode)) continue
-    seen.add(adcode)
-    out.push({ adcode, name: name.trim() })
+  const out: GeoRegion[] = [];
+  const seen = new Set<string>();
+  const tagRe = /<g\b[^>]*class="geo-region"[^>]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(String(svg || "")))) {
+    const tag = m[0];
+    const ad = /data-adcode="([^"]*)"/.exec(tag);
+    const nm = /data-name="([^"]*)"/.exec(tag);
+    const adcode = unescapeXml(ad ? ad[1] : "");
+    const name = unescapeXml(nm ? nm[1] : "");
+    if (!adcode || !name.trim()) continue;
+    if (seen.has(adcode)) continue;
+    seen.add(adcode);
+    out.push({ adcode, name: name.trim() });
   }
-  return out
+  return out;
 }
 
 /** XML 实体还原（渲染器对 &<>" 做了转义；地名里出现 `&` 的概率虽低，也不该显示成 `&amp;`） */
 export function unescapeXml(s: string): string {
-  return String(s || '')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
+  return String(s || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
+    .replace(/&amp;/g, "&");
 }
 
 /**
@@ -100,9 +100,9 @@ export function unescapeXml(s: string): string {
  * `<script>` 同理（后端不会输出，但注入前一律清掉，这是纪律不是洁癖）。
  */
 export function sanitizeGeoMarkup(svg: string): string {
-  return String(svg || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
+  return String(svg || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "");
 }
 
 /**
@@ -114,9 +114,9 @@ export function sanitizeGeoMarkup(svg: string): string {
  * 否则 data URL 会在第一个 `#` 处被截断成「只画了一半」的图。
  */
 export function svgToDataUrl(svg: string): string {
-  const text = String(svg || '').trim()
-  if (!text.startsWith('<')) throw new Error('后端没有返回 SVG')
-  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(text)
+  const text = String(svg || "").trim();
+  if (!text.startsWith("<")) throw new Error("后端没有返回 SVG");
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(text);
 }
 
 /**
@@ -128,13 +128,13 @@ export function svgToDataUrl(svg: string): string {
  * 超过就丢精度、两边算出的草图会悄悄不一样 —— 卡在 32 位绝对安全。
  */
 export function hash32(s: string): number {
-  let h = 0x811c9dc5
-  const str = String(s || '')
+  let h = 0x811c9dc5;
+  const str = String(s || "");
   for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
   }
-  return h >>> 0
+  return h >>> 0;
 }
 
 /**
@@ -150,22 +150,22 @@ export function buildAreaLabel(path: GeoRegion[], startAt = 1): string {
     // 后端只给了编码没给名字，直接拼出来就是「重庆市·500100·500102」——
     // 把一串编码甩给用户既没用又吓人。宁可少一段，也不露编码。
     .map((p) => {
-      const raw = p && p.name ? String(p.name).trim() : ''
-      return /^\d{6}$/.test(raw) ? '' : raw
+      const raw = p && p.name ? String(p.name).trim() : "";
+      return /^\d{6}$/.test(raw) ? "" : raw;
     })
-    .filter(Boolean)
-  return names.join('·')
+    .filter(Boolean);
+  return names.join("·");
 }
 
 /** 去掉路径里的重复与空项（后端给的 path 偶尔会带同名父级，拼出来会「广东省·广东省」） */
 export function dedupePath(path: GeoRegion[]): GeoRegion[] {
-  const out: GeoRegion[] = []
+  const out: GeoRegion[] = [];
   for (const p of path || []) {
-    if (!p || !p.adcode || !p.name) continue
-    if (out.length && out[out.length - 1].adcode === p.adcode) continue
-    out.push({ adcode: String(p.adcode), name: String(p.name) })
+    if (!p || !p.adcode || !p.name) continue;
+    if (out.length && out[out.length - 1].adcode === p.adcode) continue;
+    out.push({ adcode: String(p.adcode), name: String(p.name) });
   }
-  return out
+  return out;
 }
 
 /**
@@ -176,23 +176,25 @@ export function dedupePath(path: GeoRegion[]): GeoRegion[] {
  * 大小写不敏感；adcode 前缀也认（用户从别处抄来一串编码时能直接用）。
  */
 export function matchRegions(list: GeoRegion[], query: string, limit = 12): GeoRegion[] {
-  const q = String(query || '').trim().toLowerCase()
-  if (!q) return []
+  const q = String(query || "")
+    .trim()
+    .toLowerCase();
+  if (!q) return [];
   const score = (r: GeoRegion): number => {
-    const n = r.name.toLowerCase()
-    const a = r.adcode.toLowerCase()
-    if (n === q || a === q) return 0
-    if (n.startsWith(q) || a.startsWith(q)) return 1
-    if (n.includes(q)) return 2
-    return -1
-  }
-  const hit: { r: GeoRegion; s: number; i: number }[] = []
+    const n = r.name.toLowerCase();
+    const a = r.adcode.toLowerCase();
+    if (n === q || a === q) return 0;
+    if (n.startsWith(q) || a.startsWith(q)) return 1;
+    if (n.includes(q)) return 2;
+    return -1;
+  };
+  const hit: { r: GeoRegion; s: number; i: number }[] = [];
   list.forEach((r, i) => {
-    const s = score(r)
-    if (s >= 0) hit.push({ r, s, i })
-  })
-  hit.sort((x, y) => (x.s - y.s) || (x.i - y.i))
-  return hit.slice(0, limit).map((h) => h.r)
+    const s = score(r);
+    if (s >= 0) hit.push({ r, s, i });
+  });
+  hit.sort((x, y) => x.s - y.s || x.i - y.i);
+  return hit.slice(0, limit).map((h) => h.r);
 }
 
 /**
@@ -203,40 +205,40 @@ export function matchRegions(list: GeoRegion[], query: string, limit = 12): GeoR
  * 只看并发核数 / 设备内存这两个到处都有的信号，拿不到就当高端（宁可多开动画，也别误降级）。
  */
 export function detectLowPerf(): boolean {
-  if (typeof navigator === 'undefined') return false
-  const nav = navigator as Navigator & { deviceMemory?: number }
-  const cores = Number(nav.hardwareConcurrency || 0)
-  const mem = Number(nav.deviceMemory || 0)
-  if (cores > 0 && cores <= 4) return true
-  if (mem > 0 && mem <= 3) return true
-  return false
+  if (typeof navigator === "undefined") return false;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const cores = Number(nav.hardwareConcurrency || 0);
+  const mem = Number(nav.deviceMemory || 0);
+  if (cores > 0 && cores <= 4) return true;
+  if (mem > 0 && mem <= 3) return true;
+  return false;
 }
 
 /** 系统是否要求「减少动态效果」 */
 export function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false
+  if (typeof window === "undefined" || !window.matchMedia) return false;
   try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   } catch {
-    return false
+    return false;
   }
 }
 
 /** 系统当前是不是深色（跟随系统那一路就是靠它；LingChat 主题那一路由调用方显式传 dark） */
 export function systemPrefersDark(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false
+  if (typeof window === "undefined" || !window.matchMedia) return false;
   try {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
   } catch {
-    return false
+    return false;
   }
 }
 
 /** 把毫秒数说成人话（进度卡上的「已用 1.4s」） */
 export function fmtMs(ms: number): string {
-  const n = Math.max(0, Number(ms) || 0)
-  if (n < 1000) return `${Math.round(n)}ms`
-  return `${(n / 1000).toFixed(1)}s`
+  const n = Math.max(0, Number(ms) || 0);
+  if (n < 1000) return `${Math.round(n)}ms`;
+  return `${(n / 1000).toFixed(1)}s`;
 }
 
 /**
@@ -245,12 +247,12 @@ export function fmtMs(ms: number): string {
  * 不依赖任何查询表：440103 → 440000 / 440100 / 440103。
  */
 export function adminChain(adcode: string): string[] {
-  const a = String(adcode || '').trim()
-  if (a.length !== 6 || !/^\d+$/.test(a)) return a ? [a] : []
-  const province = a.slice(0, 2) + '0000'
-  const city = a.slice(0, 4) + '00'
-  const out = [province]
-  if (city !== province) out.push(city)
-  if (a !== city && a !== province) out.push(a)
-  return out
+  const a = String(adcode || "").trim();
+  if (a.length !== 6 || !/^\d+$/.test(a)) return a ? [a] : [];
+  const province = a.slice(0, 2) + "0000";
+  const city = a.slice(0, 4) + "00";
+  const out = [province];
+  if (city !== province) out.push(city);
+  if (a !== city && a !== province) out.push(a);
+  return out;
 }

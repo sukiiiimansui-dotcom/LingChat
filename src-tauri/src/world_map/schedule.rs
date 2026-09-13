@@ -19,6 +19,7 @@
 //! 都是手写扫描，行为与 Python 的 `re` 语义逐条对齐（含贪婪/回溯顺序），测试里有对照。
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 /// 数据目录候选（按优先级）。`WM_LINGCHAT_DATA` 可覆盖，便于测试与部署。
@@ -509,8 +510,8 @@ pub fn role_place(kind: &str, facilities: Option<&[Value]>, seed: u64) -> Value 
 
 /// 角色名 → 稳定种子（同一角色每次落在同一处设施）
 pub fn seed_of_name(name: &str) -> u64 {
-    let d = md5::compute(name.as_bytes());
-    let hex: String = d.0.iter().take(3).map(|b| format!("{b:02x}")).collect();
+    let d = Sha256::digest(name.as_bytes());
+    let hex: String = d.iter().take(3).map(|b| format!("{b:02x}")).collect();
     u64::from_str_radix(&hex, 16).unwrap_or(0)
 }
 

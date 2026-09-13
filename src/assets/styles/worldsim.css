@@ -33,32 +33,32 @@
 
 /* ── 主题一：薄荷奶油（默认亮色）──────────────────────────────────────────── */
 .ws-root.theme-mint {
-  --ws-bg: #fdfbf6;            /* 奶油白 */
-  --ws-bg-2: #f2f8f5;          /* 次级底：极浅薄荷 */
+  --ws-bg: #fdfbf6; /* 奶油白 */
+  --ws-bg-2: #f2f8f5; /* 次级底：极浅薄荷 */
   --ws-panel: rgba(255, 255, 255, 0.86);
   --ws-panel-2: rgba(255, 255, 255, 0.62);
   --ws-border: rgba(143, 214, 192, 0.38);
-  --ws-fg: #4a5b63;            /* 暖灰文字 */
-  --ws-fg-dim: #67757b;   /* WCAG AA：原 #7d8f96 对奶油白只有 3.25，正文级次要文字要 ≥4.5 */
-  --ws-primary: #8fd6c0;       /* 薄荷绿 */
+  --ws-fg: #4a5b63; /* 暖灰文字 */
+  --ws-fg-dim: #67757b; /* WCAG AA：原 #7d8f96 对奶油白只有 3.25，正文级次要文字要 ≥4.5 */
+  --ws-primary: #8fd6c0; /* 薄荷绿 */
   --ws-primary-deep: #62b79d;
   --ws-primary-soft: rgba(143, 214, 192, 0.18);
   --ws-on-primary: #17332c;
-  --ws-accent: #a8c8e8;        /* 雾蓝 */
-  --ws-accent-2: #f0a6b8;      /* 自己头像点（两套主题都有，玻璃套是主色） */
+  --ws-accent: #a8c8e8; /* 雾蓝 */
+  --ws-accent-2: #f0a6b8; /* 自己头像点（两套主题都有，玻璃套是主色） */
   --ws-radius: 16px;
   --ws-radius-sm: 14px;
   --ws-radius-lg: 18px;
-  --ws-shadow: 0 4px 14px rgba(90, 120, 130, 0.10);
+  --ws-shadow: 0 4px 14px rgba(90, 120, 130, 0.1);
   --ws-shadow-lg: 0 10px 30px rgba(90, 120, 130, 0.16);
-  --ws-blur: 0px;              /* 薄荷套不要毛玻璃 */
-  --ws-hl: #8fd6c0;            /* 地图上「命中区域」的高亮色 */
+  --ws-blur: 0px; /* 薄荷套不要毛玻璃 */
+  --ws-hl: #8fd6c0; /* 地图上「命中区域」的高亮色 */
   --ws-hl-line: #3f9e83;
   --ws-ok: #6cc39a;
   --ws-warn: #e8b86d;
   --ws-err: #e08d8d;
   --ws-stage-bg: #eef4f1;
-  --ws-primary-ink: #649686;  /* 主色当**文字/图标**时用（原主色对底色只有 1.6~2.1，完全读不出）；当面积填充仍用 --ws-primary */
+  --ws-primary-ink: #649686; /* 主色当**文字/图标**时用（原主色对底色只有 1.6~2.1，完全读不出）；当面积填充仍用 --ws-primary */
 }
 
 /* ── 主题二：现代简约·毛玻璃 ─────────────────────────────────────────────── */
@@ -69,40 +69,40 @@
   --ws-panel-2: rgba(255, 255, 255, 0.42);
   --ws-border: rgba(154, 166, 232, 0.32);
   --ws-fg: #3c4560;
-  --ws-fg-dim: #656d88;   /* WCAG AA：原 #6f7896 只有 3.87 */
-  --ws-primary: #9aa6e8;       /* 低饱和蓝紫 */
+  --ws-fg-dim: #656d88; /* WCAG AA：原 #6f7896 只有 3.87 */
+  --ws-primary: #9aa6e8; /* 低饱和蓝紫 */
   --ws-primary-deep: #7b88d8;
-  --ws-primary-soft: rgba(154, 166, 232, 0.20);
+  --ws-primary-soft: rgba(154, 166, 232, 0.2);
   --ws-on-primary: #232a45;
   --ws-accent: #b8c2f0;
   --ws-accent-2: #f0a6b8;
   --ws-radius: 18px;
   --ws-radius-sm: 14px;
   --ws-radius-lg: 18px;
-  --ws-shadow: 0 6px 18px rgba(80, 92, 140, 0.10);
+  --ws-shadow: 0 6px 18px rgba(80, 92, 140, 0.1);
   --ws-shadow-lg: 0 12px 34px rgba(80, 92, 140, 0.18);
-  --ws-blur: 10px;             /* 卡片毛玻璃 */
+  --ws-blur: 10px; /* 卡片毛玻璃 */
   --ws-hl: #9aa6e8;
   --ws-hl-line: #6a78d0;
   --ws-ok: #7fc7a4;
   --ws-warn: #e6bb78;
   --ws-err: #e393a0;
   --ws-stage-bg: #e9edf7;
-  --ws-primary-ink: #7a83b7;  /* 主色当**文字/图标**时用（原主色对底色只有 1.6~2.1，完全读不出）；当面积填充仍用 --ws-primary */
+  --ws-primary-ink: #7a83b7; /* 主色当**文字/图标**时用（原主色对底色只有 1.6~2.1，完全读不出）；当面积填充仍用 --ws-primary */
 }
 
 /* ── 深色（两套主题各出一版，同一色系压低明度）───────────────────────────── */
 .ws-root.theme-mint.ws-dark,
 .ws-root.theme-mint.ws-sys-dark {
-  --ws-bg: #0f1a1b;            /* 低饱和深青底 */
+  --ws-bg: #0f1a1b; /* 低饱和深青底 */
   --ws-bg-2: #132224;
   --ws-panel: rgba(24, 40, 41, 0.82);
   --ws-panel-2: rgba(28, 46, 47, 0.58);
   --ws-border: rgba(143, 214, 192, 0.22);
   --ws-fg: #d9ebe6;
   --ws-fg-dim: #8ba7a3;
-  --ws-primary: #7fd0b8;       /* 亮薄荷点缀 */
-  --ws-primary-ink: #7fd0b8;  /* 深色下主色本来就够亮（对深底 9.8/8.6），ink 就用它本身 */
+  --ws-primary: #7fd0b8; /* 亮薄荷点缀 */
+  --ws-primary-ink: #7fd0b8; /* 深色下主色本来就够亮（对深底 9.8/8.6），ink 就用它本身 */
   --ws-primary-deep: #4fae94;
   --ws-primary-soft: rgba(127, 208, 184, 0.16);
   --ws-on-primary: #0c1a18;
@@ -120,7 +120,7 @@
 
 .ws-root.theme-glass.ws-dark,
 .ws-root.theme-glass.ws-sys-dark {
-  --ws-bg: #14172a;            /* 玻璃套直接加深底色 */
+  --ws-bg: #14172a; /* 玻璃套直接加深底色 */
   --ws-bg-2: #181c33;
   --ws-panel: rgba(30, 34, 56, 0.62);
   --ws-panel-2: rgba(36, 41, 66, 0.42);
@@ -128,7 +128,7 @@
   --ws-fg: #dfe3f5;
   --ws-fg-dim: #98a0c0;
   --ws-primary: #a7b1f0;
-  --ws-primary-ink: #9aa6e8;  /* 深色下主色本来就够亮（对深底 9.8/8.6），ink 就用它本身 */
+  --ws-primary-ink: #9aa6e8; /* 深色下主色本来就够亮（对深底 9.8/8.6），ink 就用它本身 */
   --ws-primary-deep: #7f8ce0;
   --ws-primary-soft: rgba(167, 177, 240, 0.18);
   --ws-on-primary: #171a2e;
@@ -171,11 +171,12 @@
   color: var(--ws-fg);
   background:
     radial-gradient(120% 80% at 12% 0%, var(--ws-bg-2) 0%, transparent 60%),
-    radial-gradient(100% 70% at 100% 100%, var(--ws-primary-soft) 0%, transparent 55%),
-    var(--ws-bg);
+    radial-gradient(100% 70% at 100% 100%, var(--ws-primary-soft) 0%, transparent 55%), var(--ws-bg);
   overflow: hidden;
   /* 主题切换时有一点过渡，不至于“啪”地跳一下 */
-  transition: background-color 0.35s ease, color 0.35s ease;
+  transition:
+    background-color 0.35s ease,
+    color 0.35s ease;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -259,7 +260,10 @@
   border: 1px solid var(--ws-border);
   border-radius: var(--ws-radius-sm);
   cursor: pointer;
-  transition: transform 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
   backdrop-filter: blur(var(--ws-blur));
   -webkit-backdrop-filter: blur(var(--ws-blur));
 }
@@ -344,79 +348,156 @@
  * content 一变就得重新排版那一行字，属于**触发布局**的动画。现在改成
  * 静态省略号 + opacity 呼吸：一个字符、只动透明度，观感一致（“它在动=还在等”）。 */
 .ws-dots::after {
-  content: '…';
+  content: "…";
   opacity: 0.35;
   animation: ws-breathe 1.4s ease-in-out infinite;
 }
 
 /* ── 关键帧：全部 ws- 前缀，避免和 LingChat 原本的动画撞名 ── */
 @keyframes ws-fade-up {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes ws-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 @keyframes ws-dots {
   /* P5-5：保留这个关键帧名字只为兼容（老版本用它动 `content`），
      现在没有任何规则引用它 —— 新代码一律用 transform/opacity 那批。 */
-  0%, 100% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 1;
+  }
 }
 /* 初始化：外圈缓慢旋转 + 内圈反向，像在展开一张地图 */
 @keyframes ws-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 @keyframes ws-spin-rev {
-  to { transform: rotate(-360deg); }
+  to {
+    transform: rotate(-360deg);
+  }
 }
 /* 定位：雷达脉冲 */
 @keyframes ws-radar {
-  0%   { transform: scale(0.25); opacity: 0.85; }
-  80%  { transform: scale(1); opacity: 0; }
-  100% { transform: scale(1); opacity: 0; }
+  0% {
+    transform: scale(0.25);
+    opacity: 0.85;
+  }
+  80% {
+    transform: scale(1);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
 }
 /* 地图加载 / 区域切换：等高线一圈圈扩开 */
 @keyframes ws-ring {
-  0%   { transform: scale(0.35); opacity: 0; }
-  35%  { opacity: 0.9; }
-  100% { transform: scale(1.05); opacity: 0; }
+  0% {
+    transform: scale(0.35);
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.05);
+    opacity: 0;
+  }
 }
 /* AI 绘制：画笔描边（stroke-dashoffset 走一遍） */
 @keyframes ws-draw {
-  0%   { stroke-dashoffset: 120; }
-  60%  { stroke-dashoffset: 0; }
-  100% { stroke-dashoffset: 0; opacity: 0.35; }
+  0% {
+    stroke-dashoffset: 120;
+  }
+  60% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.35;
+  }
 }
 /* 进度条流光。
  * P5-5 修：原来是动 `background-position`（每次都要重画那一块渐变）。
  * 现在改成让 `::after` 那层高光**平移**（transform），合成层完成，不重画。 */
 @keyframes ws-shimmer {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 /* 新画的建筑「弹」出来（AI 增量绘制用） */
 @keyframes ws-pop {
-  0%   { opacity: 0; transform: translateY(2px) scale(0.86); }
-  100% { opacity: 1; transform: none; }
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.86);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
 }
 /* 命中的省份高亮：呼吸光晕 */
 @keyframes ws-breathe {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 /* 漂浮（空态插画） */
 @keyframes ws-float {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-4px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
-.ws-anim-spin { animation: ws-spin 9s linear infinite; transform-origin: 50% 50%; }
-.ws-anim-spin-rev { animation: ws-spin-rev 6s linear infinite; transform-origin: 50% 50%; }
-.ws-anim-radar { animation: ws-radar 2.1s ease-out infinite; transform-origin: 50% 50%; }
-.ws-anim-ring { animation: ws-ring 2.4s ease-out infinite; transform-origin: 50% 50%; }
-.ws-anim-breathe { animation: ws-breathe 2.2s ease-in-out infinite; }
-.ws-anim-float { animation: ws-float 3.2s ease-in-out infinite; }
+.ws-anim-spin {
+  animation: ws-spin 9s linear infinite;
+  transform-origin: 50% 50%;
+}
+.ws-anim-spin-rev {
+  animation: ws-spin-rev 6s linear infinite;
+  transform-origin: 50% 50%;
+}
+.ws-anim-radar {
+  animation: ws-radar 2.1s ease-out infinite;
+  transform-origin: 50% 50%;
+}
+.ws-anim-ring {
+  animation: ws-ring 2.4s ease-out infinite;
+  transform-origin: 50% 50%;
+}
+.ws-anim-breathe {
+  animation: ws-breathe 2.2s ease-in-out infinite;
+}
+.ws-anim-float {
+  animation: ws-float 3.2s ease-in-out infinite;
+}
 /* AI 绘制：一支笔把线描出来（dasharray/dashoffset 那套老办法，WebView 全兼容） */
 .ws-anim-draw {
   stroke-dasharray: 120;
@@ -433,7 +514,7 @@
   background: var(--ws-primary-soft);
 }
 .ws-skeleton::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background: linear-gradient(90deg, transparent 0%, var(--ws-panel-2) 50%, transparent 100%);
@@ -479,9 +560,15 @@
  *
  * ⚠️ 三个色值必须与后端 `src-tauri/src/world_map/render_geo.rs::style_of()` 的 `bg`
  *    逐字一致：gaode #cfe3f5 / dark #0a1420 / water #dfeaf2。改后端配色时这里要一起改。 */
-.ws-geo.ws-sea-gaode { --ws-sea: #cfe3f5; }
-.ws-geo.ws-sea-dark { --ws-sea: #0a1420; }
-.ws-geo.ws-sea-water { --ws-sea: #dfeaf2; }
+.ws-geo.ws-sea-gaode {
+  --ws-sea: #cfe3f5;
+}
+.ws-geo.ws-sea-dark {
+  --ws-sea: #0a1420;
+}
+.ws-geo.ws-sea-water {
+  --ws-sea: #dfeaf2;
+}
 /* ── 手势的**变换容器**（A 部分：地图手势本体，PR 里应该有）─────────────
  * 为什么要有这么一层：平移/缩放只改这个 div 的 transform，
  * **绝不碰后端 SVG 本体** —— 那个 SVG 是 v-html 注进来的文本，
@@ -546,7 +633,9 @@
   cursor: pointer;
 }
 .ws-geo .geo-fill {
-  transition: fill 0.18s ease, filter 0.18s ease;
+  transition:
+    fill 0.18s ease,
+    filter 0.18s ease;
 }
 .ws-geo .geo-region:hover .geo-fill {
   filter: brightness(1.06) saturate(1.12);
@@ -703,8 +792,12 @@
 }
 /* color-mix 在很老的 WebView 上没有 → 退回半透明底色，别让提示条变成透明看不见 */
 @supports not (background: color-mix(in srgb, red 10%, transparent)) {
-  .ws-note--warn { background: rgba(232, 184, 109, 0.22); }
-  .ws-note--err { background: rgba(224, 141, 141, 0.22); }
+  .ws-note--warn {
+    background: rgba(232, 184, 109, 0.22);
+  }
+  .ws-note--err {
+    background: rgba(224, 141, 141, 0.22);
+  }
 }
 
 /* ── 滚动条（列表用）────────────────────────────────────────────────────── */
@@ -745,7 +838,9 @@
   border: 1px solid var(--ws-border);
   border-radius: 999px;
   cursor: pointer;
-  transition: background-color 0.16s ease, color 0.16s ease;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
 .ws-chip.is-on {
   color: var(--ws-on-primary);
@@ -788,12 +883,17 @@
 
 /* 面板滑入 / 遮罩淡入（抽屉动画；prefers-reduced-motion 那条规则会自动把它压掉） */
 @keyframes ws-slide-in {
-  from { transform: translateX(14px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 /* 地图上的头像层：绝对不能吃掉地图手势（头像自己是唯一的洞，见组件里的 scoped 样式） */
 .ws-avs {
   pointer-events: none;
 }
-

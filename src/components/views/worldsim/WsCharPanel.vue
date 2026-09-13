@@ -30,15 +30,22 @@
 
     <aside class="ws-drawer__panel" role="dialog" aria-modal="true" :aria-label="panelTitle">
       <header class="ws-drawer__head">
-        <button class="ws-btn ws-btn--ghost" type="button" :title="t('worldsim.panel.close')" @click="emit('close')">←</button>
+        <button
+          class="ws-btn ws-btn--ghost"
+          type="button"
+          :title="t('worldsim.panel.close')"
+          @click="emit('close')"
+        >
+          ←
+        </button>
         <div class="ws-drawer__who">
-          <div class="ws-drawer__name">{{ actor?.name || '—' }}</div>
+          <div class="ws-drawer__name">{{ actor?.name || "—" }}</div>
           <div v-if="actor?.subtitle" class="ws-drawer__sub">{{ actor.subtitle }}</div>
         </div>
         <span class="ws-spacer" />
         <!-- 情绪：头像与立绘都跟着它走（与聊天里同一张映射表） -->
         <span v-if="actor && !actor.isMe" class="ws-tag">{{ emotionLabel }}</span>
-        <span v-if="onStage" class="ws-tag ws-tag--live">{{ t('worldsim.panel.onStage') }}</span>
+        <span v-if="onStage" class="ws-tag ws-tag--live">{{ t("worldsim.panel.onStage") }}</span>
       </header>
 
       <div class="ws-drawer__body ws-scroll">
@@ -57,14 +64,16 @@
               <WsLoading variant="init" size="sm" :text="t('worldsim.panel.portraitLoading')" />
             </div>
             <div v-else-if="portraitOpen" class="ws-por__state">
-              <div class="ws-note ws-note--warn">{{ t('worldsim.panel.portraitNone') }}</div>
-              <button class="ws-btn" type="button" @click="pot.reload()">{{ t('worldsim.retry') }}</button>
+              <div class="ws-note ws-note--warn">{{ t("worldsim.panel.portraitNone") }}</div>
+              <button class="ws-btn" type="button" @click="pot.reload()">
+                {{ t("worldsim.retry") }}
+              </button>
             </div>
             <!-- 未展开：只显示缩略图（绝不加载那张 73MB 的大图） -->
             <button v-else class="ws-por__thumb" type="button" @click="emit('portrait', true)">
               <img v-if="thumbUrl" :src="thumbUrl" :alt="actor?.name || ''" />
-              <span v-else class="ws-por__ph">{{ (actor?.name || '?').slice(0, 1) }}</span>
-              <span class="ws-por__hint">{{ t('worldsim.panel.portraitExpand') }}</span>
+              <span v-else class="ws-por__ph">{{ (actor?.name || "?").slice(0, 1) }}</span>
+              <span class="ws-por__hint">{{ t("worldsim.panel.portraitExpand") }}</span>
             </button>
             <button
               v-if="portraitOpen"
@@ -72,13 +81,13 @@
               type="button"
               @click="emit('portrait', false)"
             >
-              {{ t('worldsim.panel.portraitCollapse') }}
+              {{ t("worldsim.panel.portraitCollapse") }}
             </button>
           </div>
 
           <!-- 服装变体：角色目录下若有子目录（泳装/…）就在这里切换；取不到只留「默认」 -->
           <div v-if="clothes.length > 1" class="ws-por__clothes">
-            <span class="ws-panel__k">{{ t('worldsim.panel.clothes') }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.panel.clothes") }}</span>
             <button
               v-for="c in clothes"
               :key="c"
@@ -87,7 +96,7 @@
               type="button"
               @click="clothesName = c"
             >
-              {{ c === 'default' ? t('worldsim.panel.clothesDefault') : c }}
+              {{ c === "default" ? t("worldsim.panel.clothesDefault") : c }}
             </button>
           </div>
         </section>
@@ -95,12 +104,18 @@
         <!-- ② 日程 -->
         <WsCollapse :title="t('worldsim.panel.schedule')" icon="🗓" :count="timeline.length">
           <div v-if="roleSchedule?.now" class="ws-line">
-            <span class="ws-panel__k">{{ t('worldsim.panel.scheduleNow') }}</span>
-            <span>{{ roleSchedule.now.time }} {{ roleSchedule.now.content || roleSchedule.now.name }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.panel.scheduleNow") }}</span>
+            <span
+              >{{ roleSchedule.now.time }}
+              {{ roleSchedule.now.content || roleSchedule.now.name }}</span
+            >
           </div>
           <div v-if="roleSchedule?.next" class="ws-line">
-            <span class="ws-panel__k">{{ t('worldsim.panel.scheduleNext') }}</span>
-            <span>{{ roleSchedule.next.time }} {{ roleSchedule.next.content || roleSchedule.next.name }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.panel.scheduleNext") }}</span>
+            <span
+              >{{ roleSchedule.next.time }}
+              {{ roleSchedule.next.content || roleSchedule.next.name }}</span
+            >
           </div>
           <div v-if="timeline.length" class="ws-time">
             <div v-for="(it, i) in timeline" :key="i" class="ws-time__row">
@@ -109,21 +124,21 @@
               <span class="ws-tag">{{ it.kindZh || it.kind }}</span>
             </div>
           </div>
-          <div v-else class="ws-empty">{{ t('worldsim.empty.schedule') }}</div>
+          <div v-else class="ws-empty">{{ t("worldsim.empty.schedule") }}</div>
         </WsCollapse>
 
         <!-- ③ 位置 -->
         <WsCollapse :title="t('worldsim.panel.location')" icon="📍" :default-open="true">
           <div class="ws-line">
-            <span class="ws-panel__k">{{ t('worldsim.panel.area') }}</span>
-            <span>{{ areaText || t('worldsim.empty.location') }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.panel.area") }}</span>
+            <span>{{ areaText || t("worldsim.empty.location") }}</span>
           </div>
           <div class="ws-line">
-            <span class="ws-panel__k">{{ t('worldsim.panel.place') }}</span>
-            <span>{{ actor?.place || t('worldsim.empty.place') }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.panel.place") }}</span>
+            <span>{{ actor?.place || t("worldsim.empty.place") }}</span>
           </div>
           <div class="ws-line">
-            <span class="ws-panel__k">{{ t('worldsim.panel.posSource') }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.panel.posSource") }}</span>
             <span class="ws-dim">{{ posSourceLabel }}</span>
           </div>
         </WsCollapse>
@@ -131,7 +146,7 @@
         <!-- ④ 对话 -->
         <section class="ws-sec">
           <button class="ws-btn ws-btn--primary ws-wide" type="button" @click="goChat">
-            💬 {{ t('worldsim.panel.goto') }}
+            💬 {{ t("worldsim.panel.goto") }}
           </button>
           <div class="ws-panel__hint">{{ chatHint }}</div>
         </section>
@@ -139,7 +154,7 @@
         <!-- ⑤ P4-4：指挥他 / 干预开关（默认关，开关落 localStorage） -->
         <WsCollapse :title="t('worldsim.cmd.title')" icon="🧭" :default-open="true">
           <div class="ws-cmd">
-            <span class="ws-panel__k">{{ t('worldsim.cmd.to') }}</span>
+            <span class="ws-panel__k">{{ t("worldsim.cmd.to") }}</span>
             <input
               v-model="destName"
               class="ws-inp"
@@ -154,28 +169,45 @@
             </datalist>
           </div>
           <div class="ws-acts">
-            <button class="ws-btn ws-btn--primary" type="button" :disabled="!destName.trim()" @click="sendCommand">
-              {{ t('worldsim.cmd.go') }}
+            <button
+              class="ws-btn ws-btn--primary"
+              type="button"
+              :disabled="!destName.trim()"
+              @click="sendCommand"
+            >
+              {{ t("worldsim.cmd.go") }}
             </button>
-            <button class="ws-btn" type="button" @click="goChat">{{ t('worldsim.cmd.viaChat') }}</button>
+            <button class="ws-btn" type="button" @click="goChat">
+              {{ t("worldsim.cmd.viaChat") }}
+            </button>
           </div>
-          <div class="ws-panel__hint">{{ t('worldsim.cmd.hint') }}</div>
+          <div class="ws-panel__hint">{{ t("worldsim.cmd.hint") }}</div>
 
           <label class="ws-switch">
             <input type="checkbox" :checked="interveneOn" @change="onInterveneChange" />
-            <span>{{ interveneOn ? t('worldsim.intervene.on') : t('worldsim.intervene.off') }}</span>
+            <span>{{
+              interveneOn ? t("worldsim.intervene.on") : t("worldsim.intervene.off")
+            }}</span>
           </label>
-          <div class="ws-panel__hint">{{ interveneOn ? t('worldsim.intervene.dragHint') : t('worldsim.intervene.hint') }}</div>
+          <div class="ws-panel__hint">
+            {{ interveneOn ? t("worldsim.intervene.dragHint") : t("worldsim.intervene.hint") }}
+          </div>
         </WsCollapse>
 
         <!-- ⑥ 快捷动作（P2-5：打招呼 / 约他出门已接真能力；送礼物方案未定，见弹层） -->
         <WsCollapse :title="t('worldsim.panel.actions')" icon="⚡" :default-open="true">
           <div class="ws-acts">
-            <button class="ws-btn" type="button" @click="quick('hi')">👋 {{ t('worldsim.action.hi') }}</button>
-            <button class="ws-btn" type="button" @click="quick('gift')">🎁 {{ t('worldsim.action.gift') }}</button>
-            <button class="ws-btn" type="button" @click="quick('outing')">🚶 {{ t('worldsim.action.outing') }}</button>
+            <button class="ws-btn" type="button" @click="quick('hi')">
+              👋 {{ t("worldsim.action.hi") }}
+            </button>
+            <button class="ws-btn" type="button" @click="quick('gift')">
+              🎁 {{ t("worldsim.action.gift") }}
+            </button>
+            <button class="ws-btn" type="button" @click="quick('outing')">
+              🚶 {{ t("worldsim.action.outing") }}
+            </button>
           </div>
-          <div class="ws-panel__hint">{{ t('worldsim.action.hint') }}</div>
+          <div class="ws-panel__hint">{{ t("worldsim.action.hint") }}</div>
         </WsCollapse>
       </div>
 
@@ -184,26 +216,32 @@
            接入点留在 WorldSim 的 onQuick('gift') 与这里的 giftOpen 上。
            弹层挂在抽屉内部：`.ws-drawer` 已有 data-no-gesture 与指针 stop，
            所以这里不会把事件漏给地图手势。 -->
-      <div v-if="giftOpen" class="ws-giftsheet" data-no-gesture @pointerdown.stop @click.self="giftOpen = false">
+      <div
+        v-if="giftOpen"
+        class="ws-giftsheet"
+        data-no-gesture
+        @pointerdown.stop
+        @click.self="giftOpen = false"
+      >
         <div class="ws-giftsheet__card ws-card">
           <div class="ws-giftsheet__head">
             <span class="ws-giftsheet__ico" aria-hidden="true">🎁</span>
-            <span class="ws-giftsheet__t">{{ t('worldsim.gift.title') }}</span>
+            <span class="ws-giftsheet__t">{{ t("worldsim.gift.title") }}</span>
             <span class="ws-spacer" />
             <button class="ws-btn ws-btn--ghost" type="button" @click="giftOpen = false">
-              {{ t('worldsim.gift.close') }}
+              {{ t("worldsim.gift.close") }}
             </button>
           </div>
-          <p class="ws-giftsheet__lead">{{ t('worldsim.gift.lead') }}</p>
+          <p class="ws-giftsheet__lead">{{ t("worldsim.gift.lead") }}</p>
           <div class="ws-giftsheet__opt">
-            <div class="ws-giftsheet__optT">{{ t('worldsim.gift.optA') }}</div>
-            <div class="ws-giftsheet__optD">{{ t('worldsim.gift.optADesc') }}</div>
+            <div class="ws-giftsheet__optT">{{ t("worldsim.gift.optA") }}</div>
+            <div class="ws-giftsheet__optD">{{ t("worldsim.gift.optADesc") }}</div>
           </div>
           <div class="ws-giftsheet__opt">
-            <div class="ws-giftsheet__optT">{{ t('worldsim.gift.optB') }}</div>
-            <div class="ws-giftsheet__optD">{{ t('worldsim.gift.optBDesc') }}</div>
+            <div class="ws-giftsheet__optT">{{ t("worldsim.gift.optB") }}</div>
+            <div class="ws-giftsheet__optD">{{ t("worldsim.gift.optBDesc") }}</div>
           </div>
-          <p class="ws-panel__hint">{{ t('worldsim.gift.footer') }}</p>
+          <p class="ws-panel__hint">{{ t("worldsim.gift.footer") }}</p>
         </div>
       </div>
     </aside>
@@ -211,460 +249,468 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { invoke } from '@tauri-apps/api/core'
-import WsCollapse from './WsCollapse.vue'
-import WsLoading from './WsLoading.vue'
-import { useWsIntervene, facilityNames } from './wsIntervene'
-import { useWsPortrait } from '@/composables/useWsPortrait'
-import { emotionFile, type WsActors } from '@/composables/useWsActors'
-import type { PlacedActor, ActorPosSource } from './wsActors'
-import { wsToast } from './wsToast'
+  import { computed, ref, watch } from "vue";
+  import { useI18n } from "vue-i18n";
+  import { invoke } from "@tauri-apps/api/core";
+  import WsCollapse from "./WsCollapse.vue";
+  import WsLoading from "./WsLoading.vue";
+  import { useWsIntervene, facilityNames } from "./wsIntervene";
+  import { useWsPortrait } from "@/composables/useWsPortrait";
+  import { emotionFile, type WsActors } from "@/composables/useWsActors";
+  import type { PlacedActor, ActorPosSource } from "./wsActors";
+  import { wsToast } from "./wsToast";
 
-const props = withDefaults(
-  defineProps<{
-    /** 当前面板对着的人 */
-    actor: PlacedActor | null
-    /** 数据层（日程/服装/位置来源都从这儿取） */
-    data: WsActors
-    /** 当前行政区文案（「广州市·越秀区」） */
-    areaText?: string
-    /** 窄屏（手机）= 全屏 + 遮罩 */
-    narrow?: boolean
-    /** 面板是否打开（立绘只在打开时才加载） */
-    open?: boolean
-    /** 立绘是否已展开 */
-    portraitOpen?: boolean
-    /** 当前正在对话的角色 id（决定「去找他聊聊」是直连还是提醒） */
-    currentRoleId?: number
-  }>(),
-  { areaText: '', narrow: false, open: false, portraitOpen: false, currentRoleId: 0 },
-)
+  const props = withDefaults(
+    defineProps<{
+      /** 当前面板对着的人 */
+      actor: PlacedActor | null;
+      /** 数据层（日程/服装/位置来源都从这儿取） */
+      data: WsActors;
+      /** 当前行政区文案（「广州市·越秀区」） */
+      areaText?: string;
+      /** 窄屏（手机）= 全屏 + 遮罩 */
+      narrow?: boolean;
+      /** 面板是否打开（立绘只在打开时才加载） */
+      open?: boolean;
+      /** 立绘是否已展开 */
+      portraitOpen?: boolean;
+      /** 当前正在对话的角色 id（决定「去找他聊聊」是直连还是提醒） */
+      currentRoleId?: number;
+    }>(),
+    { areaText: "", narrow: false, open: false, portraitOpen: false, currentRoleId: 0 }
+  );
 
-const emit = defineEmits<{
-  (e: 'close'): void
-  (e: 'portrait', v: boolean): void
-  (e: 'goto-chat', a: PlacedActor): void
-  (e: 'quick', action: string, a: PlacedActor): void
-  /** P4-4：下一条「让他去某地」的指令（目的地是地名或设施名） */
-  (e: 'direct', to: string, a: PlacedActor): void
-}>()
+  const emit = defineEmits<{
+    (e: "close"): void;
+    (e: "portrait", v: boolean): void;
+    (e: "goto-chat", a: PlacedActor): void;
+    (e: "quick", action: string, a: PlacedActor): void;
+    /** P4-4：下一条「让他去某地」的指令（目的地是地名或设施名） */
+    (e: "direct", to: string, a: PlacedActor): void;
+  }>();
 
-const { t } = useI18n()
+  const { t } = useI18n();
 
-/* ── 立绘（按需加载 + 关闭释放，全在 useWsPortrait 里）────────────────────── */
+  /* ── 立绘（按需加载 + 关闭释放，全在 useWsPortrait 里）────────────────────── */
 
-/** 服装：默认那套；用户切换后重取 */
-const clothesName = ref('default')
-const clothes = ref<string[]>(['default'])
+  /** 服装：默认那套；用户切换后重取 */
+  const clothesName = ref("default");
+  const clothes = ref<string[]>(["default"]);
 
-// 换人 → 服装选择要重置（不然会拿上一个人的「泳装」去取新角色的图）
-watch(
-  () => props.actor?.id,
-  () => {
-    clothesName.value = 'default'
-    clothes.value = ['default']
-    void loadClothes()
-  },
-)
+  // 换人 → 服装选择要重置（不然会拿上一个人的「泳装」去取新角色的图）
+  watch(
+    () => props.actor?.id,
+    () => {
+      clothesName.value = "default";
+      clothes.value = ["default"];
+      void loadClothes();
+    }
+  );
 
-const pot = useWsPortrait({
-  folder: computed(() => props.actor?.folder || ''),
-  emotion: computed(() => props.actor?.emotion || ''),
-  clothes: clothesName,
-  // 红线①：只有「面板打开 + 立绘展开」同时成立才去取图
-  open: computed(() => !!props.open && !!props.portraitOpen),
-  mapEmotion: emotionFile,
-})
+  const pot = useWsPortrait({
+    folder: computed(() => props.actor?.folder || ""),
+    emotion: computed(() => props.actor?.emotion || ""),
+    clothes: clothesName,
+    // 红线①：只有「面板打开 + 立绘展开」同时成立才去取图
+    open: computed(() => !!props.open && !!props.portraitOpen),
+    mapEmotion: emotionFile,
+  });
 
-// 拿到服装变体清单（拿不到就只剩「默认」，不报错）
-async function loadClothes() {
-  const folder = props.actor?.folder
-  if (!folder) return
-  try {
-    clothes.value = await props.data.clothesVariants(folder)
-  } catch {
-    clothes.value = ['default']
+  // 拿到服装变体清单（拿不到就只剩「默认」，不报错）
+  async function loadClothes() {
+    const folder = props.actor?.folder;
+    if (!folder) return;
+    try {
+      clothes.value = await props.data.clothesVariants(folder);
+    } catch {
+      clothes.value = ["default"];
+    }
   }
-}
 
-// 某个变体取不到图 → 自动退回「默认」（需求：取不到就只显示默认，不要报错）
-watch(
-  () => pot.missingClothes.value,
-  (miss) => {
-    if (!miss) return
-    clothesName.value = 'default'
-    wsToast(t('worldsim.panel.clothesMissing'), 'warn')
-  },
-)
+  // 某个变体取不到图 → 自动退回「默认」（需求：取不到就只显示默认，不要报错）
+  watch(
+    () => pot.missingClothes.value,
+    (miss) => {
+      if (!miss) return;
+      clothesName.value = "default";
+      wsToast(t("worldsim.panel.clothesMissing"), "warn");
+    }
+  );
 
-function onPortraitError() {
-  wsToast(t('worldsim.panel.portraitFailed'), 'err')
-}
-
-/** 缩略图：就用地图上那张头像小方图（不碰立绘文件） */
-const thumbUrl = computed(() => props.actor?.avatarUrl || '')
-
-/* ── ② 日程 ──────────────────────────────────────────────────────────────── */
-const roleSchedule = computed(() => (props.actor ? props.data.scheduleOf(props.actor.name) : null))
-const timeline = computed(() => roleSchedule.value?.timeline || [])
-
-/* ── ③ 位置 ──────────────────────────────────────────────────────────────── */
-const posSourceLabel = computed(() => {
-  const map: Record<ActorPosSource, string> = {
-    runtime: t('worldsim.pos.runtime'),
-    schedule: t('worldsim.pos.schedule'),
-    scatter: t('worldsim.pos.scatter'),
-    me: t('worldsim.pos.me'),
+  function onPortraitError() {
+    wsToast(t("worldsim.panel.portraitFailed"), "err");
   }
-  return map[(props.actor?.posSource || 'scatter') as ActorPosSource] || ''
-})
 
-/* ── ④ 对话 ──────────────────────────────────────────────────────────────── */
-const onStage = computed(() => !!props.actor && !props.actor.isMe && props.actor.roleId > 0 && props.actor.roleId === props.currentRoleId)
-const chatHint = computed(() =>
-  onStage.value ? t('worldsim.panel.gotoNow') : t('worldsim.panel.gotoWarn'),
-)
-function goChat() {
-  if (!props.actor) return
-  emit('goto-chat', props.actor)
-}
+  /** 缩略图：就用地图上那张头像小方图（不碰立绘文件） */
+  const thumbUrl = computed(() => props.actor?.avatarUrl || "");
 
-/* ── ⑤ 快捷动作（P2-5：三个按钮都要有**真**行为或说清楚为什么没有）──────
- *   · 打招呼  → emit('quick','hi')   → 页面里复用「去找他聊聊」那条路（跳 /chat）
- *   · 约他出门 → emit('quick','outing') → 页面里调 world_map_trip_start（角色动身）
- *   · 送礼物  → **需求未澄清**：不发明礼物系统，只把说明弹层打开（两个候选方案）
- * 三个动作的分派点都收在页面的 onQuick 里（一处就能看全，好测也好改）。 */
-const giftOpen = ref(false)
+  /* ── ② 日程 ──────────────────────────────────────────────────────────────── */
+  const roleSchedule = computed(() =>
+    props.actor ? props.data.scheduleOf(props.actor.name) : null
+  );
+  const timeline = computed(() => roleSchedule.value?.timeline || []);
 
-function quick(action: 'hi' | 'gift' | 'outing') {
-  if (!props.actor) return
-  emit('quick', action, props.actor)
-  if (action === 'gift') giftOpen.value = true
-}
+  /* ── ③ 位置 ──────────────────────────────────────────────────────────────── */
+  const posSourceLabel = computed(() => {
+    const map: Record<ActorPosSource, string> = {
+      runtime: t("worldsim.pos.runtime"),
+      schedule: t("worldsim.pos.schedule"),
+      scatter: t("worldsim.pos.scatter"),
+      me: t("worldsim.pos.me"),
+    };
+    return map[(props.actor?.posSource || "scatter") as ActorPosSource] || "";
+  });
 
-/* ── ⑤.5 P4-4：指挥他 + 干预开关 ──────────────────────────────────────── */
-const DEST_LIST_ID = 'ws-dest-list'
-/** 目的地候选：后端 runtime 里的设施表（拿不到就只有一个空建议列表，手输照样能用） */
-const dests = computed(() => facilityNames(props.data.runtime?.value?.facilities))
-const destName = ref('')
-/** 干预开关（模块级单例，与地图页拖拽读的是同一份；默认关） */
-const { on: interveneOn, setOn: setIntervene } = useWsIntervene()
+  /* ── ④ 对话 ──────────────────────────────────────────────────────────────── */
+  const onStage = computed(
+    () =>
+      !!props.actor &&
+      !props.actor.isMe &&
+      props.actor.roleId > 0 &&
+      props.actor.roleId === props.currentRoleId
+  );
+  const chatHint = computed(() =>
+    onStage.value ? t("worldsim.panel.gotoNow") : t("worldsim.panel.gotoWarn")
+  );
+  function goChat() {
+    if (!props.actor) return;
+    emit("goto-chat", props.actor);
+  }
 
-function onInterveneChange(e: Event) {
-  setIntervene(!!(e.target as HTMLInputElement).checked)
-}
+  /* ── ⑤ 快捷动作（P2-5：三个按钮都要有**真**行为或说清楚为什么没有）──────
+   *   · 打招呼  → emit('quick','hi')   → 页面里复用「去找他聊聊」那条路（跳 /chat）
+   *   · 约他出门 → emit('quick','outing') → 页面里调 world_map_trip_start（角色动身）
+   *   · 送礼物  → **需求未澄清**：不发明礼物系统，只把说明弹层打开（两个候选方案）
+   * 三个动作的分派点都收在页面的 onQuick 里（一处就能看全，好测也好改）。 */
+  const giftOpen = ref(false);
 
-function sendCommand() {
-  const to = destName.value.trim()
-  if (!props.actor || !to) return
-  emit('direct', to, props.actor)
-}
+  function quick(action: "hi" | "gift" | "outing") {
+    if (!props.actor) return;
+    emit("quick", action, props.actor);
+    if (action === "gift") giftOpen.value = true;
+  }
 
-const emotionLabel = computed(() => {
-  const e = String(props.actor?.emotion || '').trim()
-  return e || t('worldsim.emotionNormal')
-})
+  /* ── ⑤.5 P4-4：指挥他 + 干预开关 ──────────────────────────────────────── */
+  const DEST_LIST_ID = "ws-dest-list";
+  /** 目的地候选：后端 runtime 里的设施表（拿不到就只有一个空建议列表，手输照样能用） */
+  const dests = computed(() => facilityNames(props.data.runtime?.value?.facilities));
+  const destName = ref("");
+  /** 干预开关（模块级单例，与地图页拖拽读的是同一份；默认关） */
+  const { on: interveneOn, setOn: setIntervene } = useWsIntervene();
 
-const panelTitle = computed(() => props.actor?.name || t('worldsim.panel.title'))
+  function onInterveneChange(e: Event) {
+    setIntervene(!!(e.target as HTMLInputElement).checked);
+  }
+
+  function sendCommand() {
+    const to = destName.value.trim();
+    if (!props.actor || !to) return;
+    emit("direct", to, props.actor);
+  }
+
+  const emotionLabel = computed(() => {
+    const e = String(props.actor?.emotion || "").trim();
+    return e || t("worldsim.emotionNormal");
+  });
+
+  const panelTitle = computed(() => props.actor?.name || t("worldsim.panel.title"));
 </script>
 
 <style scoped>
-.ws-drawer {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-}
-.ws-drawer__mask {
-  position: absolute;
-  inset: 0;
-  background: rgba(20, 30, 32, 0.42);
-  backdrop-filter: blur(1px);
-  -webkit-backdrop-filter: blur(1px);
-  animation: ws-fade-in 0.18s ease both;
-}
-/* 宽屏：右侧抽屉（不遮地图，方便边看边点别人） */
-.ws-drawer__panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(24em, 42vw);
-  display: flex;
-  flex-direction: column;
-  background: var(--ws-panel);
-  border-left: 1px solid var(--ws-border);
-  box-shadow: var(--ws-shadow-lg);
-  backdrop-filter: blur(var(--ws-blur));
-  -webkit-backdrop-filter: blur(var(--ws-blur));
-  animation: ws-slide-in 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) both;
-}
-/* 窄屏：全屏（盖住地图，避免小手势区里再叠一层可滚动面板） */
-.ws-drawer.is-narrow .ws-drawer__panel {
-  width: 100%;
-  border-left: 0;
-}
-.ws-drawer__head {
-  display: flex;
-  align-items: center;
-  gap: 0.5em;
-  padding: 0.6em 0.8em;
-  border-bottom: 1px solid var(--ws-border);
-}
-.ws-drawer__who {
-  min-width: 0;
-}
-.ws-drawer__name {
-  font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ws-drawer__sub {
-  font-size: 0.8em;
-  color: var(--ws-fg-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ws-drawer__body {
-  flex: 1;
-  min-height: 0;
-  padding: 0.7em 0.8em 1.2em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.7em;
-  /* 面板里滚动到底不该带动背后的地图 */
-  overscroll-behavior: contain;
-}
-.ws-sec {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5em;
-}
-.ws-panel__k {
-  display: inline-block;
-  min-width: 4.2em;
-  color: var(--ws-fg-dim);
-  font-size: 0.88em;
-}
-.ws-panel__hint {
-  font-size: 0.8em;
-  color: var(--ws-fg-dim);
-  line-height: 1.6;
-}
-.ws-line {
-  display: flex;
-  gap: 0.4em;
-  align-items: baseline;
-  font-size: 0.92em;
-  line-height: 1.6;
-}
-.ws-dim {
-  color: var(--ws-fg-dim);
-}
-.ws-wide {
-  width: 100%;
-}
+  .ws-drawer {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+  }
+  .ws-drawer__mask {
+    position: absolute;
+    inset: 0;
+    background: rgba(20, 30, 32, 0.42);
+    backdrop-filter: blur(1px);
+    -webkit-backdrop-filter: blur(1px);
+    animation: ws-fade-in 0.18s ease both;
+  }
+  /* 宽屏：右侧抽屉（不遮地图，方便边看边点别人） */
+  .ws-drawer__panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(24em, 42vw);
+    display: flex;
+    flex-direction: column;
+    background: var(--ws-panel);
+    border-left: 1px solid var(--ws-border);
+    box-shadow: var(--ws-shadow-lg);
+    backdrop-filter: blur(var(--ws-blur));
+    -webkit-backdrop-filter: blur(var(--ws-blur));
+    animation: ws-slide-in 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+  /* 窄屏：全屏（盖住地图，避免小手势区里再叠一层可滚动面板） */
+  .ws-drawer.is-narrow .ws-drawer__panel {
+    width: 100%;
+    border-left: 0;
+  }
+  .ws-drawer__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.6em 0.8em;
+    border-bottom: 1px solid var(--ws-border);
+  }
+  .ws-drawer__who {
+    min-width: 0;
+  }
+  .ws-drawer__name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws-drawer__sub {
+    font-size: 0.8em;
+    color: var(--ws-fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws-drawer__body {
+    flex: 1;
+    min-height: 0;
+    padding: 0.7em 0.8em 1.2em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7em;
+    /* 面板里滚动到底不该带动背后的地图 */
+    overscroll-behavior: contain;
+  }
+  .ws-sec {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+  }
+  .ws-panel__k {
+    display: inline-block;
+    min-width: 4.2em;
+    color: var(--ws-fg-dim);
+    font-size: 0.88em;
+  }
+  .ws-panel__hint {
+    font-size: 0.8em;
+    color: var(--ws-fg-dim);
+    line-height: 1.6;
+  }
+  .ws-line {
+    display: flex;
+    gap: 0.4em;
+    align-items: baseline;
+    font-size: 0.92em;
+    line-height: 1.6;
+  }
+  .ws-dim {
+    color: var(--ws-fg-dim);
+  }
+  .ws-wide {
+    width: 100%;
+  }
 
-/* ── 立绘 ─────────────────────────────────────────────────────────────── */
-.ws-sec--por {
-  gap: 0.4em;
-}
-.ws-por {
-  position: relative;
-  min-height: 12em;
-  border-radius: var(--ws-radius);
-  overflow: hidden;
-  background: var(--ws-bg-2);
-  border: 1px solid var(--ws-border);
-}
-.ws-por__img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  max-height: 62vh;
-  object-fit: contain;
-}
-.ws-por__state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6em;
-  min-height: 12em;
-  padding: 0.8em;
-  text-align: center;
-}
-.ws-por__thumb {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5em;
-  width: 100%;
-  min-height: 12em;
-  border: 0;
-  background: none;
-  color: var(--ws-fg);
-  font: inherit;
-  cursor: pointer;
-}
-.ws-por__thumb img {
-  width: 7.5em;
-  height: 7.5em;
-  object-fit: cover;
-  border-radius: 50%;
-  border: 2px solid var(--ws-primary);
-}
-.ws-por__ph {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 7.5em;
-  height: 7.5em;
-  border-radius: 50%;
-  font-size: 2em;
-  background: var(--ws-primary-soft);
-}
-.ws-por__hint {
-  font-size: 0.82em;
-  color: var(--ws-fg-dim);
-}
-.ws-por__collapse {
-  position: absolute;
-  right: 0.5em;
-  top: 0.5em;
-}
-.ws-por__clothes {
-  display: flex;
-  align-items: center;
-  gap: 0.35em;
-  flex-wrap: wrap;
-}
+  /* ── 立绘 ─────────────────────────────────────────────────────────────── */
+  .ws-sec--por {
+    gap: 0.4em;
+  }
+  .ws-por {
+    position: relative;
+    min-height: 12em;
+    border-radius: var(--ws-radius);
+    overflow: hidden;
+    background: var(--ws-bg-2);
+    border: 1px solid var(--ws-border);
+  }
+  .ws-por__img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-height: 62vh;
+    object-fit: contain;
+  }
+  .ws-por__state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6em;
+    min-height: 12em;
+    padding: 0.8em;
+    text-align: center;
+  }
+  .ws-por__thumb {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5em;
+    width: 100%;
+    min-height: 12em;
+    border: 0;
+    background: none;
+    color: var(--ws-fg);
+    font: inherit;
+    cursor: pointer;
+  }
+  .ws-por__thumb img {
+    width: 7.5em;
+    height: 7.5em;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 2px solid var(--ws-primary);
+  }
+  .ws-por__ph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 7.5em;
+    height: 7.5em;
+    border-radius: 50%;
+    font-size: 2em;
+    background: var(--ws-primary-soft);
+  }
+  .ws-por__hint {
+    font-size: 0.82em;
+    color: var(--ws-fg-dim);
+  }
+  .ws-por__collapse {
+    position: absolute;
+    right: 0.5em;
+    top: 0.5em;
+  }
+  .ws-por__clothes {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    flex-wrap: wrap;
+  }
 
-/* ── 日程 ─────────────────────────────────────────────────────────────── */
-.ws-time {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2em;
-  max-height: 12em;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.ws-time__row {
-  display: flex;
-  align-items: baseline;
-  gap: 0.45em;
-  font-size: 0.88em;
-  line-height: 1.7;
-}
-.ws-time__t {
-  min-width: 3.4em;
-  color: var(--ws-fg-dim);
-  font-variant-numeric: tabular-nums;
-}
-.ws-time__c {
-  flex: 1;
-  min-width: 0;
-}
+  /* ── 日程 ─────────────────────────────────────────────────────────────── */
+  .ws-time {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    max-height: 12em;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .ws-time__row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45em;
+    font-size: 0.88em;
+    line-height: 1.7;
+  }
+  .ws-time__t {
+    min-width: 3.4em;
+    color: var(--ws-fg-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .ws-time__c {
+    flex: 1;
+    min-width: 0;
+  }
 
-/* ── 快捷动作 ─────────────────────────────────────────────────────────── */
-.ws-acts {
-  display: flex;
-  gap: 0.4em;
-  flex-wrap: wrap;
-}
+  /* ── 快捷动作 ─────────────────────────────────────────────────────────── */
+  .ws-acts {
+    display: flex;
+    gap: 0.4em;
+    flex-wrap: wrap;
+  }
 
-/* ── P4-4：指挥他（目的地输入 + 干预开关）────────────────────────────────── */
-.ws-cmd {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-}
-.ws-inp {
-  flex: 1;
-  min-width: 0;
-  font: inherit;
-  font-size: 0.92em;
-  color: var(--ws-fg);
-  background: var(--ws-panel-2);
-  border: 1px solid var(--ws-border);
-  border-radius: var(--ws-radius-sm);
-  padding: 0.32em 0.5em;
-}
-.ws-inp:focus-visible {
-  outline: 2px solid var(--ws-primary);
-  outline-offset: 1px;
-}
-/* 干预开关：用原生 checkbox（三套主题下都不会跑版），文字走 i18n */
-.ws-switch {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-  margin-top: 0.55em;
-  font-size: 0.92em;
-  cursor: pointer;
-}
-.ws-switch input {
-  width: 1.05em;
-  height: 1.05em;
-  accent-color: var(--ws-primary-deep);
-}
+  /* ── P4-4：指挥他（目的地输入 + 干预开关）────────────────────────────────── */
+  .ws-cmd {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+  }
+  .ws-inp {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 0.92em;
+    color: var(--ws-fg);
+    background: var(--ws-panel-2);
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius-sm);
+    padding: 0.32em 0.5em;
+  }
+  .ws-inp:focus-visible {
+    outline: 2px solid var(--ws-primary);
+    outline-offset: 1px;
+  }
+  /* 干预开关：用原生 checkbox（三套主题下都不会跑版），文字走 i18n */
+  .ws-switch {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    margin-top: 0.55em;
+    font-size: 0.92em;
+    cursor: pointer;
+  }
+  .ws-switch input {
+    width: 1.05em;
+    height: 1.05em;
+    accent-color: var(--ws-primary-deep);
+  }
 
-/* ── 送礼物：说明弹层（方案未定，只解释 + 给候选，不做任何副作用）────────── */
-.ws-giftsheet {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.8em;
-  background: rgba(20, 30, 32, 0.42);
-  animation: ws-fade-in 0.16s ease both;
-}
-.ws-giftsheet__card {
-  width: min(24em, 100%);
-  max-height: 86%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0.9em 1em 1em;
-  animation: ws-fade-up 0.2s ease both;
-}
-.ws-giftsheet__head {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-}
-.ws-giftsheet__ico {
-  font-size: 1.1em;
-}
-.ws-giftsheet__t {
-  font-weight: 700;
-}
-.ws-giftsheet__lead {
-  margin: 0.55em 0 0.7em;
-  font-size: 0.9em;
-  line-height: 1.65;
-  color: var(--ws-fg);
-}
-.ws-giftsheet__opt {
-  margin-bottom: 0.5em;
-  padding: 0.5em 0.6em;
-  border: 1px solid var(--ws-border);
-  border-radius: var(--ws-radius-sm);
-  background: var(--ws-panel-2);
-}
-.ws-giftsheet__optT {
-  font-weight: 600;
-  font-size: 0.94em;
-}
-.ws-giftsheet__optD {
-  margin-top: 0.2em;
-  font-size: 0.86em;
-  line-height: 1.6;
-  color: var(--ws-fg-dim);
-}
+  /* ── 送礼物：说明弹层（方案未定，只解释 + 给候选，不做任何副作用）────────── */
+  .ws-giftsheet {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.8em;
+    background: rgba(20, 30, 32, 0.42);
+    animation: ws-fade-in 0.16s ease both;
+  }
+  .ws-giftsheet__card {
+    width: min(24em, 100%);
+    max-height: 86%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.9em 1em 1em;
+    animation: ws-fade-up 0.2s ease both;
+  }
+  .ws-giftsheet__head {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+  }
+  .ws-giftsheet__ico {
+    font-size: 1.1em;
+  }
+  .ws-giftsheet__t {
+    font-weight: 700;
+  }
+  .ws-giftsheet__lead {
+    margin: 0.55em 0 0.7em;
+    font-size: 0.9em;
+    line-height: 1.65;
+    color: var(--ws-fg);
+  }
+  .ws-giftsheet__opt {
+    margin-bottom: 0.5em;
+    padding: 0.5em 0.6em;
+    border: 1px solid var(--ws-border);
+    border-radius: var(--ws-radius-sm);
+    background: var(--ws-panel-2);
+  }
+  .ws-giftsheet__optT {
+    font-weight: 600;
+    font-size: 0.94em;
+  }
+  .ws-giftsheet__optD {
+    margin-top: 0.2em;
+    font-size: 0.86em;
+    line-height: 1.6;
+    color: var(--ws-fg-dim);
+  }
 </style>

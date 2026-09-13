@@ -7,6 +7,7 @@
 //!   2. **读-改-写必须整体加锁** —— Python 侧曾因多线程并发覆盖，索引从 190 条悄悄掉到 65 条
 //!   3. **索引可从文件自愈**：`scan()` 把「文件存在但没登记」的补回来（索引只是缓存，数据本体才是关键）
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -371,8 +372,9 @@ impl MapLib {
     // ───────── 布局缓存（AI 生成的小区布局，可复用省 LLM 调用）─────────
 
     pub fn layout_key(area: &str, context: &str, expand: i32) -> String {
-        let d = md5::compute(format!("{area}|{context}|{expand}").as_bytes());
-        d.0.iter().take(6).map(|b| format!("{b:02x}")).collect()
+        // 键 = 摘要前 6 字节的十六进制串。算法走 sha2（上游已有依赖，不新增 md5）。
+        let d = Sha256::digest(format!("{area}|{context}|{expand}").as_bytes());
+        d.iter().take(6).map(|b| format!("{b:02x}")).collect()
     }
 
     pub fn save_layout(&self, key: &str, layout: &Value, meta: Value) -> Option<PathBuf> {

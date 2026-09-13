@@ -19,30 +19,30 @@
 
 /** 出行方式（与后端 `MoveKind::key()` 逐字一致；`ferry` 目前后端还没有） */
 export type WsVehicleKind =
-  | 'walk'
-  | 'bike'
-  | 'ebike'
-  | 'bus'
-  | 'subway'
-  | 'taxi'
-  | 'car'
-  | 'train'
-  | 'plane'
-  | 'ferry'
+  | "walk"
+  | "bike"
+  | "ebike"
+  | "bus"
+  | "subway"
+  | "taxi"
+  | "car"
+  | "train"
+  | "plane"
+  | "ferry";
 
 export interface WsVehicle {
-  kind: WsVehicleKind
+  kind: WsVehicleKind;
   /** 中文名（后端 `kind_zh` 缺失时的兜底；有 kind_zh 时以它为准，见 kindLabelOf） */
-  zh: string
+  zh: string;
   /** 立绘 URL（`public/world_map/vehicles/<kind>.svg`，已按 BASE_URL 拼好） */
-  svg: string
+  svg: string;
   /** 现实速度（米/秒）—— 与后端 `MoveKind::speed_mps()` 一致 */
-  speed_mps: number
+  speed_mps: number;
   /**
    * 这一类**不画车**：人自己走（P4-3 明确「walk 可以不画车」）。
    * 地图上步行时只画人 —— 脚底下再压一辆「步行车」既不存在也难看。
    */
-  bare: boolean
+  bare: boolean;
 }
 
 /* ── 立绘根路径 ─────────────────────────────────────────────────────────────
@@ -52,46 +52,46 @@ export interface WsVehicle {
  * （或给 Tauri 设 `base: './'`），只有这一个地方要改，不会散落一堆写死的 `/world_map/`。 */
 const BASE: string = (() => {
   try {
-    const b = String(import.meta.env?.BASE_URL || '/')
-    return b.endsWith('/') ? b : `${b}/`
+    const b = String(import.meta.env?.BASE_URL || "/");
+    return b.endsWith("/") ? b : `${b}/`;
   } catch {
-    return '/'
+    return "/";
   }
-})()
+})();
 
-const SVG_DIR = 'world_map/vehicles/'
+const SVG_DIR = "world_map/vehicles/";
 
 /** kind → 立绘 URL（导出的，供 `WsVehicleMark` 直接用） */
 export function vehicleSvgUrl(kind: string): string {
-  return `${BASE}${SVG_DIR}${vehicleKindOf(kind)}.svg`
+  return `${BASE}${SVG_DIR}${vehicleKindOf(kind)}.svg`;
 }
 
 /* ── 那张表 ────────────────────────────────────────────────────────────────
  * 顺序与后端 `MoveKind::ALL` 一致（步行 → 自行车 → … → 飞机），ferry 垫在最后。 */
 export const WS_VEHICLES: Record<WsVehicleKind, WsVehicle> = {
-  walk: { kind: 'walk', zh: '步行', svg: '', speed_mps: 1.4, bare: true },
-  bike: { kind: 'bike', zh: '自行车', svg: '', speed_mps: 4.2, bare: false },
-  ebike: { kind: 'ebike', zh: '电动车', svg: '', speed_mps: 6.0, bare: false },
-  bus: { kind: 'bus', zh: '公交', svg: '', speed_mps: 8.0, bare: false },
-  subway: { kind: 'subway', zh: '地铁', svg: '', speed_mps: 11.0, bare: false },
-  taxi: { kind: 'taxi', zh: '出租车', svg: '', speed_mps: 10.0, bare: false },
-  car: { kind: 'car', zh: '私家车', svg: '', speed_mps: 12.0, bare: false },
-  train: { kind: 'train', zh: '高铁', svg: '', speed_mps: 70.0, bare: false },
-  plane: { kind: 'plane', zh: '飞机', svg: '', speed_mps: 220.0, bare: false },
+  walk: { kind: "walk", zh: "步行", svg: "", speed_mps: 1.4, bare: true },
+  bike: { kind: "bike", zh: "自行车", svg: "", speed_mps: 4.2, bare: false },
+  ebike: { kind: "ebike", zh: "电动车", svg: "", speed_mps: 6.0, bare: false },
+  bus: { kind: "bus", zh: "公交", svg: "", speed_mps: 8.0, bare: false },
+  subway: { kind: "subway", zh: "地铁", svg: "", speed_mps: 11.0, bare: false },
+  taxi: { kind: "taxi", zh: "出租车", svg: "", speed_mps: 10.0, bare: false },
+  car: { kind: "car", zh: "私家车", svg: "", speed_mps: 12.0, bare: false },
+  train: { kind: "train", zh: "高铁", svg: "", speed_mps: 70.0, bare: false },
+  plane: { kind: "plane", zh: "飞机", svg: "", speed_mps: 220.0, bare: false },
   // 后端 MoveKind 里还没有轮渡；速度是前端估的（见文件头说明）
-  ferry: { kind: 'ferry', zh: '轮渡', svg: '', speed_mps: 8.0, bare: false },
-}
+  ferry: { kind: "ferry", zh: "轮渡", svg: "", speed_mps: 8.0, bare: false },
+};
 
 /** 全部 kind（按「慢 → 快」排，UI 上要做选择器时直接用） */
-export const WS_VEHICLE_KINDS: WsVehicleKind[] = Object.keys(WS_VEHICLES) as WsVehicleKind[]
+export const WS_VEHICLE_KINDS: WsVehicleKind[] = Object.keys(WS_VEHICLES) as WsVehicleKind[];
 
 // 把立绘 URL 补进表里（写成字面量会重复 10 遍 `world_map/vehicles/`，容易打错一个就 404）
 for (const k of WS_VEHICLE_KINDS) {
-  WS_VEHICLES[k].svg = `${BASE}${SVG_DIR}${k}.svg`
+  WS_VEHICLES[k].svg = `${BASE}${SVG_DIR}${k}.svg`;
 }
 
 /** 认不出/为空时的兜底：**步行**（最保守的一档，绝不瞎猜成飞机） */
-export const WS_VEHICLE_FALLBACK: WsVehicleKind = 'walk'
+export const WS_VEHICLE_FALLBACK: WsVehicleKind = "walk";
 
 /**
  * 归一化一个 kind 字符串。
@@ -101,34 +101,38 @@ export const WS_VEHICLE_FALLBACK: WsVehicleKind = 'walk'
  * 前端再抄一份别名表，两边一改就是不一致。认不出 → `walk`（兜底，见上）。
  */
 export function vehicleKindOf(raw: unknown): WsVehicleKind {
-  const s = String(raw ?? '').trim().toLowerCase()
-  return (WS_VEHICLE_KINDS as string[]).includes(s) ? (s as WsVehicleKind) : WS_VEHICLE_FALLBACK
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return (WS_VEHICLE_KINDS as string[]).includes(s) ? (s as WsVehicleKind) : WS_VEHICLE_FALLBACK;
 }
 
 /** 这个 kind 是不是后端认得的（`ferry` 目前 false —— 后端只有 9 种） */
 export function isBackendVehicleKind(raw: unknown): boolean {
-  const s = String(raw ?? '').trim().toLowerCase()
-  return s !== 'ferry' && (WS_VEHICLE_KINDS as string[]).includes(s)
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return s !== "ferry" && (WS_VEHICLE_KINDS as string[]).includes(s);
 }
 
 /** kind → 整条记录（永远有值，认不出给步行） */
 export function vehicleOf(raw: unknown): WsVehicle {
-  return WS_VEHICLES[vehicleKindOf(raw)]
+  return WS_VEHICLES[vehicleKindOf(raw)];
 }
 
 /** kind → 立绘 URL（永远有值） */
 export function vehicleIconOf(raw: unknown): string {
-  return vehicleOf(raw).svg
+  return vehicleOf(raw).svg;
 }
 
 /** 现实速度（米/秒）；后端给了 `speed_mps` 时**以行程里的为准**，这里只是兜底 */
 export function vehicleSpeedOf(raw: unknown): number {
-  return vehicleOf(raw).speed_mps
+  return vehicleOf(raw).speed_mps;
 }
 
 /** 这一类要不要画车（walk = 不画） */
 export function isBareVehicle(raw: unknown): boolean {
-  return vehicleOf(raw).bare
+  return vehicleOf(raw).bare;
 }
 
 /**
@@ -143,11 +147,11 @@ export function isBareVehicle(raw: unknown): boolean {
  * @param backendZh 后端的 `kind_zh`（有就用它）
  * @param fallback 两者都没有时的兜底文案（默认「赶路」）
  */
-export function kindLabelOf(raw: unknown, backendZh?: unknown, fallback = '赶路'): string {
-  const zh = String(backendZh ?? '').trim()
-  if (zh) return zh
-  const s = String(raw ?? '').trim()
-  if (!s) return fallback
-  const hit = (WS_VEHICLE_KINDS as string[]).includes(s.toLowerCase())
-  return hit ? WS_VEHICLES[s.toLowerCase() as WsVehicleKind].zh : fallback
+export function kindLabelOf(raw: unknown, backendZh?: unknown, fallback = "赶路"): string {
+  const zh = String(backendZh ?? "").trim();
+  if (zh) return zh;
+  const s = String(raw ?? "").trim();
+  if (!s) return fallback;
+  const hit = (WS_VEHICLE_KINDS as string[]).includes(s.toLowerCase());
+  return hit ? WS_VEHICLES[s.toLowerCase() as WsVehicleKind].zh : fallback;
 }

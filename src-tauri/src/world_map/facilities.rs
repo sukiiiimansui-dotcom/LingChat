@@ -23,7 +23,7 @@
 //!   并跑可以肉眼 diff。内部计算才用小 struct（[`State`] / [`FacType`]）。
 //! · **确定性**：名字池取名字、预算分摊、结果排序全部无随机；随机只出现在三处——「前几名挑一个」
 //!   「分数抖动」「邻格尝试顺序」，且统一用 [`StdRng::seed_from_u64`] 播种，种子由
-//!   `md5("{area}|{size}|{salt}")` 前 4 字节给出（[`seed_of`]，与原型 `_seed_of` 逐位相同），
+//!   `sha256("{area}|{size}|{salt}")` 前 4 字节给出（[`seed_of`]），
 //!   生活设施用 salt=`life`、交通设施用 salt=`traffic`。**同输入永远同输出**，可缓存、可回归。
 //!   ⚠️ 但 Rust 的 `StdRng`（ChaCha12）与 Python 的 `random.Random`（MT19937）**不是同一个算法**，
 //!   随机序不同 ⇒ 具体落点坐标不会与 Python 逐位相同。这是**有意接受的行为差异**：结构、数量、
@@ -64,6 +64,7 @@
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -1005,12 +1006,16 @@ fn alloc(count: i64, weights: &[(String, f64)]) -> Vec<(String, i64)> {
     out
 }
 
-/// 从 md5 派生随机种子 —— 对应 `_seed_of`：`int(md5("{area}|{size}|{salt}").hexdigest()[:8], 16)`
-/// 即摘要前 4 字节按大端解释。**逐位与 Python 相同**，所以「区域名 → 种子」这条链路两边一致
-/// （不一致的只有种子之后的随机序，见文件头）。
+/// 从摘要派生随机种子：取摘要**前 4 字节按大端解释**（对应 Python 侧
+/// `int(hexdigest()[:8], 16)` 的那一步）。
+///
+/// ⚠️ 摘要算法用的是 `sha2`（上游已有依赖），**不是** Python 侧那份 md5 ——
+/// 所以「区域名 → 种子」这条链路与 Python 原型**不再逐位一致**（种子的位数、
+/// 以及种子之后的随机序，两边都不同）。Rust 侧自身是自洽的：同输入永远同输出。
+/// 选 `sha2` 是为了不给上游新增依赖（md5 不在上游 Cargo.toml 里）。
 fn seed_of(area: &str, size: i64, salt: &str) -> u64 {
-    let d = md5::compute(format!("{}|{}|{}", area, size, salt).as_bytes());
-    u32::from_be_bytes([d.0[0], d.0[1], d.0[2], d.0[3]]) as u64
+    let d = Sha256::digest(format!("{}|{}|{}", area, size, salt).as_bytes());
+    u32::from_be_bytes([d[0], d[1], d[2], d[3]]) as u64
 }
 
 /// 造随机源：显式 seed 优先，否则按区域名派生。

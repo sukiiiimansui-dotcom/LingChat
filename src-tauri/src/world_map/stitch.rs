@@ -32,6 +32,7 @@
 //! 本模块**不依赖 tauri**（可脱离工程 `rustc --test` 跑单测）：命令层在 `stitch_cmd.rs`，
 //! HTTP 版在独立调试工程 `world_map_rs` 的 `/api/bigmap_stitch`。
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -1013,17 +1014,17 @@ pub fn compose_svg(plan: &Plan, bodies: &BTreeMap<String, String>, title: &str, 
 //  ⑥ 缓存（走 maplib 既有入库逻辑）
 // ═══════════════════════════════════════════════════════════════════
 
-fn md5_hex(s: &str, n: usize) -> String {
-    let d = md5::compute(s.as_bytes());
-    d.0.iter().take(n).map(|b| format!("{b:02x}")).collect()
+/// 摘要前 `n` 字节的十六进制串（缓存键用）。
+/// 算法走 sha2 —— 上游已有依赖，不新增 md5。
+fn hash_hex(s: &str, n: usize) -> String {
+    let d = Sha256::digest(s.as_bytes());
+    d.iter().take(n).map(|b| format!("{b:02x}")).collect()
 }
 
 /// 每块的确定性随机种子（同 adcode 永远同一张街区图）
 pub fn tile_seed(adcode: &str) -> u64 {
-    let d = md5::compute(adcode.as_bytes());
-    u64::from_be_bytes([
-        d.0[0], d.0[1], d.0[2], d.0[3], d.0[4], d.0[5], d.0[6], d.0[7],
-    ])
+    let d = Sha256::digest(adcode.as_bytes());
+    u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
 }
 
 /// 整张大图的缓存键：**形状参数 + 每块的 (adcode, 网格, 是否高精)** 全进哈希。
@@ -1051,12 +1052,12 @@ pub fn cache_key(ad: &str, o: &Opts, plan: &Plan) -> String {
     let mut hi = o.hi.clone();
     hi.sort();
     s.push_str(&format!("hi={}|", hi.join(",")));
-    md5_hex(&s, 12)
+    hash_hex(&s, 12)
 }
 
 /// 单块 SVG 的缓存键
 pub fn tile_key(t: &Tile, style: &str, detail: bool, seed: Option<u64>) -> String {
-    md5_hex(
+    hash_hex(
         &format!(
             "tile|v{}|{}|{}|{}|g{}|d{}|px{:.0}|z{}|s{}",
             STITCH_VERSION,

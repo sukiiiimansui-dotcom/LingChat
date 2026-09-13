@@ -102,14 +102,16 @@ jobs:
           # 少了它，152 个素材全是 131 字节指针 → APK 变空壳。
           lfs: true
 
-      - uses: pnpm/action-setup@v4
+      # ⚠️ 必须用 `pnpm/setup@v1`（与官方工作流一致），**不能用 `pnpm/action-setup`**：
+      # 本仓库 `package.json` 里有 `"packageManager": "pnpm@11.21.0"`，
+      # 再给 action 指定 `version` 会报「Multiple versions of pnpm specified」直接挂
+      # （实测：Build Map APK #1 就死在第一步，0.0 分钟）。
+      # 这个 action 还会**顺带装好 Node**（`runtime: node@26`），
+      # 所以官方工作流里没有单独的 `actions/setup-node` —— 我们也照做，省一步。
+      - uses: pnpm/setup@v1
         with:
-          version: latest
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: 'pnpm'
+          runtime: node@26
+          cache: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:

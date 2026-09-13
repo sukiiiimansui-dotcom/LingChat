@@ -37,6 +37,25 @@ name: Build Map APK (unsigned · 本地签名)
 # ════════════════════════════════════════════════════════════════════════════
 
 on:
+  # ── 触发方式 ────────────────────────────────────────────────────────────────
+  #
+  # ① `push`：**这个才是当前实际生效的**。
+  #    GitHub 规定 `workflow_dispatch` 的工作流**必须先出现在默认分支**上，
+  #    否则 API 触发会 404（实测：`POST .../workflows/map-apk.yml/dispatches` → 404）。
+  #    而 `push` 只要求文件在被推的那个分支上 —— 所以推送即构建，开发回路更顺。
+  #    `paths` 限定在地图相关目录，改文档/别的功能不会触发一次 30 分钟的构建。
+  #    配合下面的 `concurrency.cancel-in-progress`：连推几次只跑最后一次。
+  #
+  # ② `workflow_dispatch`：等这个文件随 PR 进了 `dev`/`main` 之后就能手动触发了
+  #    （那时也能用 `profile` 选 fast / release）。现在留着不碍事。
+  push:
+    branches: ['feat/world-map', 'feat/world-map-**']
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'public/world_map/**'
+      - '.github/workflows/map-apk.yml'
+
   workflow_dispatch:
     inputs:
       profile:

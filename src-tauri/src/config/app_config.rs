@@ -113,6 +113,10 @@ pub struct AppConfig {
     pub memory_update_interval: u32,
     #[serde(default = "default_memory_recent_window")]
     pub memory_recent_window: u32,
+    /// 记忆窗口内没有 user 消息时，是否在裁切后的首条 assistant 前注入一条 user「继续」。
+    /// 默认开启：genai 不做消息规范化，Gemini 等 provider 要求首条为 user。
+    #[serde(default = "default_true")]
+    pub memory_inject_continue_user: bool,
     // 记忆段长度上限（字符数，0 = 不截断）：决定压缩喂给 LLM 的旧内容与运行时注入上下文的长度
     #[serde(default = "default_memory_short_term_max_chars")]
     pub memory_short_term_max_chars: u32,
@@ -155,6 +159,7 @@ impl Default for AppConfig {
             use_persistent_memory: true,
             memory_update_interval: default_memory_update_interval(),
             memory_recent_window: default_memory_recent_window(),
+            memory_inject_continue_user: true,
             memory_short_term_max_chars: default_memory_short_term_max_chars(),
             memory_long_term_max_chars: default_memory_long_term_max_chars(),
             memory_user_info_max_chars: default_memory_user_info_max_chars(),
@@ -271,6 +276,11 @@ impl AppConfig {
                 default.memory_recent_window,
                 0,
                 MAX_MEMORY_RECENT_WINDOW,
+            ),
+            memory_inject_continue_user: get_bool(
+                &store,
+                keys::MEMORY_INJECT_CONTINUE_USER,
+                default.memory_inject_continue_user,
             ),
             memory_short_term_max_chars: get_u32_in_range(
                 &store,

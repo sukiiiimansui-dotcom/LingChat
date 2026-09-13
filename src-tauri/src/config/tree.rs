@@ -254,6 +254,17 @@ pub fn build_config_tree(app: &AppHandle) -> ConfigTree {
                         setting_type: "text".to_string(),
                     },
                     ConfigSetting {
+                        key: keys::MEMORY_INJECT_CONTINUE_USER.to_string(),
+                        value: read_setting(
+                            app,
+                            keys::MEMORY_INJECT_CONTINUE_USER,
+                            &app_defaults.memory_inject_continue_user.to_string(),
+                        ),
+                        description: "MEMORY_INJECT_CONTINUE_USER — 上下文窗口内没有玩家（user）消息时（工具调用挤满窗口等情况），裁切到下一条 assistant 并在其前面注入一条 user「继续」，兼容要求首条消息为 user 的 provider（如 Gemini）；关闭则只裁切、不注入（重启生效）"
+                            .to_string(),
+                        setting_type: "bool".to_string(),
+                    },
+                    ConfigSetting {
                         key: keys::MEMORY_SHORT_TERM_MAX_CHARS.to_string(),
                         value: read_setting(
                             app,

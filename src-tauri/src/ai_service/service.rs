@@ -43,6 +43,7 @@ impl AIService {
         memory_update_interval: u32,
         memory_recent_window: u32,
         memory_limits: MemorySectionLimits,
+        memory_inject_continue_user: bool,
     ) -> Self {
         // Initialize the event handler registry before any script is run
         crate::ai_service::game_system::script_engine::init_event_registry();
@@ -57,6 +58,7 @@ impl AIService {
             memory_update_interval,
             memory_recent_window,
             memory_limits,
+            memory_inject_continue_user,
         );
         let game_status = Arc::new(Mutex::new(GameStatus::new(role_manager)));
         let script_manager = ScriptManager::new(&data_dir);

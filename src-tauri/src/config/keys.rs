@@ -48,6 +48,9 @@ pub const AUTO_SAVE_INTERVAL_SECS: &str = "features.auto_save_interval_secs";
 pub const USE_PERSISTENT_MEMORY: &str = "features.use_persistent_memory";
 pub const MEMORY_UPDATE_INTERVAL: &str = "features.memory_update_interval";
 pub const MEMORY_RECENT_WINDOW: &str = "features.memory_recent_window";
+/// 上下文窗口内没有 user 消息时，是否在裁切后的首条 assistant 前注入一条 user「继续」。
+/// 兼容 Gemini 等要求首条消息为 user 的 provider。
+pub const MEMORY_INJECT_CONTINUE_USER: &str = "features.memory_inject_continue_user";
 
 // ========== 记忆段长度上限（字符数，0 = 不截断） ==========
 pub const MEMORY_SHORT_TERM_MAX_CHARS: &str = "features.memory_short_term_max_chars";

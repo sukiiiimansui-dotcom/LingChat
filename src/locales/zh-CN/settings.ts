@@ -229,6 +229,8 @@ export default {
           "MEMORY_UPDATE_INTERVAL — 触发摘要的可见台词数（1–10000，默认 250）",
         memory_recent_window:
           "MEMORY_RECENT_WINDOW — 压缩后保留的角色可见台词数（0–10000，默认 30）",
+        memory_inject_continue_user:
+          "MEMORY_INJECT_CONTINUE_USER — 上下文窗口内没有玩家（user）消息时（工具调用挤满窗口等情况），裁切到下一条 assistant 并在其前面注入一条 user「继续」，兼容要求首条消息为 user 的 provider（如 Gemini）；关闭则只裁切、不注入",
         auto_save_enabled: "AUTO_SAVE_ENABLED — 是否启用自动存档（关闭后定时与退出存档均不再写入）",
         auto_save_interval_secs:
           "AUTO_SAVE_INTERVAL_SECS — 自动存档间隔（秒，30–3600，默认 300，改后即时生效）",

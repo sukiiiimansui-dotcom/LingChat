@@ -41,6 +41,9 @@ pub struct GameRoleManager {
     memory_recent_window: u32,
     /// 各记忆段长度上限（来自 `AppConfig::memory_*_max_chars`），透传给压缩系统。
     memory_limits: MemorySectionLimits,
+    /// 记忆窗口内没有 user 消息时，是否在裁切后的首条 assistant 前注入一条 user「继续」
+    /// （来自 `AppConfig::memory_inject_continue_user`）。
+    memory_inject_continue_user: bool,
     /// 角色服装覆盖（session store → register_role_by_id 时优先读取）
     clothes_overrides: HashMap<i32, String>,
 }
@@ -56,6 +59,7 @@ impl GameRoleManager {
         memory_update_interval: u32,
         memory_recent_window: u32,
         memory_limits: MemorySectionLimits,
+        memory_inject_continue_user: bool,
     ) -> Self {
         Self {
             loaded_roles: HashMap::new(),
@@ -69,6 +73,7 @@ impl GameRoleManager {
             memory_update_interval,
             memory_recent_window,
             memory_limits,
+            memory_inject_continue_user,
             clothes_overrides: HashMap::new(),
         }
     }
@@ -340,7 +345,9 @@ impl GameRoleManager {
                 }
             }
 
-            let built = MemoryBuilder::new(rid).build(&final_sliced);
+            let built = MemoryBuilder::new(rid)
+                .with_continue_user(self.memory_inject_continue_user)
+                .build(&final_sliced);
 
             // 阶段 3.5: 世界模拟的地图上下文（P3）
             //

@@ -13,6 +13,11 @@
         $t("views.menu.scriptEditor")
       }}</StartItem>
     </StartLine>
+    <!-- 「世界模拟」主线入口：选国家 → 省 → 市 → 区县 → 小区，落到一张可交互的街区图。
+         文案走 i18n（官方那条线这里是硬编码中文，提 PR 会被挑，我们的新入口从一开始就进 locales）。 -->
+    <StartLine>
+      <StartItem @click="() => emit('open-world')">{{ $t("worldsim.entry") }}</StartItem>
+    </StartLine>
     <StartLine>
       <StartItem @click="() => emit('open-settings')">{{ $t("views.menu.gameConfig") }}</StartItem>
     </StartLine>
@@ -35,6 +40,7 @@ const emit = defineEmits<{
   (e: "open-settings", tab?: string): void;
   (e: "open-credits"): void;
   (e: "open-workshop"): void;
+  (e: "open-world"): void;
 }>();
 
 // 保留 Current 的退出逻辑

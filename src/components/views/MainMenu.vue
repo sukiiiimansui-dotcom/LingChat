@@ -58,6 +58,7 @@
             @open-settings="handleOpenSettings"
             @open-credits="handleOpenCredits"
             @open-workshop="showWorkshopMenu"
+            @open-world="() => router.push('/worldsim')"
           />
         </Transition>
 

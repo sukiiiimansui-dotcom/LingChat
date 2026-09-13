@@ -1,0 +1,208 @@
+name: Build Map APK (unsigned · 本地签名)
+
+# ════════════════════════════════════════════════════════════════════════════
+# 为什么要有这个工作流（而不是直接用官方的两个）
+#
+# 官方有两个 Android 构建工作流，但**都不能直接用来出可安装的包**：
+#
+#   ① `.github/workflows/dev-build-android.yml` —— **没有 `git lfs pull`**。
+#      而本仓库的素材大量走 **Git LFS**（`.gitattributes` 里 12 条按扩展名的规则：
+#      `*.webp *.png *.jpg *.jpeg *.wav *.mp3 *.7z *.zip *.woff2 *.icns *.ico *.safetensors`）。
+#      实测本地检出里有 **152 个文件是 131 字节的指针**（102 webp / 21 wav / …），
+#      不 pull 就打进 APK → **素材全空**（"空壳包"）。
+#      它还会删掉真图标、用 PIL 画一个蓝圆圈当占位（第 86-88 行）。
+#
+#   ② `.github/workflows/build-android.yml` —— LFS 是全的，但它**依赖仓库 Secrets**
+#      （`ANDROID_KEY_BASE64` / `ANDROID_KEY_ALIAS` / `ANDROID_KEYSTORE_PASSWORD`）来签名。
+#      而 **GitHub 的 secret 只写不可读**，没法从别的仓库复制。这个 fork 里那三个是空的
+#      → 构建会挂在签名那一步。
+#
+# 所以这个工作流：**拉全 LFS 素材** + **只出未签名 release APK**（artifact 传出来，
+# 本地用 apksigner 签）。签名放本地还有个好处：**仓库里不用放任何密钥**。
+#
+# ── 2026-09-13 第二轮：为「别每次重编 20-40 分钟」做的缓存升级 ──────────────
+#
+#   · **NDK 缓存**：`sdkmanager "ndk;28.2.13676358"` 每次下 ~1GB。官方工作流也没缓存它，
+#     这是最容易被忽略的一块。这里加了 —— 命中后省掉几分钟。
+#   · **Gradle 缓存**：官方有、我们原来漏了。`~/.gradle/caches` + `wrapper`。
+#   · **rust-cache 开启 `cache-on-failure`**：⚠️ 这条最关键。原来没开，
+#     一旦构建失败（比如接线点写错），**整个 target/ 缓存就丢了**，
+#     下次从零编 —— 而失败重试恰恰是最常见的场景。
+#   · **`cache-all-crates`**：连 registry / git 依赖一起缓存。
+#   · **`profile` 可选输入**：默认 `fast`，用 env 覆盖 `.cargo/config.toml` 里的
+#     `lto="thin"` / `opt-level="z"`（那是为发布体积优化的，编译很慢）。
+#     `fast` 档实测能显著缩短编译时间，代价是产物略大 —— 我们只是自用验证，划算。
+#     要出正式包时选 `release`。
+#   · **concurrency**：同一分支的新构建会自动取消旧的，不浪费 runner。
+# ════════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: '编译档位：fast=快（覆盖 LTO/opt-level，产物略大）· release=按仓库正式配置'
+        required: true
+        default: 'fast'
+        type: choice
+        options: [fast, release]
+      rust_cache_key:
+        description: '可选的缓存后缀（想让某次构建从零开始就填个新值）'
+        required: false
+        default: ''
+        type: string
+
+# 同一分支只保留最新一次构建（旧的自动取消）——省 runner，也省得看一堆过期结果
+concurrency:
+  group: map-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      # ── 编译档位 ────────────────────────────────────────────────────────
+      # Cargo 会把 `CARGO_PROFILE_<PROFILE>_<KEY>` 当配置覆盖，优先级高于
+      # `.cargo/config.toml` 里的 profile 段。所以下面这几行能不动仓库文件就改编译参数。
+      CARGO_PROFILE_RELEASE_LTO: ${{ inputs.profile == 'fast' && 'false' || 'thin' }}
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ inputs.profile == 'fast' && '1' || 'z' }}
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+      CARGO_PROFILE_RELEASE_STRIP: 'true'
+      # 增量编译在 CI 上没意义（每次都是干净环境），关掉省内存
+      CARGO_INCREMENTAL: '0'
+      # 少刷点日志，也省一点 IO
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ⚠️ 关键：`lfs: true` 让 checkout 直接拉 LFS 真文件。
+          # 少了它，152 个素材全是 131 字节指针 → APK 变空壳。
+          lfs: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # ── Rust 缓存（最容易白费的一块）────────────────────────────────────
+      # `cache-on-failure: true` 是重点：接线点写错导致构建失败时，
+      # 已经编好的依赖不该跟着作废，否则每次重试都要从零编 20 分钟。
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri
+          cache-targets: true
+          cache-all-crates: true
+          cache-on-failure: true
+          shared-key: map-apk
+          key: ${{ inputs.rust_cache_key }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      # ── NDK 缓存：每次要下 ~1GB，官方工作流都没缓存 ──────────────────────
+      - name: 缓存 NDK
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/ndk/28.2.13676358
+          key: ndk-28.2.13676358-${{ runner.os }}
+
+      - name: Install NDK（命中缓存时秒过）
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: Linux deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential clang
+
+      # ── LFS 素材：空壳包的防线 ──────────────────────────────────────────
+      # ⚠️ 这里**故意用裸的 `git lfs pull`、不加 `--include`**（与官方 `release.yml` 一致）。
+      # 原因：本仓库 LFS 规则是**按扩展名**的，按**路径**过滤看着更精确，
+      # 但只要有一个 LFS 文件落在过滤路径之外（例如 `docs/assets/` 下的配图），
+      # 就会被**静默漏掉** —— 而"漏掉素材"正是空壳包的成因，代价太大。
+      - name: 确认 LFS 素材是真的（不是 131 字节指针）
+        run: |
+          set -e
+          git lfs pull
+          echo "── 抽查素材的真实大小（LFS 指针文件只有 ~130 字节）"
+          fail=0
+          for f in \
+            data/game_data/backgrounds/夜晚.webp \
+            data/game_data/characters/DeepSeek/avatar/头像.webp \
+            src-tauri/icons/icon.png ; do
+            if [ -e "$f" ]; then
+              sz=$(stat -c%s "$f")
+              if [ "$sz" -lt 200 ]; then echo "   ❌ $f = $sz B —— 这是 LFS 指针，不是真文件！"; fail=1
+              else echo "   ✅ $f = $sz B"; fi
+            else
+              echo "   ⚠️ $f 不存在（可能是路径变了，检查一下）"
+            fi
+          done
+          [ "$fail" -eq 0 ] || { echo "❌ 素材没有真正拉下来，继续构建只会得到空壳包，直接失败。"; exit 1; }
+          echo "── 兜底：还有没有残留的指针文件（应为空）"
+          git grep -lI 'https://git-lfs.github.com/spec' -- . 2>/dev/null | head -10 || true
+
+      - name: pnpm install
+        run: pnpm i --frozen-lockfile
+
+      - name: 生成图标
+        run: pnpm tauri icon src-tauri/icons/icon.png
+
+      - name: 准备 Android 项目
+        run: pnpm android:prepare
+
+      # ── Gradle 缓存：官方有、我们原来漏了 ───────────────────────────────
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('src-tauri/gen/android/**/*.gradle*', 'src-tauri/gen/android/**/gradle-wrapper.properties', 'src-tauri/gen/android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # 注意：这里**不配置任何签名**。
+      # 没有 keystore.properties 时 Gradle 出的是 `app-*-release-unsigned.apk`，
+      # 正是我们要的 —— 拿回本地用自备 keystore 签。
+      - name: 构建 APK（release · 未签名）
+        run: |
+          echo "编译档位: ${{ inputs.profile }}  (LTO=$CARGO_PROFILE_RELEASE_LTO opt-level=$CARGO_PROFILE_RELEASE_OPT_LEVEL)"
+          START=$(date +%s)
+          pnpm android:build
+          echo "构建耗时 $(( ($(date +%s) - START) / 60 )) 分 $(( ($(date +%s) - START) % 60 )) 秒"
+
+      - name: 列出产物
+        run: find src-tauri/gen/android/app/build/outputs -name '*.apk' -exec ls -la {} \;
+
+      - name: 报告大小（空壳的话 data.7z 会很小）
+        run: |
+          A=$(find src-tauri/gen/android/app/build/outputs -name '*.apk' | head -1)
+          echo "APK: $A ($(stat -c%s "$A") B)"
+          python3 - "$A" <<'PY'
+          import sys, zipfile
+          z = zipfile.ZipFile(sys.argv[1])
+          for n in z.namelist():
+              if n.endswith('.7z') or n.endswith('.so'):
+                  print(f"   {n}: {z.getinfo(n).file_size/1048576:.1f} MB")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: map-apk-unsigned-${{ inputs.profile }}
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14

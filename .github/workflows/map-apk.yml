@@ -185,6 +185,33 @@ jobs:
       - name: 准备 Android 项目
         run: pnpm android:prepare
 
+      # ⚠️ 必须给开发包一个**独立的安装标识**（2026-09-13 加）
+      #
+      # 起因：fork 继承的是上游的包名 `com.noiq.lingchat`，而机主手机上装的是**官方版**，
+      # 包名相同 → 安装器会直接把它当成「更新」，**覆盖掉官方 App**。
+      #
+      # Android 里两个概念要分清：
+      #   · `namespace`     = 代码包名（Kotlin 类路径 / R 类）—— 我们的
+      #                       `com/noiq/lingchat/location/LocationPlugin.kt` 在这里
+      #   · `applicationId` = **安装标识**——系统靠它判断"这是不是同一个 App"
+      # 所以**只改 applicationId、namespace 保持不动**：官方版与我们的开发包能并存，
+      # 而 `register_android_plugin` 找的类路径不变，GPS 链路不受影响。
+      #
+      # 这一步只改 CI 工作区里的构建产物，**不碰仓库文件**（PR 不受影响）。
+      - name: 改成独立安装标识（避免覆盖官方 App）
+        run: |
+          set -e
+          F=src-tauri/gen/android/app/build.gradle.kts
+          sed -i 's/^\(\s*applicationId = \)"com\.noiq\.lingchat"/\1"com.noiq.lingchat.mapdev"/' "$F"
+          echo "── 改后："
+          grep -nE "namespace|applicationId" "$F"
+          # 断言：namespace 必须原封不动 —— 动了的话 LocationPlugin 就找不到了
+          grep -q 'namespace = "com.noiq.lingchat"' "$F" \
+            || { echo "❌ namespace 被改动了！LocationPlugin 会找不到，GPS 会静默失效"; exit 1; }
+          grep -q 'applicationId = "com.noiq.lingchat.mapdev"' "$F" \
+            || { echo "❌ applicationId 没改成功"; exit 1; }
+          echo "✅ namespace 未动 · applicationId 已改为独立标识"
+
       # ── Gradle 缓存：官方有、我们原来漏了 ───────────────────────────────
       - name: 缓存 Gradle
         uses: actions/cache@v4

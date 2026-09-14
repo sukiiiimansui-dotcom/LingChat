@@ -737,6 +737,21 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
   let drainTimer: number | null = null;
   let unlisten: UnlistenFn | null = null;
   let bound = false;
+  /**
+   * 订阅代号：每次 `subscribe()` / `stop()` 都自增。
+   *
+   * ⚠️ **为什么需要它**（2026-09-14 修的竞态）：
+   * `listen()` 是**异步**的。原来的写法是「先同步置 `bound = true`，再 `await listen(...)`
+   * 把返回的 unlisten 直接赋值」。如果组件在 `await` 期间卸载 → `stop()` 跑的时候
+   * `unlisten` **还是 null** → 它什么都摘不掉；等 Promise resolve 后，那个监听器
+   * 又被赋回 `unlisten` —— 于是**这个监听器永久留在窗口上**，之后每次 emit 都会跑
+   * 孤儿回调（本模块里还会持续触发状态更新）。弱网下快速离开页面就会撞上，且完全静默。
+   *
+   * 对策：`subscribe()` 进入时记下自己的代号；`await` 返回后先核对
+   * 「现在的代号还是我这一代吗、还处于 bound 状态吗」——
+   * 不是的话说明中途 stop() 过（或又 subscribe 了一次），**当场把刚拿到的监听器摘掉**。
+   */
+  let subGen = 0;
   /** 已经处理过的事件（`id@时刻`）—— tick 与广播是同一件事的两条通路，必须去重 */
   const seenKeys = new Set<string>();
   /** 气泡的消失定时器 */
@@ -924,13 +939,25 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
   async function subscribe() {
     if (!supported.value || bound) return;
     bound = true;
+    const gen = ++subGen; // 本次订阅的代号（见 subGen 的注释）
     try {
-      unlisten = await listen<unknown>("world_map:event", (ev) => {
+      const off = await listen<unknown>("world_map:event", (ev) => {
         applyFired(firedFromPayload(ev?.payload));
       });
+      // ⚠️ await 期间可能已经 stop()（代号变了）或又 subscribe 了一次 ——
+      //    那就【立刻摘掉】，否则它永远留在窗口上（孤儿回调）。
+      if (gen !== subGen || !bound) {
+        try {
+          off();
+        } catch {
+          /* 卸载失败无所谓：Tauri 那边会随窗口一起清 */
+        }
+        return;
+      }
+      unlisten = off;
     } catch (e) {
       // web 预览 / 权限问题：订阅不上不影响轮询这条路
-      unlisten = null;
+      if (gen === subGen) unlisten = null;
       safe(opts.onError, e);
     }
   }
@@ -990,6 +1017,9 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
 
   function stop() {
     running.value = false;
+    // 让任何「正在 await listen() 的那一次订阅」作废 —— 它 resolve 后会自己摘掉
+    // （见 subGen 的注释：不做这一步就会留下永久监听器）
+    subGen++;
     if (pollTimer !== null) window.clearTimeout(pollTimer);
     pollTimer = null;
     if (drainTimer !== null) window.clearInterval(drainTimer);

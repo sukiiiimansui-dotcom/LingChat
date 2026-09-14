@@ -22,28 +22,30 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-/// 数据目录候选（按优先级）。`WM_LINGCHAT_DATA` 可覆盖，便于测试与部署。
+/// LingChat 的数据目录。`WM_LINGCHAT_DATA` 可覆盖，便于测试与部署。
+///
+/// **历史坑（2026-09-14 修）**：这里原本是「按优先级探测一串候选目录」，
+/// 其中包括 `{home}/lingchat-main/data`、`{home}/rikka/Dsh-SYuki/lingchat-data` 这类
+/// **开发机路径** —— 那是本模块还是独立原型时留下的。
+///
+/// 后果：打包成 APK 后那些路径**全都不存在** → 本函数返回 `None`
+/// → [`schedules_path`] / [`characters_dir`] 也返回 `None`
+/// → **日程驱动功能静默降级**（不报错、不崩溃，只是角色位置不再随日程变化）。
+/// 而它在本地开发时**不会暴露**，因为开发机上那些路径真的存在。
+///
+/// 现在改用上游正牌的数据目录 API（`crate::api::data_dir()`，全仓 30 处都用它）。
 pub fn data_dir() -> Option<PathBuf> {
     // 显式指定就**只认它**：指向不存在的路径即等于禁用发现（测试与部署都要能锁定数据源）
     if let Ok(d) = std::env::var("WM_LINGCHAT_DATA") {
         let p = PathBuf::from(d);
         return if p.join("game_data").is_dir() { Some(p) } else { None };
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let cands = [
-        format!("{home}/lingchat-data"),
-        format!("{home}/companion_new/lingchat-data"),
-        format!("{home}/lingchat-main/data"),
-        format!("{home}/rikka/Dsh-SYuki/lingchat-data"),
-        format!("{home}/lingchat-main/src-tauri/target/debug/data"),
-    ];
-    for d in cands {
-        let p = PathBuf::from(&d);
-        if p.join("game_data").is_dir() {
-            return Some(p);
-        }
+    // 未初始化（独立运行 / 单测垫片）→ 安静降级，**不能**让 `get_data_dir()` panic
+    if !crate::init::static_copy::data_dir_initialized() {
+        return None;
     }
-    None
+    let p = crate::api::data_dir();
+    if p.join("game_data").is_dir() { Some(p) } else { None }
 }
 
 /// LingChat 的 schedules.json 路径（找不到数据目录则为 None）

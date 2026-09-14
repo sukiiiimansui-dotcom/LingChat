@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>LingChat · 浏览器预览（web-mock）</title>
+    <style></style>
+  </head>
+
+  <body>
+    <!--
+      ────────────────────────────────────────────────────────────────────────
+      webdev.html —— 纯浏览器预览入口（自用层，不进 PR）
+      ────────────────────────────────────────────────────────────────────────
+      为什么是单独一个 html 而不是改 index.html：
+
+        · `src/main.ts` 是 PR 保护文件（必须与上游逐字节相同），不能在它里面
+          `import "./web-mock"`；
+        · `index.html` 虽然没被点名保护，但改它同样会让 PR diff 变脏。
+
+      所以新开一个入口：**先加载垫片，再加载真正的主入口**。
+      访问：http://127.0.0.1:5219/webdev.html
+
+      ⚠️ 这里的数据是【空值】—— 只能看布局 / 配色 / 交互 / 动画，
+          **不能**用来验证业务逻辑（那要真机或真壳）。
+    -->
+    <div id="app"></div>
+
+    <!-- ⓿ 错误收集器：把启动期的异常记进 window.__ERRORS__，便于用 WebDriver 取回 -->
+    <script>
+      window.__ERRORS__ = [];
+      window.addEventListener("error", function (e) {
+        window.__ERRORS__.push("error: " + (e.message || e.error || e.type) + " @" + (e.filename || "?") + ":" + (e.lineno || 0));
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        window.__ERRORS__.push("reject: " + String((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
+      });
+      // ⚠️ 关键：Vue 会**自己捕获**组件渲染/生命周期的异常再 `console.error`，
+      //    这类错误**不会**触发 window.onerror —— 上一版因此看到空的 errs，
+      //    误以为"没报错"。这里把 console.error / warn 也收进来。
+      (function () {
+        const wrap = function (level) {
+          const orig = console[level].bind(console);
+          console[level] = function () {
+            try {
+              const msg = Array.prototype.map
+                .call(arguments, function (a) {
+                  if (a instanceof Error) return a.stack || a.message;
+                  if (typeof a === "object") {
+                    try { return JSON.stringify(a).slice(0, 300); } catch (_e) { return String(a); }
+                  }
+                  return String(a);
+                })
+                .join(" ");
+              window.__ERRORS__.push(level + ": " + msg.slice(0, 600));
+            } catch (_e) { /* 收集器自身绝不能抛 */ }
+            return orig.apply(console, arguments);
+          };
+        };
+        wrap("error");
+        wrap("warn");
+      })();
+    </script>
+
+    <!--
+      ① 最小引导（**内联 classic script**，不是 module）
+      ──────────────────────────────────────────────────────────────────────
+      为什么必须是内联的 classic script：
+        · classic script **同步立即执行**，比任何 `type="module"` 都早
+          （module 一律 defer）；
+        · 上一版把它放在 `/src/web-mock.ts` 里 → URL 改写**没生效**，
+          因为 router 创建时看到的仍然是 `/webdev.html`（不匹配任何路由 → 白屏）。
+      所以这里只做两件「时序敏感」的事，其余仍由 web-mock.ts 负责。
+    -->
+    <script>
+      // ① URL 改写：`/webdev.html` 不匹配任何路由（router 是 history 模式），
+      //    不改写的话 `<router-view>` 渲染空 —— 看起来像白屏，其实应用已经起来了。
+      if (/\/webdev\.html$/.test(location.pathname)) {
+        history.replaceState(null, "", "/" + (location.search || "") + (location.hash || ""));
+      }
+      // ② 先打上 mock 标记（真壳里由 Rust 注入 __TAURI_INTERNALS__，这里只在没有时打）
+      if (!window.__TAURI_INTERNALS__) {
+        window.__LINGCHAT_WEB_MOCK__ = true;
+      }
+    </script>
+
+    <!-- ② 完整垫片（伪造 __TAURI_INTERNALS__ 等）—— module 即可，它不再承担时序职责 -->
+    <script type="module" src="/src/web-mock.ts"></script>
+    <!-- ③ 真正的主入口（与 index.html 用的是同一个文件，不改它） -->
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

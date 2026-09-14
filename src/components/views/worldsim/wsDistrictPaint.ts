@@ -19,6 +19,15 @@ export interface PaintItem {
   type?: string;
   name?: string;
   floors?: number | string;
+  /**
+   * 入列时间戳（**内部字段**，由 DistrictPaint 自己打，调用方不用管）。
+   *
+   * ⚠️ 现在**只用于诊断**，不参与任何层序判断：增量画布的层序完全由**类别**决定
+   *    （绿地 → 水域 → 道路 → 建筑），与 `toSvg` 逐点一致。曾经拿它做过
+   *    「按到达先后归并绿地/水域」，结果与 `toSvg` 的类分层不一致，实测像素差 11%，
+   *    已经改掉 —— 别再把它捡回来做排序。
+   */
+  at?: number;
 }
 
 /** 道路图元 */
@@ -29,6 +38,8 @@ export interface PaintRoad {
   y2?: number;
   type?: string;
   name?: string;
+  /** 同 PaintItem.at */
+  at?: number;
 }
 
 /** 一套配色（值抄自 Rust `render.rs::style_of`，保证 AI 精绘与草图/行政区划是同一套视觉语言） */
@@ -169,6 +180,211 @@ function num(v: unknown, d = 0): number {
   return Number.isFinite(n) ? n : d;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * 图元规格（spec）：字符串路径与 DOM 路径的**唯一事实来源**
+ *
+ * 为什么要把「一个图元有哪些属性」抽出来：
+ *   P5-6 给 AI 精绘层加了**增量 DOM** 渲染（见文件末尾的 DistrictCanvas），
+ *   于是同一批图元有了两条出口 —— `toSvg()` 出字符串（给 v-html / 自检用），
+ *   `DistrictCanvas` 出真 DOM。两条路若各写一份属性表，迟早会漂移出
+ *   「跑起来和自检里不一样」这种最难查的 bug。
+ *   所以属性只在这里写一次：`toSvg` 把 spec 拼成字符串，Canvas 把 spec 转成属性。
+ *
+ * ⚠️ 属性顺序有意义：`toSvg` 的输出被自检逐字断言，重排顺序会让自检失败。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** 一个图元的规格：标签名 + 有序属性（值已字符串化）+ 可选文本内容 */
+export interface ElSpec {
+  tag: string;
+  /** `[名, 值]` 有序对 —— 顺序即输出顺序 */
+  attrs: [string, string][];
+  /** 元素文本（只有 <text> 用；走 textContent，转义由 DOM 负责） */
+  text?: string;
+}
+
+/** 把 spec 拼成 SVG 文本（自闭合，与原来手拼的字符串逐字一致） */
+export function specToText(spec: ElSpec): string {
+  let s = `<${spec.tag}`;
+  for (const [k, v] of spec.attrs) s += ` ${k}="${v}"`;
+  if (spec.text !== undefined) return s + `>${spec.text}</${spec.tag}>`;
+  return s + "/>";
+}
+
+/** 把 spec 转成真 DOM 节点（SVG 树里一律 SVG 命名空间） */
+export function specToNode(spec: ElSpec, doc: Document): Element {
+  const el = doc.createElementNS("http://www.w3.org/2000/svg", spec.tag);
+  for (const [k, v] of spec.attrs) el.setAttribute(k, v);
+  if (spec.text !== undefined) el.textContent = spec.text;
+  return el;
+}
+
+/** 网格边长 → 绝对长度（原来散在 toSvg 里，现在两边共用） */
+function unit(size: number) {
+  return (k: number) => Math.max(0.05, size * k);
+}
+
+/** 建筑填充色（原来是 `p.bld[type] || p.bld.residential || 兜底`） */
+function bldFill(p: PaintPalette, type?: string): string {
+  return p.bld[String(type || "residential")] || p.bld.residential || "#d6dce6";
+}
+
+/**
+ * 建筑图元的属性组（1~3 个 spec：投影 + 本体 + 可选名字）。
+ *
+ * 名字只给够大的楼：小楼上写字只会糊成一团 —— 阈值 `w*h >= 5.5` 是原实现写死的。
+ */
+export function buildingSpecs(
+  b: PaintItem,
+  p: PaintPalette,
+  size: number,
+  showNames: boolean
+): ElSpec[] {
+  const w0 = unit(size);
+  const x = num(b.x);
+  const y = num(b.y);
+  const w = Math.max(0.35, num(b.w, 1));
+  const h = Math.max(0.35, num(b.h, 1));
+  const out: ElSpec[] = [
+    {
+      tag: "rect",
+      attrs: [
+        ["x", (x + w0(0.012)).toFixed(3)],
+        ["y", (y + w0(0.012)).toFixed(3)],
+        ["width", String(w)],
+        ["height", String(h)],
+        ["fill", p.shadow],
+        ["rx", String(w0(0.01))],
+      ],
+    },
+    {
+      tag: "rect",
+      attrs: [
+        ["class", "ws-b"],
+        ["x", String(x)],
+        ["y", String(y)],
+        ["width", String(w)],
+        ["height", String(h)],
+        ["fill", bldFill(p, b.type)],
+        ["stroke", p.bldEdge],
+        ["stroke-width", String(w0(0.008))],
+        ["rx", String(w0(0.01))],
+      ],
+    },
+  ];
+  const name = String(b.name || "").trim();
+  if (showNames && name && w * h >= 5.5) {
+    const fs = Math.max(0.42, Math.min(w0(0.032), w / (name.length * 0.62)));
+    out.push({
+      tag: "text",
+      attrs: [
+        ["x", (x + w / 2).toFixed(3)],
+        ["y", (y + h / 2 + fs * 0.36).toFixed(3)],
+        ["font-size", fs.toFixed(3)],
+        ["text-anchor", "middle"],
+        ["fill", p.text],
+        ["stroke", p.textHalo],
+        ["stroke-width", String(w0(0.006))],
+        ["paint-order", "stroke"],
+      ],
+      text: esc(name.slice(0, 8)),
+    });
+  }
+  return out;
+}
+
+/** 道路图元的属性组（2 个 spec：描边打底 + 路面色，叠出「路缘」） */
+export function roadSpecs(r: PaintRoad, p: PaintPalette, size: number): ElSpec[] {
+  const w0 = unit(size);
+  const x1 = num(r.x1);
+  const y1 = num(r.y1);
+  const x2 = num(r.x2);
+  const y2 = num(r.y2);
+  const w = r.type === "main" ? w0(0.055) : r.type === "secondary" ? w0(0.034) : w0(0.018);
+  const face = r.type === "main" ? p.roadMain : r.type === "secondary" ? p.roadSec : p.roadPath;
+  const base = [
+    ["x1", String(x1)],
+    ["y1", String(y1)],
+    ["x2", String(x2)],
+    ["y2", String(y2)],
+  ];
+  return [
+    {
+      tag: "line",
+      attrs: [
+        ["class", "ws-t"],
+        ...(base as [string, string][]),
+        ["stroke", p.roadEdge],
+        ["stroke-width", (w + w0(0.012)).toFixed(3)],
+        ["stroke-linecap", "round"],
+      ],
+    },
+    {
+      tag: "line",
+      attrs: [
+        ["class", "ws-t"],
+        ...(base as [string, string][]),
+        ["stroke", face],
+        ["stroke-width", w.toFixed(3)],
+        ["stroke-linecap", "round"],
+      ],
+    },
+  ];
+}
+
+/** 绿地 / 水域的图元（1 个 spec；水域圆角更大） */
+export function areaSpec(
+  k: PaintItem,
+  p: PaintPalette,
+  size: number,
+  kind: "park" | "water"
+): ElSpec {
+  const w0 = unit(size);
+  const w = Math.max(0.4, num(k.w, 1));
+  const h = Math.max(0.4, num(k.h, 1));
+  return {
+    tag: "rect",
+    attrs: [
+      ["class", "ws-b"],
+      ["x", String(num(k.x))],
+      ["y", String(num(k.y))],
+      ["width", String(w)],
+      ["height", String(h)],
+      ["rx", String(kind === "water" ? w0(0.08) : w0(0.05))],
+      ["fill", kind === "water" ? p.water : p.park],
+      ["stroke", kind === "water" ? p.waterEdge : p.parkEdge],
+      ["stroke-width", String(w0(0.012))],
+    ],
+  };
+}
+
+/** 底色 + 街区底（两个固定 rect） */
+export function baseSpecs(p: PaintPalette, size: number): ElSpec[] {
+  const s = size;
+  return [
+    {
+      tag: "rect",
+      attrs: [
+        ["x", "0"],
+        ["y", "0"],
+        ["width", String(s)],
+        ["height", String(s)],
+        ["fill", p.bg],
+      ],
+    },
+    {
+      tag: "rect",
+      attrs: [
+        ["x", String(s * 0.04)],
+        ["y", String(s * 0.04)],
+        ["width", String(s * 0.92)],
+        ["height", String(s * 0.92)],
+        ["rx", String(s * 0.02)],
+        ["fill", p.blockbg],
+      ],
+    },
+  ];
+}
+
 /**
  * 增量绘制模型：一条流对应一个实例。
  *
@@ -195,28 +411,39 @@ export class DistrictPaint {
       this.dropped++;
       return;
     }
-    this.buildings.push(it);
+    this.buildings.push(this.stamp(it));
   }
   addRoad(it: PaintRoad) {
     if (this.roads.length >= MAX_ROADS) {
       this.dropped++;
       return;
     }
-    this.roads.push(it);
+    this.roads.push(this.stamp(it));
   }
   addPark(it: PaintItem) {
     if (this.parks.length >= MAX_PARK) {
       this.dropped++;
       return;
     }
-    this.parks.push(it);
+    this.parks.push(this.stamp(it));
   }
   addWater(it: PaintItem) {
     if (this.water.length >= MAX_WATER) {
       this.dropped++;
       return;
     }
-    this.water.push(it);
+    this.water.push(this.stamp(it));
+  }
+
+  /**
+   * 给图元打上入列时间戳（见 PaintItem.at；**只用于诊断**，不影响渲染）。
+   *
+   * 为什么在这里补、而不是在调用方：调用方有三处（三条流事件 + `loadLayout`），
+   * 漏一处就会出现「有的图元没时间戳」这种只在特定流程下复现的缺口。
+   */
+  private stamp<T extends PaintItem | PaintRoad>(it: T): T {
+    if (it && typeof it === "object" && it.at === undefined) it.at = Date.now();
+    return it;
   }
 
   counts(): PaintCounts {
@@ -261,86 +488,223 @@ export class DistrictPaint {
   }
 
   /**
-   * 生成整份 SVG 文本（给 v-html）。
+   * 生成整份 SVG 文本（给 v-html 与**自检**用）。
    *
    * viewBox 用 `0 0 size size`，坐标 1:1 —— 这样流里给的格子坐标不用任何换算，
    * 缩放交给 CSS（`width:100%`），手机上也是清晰的矢量。
+   *
+   * ⚠️ P5-6 起这个函数**不再是页面的渲染路径**（页面走 DistrictCanvas 增量 DOM），
+   *    但它是自检的基准与降级实现，且与 DOM 路径共用同一批 spec builder，
+   *    所以两者输出必然一致 —— 别把属性表改回「只在这个函数里写一份」。
    */
   toSvg(p: PaintPalette, opts: { showNames?: boolean } = {}): string {
     const s = this.size;
-    const w0 = (k: number) => Math.max(0.05, s * k);
+    const showNames = opts.showNames !== false;
     const parts: string[] = [];
     parts.push(
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${s}" class="ws-paint" role="img">`
     );
     // 底色 + 街区底
-    parts.push(`<rect x="0" y="0" width="${s}" height="${s}" fill="${p.bg}"/>`);
-    parts.push(
-      `<rect x="${s * 0.04}" y="${s * 0.04}" width="${s * 0.92}" height="${s * 0.92}" rx="${s * 0.02}" fill="${p.blockbg}"/>`
-    );
-
+    for (const spec of baseSpecs(p, s)) parts.push(specToText(spec));
     // 绿地 / 水域（先画，压在路和楼下面）
-    for (const k of this.parks) {
-      const x = num(k.x),
-        y = num(k.y),
-        w = Math.max(0.4, num(k.w, 1)),
-        h = Math.max(0.4, num(k.h, 1));
-      parts.push(
-        `<rect class="ws-b" x="${x}" y="${y}" width="${w}" height="${h}" rx="${w0(0.05)}" fill="${p.park}" stroke="${p.parkEdge}" stroke-width="${w0(0.012)}"/>`
-      );
-    }
-    for (const k of this.water) {
-      const x = num(k.x),
-        y = num(k.y),
-        w = Math.max(0.4, num(k.w, 1)),
-        h = Math.max(0.4, num(k.h, 1));
-      parts.push(
-        `<rect class="ws-b" x="${x}" y="${y}" width="${w}" height="${h}" rx="${w0(0.08)}" fill="${p.water}" stroke="${p.waterEdge}" stroke-width="${w0(0.012)}"/>`
-      );
-    }
-
+    for (const k of this.parks) parts.push(specToText(areaSpec(k, p, s, "park")));
+    for (const k of this.water) parts.push(specToText(areaSpec(k, p, s, "water")));
     // 道路：先描边色打底（宽一点），再盖一层路面色 —— 就有「路缘」了
-    const roadW = (t?: string) =>
-      t === "main" ? w0(0.055) : t === "secondary" ? w0(0.034) : w0(0.018);
-    for (const r of this.roads) {
-      const x1 = num(r.x1),
-        y1 = num(r.y1),
-        x2 = num(r.x2),
-        y2 = num(r.y2);
-      const w = roadW(r.type);
-      parts.push(
-        `<line class="ws-t" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.roadEdge}" stroke-width="${(w + w0(0.012)).toFixed(3)}" stroke-linecap="round"/>`
-      );
-      parts.push(
-        `<line class="ws-t" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${r.type === "main" ? p.roadMain : r.type === "secondary" ? p.roadSec : p.roadPath}" stroke-width="${w.toFixed(3)}" stroke-linecap="round"/>`
-      );
-    }
-
-    // 建筑：投影 + 本体 + 名字（名字只给够大的楼，小楼上写字只会糊成一团）
-    const showNames = opts.showNames !== false;
-    for (const b of this.buildings) {
-      const x = num(b.x),
-        y = num(b.y);
-      const w = Math.max(0.35, num(b.w, 1));
-      const h = Math.max(0.35, num(b.h, 1));
-      const fill = p.bld[String(b.type || "residential")] || p.bld.residential || "#d6dce6";
-      parts.push(
-        `<rect x="${(x + w0(0.012)).toFixed(3)}" y="${(y + w0(0.012)).toFixed(3)}" width="${w}" height="${h}" fill="${p.shadow}" rx="${w0(0.01)}"/>`
-      );
-      parts.push(
-        `<rect class="ws-b" x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" stroke="${p.bldEdge}" stroke-width="${w0(0.008)}" rx="${w0(0.01)}"/>`
-      );
-      const name = String(b.name || "").trim();
-      if (showNames && name && w * h >= 5.5) {
-        const fs = Math.max(0.42, Math.min(w0(0.032), w / (name.length * 0.62)));
-        parts.push(
-          `<text x="${(x + w / 2).toFixed(3)}" y="${(y + h / 2 + fs * 0.36).toFixed(3)}" font-size="${fs.toFixed(3)}" ` +
-            `text-anchor="middle" fill="${p.text}" stroke="${p.textHalo}" stroke-width="${w0(0.006)}" paint-order="stroke">${esc(name.slice(0, 8))}</text>`
-        );
-      }
-    }
+    for (const r of this.roads) for (const spec of roadSpecs(r, p, s)) parts.push(specToText(spec));
+    // 建筑：投影 + 本体 + 名字
+    for (const b of this.buildings)
+      for (const spec of buildingSpecs(b, p, s, showNames)) parts.push(specToText(spec));
 
     parts.push("</svg>");
     return parts.join("");
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * P5-6：增量 DOM 画布 —— AI 精绘层的正式渲染路径
+ *
+ * ── 为什么要有它（实测数据）──────────────────────────────────────────────
+ *   原来的做法是每帧 `aiSvgInner.value = paint.toSvg(...)`，再由 `<div v-html>`
+ *   整份替换。实测（同结构人造 DOM，1002 个 SVG 节点 / 69KB HTML）：
+ *       每帧 innerHTML = markup ：186.81ms/帧，5.4fps，jank 100%
+ *       同样 DOM 只建一次       ： 16.67ms/帧，60.0fps，jank 0%
+ *   **11.2 倍**，而且代价不在「节点多」，在「每帧重新解析 69KB 文本并重建整棵树」。
+ *
+ * ── 顺便修掉一个一直没生效的动画 ─────────────────────────────────────────
+ *   `worldsim.css:735-737` 给 `.ws-neigh__ai svg .ws-b/.ws-t` 挂了 `ws-pop 0.34s`
+ *   （「新画上去的建筑轻微弹出」）。但整棵树每帧被重建 → 每个元素每帧都是新的
+ *   → 那个 0.34s 动画**每帧重启一次、永远播不完**，实际观感是「所有元素一直在淡入」。
+ *   改成增量之后，`ws-pop` 才真的是「新增的那几个元素弹一下」，与注释里的意图一致。
+ *   → **这是修好，不是改观感**：初次加载的最终画面两者完全一样。
+ *
+ * ── 与 `WorldMap/DistrictLive.vue` 的关系 ────────────────────────────────
+ *   那边用的是同一套思路（每条事件 createElementNS 造一个节点直接 append）。
+ *   这里**不 import 那个文件**：它是 worldmap/** 下的页面，import 页面等于把它的
+ *   样式与状态一起拖进来（原 wsDistrictPaint 文件头已说明过这个边界）。
+ *   所以照同样的思路、用这边自己的 spec builder 重写一份小的。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+export class DistrictCanvas {
+  /** 根 <svg>（由本类创建并持有；外面只管把它塞进容器） */
+  readonly root: SVGSVGElement;
+  private readonly doc: Document;
+  /** 已落 DOM 的条数（按类别）—— 用它算「这一帧新增了哪几条」，只 append 增量 */
+  private n: PaintCounts = { buildings: 0, roads: 0, parks: 0, water: 0 };
+  /** 当前配色。换配色 = 整体重画（本类不再复用，外面会 new 一个新的） */
+  private palette: PaintPalette;
+  private readonly showNames: boolean;
+  /**
+   * 三个**分层标记**（空注释节点），把根 svg 切成四段固定层带：
+   *
+   *    底色 → [绿地] waterMark → [水域] roadMark → [道路] bldMark → [建筑(append)]
+   *
+   * 每个标记的位置在整块画布的生命周期里**永不移动**：新元素一律
+   * `insertBefore(..., 本层带的右边界标记)`，于是**层序完全由类别决定，
+   * 与到达顺序无关**，也就与 `toSvg` 的分组顺序逐点一致。
+   *
+   * 为什么非这样不可（都是实测踩出来的）：
+   *   · 按「到达即 append」→ 若建筑先到、道路后到，路就**盖在楼上**，
+   *     与 `toSvg` 正好相反（像素对比 A/B 层序相反，差异 11%）。
+   *   · 拿一个会移动的节点（如「最后一个低层节点」）当锚点 → 顺序被逐帧倒过来。
+   *   · 逐元素 `insertBefore` 到同一锚点 → 整批被倒序，必须先装 DocumentFragment。
+   * 用注释节点而不是元素：不参与渲染、不影响选择器、不会被 CSS 命中。
+   */
+  private readonly waterMark: ChildNode;
+  private readonly roadMark: ChildNode;
+  private readonly bldMark: ChildNode;
+
+  constructor(palette: PaintPalette, size: number, doc: Document = document, showNames = true) {
+    this.doc = doc;
+    this.palette = palette;
+    this.showNames = showNames;
+    const s = Math.max(8, Math.floor(size) || 28);
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = doc.createElementNS(NS, "svg");
+    // 与 toSvg 的根元素逐项一致（viewBox / class / role；xmlns 在 DOM 里由命名空间承载）
+    svg.setAttribute("viewBox", `0 0 ${s} ${s}`);
+    svg.setAttribute("class", "ws-paint");
+    svg.setAttribute("role", "img");
+    for (const spec of baseSpecs(palette, s)) svg.appendChild(specToNode(spec, doc));
+    // 三个标记一次排好，此后位置永不改变（层带右边界）：
+    //   底色 → [绿地] waterMark → [水域] roadMark → [道路] bldMark → [建筑]
+    // 绿地与水域分开标记，因为 `toSvg` 里**绿地永远在水域下面**（两层，不是一个混排带）。
+    // 绿地带的左边界就是底色末尾，不需要单独一个标记。
+    this.waterMark = doc.createComment("ws-water");
+    this.roadMark = doc.createComment("ws-roads");
+    this.bldMark = doc.createComment("ws-buildings");
+    for (const m of [this.waterMark, this.roadMark, this.bldMark]) svg.appendChild(m);
+    this.root = svg;
+  }
+
+  /** 网格边长（从 viewBox 反推，外面不用再记一份） */
+  private get size(): number {
+    const vb = this.root.getAttribute("viewBox") || "";
+    return Number(vb.split(/\s+/)[2]) || 28;
+  }
+
+  /**
+   * 把「画笔里现有的全部图元」对齐到 DOM。
+   *
+   * 只做 **append**：已落 DOM 的节点一个都不碰。
+   * ⚠️ 前提：各类图元只增不减（`loadLayout` 会先 clear 再加，那种情况外面重建画布）。
+   *   若某一类**变少**了，说明状态被换过，这里会保守地整体重来。
+   */
+  sync(paint: DistrictPaint) {
+    // 变少 = 状态被换过（loadLayout / new DistrictPaint）：整体重来，保证不会残留旧节点
+    if (
+      paint.buildings.length < this.n.buildings ||
+      paint.roads.length < this.n.roads ||
+      paint.parks.length < this.n.parks ||
+      paint.water.length < this.n.water
+    ) {
+      this.clear();
+    }
+    const p = this.palette;
+    const s = this.size;
+    const doc = this.doc;
+
+    // 绿地 / 水域：必须在道路与建筑**下面**。正常顺序下它们本来就是先到的；
+    // 万一晚到，就插在「建筑层第一条」之前，而不是无脑 append 到最上面。
+    // 绿地 / 水域：必须在道路与建筑**下面**，且两者之间保持 `toSvg` 的分层 ——
+    // **所有绿地在下、所有水域在上**（`toSvg` 就是先遍历 parks 再遍历 water）。
+    //
+    // ⚠️ 这里**不能**按「到达先后」混排。踩过的坑（实测量化）：
+    //    原来按 `at` 归并，绿地与水域的上下关系就变成「谁先到谁在下」，
+    //    而产品是「绿地永远在水域下面」。两者在**互相重叠**时z序相反 →
+    //    实测像素对比出现 11.0% 的颜色差异（19433/176400 个像素）。
+    //    所以这里按**类别**定位，与 toSvg 的分层逐点一致：
+    //      · 新绿地 → 插在「第一个水域」之前（没有水域就插在低层带末尾）
+    //      · 新水域 → 追加到低层带末尾（后面就是道路/建筑，天然压在它们下面）
+    //    标记节点 lowMark 固定在低层带末尾，是这一切的锚点。
+    const parkEls: Element[] = [];
+    for (let i = this.n.parks; i < paint.parks.length; i++)
+      parkEls.push(specToNode(areaSpec(paint.parks[i], p, s, "park"), doc));
+    const waterEls: Element[] = [];
+    for (let i = this.n.water; i < paint.water.length; i++)
+      waterEls.push(specToNode(areaSpec(paint.water[i], p, s, "water"), doc));
+
+    // 绿地插在自己的层带里（waterMark 之前），水域插在 waterMark 之前。
+    // 两个标记位置固定 → 无论两类谁先到，都是「绿地在下、水域在上」。
+    // ⚠️ 必须先装 DocumentFragment 再一次性插：逐元素 insertBefore 到同一锚点会把整批倒序。
+    if (parkEls.length) {
+      const band = doc.createDocumentFragment();
+      for (const el of parkEls) band.appendChild(el);
+      this.root.insertBefore(band, this.waterMark);
+    }
+    if (waterEls.length) {
+      const band = doc.createDocumentFragment();
+      for (const el of waterEls) band.appendChild(el);
+      this.root.insertBefore(band, this.roadMark);
+    }
+
+    // 道路：插在 **bldMark 之前**（= 道路层带的末尾）。
+    //
+    // ⚠️ 各层带必须插在**自己的右边界标记**之前，不能都图省事插到同一个标记前：
+    //    那样三个层带的元素会被**倒序压进同一个栈**里 —— 实测（同一份数据：
+    //    `toSvg` 的楼名字是「楼5 楼11 … 楼119」，而栽进去的 DOM 变成
+    //    「楼113 楼119 楼107 … 楼5」这种严格倒序），像素差 59%。
+    if (this.n.roads < paint.roads.length) {
+      const band = doc.createDocumentFragment();
+      for (let i = this.n.roads; i < paint.roads.length; i++) {
+        for (const spec of roadSpecs(paint.roads[i], p, s)) band.appendChild(specToNode(spec, doc));
+      }
+      this.root.insertBefore(band, this.bldMark);
+    }
+
+    // 建筑：建筑带是最后一层，插在末尾（= append）。用 insertBefore 会对**倒序** ——
+    // 这正是上面那个「楼113 楼119 楼107…」bug 的一半原因。
+    if (this.n.buildings < paint.buildings.length) {
+      const band = doc.createDocumentFragment();
+      for (let i = this.n.buildings; i < paint.buildings.length; i++) {
+        for (const spec of buildingSpecs(paint.buildings[i], p, s, this.showNames))
+          band.appendChild(specToNode(spec, doc));
+      }
+      this.root.appendChild(band);
+    }
+
+    this.n = {
+      buildings: paint.buildings.length,
+      roads: paint.roads.length,
+      parks: paint.parks.length,
+      water: paint.water.length,
+    };
+  }
+
+  /** 清空全部图元（保留根 svg、底色与 lowMark 标记） */
+  clear() {
+    // 只删**元素**节点：lowMark 是注释节点，必须留下（它是低层带的插入点）。
+    // 所以按元素个数判断，而不是数 childNodes（注释也算 childNodes）。
+    while (this.root.querySelectorAll("*").length > baseSpecs(this.palette, this.size).length) {
+      let lastEl: ChildNode | null = this.root.lastChild;
+      while (lastEl && lastEl.nodeType !== 1) lastEl = lastEl.previousSibling;
+      if (!lastEl) break;
+      this.root.removeChild(lastEl);
+    }
+    this.n = { buildings: 0, roads: 0, parks: 0, water: 0 };
+  }
+
+  /** 已落 DOM 的条数（自检/诊断用） */
+  rendered(): PaintCounts {
+    return { ...this.n };
   }
 }

@@ -52,8 +52,11 @@
     justify-content: center;
     padding: 1em;
     background: rgba(20, 30, 32, 0.22);
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
+    /* P5-6：写死的 blur(2px) 低端机档关不掉。改用 `--ws-blur-low`（只在 `.ws-perf-low` 定义）
+       → 默认档与玻璃档都取兜底 2px（逐字节不变），只有低端机档才置 0。
+       ⚠️ 别写成 `var(--ws-blur, 2px)`：那会把默认档改成 0px、玻璃档改成 10px（实测过）。 */
+    backdrop-filter: blur(var(--ws-blur-low, 2px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 2px));
     z-index: 5;
   }
   .ws-confirm__box {

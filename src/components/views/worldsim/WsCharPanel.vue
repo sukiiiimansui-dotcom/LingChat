@@ -425,8 +425,11 @@
     position: absolute;
     inset: 0;
     background: rgba(20, 30, 32, 0.42);
-    backdrop-filter: blur(1px);
-    -webkit-backdrop-filter: blur(1px);
+    /* P5-6：写死的 blur(1px) 低端机档关不掉。改用 `--ws-blur-low`（只在 `.ws-perf-low` 定义）
+       → 默认档与玻璃档都取兜底 1px（逐字节不变），只有低端机档才置 0。
+       ⚠️ 别写成 `var(--ws-blur, 1px)`：那会把默认档改成 0px、玻璃档改成 10px（实测过）。 */
+    backdrop-filter: blur(var(--ws-blur-low, 1px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 1px));
     animation: ws-fade-in 0.18s ease both;
   }
   /* 宽屏：右侧抽屉（不遮地图，方便边看边点别人） */

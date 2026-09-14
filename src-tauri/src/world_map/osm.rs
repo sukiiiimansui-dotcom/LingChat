@@ -19,11 +19,60 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 三个公共 Overpass 端点，按顺序回退
+/// 公共 Overpass 端点，按顺序回退（前一个失败才试下一个）。
+///
+/// ## ⚠️ 加端点前必读：**公共镜像的覆盖范围不一样**
+///
+/// Overpass 有一堆公共镜像，但**不是每个都装全球数据**。有的只装某个国家/地区
+/// （典型：`overpass.osm.ch` 只装瑞士）。这类"局部镜像"对中国的表现是：
+///
+/// ```text
+/// HTTP 200  {"version":0.6, ..., "elements": []}     ← 1 秒就返回，看起来很"成功"
+/// ```
+///
+/// 而本文件的回退循环只判 `elements` **字段在不在**（`if j.get("elements").is_none() { continue; }`），
+/// 所以这份空结果会被**当成最终答案**、后续端点根本没机会跑。
+/// **这比"请求失败"危险得多**：失败会 `continue` 去试下一个，返回空则会被当成
+/// 「这里真的没有水系/建筑」，一路静默传到 LLM 提示词里，谁也不报错。
+///
+/// ⇒ **只加"全球覆盖"的端点**；拿不准就先按下面那套实测方法验一遍。
+///
+/// ## 实测方法（2026-09-13 用的就是这套）
+///
+/// ⚠️ **必须用调用方的真实参数**测。`world_map_osm_summary` 的默认半径是 **300m**，
+/// 子句是 `DEFAULT_KINDS` 的 5 类 × (way+node) = 10 个。
+/// 用 3000m 测会得到完全不同的结论（那规模在 `.de` 上要跑 180s+、在 `maps.mail.ru` 上直接 504），
+/// 容易误判成"端点都坏了"。
+///
+/// 最省事的办法：**用代码自己生成的查询**去打，别手写 ——
+/// ```bash
+/// # 临时 bin：打印 overpass_query(23.129,113.264,300.0,&DEFAULT_KINDS)
+/// curl -s --max-time 30 -A 'LSYuki-maps/1.0' \
+///      -H 'Content-Type: application/x-www-form-urlencoded' \
+///      --data-urlencode "data=$Q" <端点> | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["elements"]))'
+/// ```
+/// 广州越秀 300m 的正确答案是 **326 个要素**。返回 0 = 该端点没有中国数据，**别加**。
+/// 顺带：`overpass-api.de` 的 `/api/status` 通 **不代表** interpreter 能用（实测会 504）。
+///
+/// ## 当前三个（2026-09-13 本机实测，**真实参数**：广州越秀 300m / 10 子句）
+///
+/// | 端点 | 实测 | 适用 |
+/// |---|---|---|
+/// | `maps.mail.ru` | **200 / 5.7s / 326 要素** | 全球。**当前最快最稳**，放第一 |
+/// | `overpass-api.de` | **200 / 3.3~10.3s / 326 要素**，但同日另有连续 504 | 官方，全球。**会抖**，所以不再放第一 |
+/// | `overpass.private.coffee` | 200 / **29.2s** / 316 要素 | 全球，**慢**（超过调用方 25s 超时），仅作最后兜底；数据快照略旧 |
+///
+/// ## 已移除的两个（**勿加回**，都是实测踩过的）
+///
+/// · `overpass.kumi.systems` —— **已死**：多次探测全部 `000`（连接都建不起来），
+///   是 `osm.rs` 原来的第 2 端点。加回它只会白白多等一次超时。
+/// · `overpass.osm.ch` —— **只覆盖瑞士**：广州返回 `200 / 1.9s / {"elements":[]}`
+///   （同一查询 `overpass-api.de` 返回 326 个），苏黎世则返回 428 个。
+///   即上面说的"静默返回空"，是原来的第 3 端点 —— **这次修的就是它**。
 pub const ENDPOINTS: [&str; 3] = [
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 ];
 
 /// 摘要里要分桶统计的 5 类标签（顺序即 Python 里的出现顺序）
@@ -284,6 +333,48 @@ pub fn describe_for_llm(osm: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **端点表的回归哨兵**（2026-09-13 加）。
+    ///
+    /// 这组断言不联网，守的是「别再踩同一个坑」：
+    ///
+    /// · `kumi.systems` **已死**（三次探测全是连接失败）—— 加回它只会白白拖长超时；
+    /// · `osm.ch` **只覆盖瑞士**，对中国返回 `200 + {"elements":[]}`。因为回退循环只判
+    ///   `elements` 字段在不在，这份空结果会被**当成成功答案**，后续端点没机会跑，
+    ///   比"失败"危险得多（失败会 `continue`，返回空会被当成事实）。
+    ///
+    /// 所以这两个名字一旦再出现在表里，这条测试就红 —— 逼后来人去读上面的模块文档。
+    #[test]
+    fn endpoints_are_global_and_well_formed() {
+        // 已知不合格的端点：不许出现在表里
+        const BANNED: [&str; 2] = [
+            "https://overpass.kumi.systems/api/interpreter",
+            "https://overpass.osm.ch/api/interpreter",
+        ];
+        for bad in BANNED {
+            assert!(
+                !ENDPOINTS.contains(&bad),
+                "{bad} 不该在端点表里 —— 它要么已死、要么只覆盖局部地区（会静默返回空），详见 ENDPOINTS 的文档注释"
+            );
+        }
+        // 实测最快最稳的那个必须在（它是中国可用性的主要保障）
+        assert!(
+            ENDPOINTS.iter().any(|e| e.contains("maps.mail.ru")),
+            "maps.mail.ru 是实测最稳的端点，不该被拿掉"
+        );
+        // 形状统一：https + interpreter 路径，且不重复
+        for ep in ENDPOINTS {
+            assert!(ep.starts_with("https://"), "端点必须是 https：{ep}");
+            assert!(ep.ends_with("/api/interpreter"), "端点路径不标准：{ep}");
+            assert!(!ep.contains(' '), "端点不该含空格：{ep}");
+        }
+        let uniq: std::collections::HashSet<&&str> = ENDPOINTS.iter().collect();
+        assert_eq!(uniq.len(), ENDPOINTS.len(), "端点表里有重复：{ENDPOINTS:?}");
+        assert!(
+            !ENDPOINTS.is_empty(),
+            "端点表不能为空，否则 OSM 永远拿不到数据"
+        );
+    }
 
     /// 测试用临时目录：Android/Termux 上 /tmp 不可写，优先 TMPDIR，退到 $HOME/.cache
     fn tmp(tag: &str) -> PathBuf {

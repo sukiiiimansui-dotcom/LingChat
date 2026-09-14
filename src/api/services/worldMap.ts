@@ -434,6 +434,31 @@ export interface DistrictLayout {
   details?: { stats?: Record<string, number> };
   /** 后端标注：这份布局是流式攒出来的 */
   _streamed?: boolean;
+  /**
+   * 后端标注：AI 布局**几何净化**的统计（剔了哪些图元、为什么）。
+   *
+   * 由 Rust `layout_clean::clean()` 在 `stream::assemble_layout` 出口写回。
+   * 提示词要求「建筑不要重叠」，但模型偶尔不遵守；净化就是补上那道闸。
+   *
+   * `removed > 0` 表示模型画的东西被**修正过** —— 排查「为什么这栋楼不见了」时看这里，
+   * 不用去猜。正常布局恒为 0（净化是保守的：宁可少剔，不可误删）。
+   */
+  _clean?: {
+    summary: string;
+    removed: number;
+    buildings: {
+      in: number;
+      out: number;
+      degenerate: number;
+      outOfBounds: number;
+      overlap: number;
+      clamped: number;
+    };
+    roads: { in: number; out: number; degenerate: number; clamped: number };
+    areas: { in: number; out: number };
+    sizeFixed: boolean;
+    overlapSkipped: boolean;
+  };
 }
 
 export interface DistrictCounts {
@@ -1183,6 +1208,10 @@ export async function maplibCleanupAuto(o: {
  * @param w     容器实际 CSS 像素宽
  * @param h     容器实际 CSS 像素高
  * @param zoom  1=只留主轮廓（省界/市界），2=多一层内阴影，3=全
+ * @param hydro 是否叠加**真实水系**（河流/湖泊，Natural Earth 1:50m，Rust 侧编译期内嵌）。
+ *              默认 `true`。这是唯一会明显增加 SVG 体积的图层（全国视图实测 +32KB / +4.7%），
+ *              万一在低端机上成为负担，调用方传 `false` 即可退回加图层之前的样子
+ *              （**不会白屏**：关掉只是少画一层，主图与点击下钻都照常）。
  *
  * 失败一律 **throw**（空串、不是 SVG 都算失败）：调用方已有 catch → 页面提示 + 重试，
  * 绝不把 JSON 塞进 v-html 变成一屏乱码、也不让页面卡在「加载中…」。
@@ -1192,7 +1221,8 @@ export async function geoSvgText(
   style = "gaode",
   w: number = MAP_SVG_DEFAULT_W,
   h: number = MAP_SVG_DEFAULT_H,
-  zoom = 2
+  zoom = 2,
+  hydro = true
 ): Promise<string> {
   const code = String(ad || "").trim() || "100000";
   const width = Math.max(64, Math.round(Number(w) || MAP_SVG_DEFAULT_W));
@@ -1207,6 +1237,7 @@ export async function geoSvgText(
       width,
       height,
       zoom: z,
+      hydro: hydro !== false,
     });
     const text = String(svg || "");
     if (!/<svg[\s>]/i.test(text.slice(0, 400))) {
@@ -1217,8 +1248,13 @@ export async function geoSvgText(
 
   // ── ② 浏览器 / 局域网调试：/api/geo_svg ──
   // 这条路由**不认 zoom 之外的东西**也一样能用；出错时 fetchSvgText 会把 JSON 翻译成人话。
+  //
+  // ⚠️ `hydro` 目前**只有 Rust 侧认**（Python 侧车 `hier_api.py` 的 `/api/geo_svg` 还没实现
+  // 水系图层，多传的参数会被它忽略）→ 浏览器预览看不到河湖，真机才看得到。
+  // 这是已知差异，不影响真机；要消除得同步改 Python 原型（不在本次范围）。
   const url =
     `${API_BASE}/api/geo_svg?ad=${encodeURIComponent(code)}` +
-    `&style=${encodeURIComponent(style)}&w=${width}&h=${height}&zoom=${z}`;
+    `&style=${encodeURIComponent(style)}&w=${width}&h=${height}&zoom=${z}` +
+    `&hydro=${hydro !== false ? 1 : 0}`;
   return await fetchSvgText(url);
 }

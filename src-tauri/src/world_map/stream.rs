@@ -173,6 +173,18 @@ pub fn extract_scalar(buf: &str, key: &str) -> Option<Value> {
 }
 
 /// 把流式收到的碎片组装成最终布局（保证与前端逐条看到的一致）
+///
+/// ## 出口处的几何净化（路线图 ②）
+///
+/// `assemble_layout` 是 **AI 精绘布局的唯一产地**，而这份布局是「权威版本」——
+/// 前端收到 `done` 时用它 `loadLayout()` **整份替换**画布（`WsDistrict.vue`），
+/// 地图库落盘的也是它。所以净化挂在这里，一处生效、两条通路都覆盖。
+///
+/// 为什么必须有：提示词写了「建筑不要重叠」（`build_prompt` 规则 1），但**没有任何东西执行它**，
+/// 模型偶尔会吐重叠/越界/退化的图元，而这些会原样画到用户眼前。详见 `layout_clean.rs`。
+///
+/// 净化是**保守**的（宁可少剔不可误删）且**幂等**的，正常布局一个图元都不会动。
+/// 结果统计既打日志、也以 `_clean` 键写回布局，事后可查「为什么这栋楼不见了」。
 pub fn assemble_layout(buf: &str, area: &str, fallback_size: i32) -> Value {
     let mut layout = json!({
         "name": extract_scalar(buf, "name").and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_else(|| area.to_string()),
@@ -185,6 +197,11 @@ pub fn assemble_layout(buf: &str, area: &str, fallback_size: i32) -> Value {
         if let Some(o) = layout.as_object_mut() {
             o.insert(key.to_string(), json!(objs));
         }
+    }
+    // AI 布局出口净化：剔重叠 / 夹越界 / 丢退化。没改动时不打日志，免得刷屏。
+    let clean_stats = crate::world_map::layout_clean::clean(&mut layout, fallback_size as f64);
+    if clean_stats.touched() {
+        tracing::info!("AI 精绘布局净化：{}", clean_stats.summary());
     }
     layout
 }
@@ -576,6 +593,57 @@ mod tests {
         assert_eq!(lay["roads"].as_array().unwrap().len(), 1);
         assert_eq!(lay["parks"].as_array().unwrap().len(), 1);
         assert_eq!(lay["_streamed"], json!(true));
+    }
+
+    /// **集成**：`assemble_layout` 出口的净化确实生效（路线图 ②）。
+    ///
+    /// 这条是 wiring 测试：光有 `layout_clean` 的单测不够，得证明它真的挂在了
+    /// AI 布局的出口上 —— 否则模块再正确也是死代码。
+    #[test]
+    fn assemble_layout_cleans_ai_output() {
+        // 模型吐了：一栋重复的楼、一栋越界、一栋退化，外加一条零长度路
+        let buf = r#"{"name":"测试小区","size":20,"buildings":[
+            {"x":2,"y":2,"w":4,"h":3,"type":"residential","name":"1号楼","floors":6},
+            {"x":2,"y":2,"w":4,"h":3,"type":"residential","name":"1号楼","floors":6},
+            {"x":18,"y":1,"w":5,"h":2,"type":"shop","name":"越界铺","floors":1},
+            {"x":1,"y":1,"w":0,"h":2,"type":"shop","name":"退化铺","floors":1}
+        ],"roads":[{"x1":5,"y1":5,"x2":5,"y2":5,"type":"main","name":"零长路"}],"parks":[],"water":[]}"#;
+        let lay = assemble_layout(buf, "越秀区", 20);
+        let bs = lay["buildings"].as_array().unwrap();
+        assert_eq!(bs.len(), 2, "重复的剔掉、退化的剔掉、越界的夹回保留：{bs:?}");
+        // 保住先出现的那栋
+        assert_eq!(bs[0]["name"], json!("1号楼"));
+        assert_eq!(bs[0]["x"], json!(2));
+        // 越界那栋被夹进画布
+        let clamped = bs.iter().find(|b| b["name"] == json!("越界铺")).expect("越界铺应保留");
+        assert_eq!(clamped["w"], json!(2), "18+5=23 → 夹到 20");
+        // 零长度路被剔
+        assert_eq!(lay["roads"].as_array().unwrap().len(), 0);
+        // 统计要写回布局，事后可查
+        assert_eq!(lay["_clean"]["buildings"]["overlap"], json!(1));
+        assert_eq!(lay["_clean"]["buildings"]["degenerate"], json!(1));
+        assert_eq!(lay["_clean"]["buildings"]["clamped"], json!(1));
+        assert_eq!(lay["_clean"]["roads"]["degenerate"], json!(1));
+        assert_eq!(lay["_clean"]["removed"], json!(3));
+    }
+
+    /// 净化必须是**保守**的：模型老老实实画的时候，一栋都不能动。
+    #[test]
+    fn assemble_layout_keeps_clean_ai_output_intact() {
+        let buf = r#"{"name":"临江苑","size":20,"buildings":[
+            {"x":1,"y":1,"w":3,"h":2,"type":"residential","name":"1号楼","floors":6},
+            {"x":5,"y":1,"w":3,"h":2,"type":"office","name":"云顶大厦","floors":12}
+        ],"roads":[{"x1":0,"y1":4,"x2":20,"y2":4,"type":"main","name":"中山路"}],
+        "parks":[{"x":8,"y":8,"w":3,"h":3,"name":"中心公园"}],"water":[]}"#;
+        let lay = assemble_layout(buf, "越秀区", 20);
+        assert_eq!(lay["buildings"].as_array().unwrap().len(), 2);
+        assert_eq!(lay["roads"].as_array().unwrap().len(), 1);
+        assert_eq!(lay["parks"].as_array().unwrap().len(), 1);
+        assert_eq!(lay["_clean"]["removed"], json!(0), "合法布局不该剔任何东西");
+        // 位置与字段原样
+        assert_eq!(lay["buildings"][1]["name"], json!("云顶大厦"));
+        assert_eq!(lay["buildings"][1]["floors"], json!(12));
+        assert_eq!(lay["buildings"][1]["x"], json!(5));
     }
 
     #[test]

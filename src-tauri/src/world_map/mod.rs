@@ -31,6 +31,12 @@ pub mod event_cmd;
 pub mod events;
 pub mod facilities;
 pub mod geo;
+// 真实水系图层（河流/湖泊，Natural Earth 1:50m 内嵌）。纯函数模块、不碰网络，
+// 被 `render_geo` 消费，用来把「全国级真实地理」画进行政区划图。
+pub mod hydro;
+// AI 精绘布局的几何净化（剔重叠 / 夹越界 / 丢退化）。纯函数模块，
+// 挂在 `stream::assemble_layout` 出口，补上「提示词要求了但没人执行」的那道闸。
+pub mod layout_clean;
 // 实时数据通路：定位（world_map_location）+ 天气（world_map_weather）。
 // 同样要按**完整路径**注册：world_map::live::world_map_location —— 命令宏在定义处
 // （本文件的子模块 live.rs）生成，写 world_map::world_map_location 会 E0433。
@@ -578,6 +584,7 @@ pub async fn world_map_geo_svg(
     labels: Option<bool>,
     dots: Option<bool>,
     stats: Option<bool>,
+    hydro: Option<bool>,
 ) -> Result<String, String> {
     let ad = ad.unwrap_or_else(|| "100000".to_string());
     let src = make_source(&app);
@@ -591,6 +598,9 @@ pub async fn world_map_geo_svg(
         zoom: zoom.unwrap_or(2),
         labels: labels.unwrap_or(true),
         dots: dots.unwrap_or(true),
+        // 真实水系默认开：它是「全国级真实地理」的主要视觉来源。
+        // 传 false 可退回加图层之前的样子（不白屏、不报错）。
+        hydro: hydro.unwrap_or(true),
         show_stats: stats.unwrap_or(false),
     };
     render_geo::render_geo_svg(&fc, &opts)

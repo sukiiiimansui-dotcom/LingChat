@@ -16,6 +16,16 @@ pub fn get_data_dir() -> &'static PathBuf {
         .expect("data_dir not initialized — call init_data_dir first")
 }
 
+/// data 目录是否已初始化。
+///
+/// [`get_data_dir`] 在未初始化时**会 panic**（它假定启动时一定调过 `init_data_dir`）。
+/// 但有些调用方需要「拿不到就降级」而不是崩 —— 例如世界模拟的日程读取
+/// （`world_map::schedule`）：它在未初始化的环境里（独立运行、单测垫片）
+/// 应当安静地返回空。这个探询函数就是给这类调用方用的。
+pub fn data_dir_initialized() -> bool {
+    DATA_DIR.get().is_some()
+}
+
 /// 解析 data 目录路径。
 ///
 /// 优先级：

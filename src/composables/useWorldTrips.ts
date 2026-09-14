@@ -400,6 +400,20 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
   let lastTick = 0;
   let unlisten: UnlistenFn | null = null;
   let bound = false;
+  /**
+   * 订阅代号：每次 `subscribe()` / `stop()` 都自增。
+   *
+   * ⚠️ **为什么需要它**（2026-09-14 修的竞态，与 `useWorldEvents.ts` 同一处病）：
+   * `listen()` 是异步的，而原写法是「先同步置 `bound = true`，再 `await listen(...)`
+   * 直接赋值给 `unlisten`」。若组件在 `await` 期间卸载 → `stop()` 时 `unlisten` **还是 null**
+   * → 什么都摘不掉；Promise resolve 后监听器又被赋回去 → **永久留在窗口上**。
+   * 本模块的孤儿回调还会 `void refresh()`（invoke + 重排定时器），
+   * 等于一个脱离组件生命周期的后台循环。
+   *
+   * 对策：进入时记代号；`await` 返回后核对「还是我这一代吗、还 bound 吗」——
+   * 不是就**当场摘掉**。
+   */
+  let subGen = 0;
 
   /** 已回调过 start 的行程 id（事件 + 轮询两条通路都要去重） */
   const seenStart = new Set<number>();
@@ -606,8 +620,9 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
   async function subscribe() {
     if (!supported.value || bound) return;
     bound = true;
+    const gen = ++subGen; // 本次订阅的代号（见 subGen 的注释）
     try {
-      unlisten = await listen<WsTripEventPayload>("world_map:trip", (ev) => {
+      const off = await listen<WsTripEventPayload>("world_map:trip", (ev) => {
         const p = ev?.payload;
         const t = p?.trip;
         if (!t || typeof t !== "object") return;
@@ -623,8 +638,21 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
         // 事件的 trip 可能没带 `now_ms` 的上下文，顺手再对齐一次轮询数据
         void refresh().finally(schedule);
       });
+      // ⚠️ await 期间可能已经 stop()（代号变了）或又 subscribe 了一次 ——
+      //    那就【立刻摘掉】。不这么做的话，这个监听器会永久留在窗口上，
+      //    每次事件都跑孤儿回调 —— 而它里面还会 `void refresh()`（invoke + 重排定时器），
+      //    等于脱离组件生命周期的后台循环。弱网下快速离开页面就会撞上，且完全静默。
+      if (gen !== subGen || !bound) {
+        try {
+          off();
+        } catch {
+          /* 卸载失败无所谓：Tauri 那边会随窗口一起清 */
+        }
+        return;
+      }
+      unlisten = off;
     } catch (e) {
-      unlisten = null;
+      if (gen === subGen) unlisten = null;
       safe(opts.onError, e);
     }
   }
@@ -650,6 +678,9 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
 
   function stop() {
     running.value = false;
+    // 让任何「正在 await listen() 的那一次订阅」作废 —— 它 resolve 后会自己摘掉
+    // （见 subGen 的注释：不做这一步就会留下永久监听器）
+    subGen++;
     if (pollTimer !== null) window.clearTimeout(pollTimer);
     pollTimer = null;
     tickStop();

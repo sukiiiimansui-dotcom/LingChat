@@ -502,22 +502,49 @@ pub async fn world_map_district_stream(
     let sid_done = sid.clone();
     let cancel_done = cancel.clone();
     tokio::spawn(async move {
+        // ⚠️ 登记用 RAII 撤销，**不要**在末尾手写 `map.remove`（2026-09-14 修）：
+        // 原写法只在 `run_stream` 正常返回后才摘登记。若它 panic（展开）或这个 task
+        // 被取消 / 运行时就地关闭（drop），那行永不执行 →
+        //   ① 登记永久留在 `RUNNING` 里，`Arc<AtomicBool>` 无界累积；
+        //   ② 更糟的是 `cancel_stream(id)` 会对一个**已经不存在的流**返回 true ——
+        //      接口在说谎（前端会以为"确实停掉了"）。
+        // `StreamReg::drop` 在正常收尾、panic 展开、task 取消三种情况下都会跑。
+        let _reg = StreamReg {
+            sid: sid_done,
+            cancel: cancel_done,
+        };
         run_stream(on_event, cancel, llm, messages, area, base, model).await;
-        // 自然收尾时把登记撤掉。只撤「还是自己那一份」的登记（Arc::ptr_eq）：
-        // 否则可能误删重开后新一轮的那条，让第二次「停止」失效。
-        if !sid_done.is_empty() {
-            let mut map = lock_running();
-            let mine = map
-                .get(&sid_done)
-                .map(|f| Arc::ptr_eq(f, &cancel_done))
-                .unwrap_or(false);
-            if mine {
-                map.remove(&sid_done);
-            }
-        }
     });
 
     Ok(())
+}
+
+/// 一轮实时绘制在 `RUNNING` 里的登记 —— **靠 `Drop` 撤销**。
+///
+/// 为什么不用「末尾手写 `map.remove`」见上面那段注释：
+/// panic / 取消会让那行永不执行，留下永久残留与"会撒谎的 cancel"。
+/// RAII 保证三种收尾方式（正常返回 / 展开 / 被 drop）都撤销登记。
+struct StreamReg {
+    sid: String,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for StreamReg {
+    fn drop(&mut self) {
+        if self.sid.is_empty() {
+            return;
+        }
+        let mut map = lock_running();
+        // 只撤「还是自己那一份」的登记（`Arc::ptr_eq`）：
+        // 否则可能误删重开后新一轮的那条，让第二次「停止」失效。
+        let mine = map
+            .get(&self.sid)
+            .map(|f| Arc::ptr_eq(f, &self.cancel))
+            .unwrap_or(false);
+        if mine {
+            map.remove(&self.sid);
+        }
+    }
 }
 
 /// 停止一轮实时绘制（前端 stop() / 离开页面时调用）。

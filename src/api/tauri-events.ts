@@ -431,7 +431,14 @@ export function initializeTauriEventListeners() {
     const gameStore = useGameStore();
     const uiStore = useUIStore();
     gameStore.setCurrentScene(payload.scene);
-    uiStore.setCurrentBackground(payload.scene.background ?? "");
+    // ⚠️ 空值守卫（2026-09-14 修）：**不能**无条件 setCurrentBackground。
+    // 上游 Scene.background 可以是空串（例如机器生成/没有插图的场景）。
+    // 传 "" 进去会让 `GameBackground.vue` 的 `v-if="backgroundSrc"` 不成立
+    // → **整个背景层不渲染 → 用户看到白屏**（只剩粒子层）。
+    // 同一件事的另外 5 条路径（game/actions.ts:211、SettingsBackground.vue:729/:831、
+    // script-handler.ts:128、以及 `select_scene` 命令本身）**都有守卫**，
+    // 只有这里和投屏窗口那处漏了 —— 属于上游自身的不一致，补上即对齐。
+    if (payload.scene.background) uiStore.setCurrentBackground(payload.scene.background);
   });
 
   console.log(
@@ -468,7 +475,10 @@ export function initializeCastWindowListeners() {
     const gameStore = useGameStore();
     const uiStore = useUIStore();
     gameStore.setCurrentScene(payload.scene);
-    uiStore.setCurrentBackground(payload.scene.background ?? "");
+    // ⚠️ 空值守卫（2026-09-14 修，与主窗口那处同一个 bug）：
+    // 无条件写 "" 会让 `GameBackground.vue` 的 `v-if="backgroundSrc"` 不成立 → 背景层不渲染 → 白屏。
+    // 投屏窗口同样会渲染背景，所以这里也必须守。
+    if (payload.scene.background) uiStore.setCurrentBackground(payload.scene.background);
   });
 
   // 投屏客户端麦克风经投屏 /ws 送到 Rust ASR，识别文本由这里注入对话。

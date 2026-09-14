@@ -816,6 +816,16 @@ pub async fn world_map_transport_plan(
 /// `text=true` 时额外返回给 LLM 看的一段中文描述（`osm::describe_for_llm`）。
 /// 返回 `{ ok, key, cached, count, summary, text, meta }`；
 /// 没缓存且没 `force` 时 `ok=false` + `hint`，让调用方降级为纯 LLM 生成。
+///
+/// ⚠️ **不要把 `force=true` 接到「平移 / 缩放 / 进页面」这类自动路径上。**
+///
+/// 这是本命令唯一会**写盘**的分支。缓存键是 200m 网格（`osm.rs` 的 `GRID = 0.002`），
+/// 而网格数随「访问过的地理位置」增长 —— 也就是说**键空间实际上是无界的**：
+/// 自动抓取 = 用户每挪 200m 就落一个文件，落盘量随浏览行为线性上涨，且没有上限。
+/// 本机实测单条 0.4 KB ~ 95 KB（n=2，只能看量级），几百个文件就是几十 MB。
+///
+/// 现状是安全的（只有显式调用才会写），这条注释是**防将来有人图方便把它接到自动路径上** ——
+/// 那会从一个「有硬天花板的正当缓存」变成一个真正无界的写盘源。
 #[tauri::command]
 pub async fn world_map_osm_summary(
     app: AppHandle,

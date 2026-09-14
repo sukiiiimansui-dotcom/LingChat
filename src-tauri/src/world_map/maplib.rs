@@ -257,7 +257,20 @@ impl MapLib {
         let _ = self.save(&d);
         if remove_file {
             if let Some(p) = path {
-                let _ = std::fs::remove_file(self.abs(&p));
+                // ⚠️ 删除走**校验过的**解析（见 `abs_for_delete`）：`index.json` 是磁盘文件，
+                // 可能被外部改写/损坏/注入，而这里是**真删文件**的地方。
+                match self.abs_for_delete(&p) {
+                    Some(ap) => {
+                        let _ = std::fs::remove_file(ap);
+                    }
+                    None => {
+                        // 越界路径：**不删**。记一条日志，便于排查索引被污染的情况。
+                        tracing::warn!(
+                            path = %p,
+                            "地图库：索引条目指向可控目录之外，已跳过删除（索引可能被外部改写）"
+                        );
+                    }
+                }
             }
         }
         true
@@ -432,6 +445,43 @@ impl MapLib {
                 .and_then(|p| p.parent())
                 .map(|p| p.join(rel))
                 .unwrap_or_else(|| p.to_path_buf())
+        }
+    }
+
+    /// **删除专用**的解析：只接受「纯相对路径、且不含 `..` 逃逸」的条目。
+    ///
+    /// ⚠️ 为什么需要它（2026-09-14，审计 🟡-4，最贴「误删 119 张地图缓存」那条纪律）：
+    /// [`abs`] 是**无条件解析**——绝对路径原样返回、相对路径里的 `..` join 之后会逃出库根。
+    /// 而 `index.json` 是**磁盘上的普通文件**，可能被外部改写、损坏或被注入；
+    /// `delete_locked` 又会 `remove_file(abs(p))`。
+    /// → 一条恶意/损坏的索引条目就能删掉**库目录之外**的任意文件。
+    ///
+    /// 读操作（`register` / `list` 的存活检查）沿用宽松的 [`abs`] —— 那里最坏只是
+    /// "多/少算一个条目"，不改既有行为；**只有真删文件这一条路必须收紧**。
+    ///
+    /// 返回 `None` = 越界，调用方**必须跳过删除**。
+    fn abs_for_delete(&self, rel: &str) -> Option<PathBuf> {
+        let p = Path::new(rel);
+        if p.is_absolute() {
+            return None; // 索引里不该出现绝对路径
+        }
+        // 逐个分量检查：任何 `..` 都视为逃逸（`a/../b` 这种"看起来还在里面"的也一并拒绝 ——
+        // 正常索引条目不会长这样，宁可少删一个也不要删错）
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return None;
+        }
+        let base = self.root.parent().and_then(|q| q.parent())?;
+        let full = base.join(rel);
+        // 双保险：规范化后仍须以 base 开头（防符号链接/奇怪分量绕过上面的逐段检查）
+        match (base.canonicalize(), full.canonicalize()) {
+            (Ok(b), Ok(f)) => f.starts_with(&b).then_some(f),
+            // 文件不存在（canonicalize 失败）→ 没东西可删，交给调用方当"跳过"处理也无妨；
+            // 但为了不误判，这里只在「base 能规范化、full 不能」时放行原始拼接（让 remove_file
+            // 自己因 ENOENT 失败），其余一律拒绝。
+            (Ok(_), Err(_)) => Some(full),
+            _ => None,
         }
     }
 }

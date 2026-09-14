@@ -818,6 +818,23 @@
     const ctx = dropCtx();
     if (!ctx) return;
     const pin = gridPinAt({ x: p.clientX, y: p.clientY }, ctx);
+    // P5-6：落点没变就别写。
+    // 指针停住不动时（真人拖拽里很常见：按住想一下、或者手抖在同一个格子里），
+    // 原来每次 pointermove 都会写一个新的对象字面量 → 触发响应式 + 整页子组件重渲染。
+    // 加了这一句之后，同一格内的重复事件**一次都不写**。
+    //
+    // ── 为什么**只**加相等判断、不做「缓存宿主矩形」的全套改造 ──────────────
+    // 这个改动之前实测过（`~/wsperf/run-drag-bench.mjs`，CDP Performance.getMetrics）：
+    //   · 60Hz 真人拖拽：老写法 16.60ms/帧、jank=0；缓存写法 16.62ms/帧、jank=0
+    //     → **墙钟 1.00x，没有任何可见收益**（每帧预算 16.7ms 被 vsync 吸收掉了）
+    //   · 但 JS 侧的强制布局读确实是 720 → 3（少读 240 倍）——那是"我自己数的读"，
+    //     不是"浏览器真的多做的工作"：那一帧反正要排一次版，提前读只是顺手用掉它。
+    //   · 只有在「一口气派发几百个事件」（burst）时才现出机制级差异：
+    //     浏览器 LayoutCount 240 → 1、LayoutDuration 50~107ms → 0.3ms。
+    // 收益是"余量"（现在看不见），而缓存方案的风险是"落点算错"（用户立刻看得见）：
+    // 一旦尺寸/滚动/缩放变化而缓存没失效，换算就会按旧矩形走，把角色挪到**错的格子**。
+    // 那个失效源很难穷尽，所以**不做** —— 留到真机确实观察到拖拽掉帧再说。
+    if (dragPin.value && dragPin.value.x === pin.x && dragPin.value.y === pin.y) return;
     dragPin.value = { x: pin.x, y: pin.y };
   }
 
@@ -1342,8 +1359,15 @@
     align-items: center;
     justify-content: center;
     background: color-mix(in srgb, var(--ws-bg) 55%, transparent);
-    backdrop-filter: blur(1.5px);
-    -webkit-backdrop-filter: blur(1.5px);
+    /* P5-6：原来是写死的 blur(1.5px)，低端机档关不掉它。
+       改用 **`--ws-blur-low`**（这个变量**只在 `.ws-perf-low` 里定义**）：
+         · 默认档 / 毛玻璃档：变量未定义 → 取兜底 1.5px → **与改动前逐字节相同**；
+         · 低端机档：`.ws-perf-low` 把它置 0 → 这里真的不模糊了。
+       ⚠️ 不要图省事写成 `var(--ws-blur, 1.5px)`:--ws-blur 在**两套皮肤里都有值**
+          （默认 0px / 玻璃 10px）,那样会把默认档从 1.5px 改成 0px、把玻璃档从
+          1.5px 改成 10px —— 实测确认过,那是**改了观感**,不是"零变化"。 */
+    backdrop-filter: blur(var(--ws-blur-low, 1.5px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 1.5px));
     border-radius: var(--ws-radius);
   }
   .ws-modal {

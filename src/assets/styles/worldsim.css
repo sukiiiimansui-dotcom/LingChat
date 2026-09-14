@@ -185,11 +185,29 @@
  * ② 装饰性**无限**动画全部关掉（它们会一直占着合成器，哪怕没人看）。 */
 .ws-root.ws-perf-low {
   --ws-blur: 0px;
+  /* P5-6：给「写死了模糊半径」的那三处（.ws-mapmask / .ws-drawer__mask / .ws-confirm）
+     一个**只在低档才存在**的开关。它们原来是 blur(1.5px/1px/2px) 字面值，--ws-blur 管不到。
+     单独立一个变量而不是复用 --ws-blur，是因为 **--ws-blur 在两套皮肤里都有值**
+     （默认 0px / 玻璃 10px），拿它当兜底会把默认档和玻璃档的观感一起改掉。
+     这个变量只在 `.ws-perf-low` 下定义 → 其它档位下那三处取各自的原字面值，逐字节不变。 */
+  --ws-blur-low: 0px;
   --ws-shadow: none;
   --ws-shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 /* 无限循环的装饰动画：转圈经线 / 雷达 / 等高线 / 画笔 / 流光 / 骨架高光 / 省略号。
- * 关掉它们**只影响观感**：`.ws-note` 的色调、主题变量、毛玻璃退化后的底色一个都不动。 */
+ * 关掉它们**只影响观感**：`.ws-note` 的色调、主题变量、毛玻璃退化后的底色一个都不动。
+ *
+ * ⚠️ 往这个名单里加东西之前先看两条（P5-6 逐条实测过，别凭直觉加）：
+ *   ① 选择器必须**真的能命中**。本文件是全局 CSS、这些组件是 `scoped`，
+ *      但`.ws-root.ws-perf-low X` 是祖先链选择器，作用域属性只加在链尾元素上，
+ *      所以**跨组件照样生效** —— `.ws-trip`（WsTripCard.vue，`:scoped`）实测就是停住的。
+ *      反过来，`.ws-perf-low` 只打在 worldsim 那棵树上，**别处（PhoneOverlay /
+ *      WorldMapLayer 是独立路由）根本拿不到这个类**，那些地方写降级规则是死代码。
+ *   ② 名单里每加一个**都要用浏览器实测**「高档在动 / 低档停了」两条都成立 ——
+ *      P5-6 就是这么发现 `.ws-empty__ico` 和 `.ws-confirm__emoji` 漏了的：
+ *      它俩一个在 worldsim.css 自己的 `.ws-empty__ico` 规则里（`:874`），
+ *      另一个在 WsConfirm.vue 的 scoped 样式里，都**没有被这份名单覆盖**。
+ */
 .ws-root.ws-perf-low .ws-anim-spin,
 .ws-root.ws-perf-low .ws-anim-spin-rev,
 .ws-root.ws-perf-low .ws-anim-radar,
@@ -199,7 +217,13 @@
 .ws-root.ws-perf-low .ws-skeleton::after,
 .ws-root.ws-perf-low .ws-dots::after,
 .ws-root.ws-perf-low .ws-trip,
-.ws-root.ws-perf-low .ws-trip__fast.is-on {
+.ws-root.ws-perf-low .ws-trip__fast.is-on,
+/* P5-6 补：空态插画（`.ws-empty__ico`，ws-float 4.2s infinite）——
+ * 原来没进名单，低档下照转，跟「装饰性无限动画全停」的说法不一致。 */
+.ws-root.ws-perf-low .ws-empty__ico,
+/* P5-6 补：确认框的 emoji（WsConfirm.vue 里 `ws-float 3.2s infinite`）。
+ * 它的规则在组件的 `scoped` 样式里，所以只能靠这条全局的祖先链选择器关掉。 */
+.ws-root.ws-perf-low .ws-confirm__emoji {
   animation: none;
 }
 /* 唯一保留的一条：纯 opacity 呼吸（“还在加载/还在跑”的功能反馈不能没有，
@@ -535,7 +559,11 @@
  *    这一条踩过一次，后果极隐蔽：13 条规则（尺寸约束 width/height:100%、cursor、
  *    配色、hover、选中高亮 `.ws-on`、按 `data-zoom` 分层隐藏…）全部失效，
  *    表现是「SVG 按固有尺寸 900×620 画出来、在 407 宽的容器里只看得见西北一角」。
- *    改动这里之前先确认：`grep -c ':deep(' src/assets/styles/worldsim.css` 必须是 0。
+ *    改动这里之前先确认**没有真实的 :deep 规则**。注意别再用
+ *    `grep -c ':deep('` 来自检 —— 本段注释自己就含这个字样，那个命令会**永远返回非 0**，
+ *    把防呆措施变成坑（P5-6 实测：返回 3，三条全是注释）。可用的写法：
+ *        grep -n ':deep' src/assets/styles/worldsim.css | grep -v '^\s*[0-9]*:\s*\*'
+ *    即「先找出所有出现处，再把注释行滤掉」——过滤后应当**一条都不剩**。
  * ========================================================================== */
 .ws-geo {
   position: relative;

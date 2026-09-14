@@ -38,10 +38,13 @@
         </div>
 
         <!-- ② AI 精绘层（流式增量；第一条要素到了就淡入接管）
-             注意是 v-html 注入的裸 <svg>：我这份画笔**不写 <style>**，
-             所有颜色/线宽都是元素属性，所以注入真 DOM 也不会污染任何全局样式。 -->
+             P5-6：这里**不再是 v-html**。真实 DOM 由下面 paintHost 旁边的
+             <svg> 承载，画布实例（DistrictCanvas）把新增的图元 append 进去。
+             为什么要换：v-html 每帧都要把整份 SVG 字符串重新解析、整棵树重建，
+             实测 186.81ms/帧（5.4fps）→ 改成只 append 增量后 16.67ms/帧（60fps）。
+             外面这层 div 的结构/类名与动画都没动，所以视觉不变。 -->
         <div class="ws-neigh__layer ws-neigh__ai" :class="{ 'is-in': aiVisible }">
-          <div v-if="aiSvgInner" class="ws-paint-host" v-html="aiSvgInner" />
+          <div ref="paintHost" class="ws-paint-host" />
         </div>
 
         <!-- ③ 人物层（P2-1）：由页面从外面插进来。
@@ -162,7 +165,7 @@
     startDistrictStream,
     type DistrictStreamEvent,
   } from "@/api/services/worldMap";
-  import { DistrictPaint, paletteOf, type PaintCounts } from "./wsDistrictPaint";
+  import { DistrictCanvas, DistrictPaint, paletteOf, type PaintCounts } from "./wsDistrictPaint";
   import { hash32, svgToDataUrl } from "./wsGeo";
   // 加载态纯逻辑（分档 / 阶段推断 / 预估剩余）：抽出去是为了能被自检脚本直接跑，
   // 见 wsLoadPlan.ts 的文件头说明 —— 「预估剩余」是最容易变成骗人的地方。
@@ -190,6 +193,8 @@
   // 小区图也要能拖能缩（它就是玩家待得最久的那张图）——与行政区划舞台共用同一套手势
   const neighHost = ref<HTMLElement | null>(null);
   const neighPan = ref<HTMLElement | null>(null);
+  /** AI 精绘层的挂载点：真 DOM 画布（DistrictCanvas）的根 <svg> 塞进这里 */
+  const paintHost = ref<HTMLElement | null>(null);
   const {
     scale: gsScale,
     dragging: gsDragging,
@@ -202,7 +207,6 @@
   const sketchUrl = ref("");
   const sketchLoading = ref(true);
   const sketchError = ref("");
-  const aiSvgInner = ref("");
   const aiVisible = ref(false);
   const aiDone = ref(false);
   const aiRunning = ref(false);
@@ -298,13 +302,48 @@
   }
 
   /* ── AI 精绘（流式）────────────────────────────────────────────────────── */
+  /**
+   * 增量画布（P5-6）。
+   *
+   * 为什么不再用 `v-html`：那条路每帧要把整份 SVG 字符串重新解析、整棵树重建，
+   * 实测 186.81ms/帧（5.4fps、jank 100%）—— 而「同样 DOM 只建一次」是 16.67ms/帧（60fps）。
+   * 代价不在节点多，在**每帧重建**本身。
+   *
+   * 这里改成：画布实例常驻，`sync()` 只把**新增的**图元 append 进去，
+   * 已经画好的节点一个都不碰（`worldmap/DistrictLive.vue` 用的是同一个思路）。
+   */
+  let canvas: DistrictCanvas | null = null;
+  /** 画布建立时的 (配色, 网格边长)：任一变了都得整块重画（viewBox / 颜色都写死在节点上） */
+  let canvasKey = "";
+
+  /** 把画布挂到宿主上（幂等；宿主还没 mount 就返回 false） */
+  function ensureCanvas() {
+    const host = paintHost.value;
+    if (!host) return false;
+    const key = `${String(props.mapStyle || "gaode")}|${paint.size}`;
+    // 配色或网格规模变了：整块重画（只在这两样变化时发生，不在一帧的路径上）
+    if (canvas && canvasKey !== key) {
+      canvas.root.remove();
+      canvas = null;
+    }
+    if (!canvas) {
+      canvas = new DistrictCanvas(palette.value, paint.size);
+      canvasKey = key;
+      host.replaceChildren(canvas.root);
+    }
+    return true;
+  }
+
   function scheduleRender() {
     if (rafId) return; // 单飞：一帧最多重建一次 SVG 文本（一次流可能推几百条）
     rafId = requestAnimationFrame(() => {
       rafId = 0;
       counts.value = paint.counts();
       dropped.value = paint.dropped;
-      aiSvgInner.value = paint.toSvg(palette.value);
+      // 宿主理论上 mount 后一直在；万一取不到（卸载中），**不要**递归重排，
+      // 否则就是一个每帧自唤醒的空转循环。丢掉这一帧即可，下一条流事件会再来。
+      if (!ensureCanvas()) return;
+      canvas?.sync(paint);
     });
   }
 
@@ -318,6 +357,8 @@
     gridSize.value = n; // 计划建筑数（预估剩余的分母）由它推出来，所以先采纳
     if (paint.total === 0 && n !== paint.size) {
       paint = new DistrictPaint(n);
+      // 画布的 viewBox 是构造时按旧 size 定死的，换网格规模必须换画布
+      // （ensureCanvas 用 canvasKey 里带上 paint.size 来兜住这件事，这里只是顺手清掉）
       log(`网格规模：${n}×${n}`);
     }
   }
@@ -396,7 +437,8 @@
     stopAi(false);
     if (fresh) {
       paint = new DistrictPaint(SKETCH_SIZE);
-      aiSvgInner.value = "";
+      // 重画：新的画笔实例 + 清空画布（保留根 svg，图元全丢）
+      canvas?.clear();
       aiVisible.value = false;
       aiDone.value = false;
       aiError.value = "";
@@ -476,7 +518,7 @@
     received.value = 0;
     logs.value = [];
     paint = new DistrictPaint(SKETCH_SIZE);
-    aiSvgInner.value = "";
+    canvas?.clear();
     aiVisible.value = false;
     counts.value = { buildings: 0, roads: 0, parks: 0, water: 0 };
     void loadSketch();

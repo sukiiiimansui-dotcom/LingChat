@@ -102,17 +102,41 @@
           linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px) 0 0 / 28px 100%,
           linear-gradient(160deg, #dfe9f2, #eef4ef);
       }
-      .roof {
+      /* ── 示意底图的结构：**逐条照搬真应用**（worldsim.css:717-745）──────────
+         为什么不是随手画几个 div 就行：`WsWindowLight` 从 DOM 里读建筑，选择器是
+         `.ws-neigh__ai svg .ws-b` —— 它要的是「AI 精绘层里的 SVG 矩形」。
+         第一版这里用的是 `<div class="roof ws-b">`，**一个都匹配不上** →
+         `cells` 为空 → 窗户光整层不渲染。而这类错**任何静态检查都抓不到**
+         （vite 只保证这一页能编译，不知道 DOM 结构对不对），只会表现为
+         「功能好像没做」。所以结构必须与真应用一致，不是"像"就行。
+
+         真应用的实际结构（WsDistrict.vue:13-47 + worldsim.css:726-745）：
+           .ws-neigh__pan（手势变换容器，absolute inset:0）
+             .ws-neigh__ai（AI 层）
+               .ws-paint-host（w/h 100% + flex 居中）
+                 svg.ws-paint（viewBox="0 0 28 28"，**不设 preserveAspectRatio**）
+         下面这一套与它一一对应。 */
+      .ws-neigh__ai {
         position: absolute;
-        background: #d6dce6;
-        border: 1px solid #aab6c4;
-        border-radius: 2px;
+        inset: 0;
+        z-index: 0; /* 压在地图色与粒子之下（那两层是 z-index 1） */
       }
-      .road {
-        position: absolute;
-        background: #f2f0ea;
-        border-left: 1px solid #d8d2c6;
-        border-right: 1px solid #d8d2c6;
+      .ws-paint-host {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* =.ws-neigh__layer svg（worldsim.css:742）：
+         ⚠️ 元素盒是**长方形**（撑满舞台），而 viewBox 是正方形 →
+         真正居中留白的是 `preserveAspectRatio`（默认 xMidYMid meet），
+         留白发生在**内容**里、不在元素盒上。这一页刻意保留这个事实 ——
+         窗户光的信箱折算对不对，正是在这种形状下才看得出来。 */
+      .ws-paint {
+        width: 100%;
+        height: 100%;
+        display: block;
       }
       #readout {
         margin-top: 10px;
@@ -168,62 +192,81 @@
         <button id="btnRoofs">重画建筑</button>
       </div>
 
-      <!-- ── 两个覆盖层的宿主。等价于主应用的 `<main class="ws-stage">`：
-           它是定位容器，两个层都 `position:absolute; inset:0` 贴住它。 ── -->
+      <!-- ── 舞台。等价于主应用的 `<main class="ws-stage">`（它本来就是 position:relative）：
+           三个覆盖层（昼夜色 / 天气粒子 / 窗户光）都 `position:absolute; inset:0` 贴住它。 ── -->
       <div id="stage">
-        <div id="roofs"></div>
+        <!-- 示意底图：结构与真应用的 AI 精绘层**一一对应**（见上面 CSS 里的说明）。
+             建筑用**格子坐标**画（0..28，与 `wsDistrictPaint` 的 viewBox 同一口径），
+             这样窗户光读到的矩形与它算出来的窗格在同一坐标系里。 -->
+        <div class="ws-neigh__ai">
+          <div class="ws-paint-host">
+            <svg id="paint" class="ws-paint" viewBox="0 0 28 28"></svg>
+          </div>
+        </div>
       </div>
-
       <div id="readout"></div>
 
       <div class="hint">
-        · <b>窗户光</b>只在「夜晚/深夜」亮；它读的是画布里
-        <code>class="ws-b"</code> 的建筑（与主应用同一套选择器）。<br />
+        · <b>窗户光</b>只在「夜晚/深夜」亮；它读的是
+        <code>.ws-neigh__ai svg .ws-b</code> 的 SVG 矩形（与主应用同一套选择器与结构）。<br />
+        · 底图是 <b>方形 viewBox 撑进长方形舞台</b>（与真应用一致）——
+        窗户光到底有没有落在楼里，看这一页最准。<br />
         · <b>降级</b>那一档就是「拿不到天气」的真实状态：角标写「天气不可用」、
         不画任何粒子 —— 绝不伪装成晴天。<br />
         · 粒子是真动画（rAF 驱动）：雨是斜线、雪有横摆、雾是缓慢漂移的软边团。
       </div>
     </div>
 
-    <!-- 示意底图：先画一批"建筑"，好让窗户光有东西可以点 -->
+    <!-- 示意底图：按格子坐标画成 SVG 矩形（与真应用同一套选择器与坐标系） -->
     <script>
-      function drawRoofs() {
-        const box = document.getElementById("roofs");
-        box.innerHTML = "";
-        const rows = 5;
-        const cols = 9;
-        for (let r = 0; r < rows; r++) {
-          for (let c = 0; c < cols; c++) {
-            if ((r * cols + c) % 11 === 3) continue; // 空一些格子，像街区
-            const d = document.createElement("div");
-            d.className = "roof ws-b";
-            // ⚠️ 用百分比而不是 px：主应用的建筑坐标是「格子单位」，这里用百分比
-            //    只是为了在任意窗口宽度下都铺满；窗户光读的是像素矩形，两者都吃。
-            d.style.left = `${2 + c * 10.6}%`;
-            d.style.top = `${4 + r * 19}%`;
-            d.style.width = `${7.4 + (c % 3) * 1.8}%`;
-            d.style.height = `${7.5 + (r % 2) * 3}%`;
-            box.appendChild(d);
+      const GRID = 28; // 与 `WorldSim.vue` 的 WS_GRID / `wsDistrictPaint` 的 viewBox 同值
+
+      /* 一栋楼的尺寸：真应用里实测的建筑量级就是 **2×2 格子**
+         （P1 自检里 `paint.addBuilding({ x, y, w: 2, h: 2 })` 那一路）。
+         窗户光在 2×2 上正好出 2×2 = 4 扇窗；1×1 的棚子出 0 扇（这是标定好的）。 */
+      const BLD = 2.2;
+      /* ⚠️ 3.02 不是随手取的：最右一列 x = 1 + 8·PITCH，再加上最宽的一栋（2.2 + 0.4）
+         必须 ≤ 28。原来写的 3.1 会得到 28.4 —— **溢出网格**，窗户光算出来的窗格
+         会跟着飘到图外面去（这条是校验脚本 `~/chk/check-wsfx-winlight.mjs` 抓到的）。 */
+      const PITCH = 3.02;
+
+      function drawMap() {
+        const svg = document.getElementById("paint");
+        const parts = [];
+        // 地面（整张图的底）
+        parts.push(`<rect x="0" y="0" width="${GRID}" height="${GRID}" fill="#eef4ef"/>`);
+        // 水域一块：放在**左下角**，并且下面循环会把那一块的建筑腾出来（否则水压着楼）
+        parts.push('<rect x="0" y="21.2" width="7.0" height="6.8" fill="#cfe3f5"/>');
+        // 道路：横向 + 纵向，铺在建筑间隙里
+        for (let r = 0; r <= 9; r++) {
+          const y = (1 + r * PITCH - 0.95).toFixed(2);
+          parts.push(`<rect x="0" y="${y}" width="${GRID}" height="0.6" fill="#f2f0ea"/>`);
+        }
+        for (const c of [3, 6]) {
+          const x = (1 + c * PITCH - 0.95).toFixed(2);
+          parts.push(`<rect x="${x}" y="0" width="0.6" height="${GRID}" fill="#f2f0ea"/>`);
+        }
+        // 建筑：`class="ws-b"` 是**窗户光唯一认的东西**（选择器 `.ws-neigh__ai svg .ws-b`）
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if ((r * 9 + c) % 11 === 3) continue; // 空一些格子，像街区
+            if (r >= 7 && c <= 1) continue; // 左下角是水（上面画了那块水域）
+            const x = (1 + c * PITCH).toFixed(2);
+            const y = (1 + r * PITCH).toFixed(2);
+            // 每栋楼略宽/略高一点，看起来不像阵列（窗户的错峰本来就按楼号哈希）
+            const w = (BLD + (c % 3) * 0.2).toFixed(2);
+            const h = (BLD + (r % 2) * 0.3).toFixed(2);
+            parts.push(
+              `<rect class="ws-b" x="${x}" y="${y}" width="${w}" height="${h}" ` +
+                `fill="#d6dce6" stroke="#aab6c4" stroke-width="0.08" rx="0.1"/>`
+            );
           }
         }
-        // 两条路（放在建筑之下、底图之上）
-        for (const [top, h] of [
-          [22, 1.6],
-          [62, 2.2],
-        ]) {
-          const road = document.createElement("div");
-          road.className = "road";
-          road.style.left = "0";
-          road.style.width = "100%";
-          road.style.top = `${top}%`;
-          road.style.height = `${h}%`;
-          box.appendChild(road);
-        }
+        svg.innerHTML = parts.join("");
       }
-      drawRoofs();
-      window.__drawRoofs = drawRoofs;
+      drawMap();
+      window.__drawMap = drawMap;
     </script>
-
     <script type="module">
       import { createApp, h, ref, computed } from "vue";
       import { timeTint, nightLevel, periodOf, periodLabel, periodIcon } from "/src/components/views/worldsim/wsTime.ts";
@@ -373,7 +416,7 @@
         sync();
       };
       document.getElementById("btnRoofs").onclick = () => {
-        window.__drawRoofs();
+        window.__drawMap();
         sync();
       };
 

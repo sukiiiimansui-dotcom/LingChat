@@ -20,7 +20,7 @@
 //   成功：30 分钟一次（与后端缓存 TTL 一致）。
 //   失败：2 分钟一次（真源恢复得快，但也不能打成刷屏）。
 
-import { computed, onBeforeUnmount, onMounted, ref, type ComputedRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, type ComputedRef, type Ref } from "vue";
 import worldMapApi from "@/api/services/worldMap";
 import {
   degradedState,
@@ -50,7 +50,7 @@ function usable(raw: unknown): WsWeatherState | { reason: string } {
 
 export interface UseWorldWeather {
   /** 当前天气（拿不到时是 `degraded = true` 的降级态，**不是**晴天） */
-  state: ComputedRef<WsWeatherState>;
+  state: Ref<WsWeatherState>;
   /** 角标一行字：`小雨 18°C` / `天气不可用` */
   line: ComputedRef<string>;
   /** 是否降级（没拿到真实天气） */
@@ -59,42 +59,26 @@ export interface UseWorldWeather {
   reason: ComputedRef<string>;
   /** 拉一次（失败不抛，转成降级态） */
   refresh: () => Promise<void>;
-  /**
-   * 手动指定天气（**演示页 / 自检**用）。
-   * 传 null 恢复跟随真实天气。刻意不做成 URL 参数或全局开关：
-   * 主应用里不该存在任何"伪造天气"的入口。
-   */
-  setManual: (kind: string | null, intensity?: number) => void;
 }
 
-/** 演示页要用的：按天气类型直接造一个状态（不经过网络） */
-export function manualState(kind: string, intensity = 0.6): WsWeatherState {
-  const cloudByKind: Record<string, number> = {
-    clear: 5,
-    partly: 40,
-    cloudy: 70,
-    overcast: 95,
-    rain: 95,
-    thunder: 98,
-    snow: 92,
-    fog: 88,
-    haze: 80,
-  };
-  return normalize({
-    desc: kind,
-    kind,
-    cloudcover: cloudByKind[kind] ?? 60,
-    intensity,
-    is_rain: kind === "rain" || kind === "thunder",
-    is_snow: kind === "snow",
-    is_fog: kind === "fog" || kind === "haze",
-  });
-}
+/*
+ * ⚠️ 这里**刻意没有**「手动指定天气」的入口（曾经有过 `manualState()` + `setManual()`，已删）。
+ *
+ * 删它的三个理由，缺一都不够：
+ *   ① **没有调用方**：全仓 grep（含 `wsfx.html` 与仓库外的自检脚本）只有定义与内部互调，
+ *      真实路径永远是 `worldMapApi.weather()`；
+ *   ② **它判错过**：它是把 kind 塞回 `normalize({ desc, is_rain, is_fog … })` 让 `classify()`
+ *      再判一次，而 `classify` 的优先级是**雨早于雷 / 雾早于霾** → 传 `thunder` 得到 `rain`、
+ *      传 `haze` 得到 `fog`（演示页逐 kind 跑出来的事实）。要"手动切天气"就得像
+ *      `wsfx.html` 里那样**直接覆盖 kind**，不能过 classify；
+ *   ③ **它在要进 PR 的文件里**：为一个自用演示页留 API（且是死代码）不合适 ——
+ *      上游的规矩是「一个 PR 一个功能域」，多余导出只会给 reviewer 添问题。
+ * 演示页现在自己有一份（页内函数），不依赖这里。
+ */
 
 export function useWorldWeather(): UseWorldWeather {
   const fallback = degradedState("还没开始拉取天气");
   const state = ref<WsWeatherState>(fallback);
-  const manual = ref<WsWeatherState | null>(null);
 
   let timer: number | null = null;
   let alive = true;
@@ -114,7 +98,6 @@ export function useWorldWeather(): UseWorldWeather {
 
   async function refresh(): Promise<void> {
     if (!alive) return;
-    if (manual.value) return; // 手动指定期间不打扰接口（演示页/自检）
     try {
       const got = usable(await worldMapApi.weather());
       if (!alive) return;
@@ -151,17 +134,11 @@ export function useWorldWeather(): UseWorldWeather {
     }
   });
 
-  const current = computed(() => manual.value ?? state.value);
-
   return {
-    state: current,
-    line: computed(() => weatherLine(current.value)),
-    degraded: computed(() => current.value.degraded),
-    reason: computed(() => current.value.reason || current.value.error || ""),
+    state,
+    line: computed(() => weatherLine(state.value)),
+    degraded: computed(() => state.value.degraded),
+    reason: computed(() => state.value.reason || state.value.error || ""),
     refresh,
-    setManual: (kind: string | null, intensity = 0.6) => {
-      manual.value = kind ? manualState(kind, intensity) : null;
-      if (!kind) void refresh();
-    },
   };
 }

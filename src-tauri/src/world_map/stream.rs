@@ -369,8 +369,23 @@ pub fn spawn_stream(
             "stream": true
         });
 
+        // ⚠️ 必须注入预配置的 TLS 后端（见 `src/utils/tls.rs` 的模块说明）：
+        // reqwest 0.13 默认用 rustls-platform-verifier 验证系统证书，而本仓**从不初始化它**
+        // → 裸 `Client::builder().build()` 在 Android 上发请求时会 **panic**（不是返回 Err）：
+        //   thread 'tokio-rt-worker' panicked at rustls-platform-verifier-0.7.0/src/android.rs:90:
+        //   Expect rustls-platform-verifier to be initialized
+        // 这条路径就是「AI 精绘小区」，也就是说**小区图在真机上根本画不出来**。
+        // 本机（Termux 同为 android target）已复现：走裸客户端的请求返回 HTTP 000 + 上面那行 panic。
+        let tls = match crate::utils::tls::build_tls_config() {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = tx.send(Event::Error { message: format!("TLS 配置失败: {e}") }).await;
+                return;
+            }
+        };
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
+            .tls_backend_preconfigured(tls)
             .build()
         {
             Ok(c) => c,

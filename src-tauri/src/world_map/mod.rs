@@ -858,8 +858,13 @@ pub async fn world_map_osm_summary(
         cached = data.is_some();
     }
     if data.is_none() && force {
+        // ⚠️ 必须注入预配置的 TLS 后端：reqwest 0.13 默认走 rustls-platform-verifier，
+        // 而本仓从不初始化它 → 裸 builder 在 Android 上发请求时 panic（见 `src/utils/tls.rs`）。
+        // 与 `stream.rs` 那处是同一类漏配，两处一起补。
+        let tls = crate::utils::tls::build_tls_config()?;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(25))
+            .tls_backend_preconfigured(tls)
             .build()
             .map_err(|e| format!("HTTP 客户端创建失败: {e}"))?;
         data = osm::fetch_area(&client, &dir, lat, lng, radius, kinds, true).await;

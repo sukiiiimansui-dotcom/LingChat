@@ -330,6 +330,10 @@
         @pick="onActorPick"
         @refresh="actors.loadTimeWeather()"
       />
+      <!-- T4-2 角标：当前天气（图标 + 描述 + 温度）。拿不到天气时它显示
+           「天气不可用」而不是「晴」—— 这是 T4-2 的硬要求：优雅降级，不伪造数据。 -->
+      <WsWeatherBadge :weather="wxState" />
+
       <!-- T4-1 角标：当前时段 + 时刻。位置与样式在 worldsim-tod.css 里（左上角，
            避开右下的缩放控件与顶栏按钮）。放在 `</main>` 之内 —— 它的包含块就是
            `.ws-stage` 的 padding box，天然贴着舞台左上角，不需要页面给它算坐标。 -->
@@ -347,6 +351,12 @@
          刻意不做成「盖住整页再挖掉顶栏底栏」：那要靠实测顶栏/底栏高度，
          而底栏在 boot/定位中根本不渲染、宽扁屏那一档还会变成悬浮 —— 会量错的活别干。 -->
     <WsTimeLayer :tint="todTint" :night="todNight" />
+
+    <!-- ── T4-2：天气视觉层 ──────────────────────────────────────────────
+         包含块同样是 `.ws-stage`（`position: relative`）→ 只盖地图舞台。
+         `:tint` 是必须传的：昼夜色要**压在天气色之上**（老线的顺序，
+         「夜间压暗应覆盖天气提亮」），少传它雨夜就会是亮的。 -->
+    <WsWeatherLayer :weather="wxState" :tint="todTint" :low="perfLow" />
 
     <!-- toast 容器（快捷动作「即将上线」这类提示必须有可见反应，绝不静默） -->
     <div class="ws-toasts" aria-live="polite">
@@ -422,6 +432,11 @@
   import WsTimeLayer from "./WsTimeLayer.vue";
   import WsWindowLight from "./WsWindowLight.vue";
   import { useWorldTime } from "@/composables/useWorldTime";
+  // T4-2：天气视觉（雨/雪/雾粒子 + 天气色调 + 角标）。同样自带独立样式文件。
+  import "@/assets/styles/worldsim-weather.css";
+  import WsWeatherLayer from "./WsWeatherLayer.vue";
+  import WsWeatherBadge from "./WsWeatherBadge.vue";
+  import { useWorldWeather } from "@/composables/useWorldWeather";
   // P2：人物层 + 两个面板（面板与头像层都是这一页独有的，懒加载没有意义，直接静态 import）
   import WsAvatarLayer from "./WsAvatarLayer.vue";
   import WsCharPanel from "./WsCharPanel.vue";
@@ -541,6 +556,13 @@
     periodText: todPeriodText,
     clockText: todClock,
   } = tod;
+
+  /* ══ T4-2：天气视觉表现 ═══════════════════════════════════════════════════
+   * 数据走 `worldMapApi.weather()`（真壳 `world_map_weather` / 浏览器 `/api/weather`），
+   * **拿不到就是"天气不可用"**（角标明说 + 无粒子），不编一个晴天出来。
+   * 判定/强度/粒子全在 `wsWeather.ts`（纯函数），这里只做挂载。 */
+  const wx = useWorldWeather();
+  const { state: wxState } = wx;
 
   /* ══ P2：地图上的「人」+ 面板 ══════════════════════════════════════════════
    * 数据（谁在哪、头像、日程）在 useWsActors；面板的开关/选中在 useWsPanel。

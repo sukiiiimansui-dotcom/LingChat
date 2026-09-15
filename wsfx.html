@@ -227,13 +227,54 @@
     <script type="module">
       import { createApp, h, ref, computed } from "vue";
       import { timeTint, nightLevel, periodOf, periodLabel, periodIcon } from "/src/components/views/worldsim/wsTime.ts";
-      import { normalize, degradedState, manualState, weatherLine } from "/src/components/views/worldsim/wsWeather.ts";
+      import {
+        normalize,
+        degradedState,
+        weatherLine,
+        KIND_LABEL,
+        KIND_ICON,
+      } from "/src/components/views/worldsim/wsWeather.ts";
       import WsTimeLayer from "/src/components/views/worldsim/WsTimeLayer.vue";
       import WsWindowLight from "/src/components/views/worldsim/WsWindowLight.vue";
       import WsWeatherLayer from "/src/components/views/worldsim/WsWeatherLayer.vue";
       import WsWeatherBadge from "/src/components/views/worldsim/WsWeatherBadge.vue";
       import "/src/assets/styles/worldsim-tod.css";
       import "/src/assets/styles/worldsim-weather.css";
+
+      /*
+        ──────────────────────────────────────────────────────────────────────
+        `manualState(kind, intensity)` —— 本页自用的小工具（**不在 wsWeather.ts 里**）
+        ──────────────────────────────────────────────────────────────────────
+        ⚠️ 这里原来写的是 `import { manualState } from ".../wsWeather.ts"`，
+        但那个模块**从来没有导出过这个名字** → 页面一打开就抛
+        `does not provide an export named 'manualState'`（dev 模式同样会炸，不是只有构建才有的问题）。
+        之所以一直没被发现：**这一页不在任何验证管道里** ——
+        `vue-tsc` 不检查 HTML 里的内联 module script，而默认 `vite build` 也不把
+        `wsfx.html` 当入口。现在它已进 `vite.webdev.config.ts` 的 build inputs，构建会拦住这类错。
+
+        所以改成页内拼：`normalize({})` 给一个**合法骨架**（字段齐全、类型正确），
+        再按手选的类型覆盖 kind 与那几个派生布尔位 —— 这样即便将来 `WsWeatherState`
+        加了字段，这里也不会漏（骨架跟着 normalize 走）。
+      */
+      function manualState(kind, intensity) {
+        const base = normalize({});
+        return {
+          ...base,
+          kind,
+          kindLabel: KIND_LABEL[kind],
+          label: KIND_LABEL[kind],
+          icon: KIND_ICON[kind],
+          desc: KIND_LABEL[kind],
+          descFromData: false,
+          intensity,
+          isRain: kind === "rain" || kind === "thunder",
+          isSnow: kind === "snow",
+          isFog: kind === "fog" || kind === "haze",
+          isThunder: kind === "thunder",
+          isWet: kind === "rain" || kind === "thunder",
+          degraded: false,
+        };
+      }
 
       const hour = ref(22);
       const wxKind = ref("rain");

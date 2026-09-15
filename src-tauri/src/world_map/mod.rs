@@ -16,6 +16,9 @@ pub mod details;
 // P4-1：AI 位置指令（⟦wm:{…}⟧）的剥离器。纯函数 + 流式状态机，不依赖 tauri，
 // 由 `ai_service/message_system/producer.rs` 在**切句之前**调用（选型理由见文件头）。
 pub mod directive;
+// 真实地形着色（分层设色，SRTM 90m 采样成 1° 网格内嵌）。纯函数模块、不碰网络，
+// 被 `render_geo` 消费，把「全国级真实地理」里的**高度**画进行政区划图。
+pub mod elevation;
 // P5-2 / P5-3：事件引擎的**接线层**（3 条 Tauri 命令 + `world_map:event` 广播 +
 // 待写记忆队列）。上游是纯函数模块 `events.rs`，下游是前端与记忆管线。
 // 组上下文 / 闸门 / drain 这些判定逻辑都抽成了不依赖 `AppHandle` 的纯函数
@@ -585,6 +588,7 @@ pub async fn world_map_geo_svg(
     dots: Option<bool>,
     stats: Option<bool>,
     hydro: Option<bool>,
+    elevation: Option<bool>,
 ) -> Result<String, String> {
     let ad = ad.unwrap_or_else(|| "100000".to_string());
     let src = make_source(&app);
@@ -601,6 +605,13 @@ pub async fn world_map_geo_svg(
         // 真实水系默认开：它是「全国级真实地理」的主要视觉来源。
         // 传 false 可退回加图层之前的样子（不白屏、不报错）。
         hydro: hydro.unwrap_or(true),
+        // 真实地形默认开。⚠️ 它和水系是**两个独立功能域**，各自可单独关：
+        // 只想要河流不要地形，传 `elevation: false, hydro: true` 即可。
+        //
+        // 📌 上游重构提示：本命令现在注册在 `lib.rs` 的 `generate_handler!` 里；
+        // 上游已把所有命令注册搬到 `app/commands.rs`，将来 rebase 时**应把它一并挪过去**，
+        // 不要再往 `lib.rs` 里加东西（维护者在 PR #802 评审里点名过这个习惯）。
+        elevation: elevation.unwrap_or(true),
         show_stats: stats.unwrap_or(false),
     };
     render_geo::render_geo_svg(&fc, &opts)

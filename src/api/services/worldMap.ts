@@ -1212,6 +1212,9 @@ export async function maplibCleanupAuto(o: {
  *              默认 `true`。这是唯一会明显增加 SVG 体积的图层（全国视图实测 +32KB / +4.7%），
  *              万一在低端机上成为负担，调用方传 `false` 即可退回加图层之前的样子
  *              （**不会白屏**：关掉只是少画一层，主图与点击下钻都照常）。
+ * @param elevation 是否叠加**真实地形着色**（分层设色，SRTM 90m 采样成 1° 网格内嵌）。
+ *              默认 `true`，全国视图实测 +29KB / +4.1%。
+ *              **与 `hydro` 完全独立**：四种组合都受支持（比如只想要河流不要地形）。
  *
  * 失败一律 **throw**（空串、不是 SVG 都算失败）：调用方已有 catch → 页面提示 + 重试，
  * 绝不把 JSON 塞进 v-html 变成一屏乱码、也不让页面卡在「加载中…」。
@@ -1222,7 +1225,8 @@ export async function geoSvgText(
   w: number = MAP_SVG_DEFAULT_W,
   h: number = MAP_SVG_DEFAULT_H,
   zoom = 2,
-  hydro = true
+  hydro = true,
+  elevation = true
 ): Promise<string> {
   const code = String(ad || "").trim() || "100000";
   const width = Math.max(64, Math.round(Number(w) || MAP_SVG_DEFAULT_W));
@@ -1238,6 +1242,7 @@ export async function geoSvgText(
       height,
       zoom: z,
       hydro: hydro !== false,
+      elevation: elevation !== false,
     });
     const text = String(svg || "");
     if (!/<svg[\s>]/i.test(text.slice(0, 400))) {
@@ -1249,12 +1254,13 @@ export async function geoSvgText(
   // ── ② 浏览器 / 局域网调试：/api/geo_svg ──
   // 这条路由**不认 zoom 之外的东西**也一样能用；出错时 fetchSvgText 会把 JSON 翻译成人话。
   //
-  // ⚠️ `hydro` 目前**只有 Rust 侧认**（Python 侧车 `hier_api.py` 的 `/api/geo_svg` 还没实现
-  // 水系图层，多传的参数会被它忽略）→ 浏览器预览看不到河湖，真机才看得到。
+  // ⚠️ `hydro` / `elevation` 目前**只有 Rust 侧认**（Python 侧车 `hier_api.py` 的 `/api/geo_svg`
+  // 还没实现这两个图层，多传的参数会被它忽略）→ 浏览器预览看不到河湖与地形，真机才看得到。
   // 这是已知差异，不影响真机；要消除得同步改 Python 原型（不在本次范围）。
   const url =
     `${API_BASE}/api/geo_svg?ad=${encodeURIComponent(code)}` +
     `&style=${encodeURIComponent(style)}&w=${width}&h=${height}&zoom=${z}` +
-    `&hydro=${hydro !== false ? 1 : 0}`;
+    `&hydro=${hydro !== false ? 1 : 0}` +
+    `&elevation=${elevation !== false ? 1 : 0}`;
   return await fetchSvgText(url);
 }

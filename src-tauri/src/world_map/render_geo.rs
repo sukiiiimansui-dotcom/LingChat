@@ -9,6 +9,7 @@
 //! 每个区划包在 `<g class="geo-region" data-adcode data-name>` 里 —— 前端据此做**点击下钻**。
 use serde_json::Value;
 
+use crate::world_map::elevation;
 use crate::world_map::hydro;
 
 // ── 三套配色（与 render.rs 对齐；RPG 风已按需求移除）──
@@ -149,6 +150,10 @@ const HYDRO_TOL: f64 = 1.0;
 /// 留边距是为了不让贴着画布边缘的河在边界处突然断掉。
 const HYDRO_MARGIN: f64 = 40.0;
 
+/// 地形着色的视口裁剪边距（px）。比水系的略小：地形是**成片**的，
+/// 一格就有十几到几十像素宽，留 8px 足够接住跨边界的那一格，不会露白边。
+const ELEV_MARGIN: f64 = 8.0;
+
 /// 按河流等级分三档线宽 —— 对应 Natural Earth `scalerank`（1 最大）。
 /// 索引即分桶号，见 [`river_bucket`]。
 const RIVER_WIDTHS: [f64; 3] = [2.0, 1.4, 1.0];
@@ -239,6 +244,11 @@ pub struct GeoOpts {
     /// 万一在某些设备上成为负担，调用方可以一键关掉，不必回滚代码。
     /// 关掉 = 退回加这个图层之前的渲染结果（不会白屏）。
     pub hydro: bool,
+    /// 是否叠加**真实地形着色**（分层设色，SRTM 90m 采样成 1° 网格内嵌，见 `elevation.rs`）。
+    ///
+    /// 与 `hydro` 同构：默认开，可一键关。
+    /// 关掉 = 退回加这个图层之前的渲染结果，**逐字节一致**（不会白屏、不会报错）。
+    pub elevation: bool,
     /// 是否标注顶点抽稀统计（开发用）
     pub show_stats: bool,
 }
@@ -248,7 +258,7 @@ impl Default for GeoOpts {
         Self {
             level: "province".into(), style: "gaode".into(),
             width: 1000.0, height: 760.0, pad: 26.0, zoom: 2,
-            labels: true, dots: true, hydro: true, show_stats: false,
+            labels: true, dots: true, hydro: true, elevation: true, show_stats: false,
         }
     }
 }
@@ -324,10 +334,23 @@ pub fn render_geo_svg(fc: &Value, o: &GeoOpts) -> Result<String, String> {
     p.push(format!(r#"<rect width="{w}" height="{h}" fill="{}"/>"#, st.bg));
     let mut stats = (0usize, 0usize); // (原始顶点, 保留顶点)
 
-    // 陆地 + 三层边界
-    p.push(r#"<g class="z1">"#.to_string());
-    // 每个真正画出来的陆地填充 path 的 id（水系靠它做 clipPath，见下）
-    let mut land_ids: Vec<usize> = Vec::new();
+    // ── 先把每块区划的 path 数据算出来（**只算一次**），再按层序输出 ──
+    //
+    // 为什么要先收集、而不是像原来那样边算边输出：
+    // 地形层开启时层序必须是「**陆地填充 → 真实地形 → 区划描边**」——
+    // 描边得压在 terrain 之上，否则整片地形会把省界糊掉（高德/Google 都是这个层序）。
+    // 而原来的循环是「每块的 fill+inner+border 挤在同一个组里」，
+    // 地形无论插在哪都会盖住一部分描边。所以拆成两段输出。
+    //
+    // ⚠️ 地形**关闭**时走的是原样单段输出，与加本功能之前**逐字节一致**（见 `emit_one` 的两个分支）。
+    struct Region {
+        idx: usize,
+        adcode: String,
+        name: String,
+        d: String,
+        fill: &'static str,
+    }
+    let mut regions: Vec<Region> = Vec::new();
     for (i, f) in feats.iter().enumerate() {
         if f.polys.is_empty() {
             continue;
@@ -355,31 +378,118 @@ pub fn render_geo_svg(fc: &Value, o: &GeoOpts) -> Result<String, String> {
             continue;
         }
         let fill = if i % 2 == 0 { st.land } else { st.land_alt };
+        regions.push(Region { idx: i, adcode: f.adcode.clone(), name: f.name.clone(), d, fill });
+    }
+    // 每个真正画出来的陆地填充 path 的 id（地形/水系靠它做 clipPath）
+    let land_ids: Vec<usize> = regions.iter().map(|r| r.idx).collect();
+
+    // 输出一块区划的图元。
+    //
+    // ⚠️ `id="wm-geo-{i}"` 是**既有代码的唯一改动**：纯增量属性，不改变任何渲染结果；
+    // 前端 `wsGeo.parseGeoRegions` 只读 `<g class="geo-region">` 上的 data-*，不看这里。
+    // 加它是为了让地形/水系能用 `<clipPath><use href="#..."/></clipPath>` 复用同一份几何，
+    // 而**不必把区划路径数据再抄一遍**（抄一遍全国视图要多 235KB）。
+    //
+    // `split` = true 时只输出填充（描边留给后面的独立图层，好压在地形之上）。
+    let emit = |p: &mut Vec<String>, r: &Region, split: bool| {
+        let i = r.idx;
         p.push(format!(
             r#"<g class="geo-region" data-adcode="{}" data-name="{}" role="button" tabindex="0">"#,
-            esc(&f.adcode), esc(&f.name)
-        ));
-        // ⚠️ 既有代码的唯一改动：给陆地填充 path 加一个 `id`。
-        // 纯增量属性，不改变任何渲染结果；前端 `wsGeo.parseGeoRegions` 只读
-        // `<g class="geo-region">` 上的 data-* 属性，不看这里。
-        // 加它是为了让水系能用 `<clipPath><use href="#..."/></clipPath>` 复用同一份几何，
-        // 而**不必把区划路径数据再抄一遍**（抄一遍全国视图要多 235KB）。
-        land_ids.push(i);
-        p.push(format!(
-            r#"<path id="wm-geo-{i}" class="geo-fill" d="{d}" fill="{fill}" fill-rule="evenodd" stroke="{}" stroke-width="{}" stroke-linejoin="round"/>"#,
-            st.border, ls.border
+            esc(&r.adcode), esc(&r.name)
         ));
         p.push(format!(
-            r#"<path class="z3 geo-inner" d="{d}" fill="none" fill-rule="evenodd" stroke="{}" stroke-width="2.4" stroke-linejoin="round"/>"#,
-            st.inner
+            r#"<path id="wm-geo-{i}" class="geo-fill" d="{}" fill="{}" fill-rule="evenodd" stroke="{}" stroke-width="{}" stroke-linejoin="round"/>"#,
+            r.d, r.fill, st.border, ls.border
         ));
-        p.push(format!(
-            r#"<path class="z2 geo-border" d="{d}" fill="none" fill-rule="evenodd" stroke="{}" stroke-width="{}" stroke-linejoin="round" pointer-events="none"/>"#,
-            st.border2, ls.border2
-        ));
+        if !split {
+            p.push(format!(
+                r#"<path class="z3 geo-inner" d="{}" fill="none" fill-rule="evenodd" stroke="{}" stroke-width="2.4" stroke-linejoin="round"/>"#,
+                r.d, st.inner
+            ));
+            p.push(format!(
+                r#"<path class="z2 geo-border" d="{}" fill="none" fill-rule="evenodd" stroke="{}" stroke-width="{}" stroke-linejoin="round" pointer-events="none"/>"#,
+                r.d, st.border2, ls.border2
+            ));
+        }
         p.push("</g>".to_string());
+    };
+
+    // ── 第一层：陆地填充 ──
+    p.push(r#"<g class="z1">"#.to_string());
+    for r in &regions {
+        emit(&mut p, r, o.elevation);
     }
     p.push("</g>".to_string());
+
+    // ── 第二层：真实地形着色（夹在填充与描边之间）──
+    let mut estats = (0usize, 0usize); // (矩形数, 用到的色带数)
+    if o.elevation {
+        if let Some(g) = elevation::grid() {
+            let cells = elevation::cells(
+                g,
+                |lng, lat| {
+                    let q = project(lng, lat);
+                    s(q.0, q.1)
+                },
+                w,
+                h,
+                ELEV_MARGIN,
+            );
+            let paths = elevation::band_paths(&cells);
+            if !paths.is_empty() {
+                // clipPath **前向引用**后面的陆地填充 path —— 已在 chromium/WebDriver 实测生效。
+                // 这样地形只会落在陆地上（海面留底色），且**不需要复制**区划几何。
+                p.push(r#"<clipPath id="wm-elev-clip">"#.to_string());
+                for id in &land_ids {
+                    p.push(format!(r##"<use href="#wm-geo-{id}"/>"##));
+                }
+                p.push("</clipPath>".to_string());
+                let (_, _, bands, _) = elevation::counts(g, &cells);
+                estats = (cells.len(), bands);
+                // 不透明：地形就是陆地本身（填充只是"没有地形数据处"的兜底底色，
+                // 比如网格范围外的南海诸岛）
+                p.push(
+                    r#"<g class="z1" pointer-events="none" clip-path="url(#wm-elev-clip)">"#
+                        .to_string(),
+                );
+                for (band, d) in &paths {
+                    p.push(format!(
+                        r#"<path class="wm-elev" d="{d}" fill="{}" stroke="none"/>"#,
+                        elevation::ELEV_RAMP[*band].1
+                    ));
+                }
+                p.push("</g>".to_string());
+            }
+        }
+    }
+
+    // ── 第三层：区划描边（地形之上）──
+    // 只有开了地形才需要单独一层；否则描边已经在第一层里跟着填充走了（保持老输出）。
+    //
+    // ⚠️ **必须重画"主描边"**（`st.border` / `ls.border`，高德风是白色 1.6px）：
+    // 第一层里那条主描边是挂在**陆地填充**上的，地形一铺上去就把它整条盖住了 ——
+    // 实测第一版就是这个问题：地形出来了，**省界却全没了**（一眼就看得出不对劲）。
+    // 下面这条 `.geo-outline` 就是把主描边补回来。
+    //
+    // ⚠️ **层的数量必须守住 3 份 `d`**（填充 / 内阴影 / 描边）：
+    // 区划路径数据全国视图一份就 235KB，多画一份 = 凭空 +32% 体积
+    // （实测：加一条 `.geo-outline` 让 756KB 涨到 983KB）。
+    // 所以这里**用 `.geo-outline` 顶掉原来的 `.geo-border`**，而不是两条都画 ——
+    // 反正 `border2` 那条 0.8px 的浅米色在彩色地形上本来就看不清。
+    if o.elevation {
+        p.push(r#"<g class="z1" pointer-events="none">"#.to_string());
+        for r in &regions {
+            p.push(format!(
+                r#"<path class="z3 geo-inner" d="{}" fill="none" fill-rule="evenodd" stroke="{}" stroke-width="2.4" stroke-linejoin="round"/>"#,
+                r.d, st.inner
+            ));
+            p.push(format!(
+                r#"<path class="geo-outline" d="{}" fill="none" fill-rule="evenodd" stroke="{}" stroke-width="{}" stroke-linejoin="round"/>"#,
+                r.d, st.border, ls.border
+            ));
+        }
+        p.push("</g>".to_string());
+    }
 
     // ── 真实水系（河流 / 湖泊）：铺在陆地之上、标签之下 ──
     //
@@ -499,8 +609,14 @@ pub fn render_geo_svg(fc: &Value, o: &GeoOpts) -> Result<String, String> {
     } else {
         String::new()
     };
+    // 地形成本同样单独报（矩形数 + 用到的色带数）——调 ELEV_RAMP 时要能一眼看到影响
+    let etail = if o.show_stats && estats.0 > 0 {
+        format!(" · 地形 {} 块/{} 色带", estats.0, estats.1)
+    } else {
+        String::new()
+    };
     let tail = if o.show_stats {
-        format!(" · 顶点 {}/{}（保留 {keep:.0}%）{htail}", stats.1, stats.0)
+        format!(" · 顶点 {}/{}（保留 {keep:.0}%）{htail}{etail}", stats.1, stats.0)
     } else {
         String::new()
     };
@@ -772,8 +888,7 @@ mod tests {
         assert!(RIVER_WIDTHS[1] > RIVER_WIDTHS[2]);
     }
 
-    /// `hydro_layers` 的视口裁剪与容差：空输入安全、框外丢弃、框内保留。
-    #[test]
+    /// `hydro_layers` 的视口裁剪与容差：空输入安全、框外丢弃、框内保留。    #[test]
     fn hydro_layers_culls_out_of_view() {
         let feats = hydro::parse(
             &json!({"type":"FeatureCollection","features":[
@@ -815,6 +930,207 @@ mod tests {
         }
         for (i, n) in per_bucket.iter().enumerate() {
             assert!(*n > 0, "第 {i} 档线宽没有任何要素：{per_bucket:?}");
+        }
+    }
+
+    // ───────────────────────── 真实地形着色 ─────────────────────────
+
+    #[test]
+    fn elevation_is_drawn_on_national_view() {
+        let svg = render_geo_svg(&fc_national(), &GeoOpts::default()).unwrap();
+        assert!(svg.contains(r#"class="wm-elev""#), "全国视图该画出地形色带");
+        assert!(svg.contains(r#"<clipPath id="wm-elev-clip">"#), "地形要裁到陆地上");
+        // 只允许用色带表里的颜色
+        for (idx, _) in svg.match_indices(r#"class="wm-elev" d=""#) {
+            let seg = &svg[idx..];
+            let fill = seg.split("fill=\"").nth(1).and_then(|s| s.split('"').next());
+            let fill = fill.expect("地形 path 必须有 fill");
+            assert!(
+                elevation::ELEV_RAMP.iter().any(|(_, c)| *c == fill),
+                "地形用了色带表以外的颜色：{fill}"
+            );
+        }
+    }
+
+    /// **开关必须真的能关**，而且要退回**老的三层同组结构**（不是简单少画一层）。
+    #[test]
+    fn elevation_switch_off_restores_old_structure() {
+        let on = render_geo_svg(&fc_national(), &GeoOpts { elevation: true, ..Default::default() }).unwrap();
+        let off = render_geo_svg(&fc_national(), &GeoOpts { elevation: false, ..Default::default() }).unwrap();
+        assert!(on.contains("wm-elev"), "开着时该有地形");
+        assert!(!off.contains("wm-elev"), "关掉后不该有任何地形 path");
+        assert!(!off.contains("wm-elev-clip"), "关掉后不该留下 clipPath");
+        // 老结构：每个 geo-region 组里 fill(geo-fill) + inner(geo-inner) + border(geo-border) 三件套
+        assert_eq!(off.matches(r#"class="geo-region""#).count(), 2);
+        assert_eq!(off.matches(r#"class="geo-fill""#).count(), 2);
+        assert_eq!(off.matches(r#"class="z3 geo-inner""#).count(), 2);
+        assert_eq!(off.matches(r#"class="z2 geo-border""#).count(), 2);
+        // 区划、下钻属性一个都不能少
+        assert!(off.contains(r#"data-adcode="110000""#));
+        assert!(off.starts_with("<svg") && off.ends_with("</svg>"));
+    }
+
+    /// ★ **层序**：陆地填充 → 地形 → 区划描边。
+    ///
+    /// 这条是本功能最容易做错的地方：地形要是画在描边之后，整片地形会把省界糊掉
+    /// （高德/Google 都是描边压在地形上）。
+    #[test]
+    fn elevation_layer_sits_between_fill_and_border() {
+        let svg = render_geo_svg(&fc_national(), &GeoOpts::default()).unwrap();
+        let last_fill = svg.rfind(r#"class="geo-fill""#).expect("要有陆地填充");
+        let first_elev = svg.find(r#"class="wm-elev""#).expect("要有地形");
+        // ⚠️ 是 `.geo-outline`（地形模式下用来重画主描边的那条），不是 `.geo-border`
+        let first_border = svg.find(r#"class="geo-outline""#).expect("要有区划描边");
+        assert!(last_fill < first_elev, "地形必须在**所有**陆地填充之后（否则被填充盖住）");
+        assert!(first_elev < first_border, "区划描边必须在**地形之上**（否则省界被糊掉）");
+    }
+
+    /// 描边与标注不能因为多了地形层而消失。
+    #[test]
+    fn borders_and_labels_survive_elevation() {
+        let svg = render_geo_svg(&fc_national(), &GeoOpts::default()).unwrap();
+        assert_eq!(svg.matches(r#"class="geo-outline""#).count(), 2, "主描边要在地形之上重画一遍");
+        assert_eq!(svg.matches(r#"class="z3 geo-inner""#).count(), 2, "内阴影也要在");
+        assert_eq!(svg.matches(r#"class="z2 geo-border""#).count(), 0,
+            "地形模式下不再画次级描边 —— 它被 .geo-outline 顶掉了，以守住「只画 3 份 d」的体积预算");
+        assert!(svg.contains(">甲省<") && svg.contains(">乙省<"), "标注不能被地形压掉");
+        assert_eq!(svg.matches(r#"role="button""#).count(), 2, "区划仍要可点");
+    }
+
+    /// ★ **体积预算的守门测试**：地形模式下区划路径只能出现 **3 份**
+    /// （填充 / 内阴影 / 主描边）。
+    ///
+    /// 实测教训：多画一份 `d` 就是 +235KB（全国视图 756KB → 983KB，+32%）。
+    /// 这条测试用「同样的 d 字符串出现次数」把预算钉死，防止后人顺手再加一层描边。
+    #[test]
+    fn elevation_keeps_region_path_budget_at_three() {
+        // `fc_national` 的两块区划形状不同，取较长的那个 `d` 作为哨兵
+        let svg_on = render_geo_svg(&fc_national(), &GeoOpts::default()).unwrap();
+        let svg_off = render_geo_svg(&fc_national(), &GeoOpts { elevation: false, ..Default::default() }).unwrap();
+        // 统计「geo- 开头的图层数」= d 的份数
+        let count = |s: &str| {
+            s.matches("class=\"geo-fill\"").count()
+                + s.matches("class=\"z3 geo-inner\"").count()
+                + s.matches("class=\"geo-outline\"").count()
+                + s.matches("class=\"z2 geo-border\"").count()
+        };
+        assert_eq!(count(&svg_off), 6, "关地形：2 区划 × 3 层（fill+inner+border）");
+        assert_eq!(count(&svg_on), 6, "开地形：2 区划 × 3 层（fill+inner+outline）—— 份数必须一样");
+    }
+
+    /// 地形层**不吃点击**（否则「点省份下钻」全被地形盖住 —— 它是满屏的）。
+    #[test]
+    fn elevation_does_not_swallow_clicks() {
+        const TAG: &str = r#"<g class="z1" pointer-events="none" clip-path="url(#wm-elev-clip)">"#;
+        let svg = render_geo_svg(&fc_national(), &GeoOpts::default()).unwrap();
+        let start = svg.find(TAG).expect("地形该包在 pointer-events=none + clip-path 的组里");
+        let rest = &svg[start + TAG.len()..];
+        let end = rest.find("</g>").expect("地形组要闭合");
+        let group = &rest[..end];
+        assert!(group.contains("wm-elev"), "这一组里应该就是地形 path");
+        // 区划组仍然是可点的
+        assert_eq!(svg.matches(r#"role="button""#).count(), 2, "区划仍要可点");
+    }
+
+    /// 地形体积要有预算（防止换资产/改色带时悄悄膨胀）。
+    /// 实测：全国视图地形约 29KB（对基线 +4.3%）。
+    #[test]
+    fn elevation_stays_within_size_budget() {
+        let on = render_geo_svg(&fc_national(), &GeoOpts::default()).unwrap();
+        let off = render_geo_svg(&fc_national(), &GeoOpts { elevation: false, ..Default::default() }).unwrap();
+        let added = on.len() - off.len();
+        assert!(added > 1000, "地形应当确实画了东西（只多了 {added} 字节）");
+        assert!(added < 60_000, "地形体积超预算：+{added} 字节");
+    }
+
+    /// 视野里没有陆地（或远在南大西洋）时，地形不该硬画，也不能报错。
+    #[test]
+    fn elevation_absent_when_view_has_no_land() {
+        let far = json!({"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"name":"远省","adcode":"990000"},
+             "geometry":{"type":"Polygon","coordinates":[[[-60.0,-40.0],[-50.0,-40.0],[-50.0,-30.0],[-60.0,-30.0],[-60.0,-40.0]]]}}]});
+        let svg = render_geo_svg(&far, &GeoOpts::default()).unwrap();
+        assert!(!svg.contains("wm-elev"), "南大西洋那块不该冒出中国的地形");
+        assert!(svg.starts_with("<svg") && svg.contains("远省"));
+    }
+
+    /// 地形与**水系**是两个独立开关，四种组合都要能出图。
+    #[test]
+    fn elevation_and_hydro_switches_are_independent() {
+        for (e, h) in [(true, true), (true, false), (false, true), (false, false)] {
+            let svg = render_geo_svg(
+                &fc_national(),
+                &GeoOpts { elevation: e, hydro: h, ..Default::default() },
+            )
+            .unwrap();
+            assert!(svg.starts_with("<svg") && svg.ends_with("</svg>"), "elev={e} hydro={h} 输出不完整");
+            assert_eq!(svg.contains("wm-elev"), e, "elev={e} hydro={h}：地形的有无不对");
+            assert_eq!(svg.contains("wm-hydro-"), h, "elev={e} hydro={h}：水系的有无不对");
+            assert_eq!(svg.matches(r#"class="geo-region""#).count(), 2, "区划必须始终在");
+        }
+    }
+
+    /// 三套主题都要能出地形（当前共用一张色带表 —— 见 `elevation::ELEV_RAMP` 的说明）。
+    #[test]
+    fn elevation_works_on_all_styles() {
+        for s in STYLE_NAMES {
+            let svg = render_geo_svg(&fc_national(), &GeoOpts { style: s.into(), ..Default::default() }).unwrap();
+            assert!(svg.contains("wm-elev"), "{s} 主题没画出地形");
+        }
+    }
+
+    /// ★ **配色守门**：最高色带（雪线）必须与「陆地兜底色」**可区分**。
+    ///
+    /// ## 为什么要有这条
+    /// 陆地兜底色是"没有地形数据的地方"露出来的颜色（比如网格范围外的南海诸岛）。
+    /// 雪线要是和它撞车，**≥5000m 的高原会看起来像一块块没渲染出来的空洞** ——
+    /// 这个症状极具误导性：当时我第一反应是"数据缺失"，
+    /// 逐点核对 65 个高格（5000~5890m，全在西藏/青海）后才确认**数据没问题、是配色撞了**。
+    /// 所以这里用**可计算的判据**把它钉死，不让它退回"下次谁顺手改一行又坏了"。
+    ///
+    /// ## ⚠️ 陆地兜底色**从真源码取**，不在这里抄字面量
+    /// 直接用 `style_of(s).land`。抄一份字面量的话，改 `style_of` 时这条测试不会红 ——
+    /// 那就成了假守门。
+    ///
+    /// ## 判据与阈值
+    /// 用通道差 `|ΔR|+|ΔG|+|ΔB|`，阈值 [`elevation::MIN_BAND_SEPARATION`]（=24，那里写了选它的依据）。
+    /// **不用亮度差**：water 主题的陆地 `#f4efe3` 与雪线 `#e8f1f8` 亮度几乎相同（差 0.0）、
+    /// 只有冷暖之分，亮度判据会把这一对**误判成看不清**。
+    #[test]
+    fn snow_band_is_distinguishable_from_land_base() {
+        let snow = elevation::ELEV_RAMP.last().expect("色带表不能为空").1;
+        let mut worst = (i32::MAX, "", "");
+        for s in STYLE_NAMES {
+            let land = style_of(s).land; // ← 真源码，不是抄来的字面量
+            let d = elevation::channel_diff(snow, land)
+                .unwrap_or_else(|| panic!("{s} 主题的陆地色值格式不对：{land}"));
+            assert!(
+                d >= elevation::MIN_BAND_SEPARATION,
+                "{s} 主题：雪线 {snow} 与陆地兜底色 {land} 太接近（通道差 {d} < {}）——\
+                 高原会被看成「没渲染出来的洞」",
+                elevation::MIN_BAND_SEPARATION
+            );
+            if d < worst.0 {
+                worst = (d, snow, land);
+            }
+        }
+        // 记录最紧的一对，方便调色时知道余量还剩多少
+        assert!(worst.0 >= elevation::MIN_BAND_SEPARATION);
+    }
+
+    /// 顺手把**每一档**都对着三套主题的陆地兜底色过一遍 ——
+    /// 撞车不只雪线会犯，任何一档贴上兜底色都是同一个病。
+    #[test]
+    fn every_band_is_distinguishable_from_land_base() {
+        for (lo, c) in elevation::ELEV_RAMP {
+            for s in STYLE_NAMES {
+                let land = style_of(s).land;
+                let d = elevation::channel_diff(c, land).unwrap_or(999);
+                assert!(
+                    d >= elevation::MIN_BAND_SEPARATION,
+                    "色带 {lo}m {c} 与 {s} 主题陆地 {land} 太接近（通道差 {d}）"
+                );
+            }
         }
     }
 }

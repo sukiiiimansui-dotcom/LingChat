@@ -143,39 +143,48 @@
   const cells = computed<WsWindowCell[]>(() => windowCells(rects.value));
 
   /**
-   * 信箱（letterbox）折算：把「小区图实际占的那块」量出来。
+   * 信箱（letterbox）折算：算出「小区图实际占的那块」，用容器的比例表示。
    *
-   * ⚠️ 为什么必须量：AI 精绘画布的 viewBox 是**正方形**（`0 0 size size`），
-   *    而盒子常常是长方形 —— 地图 SVG 靠 `preserveAspectRatio` 居中留白
-   *    （`WsAvatarLayer.vue` 的文件头把这件事写得很清楚：头像也必须复刻同一套折算，
-   *    否则会"落在盒子上而不是图上"）。窗户光同理：不折算就会与楼错位。
+   * ⚠️ 为什么必须折算：AI 精绘画布的 viewBox 是**正方形**（`0 0 size size`），
+   *    而盒子常常是长方形 —— 地图靠 `preserveAspectRatio`（默认 `xMidYMid meet`）
+   *    居中留白（`WsAvatarLayer.vue` 的文件头把同一件事写得很清楚：头像也必须复刻
+   *    同一套折算，否则会"落在盒子上而不是图上"）。窗户光同理：不折算就与楼错位。
    *
-   * 量什么：画布根 `<svg class="ws-paint">` 相对**本层容器**的矩形 ——
-   *    两者在同一个手势变换容器（`.ws-neigh__pan`）里，变换对两者相同，
-   *    所以这一步只需要处理"居中留白"，不需要碰手势。
+   * ⚠️⚠️ **不能去量 `.ws-paint` 的 `getBoundingClientRect()`** —— 这是踩过的坑：
+   *    `worldsim.css` 的 `.ws-neigh__layer svg { width:100%; height:100%; object-fit: contain }`
+   *    让画布**元素盒**撑满容器（顺带说：`object-fit` 对内联 SVG **不生效**，
+   *    那一条 CSS 其实只起了误导作用，真正留白的是 `preserveAspectRatio`）。
+   *    量元素盒永远得到「撑满」，于是折算退化成恒等变换 —— **实测横向偏 219px**
+   *    （舞台 905×394、网格 28，见 `~/chk/check-letterbox.mjs` 的前后对照表）。
+   *
+   * ✅ 正确做法：量**容器盒**（本层自己的 `inset:0` 根 svg），然后按
+   *    `wsActors.ts::letterboxOf()` 的**同一个式子**算留白 —— 两边必须逐字一致，
+   *    否则同一张图上的人和窗会各按各的算。
+   *
    * 单位：四个数都是**容器的比例**（0..1）：`left/top` 是偏移，`w/h` 是地图占的份额。
-   *    横向撑满时 `w = 1`，纵向留白时 `h < 1`（或反过来）—— 所以 `<g>` 里的
-   *    scale 必须 x/y 分开算，不能统一除 `size`。
+   *    横向撑满时 `w = 1`、纵向留白时 `h < 1`（或反过来）—— 所以 `<g>` 里的 scale
+   *    必须 x/y 分开算，不能统一除 `size`。
    */
   const box = ref({ left: 0, top: 0, w: 1, h: 1 });
 
   function measureBox() {
     if (typeof document === "undefined") return;
-    /* 容器就是这一层自己的根 `<svg class="ws-win">`：
-       它与画布根（`.ws-paint`）同在 `.ws-neigh__pan` 里，所以两者的
-       `getBoundingClientRect()` 差**只**来自「居中留白」，与手势无关。 */
+    /* 容器就是这一层自己的根 `<svg class="ws-win">`（`position:absolute; inset:0`），
+       它与画布同在 `.ws-neigh__pan` 里 —— 手势变换对两者相同，所以这里只需要
+       处理"居中留白"，完全不碰手势。 */
     const host = document.querySelector<SVGSVGElement>("svg.ws-win");
     if (!host) return; // 白天整层没渲染：没有容器可量（也没有窗要点亮），下次再量
-    const paint = document.querySelector<SVGSVGElement>(".ws-neigh__ai svg.ws-paint");
-    if (!paint) return; // 精绘还没开始：保持 1:1 兜底（此时反正也没有建筑）
     const hb = host.getBoundingClientRect();
-    const pb = paint.getBoundingClientRect();
-    if (hb.width <= 0 || hb.height <= 0 || pb.width <= 0 || pb.height <= 0) return;
+    if (hb.width <= 0 || hb.height <= 0) return;
+    // ↓ 与 `wsActors.ts::letterboxOf()` 逐字同一式（同式才不会有第二套口径）
+    const scale = Math.min(hb.width, hb.height) / props.size;
+    const padX = (hb.width - props.size * scale) / 2;
+    const padY = (hb.height - props.size * scale) / 2;
     const next = {
-      left: round4((pb.left - hb.left) / hb.width),
-      top: round4((pb.top - hb.top) / hb.height),
-      w: round4(pb.width / hb.width),
-      h: round4(pb.height / hb.height),
+      left: round4(padX / hb.width),
+      top: round4(padY / hb.height),
+      w: round4((props.size * scale) / hb.width),
+      h: round4((props.size * scale) / hb.height),
     };
     const prev = box.value;
     if (

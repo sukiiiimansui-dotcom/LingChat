@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>世界模拟 · 昼夜与天气视觉（预览）</title>
+    <!--
+      ────────────────────────────────────────────────────────────────────────
+      wsfx.html —— T4-1（昼夜）/ T4-2（天气）视觉表现的**独立预览页**（自用层，不进 PR）
+      ────────────────────────────────────────────────────────────────────────
+      为什么要有它：
+        · 主应用里这两个效果都**按真实时间 / 真实天气**走 —— 想验「夜晚」得等到晚上，
+          想验「下雪」得等天下雪。真机验收不能靠运气。
+        · 这一页把两组开关摆出来：时段（清晨/白天/黄昏/夜晚）+ 天气（晴/雨/雪/雾/雷雨），
+          点一下就能看，而且在**同一台机器、同一个真实时刻**下可反复对比。
+        · 它用的是**和主应用完全同一份代码**（`wsTime.ts` / `wsWeather.ts` /
+          `WsTimeLayer.vue` / `WsWindowLight.vue` / `WsWeatherLayer.vue` /
+          `WsWeatherBadge.vue`）—— 不是"预览用的仿制版"，所以这里看到的偏差
+          就是主应用里的偏差。
+
+      ⚠️ 它**不模拟地图本身**：底下那层是一个方格 + 几条街区色块的示意图，
+         （真实地图要么要后端 `/api/geo_svg`，要么要 AI 精绘）。所以要验的是
+         "色/粒子/角标对不对"，不是"地图画得对不对"。
+
+      访问：http://127.0.0.1:5210/wsfx.html   （vite dev 能服务根目录下的 html）
+      ⚠️ 本文件是**自用层**：进 PR 前必须剔除（与 webdev.html / src/web-mock.ts 同一档）。
+    -->
+    <style>
+      :root {
+        color-scheme: light;
+        --fg: #22303c;
+        --dim: #5b6b78;
+        --line: rgba(0, 0, 0, 0.12);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+        background: #f4f6f9;
+        color: var(--fg);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 14px 16px 40px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 6px 0 2px;
+      }
+      .sub {
+        color: var(--dim);
+        font-size: 13px;
+        margin-bottom: 14px;
+        line-height: 1.7;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0;
+      }
+      .bar > b {
+        font-size: 13px;
+        min-width: 4.2em;
+        color: var(--dim);
+        font-weight: 600;
+      }
+      button {
+        font: inherit;
+        font-size: 13px;
+        padding: 5px 11px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button:hover {
+        background: #eef2f7;
+      }
+      button.on {
+        background: #22303c;
+        color: #fff;
+        border-color: #22303c;
+      }
+      /* 舞台：与主应用的 `.ws-stage` 一样是「定位容器」，两个覆盖层都 inset:0 贴它 */
+      #stage {
+        position: relative;
+        width: 100%;
+        height: 380px;
+        margin-top: 10px;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        /* 示意底图：浅色地面 + 街区色块 + 道路线 */
+        background:
+          linear-gradient(0deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px) 0 0 / 100% 28px,
+          linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px) 0 0 / 28px 100%,
+          linear-gradient(160deg, #dfe9f2, #eef4ef);
+      }
+      .roof {
+        position: absolute;
+        background: #d6dce6;
+        border: 1px solid #aab6c4;
+        border-radius: 2px;
+      }
+      .road {
+        position: absolute;
+        background: #f2f0ea;
+        border-left: 1px solid #d8d2c6;
+        border-right: 1px solid #d8d2c6;
+      }
+      #readout {
+        margin-top: 10px;
+        font-size: 12.5px;
+        color: var(--dim);
+        line-height: 1.8;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .hint {
+        margin-top: 12px;
+        font-size: 12.5px;
+        color: var(--dim);
+        line-height: 1.8;
+        border-top: 1px dashed var(--line);
+        padding-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>世界模拟 · 昼夜与天气视觉表现（T4-1 / T4-2 预览）</h1>
+      <div class="sub">
+        两组开关直接改 <code>wsTime.ts::timeTint()</code> 与
+        <code>wsWeather.ts::normalize()</code> 的输入 —— 与主应用跑的是同一份代码。
+      </div>
+
+      <div class="bar">
+        <b>时段</b>
+        <button data-hour="6.5">清晨 06:30</button>
+        <button data-hour="12">白天 12:00</button>
+        <button data-hour="18">黄昏 18:00</button>
+        <button data-hour="22">夜晚 22:00</button>
+        <button data-hour="2">深夜 02:00</button>
+      </div>
+
+      <div class="bar">
+        <b>天气</b>
+        <button data-wx="clear">晴</button>
+        <button data-wx="cloudy">多云</button>
+        <button data-wx="overcast">阴</button>
+        <button data-wx="rain">雨</button>
+        <button data-wx="thunder">雷雨</button>
+        <button data-wx="snow">雪</button>
+        <button data-wx="fog">雾</button>
+        <button data-wx="haze">霾</button>
+        <button data-wx="__degraded__">降级（拿不到天气）</button>
+      </div>
+
+      <div class="bar">
+        <b>其它</b>
+        <button id="btnLow">低端机档（ws-perf-low）</button>
+        <button id="btnRoofs">重画建筑</button>
+      </div>
+
+      <!-- ── 两个覆盖层的宿主。等价于主应用的 `<main class="ws-stage">`：
+           它是定位容器，两个层都 `position:absolute; inset:0` 贴住它。 ── -->
+      <div id="stage">
+        <div id="roofs"></div>
+      </div>
+
+      <div id="readout"></div>
+
+      <div class="hint">
+        · <b>窗户光</b>只在「夜晚/深夜」亮；它读的是画布里
+        <code>class="ws-b"</code> 的建筑（与主应用同一套选择器）。<br />
+        · <b>降级</b>那一档就是「拿不到天气」的真实状态：角标写「天气不可用」、
+        不画任何粒子 —— 绝不伪装成晴天。<br />
+        · 粒子是真动画（rAF 驱动）：雨是斜线、雪有横摆、雾是缓慢漂移的软边团。
+      </div>
+    </div>
+
+    <!-- 示意底图：先画一批"建筑"，好让窗户光有东西可以点 -->
+    <script>
+      function drawRoofs() {
+        const box = document.getElementById("roofs");
+        box.innerHTML = "";
+        const rows = 5;
+        const cols = 9;
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            if ((r * cols + c) % 11 === 3) continue; // 空一些格子，像街区
+            const d = document.createElement("div");
+            d.className = "roof ws-b";
+            // ⚠️ 用百分比而不是 px：主应用的建筑坐标是「格子单位」，这里用百分比
+            //    只是为了在任意窗口宽度下都铺满；窗户光读的是像素矩形，两者都吃。
+            d.style.left = `${2 + c * 10.6}%`;
+            d.style.top = `${4 + r * 19}%`;
+            d.style.width = `${7.4 + (c % 3) * 1.8}%`;
+            d.style.height = `${7.5 + (r % 2) * 3}%`;
+            box.appendChild(d);
+          }
+        }
+        // 两条路（放在建筑之下、底图之上）
+        for (const [top, h] of [
+          [22, 1.6],
+          [62, 2.2],
+        ]) {
+          const road = document.createElement("div");
+          road.className = "road";
+          road.style.left = "0";
+          road.style.width = "100%";
+          road.style.top = `${top}%`;
+          road.style.height = `${h}%`;
+          box.appendChild(road);
+        }
+      }
+      drawRoofs();
+      window.__drawRoofs = drawRoofs;
+    </script>
+
+    <script type="module">
+      import { createApp, h, ref, computed } from "vue";
+      import { timeTint, nightLevel, periodOf, periodLabel, periodIcon } from "/src/components/views/worldsim/wsTime.ts";
+      import { normalize, degradedState, manualState, weatherLine } from "/src/components/views/worldsim/wsWeather.ts";
+      import WsTimeLayer from "/src/components/views/worldsim/WsTimeLayer.vue";
+      import WsWindowLight from "/src/components/views/worldsim/WsWindowLight.vue";
+      import WsWeatherLayer from "/src/components/views/worldsim/WsWeatherLayer.vue";
+      import WsWeatherBadge from "/src/components/views/worldsim/WsWeatherBadge.vue";
+      import "/src/assets/styles/worldsim-tod.css";
+      import "/src/assets/styles/worldsim-weather.css";
+
+      const hour = ref(22);
+      const wxKind = ref("rain");
+      const low = ref(false);
+
+      const tint = computed(() => timeTint(hour.value));
+      const night = computed(() => nightLevel(hour.value));
+      const wx = computed(() =>
+        wxKind.value === "__degraded__"
+          ? degradedState("演示：模拟接口拿不到天气（connection refused）")
+          : manualState(wxKind.value, 0.75)
+      );
+
+      /** 小数小时 → "HH:MM"（与 useWorldTime 里的口径一致） */
+      const hhmm = (h) => {
+        const m = Math.floor((h % 1) * 60);
+        return `${String(Math.floor(h)).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      };
+
+      const stage = document.getElementById("stage");
+      const readout = document.getElementById("readout");
+
+      /* 只挂 4 个"效果层"，不挂整个页面（页面是 .ws-root 的全屏外壳，
+         把它拉进预览页会把无关的布局问题一起带进来）。 */
+      const Host = {
+        setup() {
+          /* ⚠️ 这三个 `.value` 读取**必须留在 render 里**：
+             渲染函数只在它读过的响应式数据变化时才重跑。第一版把它们提到
+             setup 里算好（`tint.value` 只求值一次），结果点开关只有下面的
+             readout 变了、图层纹丝不动 —— 预览页最容易骗自己的就是这种"看起来点了"。 */
+          return () => {
+            const t = tint.value;
+            const n = night.value;
+            const w = wx.value;
+            const isLow = low.value;
+            return h("div", { style: "position:absolute; inset:0" }, [
+              h(WsTimeLayer, { tint: t, night: n }),
+              h(WsWeatherLayer, { weather: w, tint: t, low: isLow, animate: true }),
+              h(WsWindowLight, {
+                night: isLow ? 0 : n,
+                size: 28,
+                rects: null,
+                watchDom: true,
+              }),
+              h(WsWeatherBadge, { weather: w }),
+              h(
+                "div",
+                {
+                  style:
+                    "position:absolute; left:.7em; top:.7em; z-index:5; display:inline-flex; gap:.35em; align-items:center; padding:.2em .55em; border-radius:999px; border:1px solid rgba(255,255,255,.28); background:rgba(18,26,44,.42); color:#f2f7ff; font-size:13px; text-shadow:0 1px 2px rgba(0,0,0,.45); pointer-events:none",
+                },
+                [
+                  h("span", periodIcon(periodOf(t.hour))),
+                  h("span", { style: "font-weight:600" }, periodLabel(periodOf(t.hour))),
+                  h("span", { style: "opacity:.78" }, hhmm(t.hour)),
+                ]
+              ),
+            ]);
+          };
+        },
+      };
+      createApp(Host).mount(stage);
+
+      function sync() {
+        const t = tint.value;
+        readout.textContent =
+          `时段       ${periodLabel(t.period)}（${periodIcon(t.period)}）  hour=${t.hour}\n` +
+          `昼夜色调   rgba(${t.r},${t.g},${t.b},${t.a})   isDay=${t.isDay}\n` +
+          `天黑程度   ${night.value}（窗户光强度）\n` +
+          `天气       kind=${wx.value.kind}  intensity=${wx.value.intensity}  degraded=${wx.value.degraded}\n` +
+          `角标文字   ${weatherLine(wx.value)}\n` +
+          `性能档     ${low.value ? "ws-perf-low（降帧 + 减粒子 + 关窗户光）" : "常规"}`;
+      }
+
+      /* ── 开关 ─────────────────────────────────────────────────────────── */
+      document.querySelectorAll("[data-hour]").forEach((b) => {
+        b.onclick = () => {
+          hour.value = Number(b.dataset.hour);
+          document.querySelectorAll("[data-hour]").forEach((x) => x.classList.remove("on"));
+          b.classList.add("on");
+          sync();
+        };
+      });
+      document.querySelectorAll("[data-wx]").forEach((b) => {
+        b.onclick = () => {
+          wxKind.value = b.dataset.wx;
+          document.querySelectorAll("[data-wx]").forEach((x) => x.classList.remove("on"));
+          b.classList.add("on");
+          sync();
+        };
+      });
+      document.getElementById("btnLow").onclick = (e) => {
+        low.value = !low.value;
+        e.target.classList.toggle("on", low.value);
+        document.documentElement.classList.toggle("ws-perf-low", low.value);
+        sync();
+      };
+      document.getElementById("btnRoofs").onclick = () => {
+        window.__drawRoofs();
+        sync();
+      };
+
+      // 默认落在「夜晚 + 雨」
+      document.querySelector('[data-hour="22"]').classList.add("on");
+      document.querySelector('[data-wx="rain"]').classList.add("on");
+      sync();
+      setInterval(sync, 700);
+
+      /* ⚠️ 刻意**不**给 stage 加 `.ws-root`：
+         `worldsim.css` 里的 `.ws-root` 是 `position: fixed; inset: 0` 的整页外壳，
+         加到预览页会把那一块顶出文档流、整页布局崩掉（而这一页根本不引 worldsim.css）。
+         低端机档只用到 `.ws-perf-low`（挂在 <html> 上），组件自己的降级分支
+         （`:low` prop → 降帧 + 关窗户光）本来就不依赖任何全局类。 */
+    </script>
+  </body>
+</html>

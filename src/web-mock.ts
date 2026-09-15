@@ -31,6 +31,12 @@ declare global {
     //    我们只声明自己新增的那两个。
     /** 前端可读：判断当前是不是 web 预览（供组件显示提示条用） */
     __LINGCHAT_WEB_MOCK_INFO__?: { httpBase: string; startedAt: number };
+    /**
+     * 预览专用：手动派发一个被监听的 Tauri 事件（返回实际投递的回调数）。
+     *
+     * 例：`__MOCK_FIRE__("scene:switch", { type: "scene_switch", scene: { background: null } })`
+     */
+    __MOCK_FIRE__?: (event: string, payload: unknown) => number;
   }
 }
 
@@ -41,6 +47,16 @@ const HTTP_BASE =
 /** 回调登记表：`@tauri-apps/api` 的 listen/Channel 靠它回传 */
 const callbacks = new Map<number, (payload: unknown) => void>();
 let callbackId = 0;
+
+/**
+ * 事件名 → 回调 id 列表（供 `__MOCK_FIRE__` 手动派发）。
+ *
+ * `listen()` 最后是 `invoke('plugin:event|listen', { event, handler: <callbackId> })`，
+ * 所以能从**参数**里反查出「哪个回调属于哪个事件名」。没有这张表，
+ * 事件驱动的分支（例如 `scene:switch` → 背景同步）在浏览器里**永远走不到**，
+ * 只能在真机上验 —— 与「所有改动都要能第一时间在浏览器验证」直接冲突。
+ */
+const eventHandlers = new Map<string, number[]>();
 
 /**
  * 哪些命令返回「空值」而不是 undefined。
@@ -74,6 +90,21 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
   // ⚠️ 地图相关一律 undefined —— 让前端走 HTTP 通路（`isTauriRuntime()` 也会因
   //    `__LINGCHAT_WEB_MOCK__` 直接判 false，这里只是双保险）
   if (cmd.startsWith("world_map_")) return undefined;
+
+  // ── 事件订阅：登记「事件名 → 回调 id」，供 __MOCK_FIRE__ 手动派发 ────────────
+  // ⚠️ 必须放在下面 `plugin:` 那条兜底**之前** —— `plugin:event|listen` 也以
+  //    `plugin:` 开头，否则会被当成普通插件命令返回 undefined，登记表永远是空的。
+  if (cmd === "plugin:event|listen") {
+    const ev = args?.event;
+    const hid = args?.handler;
+    if (typeof ev === "string" && typeof hid === "number") {
+      const list = eventHandlers.get(ev) ?? [];
+      list.push(hid);
+      eventHandlers.set(ev, list);
+    }
+    return 1; // 假装拿到一个 eventId（unlisten 用不到）
+  }
+  if (cmd === "plugin:event|unlisten") return null;
 
   // 插件命令（`plugin:xxx|yyy`）：一律 undefined，调用方自己兜底
   if (cmd.startsWith("plugin:")) return undefined;
@@ -131,12 +162,36 @@ function installMock(): void {
       if (!p.startsWith("/")) return p; // 相对路径/URL 原样返回
       return "/@fs" + p.split("/").map(encodeURIComponent).join("/");
     },
-    // 事件系统：假装订阅成功，但永不推送（我们没有真后端）
+    // 事件系统：订阅会被登记（见 mockInvoke 的 `plugin:event|listen` 分支），
+    // 真后端不存在，但可以用 `window.__MOCK_FIRE__` **手动**派发。
     plugin: undefined,
   };
 
   window.__LINGCHAT_WEB_MOCK__ = true;
   window.__LINGCHAT_WEB_MOCK_INFO__ = { httpBase: HTTP_BASE, startedAt: Date.now() };
+
+  /**
+   * 手动派发一个被 `listen()` 订阅过的事件。
+   *
+   * 回调收到的是 `@tauri-apps/api` 约定的完整 `Event` 对象（`{ event, id, payload }`），
+   * 所以 `event.payload` 就是调用方传进来的 `payload` —— 与真壳的事件形状一致。
+   */
+  window.__MOCK_FIRE__ = (event: string, payload: unknown): number => {
+    const ids = eventHandlers.get(event) ?? [];
+    let delivered = 0;
+    for (const id of ids) {
+      const cb = callbacks.get(id);
+      if (!cb) continue;
+      cb({ event, id, payload });
+      delivered++;
+    }
+    if (import.meta.env?.DEV) {
+      console.debug(
+        `[web-mock] __MOCK_FIRE__("${event}") → 投递 ${delivered}/${ids.length} 个回调`
+      );
+    }
+    return delivered;
+  };
 
   // ── ⚠️ 必须做的一步：把 URL 改写成根路径 ──────────────────────────────────
   // `webdev.html` 这个路径**不匹配任何路由**（router 是 history 模式），

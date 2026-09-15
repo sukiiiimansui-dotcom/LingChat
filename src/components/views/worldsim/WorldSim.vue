@@ -217,6 +217,9 @@
                头像位置跟着地图缩放走，但尺寸始终是屏幕上那么大（不然放大 4× 会变成大饼）。
                P4-3：交通工具标记也铺在这一层（同一个手势变换容器里才会跟着地图动）。 -->
           <template #pin>
+            <!-- T4-1：窗户光。放在 `#pin` 里才和建筑同一套坐标系与手势变换。
+                 低端机（ws-perf-low）直接关掉 —— 几百个节点在合成器上排队不值当。 -->
+            <WsWindowLight :night="perfLow ? 0 : todNight" :size="WS_GRID" />
             <WsAvatarLayer
               :placed="placedActors"
               :grid="WS_GRID"
@@ -327,7 +330,23 @@
         @pick="onActorPick"
         @refresh="actors.loadTimeWeather()"
       />
+      <!-- T4-1 角标：当前时段 + 时刻。位置与样式在 worldsim-tod.css 里（左上角，
+           避开右下的缩放控件与顶栏按钮）。放在 `</main>` 之内 —— 它的包含块就是
+           `.ws-stage` 的 padding box，天然贴着舞台左上角，不需要页面给它算坐标。 -->
+      <div class="ws-todtag" data-ws-todtag>
+        <span class="ws-todtag__ico" aria-hidden="true">{{ todPeriodIcon }}</span>
+        <span class="ws-todtag__txt">{{ todPeriodText }}</span>
+        <span class="ws-todtag__clock">{{ todClock }}</span>
+      </div>
     </main>
+
+    <!-- ── T4-1：昼夜色调覆盖层 ──────────────────────────────────────────
+         `WsTimeLayer` 是 `position: absolute; inset: 0`，包含块就是 `.ws-stage`
+         （它已经是 `position: relative`，见本文件末尾那条规则）→ 覆盖层**天然**只盖住
+         地图舞台：顶栏、信息行、底栏一个都不碰，不需要量任何高度。
+         刻意不做成「盖住整页再挖掉顶栏底栏」：那要靠实测顶栏/底栏高度，
+         而底栏在 boot/定位中根本不渲染、宽扁屏那一档还会变成悬浮 —— 会量错的活别干。 -->
+    <WsTimeLayer :tint="todTint" :night="todNight" />
 
     <!-- toast 容器（快捷动作「即将上线」这类提示必须有可见反应，绝不静默） -->
     <div class="ws-toasts" aria-live="polite">
@@ -397,6 +416,12 @@
   import WsConfirm from "./WsConfirm.vue";
   import WsPicker from "./WsPicker.vue";
   import WsDistrict from "./WsDistrict.vue";
+  // T4-1：昼夜视觉表现（色调覆盖层 + 角标 + 窗户光）。各自的样式独立成文件，
+  // 与 worldsim.css 解耦 —— 那两个增量样式文件的文件头写了为什么。
+  import "@/assets/styles/worldsim-tod.css";
+  import WsTimeLayer from "./WsTimeLayer.vue";
+  import WsWindowLight from "./WsWindowLight.vue";
+  import { useWorldTime } from "@/composables/useWorldTime";
   // P2：人物层 + 两个面板（面板与头像层都是这一页独有的，懒加载没有意义，直接静态 import）
   import WsAvatarLayer from "./WsAvatarLayer.vue";
   import WsCharPanel from "./WsCharPanel.vue";
@@ -502,6 +527,20 @@
     changeMapStyle,
   } = sim;
   const { rootClass, theme: themeName, dark, darkPref, cycleTheme, cycleDark } = theme;
+
+  /* ══ T4-1：昼夜视觉表现 ═══════════════════════════════════════════════════
+   * 时间从 `worldMapApi.time()`（真壳 `world_map_time`）取，拿不到就用本机时钟，
+   * **不依赖任何网络**。这里只做一件事：把时段变成地图上的一层色 + 夜里点亮窗户。
+   * 逻辑全在 `wsTime.ts`（纯函数）与 `useWorldTime.ts`，这里不写第四份。 */
+  const tod = useWorldTime();
+  /** 模板直接用的四个（脚本里要 `sync()` 那类方法时仍走 `tod`） */
+  const {
+    tint: todTint,
+    night: todNight,
+    periodIconText: todPeriodIcon,
+    periodText: todPeriodText,
+    clockText: todClock,
+  } = tod;
 
   /* ══ P2：地图上的「人」+ 面板 ══════════════════════════════════════════════
    * 数据（谁在哪、头像、日程）在 useWsActors；面板的开关/选中在 useWsPanel。

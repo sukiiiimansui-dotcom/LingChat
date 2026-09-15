@@ -1,0 +1,103 @@
+/* worldsim-tod.css — T4-1「昼夜视觉表现」的角标样式
+ * ══════════════════════════════════════════════════════════════════════════════
+ * 为什么**单独一个文件**、而不是接着往 worldsim.css 里塞：
+ *   `worldsim.css` 是这个页面的全站皮肤（主题令牌 + 外壳 + 各种零件），它正在被
+ *   并行改动（`worldsim-loading.css` / `worldsim-trip.css` 的文件头都写明了这件事）。
+ *   两个功能域各占一个文件，各自能独立成一个 commit / 一个 PR —— 上游维护者对
+ *   「一个 PR 混四件事」是直接打回的（PR #809），对「一个 PR 一个功能域」是过的。
+ *
+ * 规矩（与另外两个增量样式文件一致）：
+ *   · 颜色一律走 worldsim.css 已定义的主题变量，**并且带兜底值** —— 单独引这个文件
+ *     也不至于没颜色；
+ *   · 类名一律 `ws-tod-` 前缀，不跟既有 `.ws-tag` / `.ws-srcbar` 撞名；
+ *   · 只做**加法**：这里没有一条规则去覆盖既有类的属性。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/* 角标：钉在舞台左上角。
+ * 为什么不放右上角：顶栏右下是主题/深色/重引导那排按钮，宽度不可控；
+ * 左下/右下是既有的 `.ws-zoomctl`（缩放/复位）。左上角在两级舞台上都是空的。 */
+.ws-todtag {
+  position: absolute;
+  left: 0.7em;
+  top: 0.7em;
+  z-index: 5; /* 压在地图上、和 .ws-zoomctl 同档；面板是 z-index 3 的兄弟层，互不遮挡 */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.2em 0.55em;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(18, 26, 44, 0.42);
+  color: #f2f7ff;
+  font-size: 0.86em;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  /* 地图是浅色的（海面 #cfe3f5 那一类），深底白字在浅色底上**必须**有描边才读得清 */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  /* 纯观感，绝不吃地图手势（地图的点击/拖拽/缩放要原样穿过去） */
+  pointer-events: none;
+  user-select: none;
+  transition: background-color 0.6s ease;
+}
+
+.ws-todtag__ico {
+  font-size: 1.05em;
+  line-height: 1;
+}
+
+.ws-todtag__txt {
+  font-weight: 600;
+}
+
+/* 时刻次要一点：它每秒都在变，抢眼就吵 */
+.ws-todtag__clock {
+  opacity: 0.78;
+  font-size: 0.92em;
+}
+
+/* 深色主题下地图本身是深底，角标反过来用浅底深字，不然和深色地图糊在一起 */
+.ws-root.ws-dark .ws-todtag,
+.ws-root.ws-sys-dark .ws-todtag {
+  border-color: rgba(0, 0, 0, 0.22);
+  background: rgba(238, 244, 255, 0.8);
+  color: #1d2a3a;
+  text-shadow: none;
+}
+
+/* 低端机（P5-5）：关毛玻璃与过渡（每一帧都要重新合成的东西，低端机上就是掉帧元凶） */
+.ws-root.ws-perf-low .ws-todtag {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(18, 26, 44, 0.72);
+  transition: none;
+}
+.ws-root.ws-perf-low.ws-dark .ws-todtag,
+.ws-root.ws-perf-low.ws-sys-dark .ws-todtag {
+  background: rgba(238, 244, 255, 0.92);
+}
+
+/* 宽扁屏（横屏手机 / 超宽窗口）：收紧。
+ * 条件与 worldsim.css 的 `@media (min-aspect-ratio: 2/1)` 那一档**逐字相同** ——
+ * 那一档里顶栏/信息条本来就被压到最紧，角标要是还保持原来的字号就会顶出来。
+ * 舞台在这档只有几百像素高，省下来的每一像素都还给地图。 */
+@media (min-aspect-ratio: 2/1) {
+  .ws-todtag {
+    left: 0.5em;
+    top: 0.4em;
+    padding: 0.12em 0.45em;
+    font-size: 0.8em;
+  }
+  /* 极窄的舞台上，时刻这一点信息最先让位（时段名和图标是主要信息） */
+  .ws-todtag__clock {
+    display: none;
+  }
+}
+
+/* 极窄屏（<340px，与顶栏「宁可横滑也不折行」同一档）：连时段名也收起来，只留图标 */
+@media (max-width: 340px) {
+  .ws-todtag__txt {
+    display: none;
+  }
+}

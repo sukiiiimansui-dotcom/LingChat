@@ -50,7 +50,8 @@ export default defineConfig({
         wsfx: path.resolve(__dirname, "wsfx.html"),       // T4-1/T4-2 昼夜与天气
         wsenter: path.resolve(__dirname, "wsenter.html"), // 开始游戏第 4 项 + 聊天页小地图 + 容器变换
         wsux: path.resolve(__dirname, "wsux.html"),       // HUD 风格板（3 套候选）
-        wsgame: path.resolve(__dirname, "wsgame.html"),   // 游戏化界面（PixiJS + Live2D，本轮）
+        wsgame: path.resolve(__dirname, "wsgame.html"),   // 游戏化界面 v1（全国地图，机主已指出概念不对）
+        wslife: path.resolve(__dirname, "wslife.html"),   // 游戏化界面 v2：角色为主 + 街区 + 同屏对话
       },
     },
   },

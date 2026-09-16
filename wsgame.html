@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>世界模拟 · 游戏化界面（PixiJS + Live2D 原型）</title>
+    <!--
+      ════════════════════════════════════════════════════════════════════════
+      wsgame.html —— 「世界模拟」的游戏化界面原型（**自用层，不进 PR**）
+      ════════════════════════════════════════════════════════════════════════
+
+      机主原话：
+        「现在来用 lingchat 的那个游戏引擎（就 l2d 那个）来设计一个给我看喵（这个你自己来设计一个）」
+
+      ## 用的是哪个「引擎」
+      LingChat 里驱动 Live2D 的是 **PixiJS 8.15**（`untitled-pixi-live2d-engine` 的 deps/peer 都是它），
+      而且它**已经在 package.json 的 dependencies 里、也已经在构建产物里** ——
+      所以用它做地图渲染是**零新增依赖、零边际包体积**，这是选它的硬理由（不是"它比较酷"）。
+      立体感来自两处：**地图用 Pixi 画**（真 GeoJSON，连续缩放/平移/惯性）
+      + **Live2D 角色站在地图上**（用仓库里那套 cubism 运行时）。
+
+      ## 设计依据（每条都能追到规范，不是我觉得）
+      见 ~/rikka/Dsh-SYuki/world_map/UI-DESIGN-SPEC.md，本页逐条落实：
+        · Mapbox 制图：**背景要素低对比**（陆地/边界都很暗）、**主题色只留给"用户内容"**
+          （选中的省、当前位置）——这一条是整页色调的根据。
+        · 主机游戏 DCD：**全屏地图而非弹窗**；**不要浮雕方框**，改用**淡发光/半透明底**；
+          **大量留白**；**单一主题色**；**无边框按钮**；字体 ≤3 种；**转场动画表达层次**。
+        · Material 3 动效：入场用**容器变换（Container Transform）**，
+          **只动 transform/opacity**，移动端基准 **~300ms**，**进入用 decelerate**、离开用 accelerate。
+        · 可达性：文字对比 ≥4.5:1；**触控目标 ≥44×44**。
+        · 标注**按缩放分级**（全国视图只留 ≤8 个锚点）—— 这是"省名糊成一团"的根治办法。
+
+      ## 数据
+      `/api/geo_json?ad=<adcode>`（8791，带 CORS）。全国 = 100000，35 个要素。
+
+      ⚠️ 本文件是**自用层**：进 PR 前必须剔除（与 webdev.html / wsfx.html / wsux.html 同一档）。
+    -->
+    <style>
+      :root {
+        /* ── 单一主题色：只用于「用户内容」（选中/当前位置/主操作）──
+           依据 Mapbox 规范：底图要素一律低对比，颜色留给数据层。 */
+        --accent: #35d39a;
+        --accent-dim: rgba(53, 211, 154, 0.16);
+        --ink: #ffffff;
+        --ink-2: rgba(255, 255, 255, 0.72);
+        --ink-3: rgba(255, 255, 255, 0.45);
+        /* 半透明 HUD 底（不用方框描边，靠模糊 + 极淡的边） */
+        --hud-bg: rgba(14, 20, 28, 0.66);
+        --hud-line: rgba(255, 255, 255, 0.08);
+        --r: 14px;
+        --blur: saturate(1.2) blur(12px);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden; background: #0b1118;
+        font-family: system-ui, -apple-system, "Noto Sans SC", "Source Han Sans SC", sans-serif;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      #app { position: relative; width: 100%; height: 100%; overflow: hidden; }
+      #stage { position: absolute; inset: 0; }
+      #stage canvas { display: block; }
+
+      /* ── HUD 层：全部 pointer-events:none，只有具体控件恢复 auto（免得挡住地图拖拽）── */
+      .hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+      .hud > * { pointer-events: auto; }
+
+      /* 顶栏：一条细带，无边框、无描边，只在底部留一道 8% 白的极淡分隔 */
+      .top {
+        position: absolute; left: 0; right: 0; top: 0;
+        display: flex; align-items: center; gap: 14px;
+        padding: 10px 14px 12px;
+        background: linear-gradient(to bottom, rgba(10, 15, 21, 0.78), rgba(10, 15, 21, 0));
+      }
+      .back {
+        width: 40px; height: 40px; border-radius: 12px; border: 0;
+        background: transparent; color: var(--ink-2); font-size: 19px; line-height: 1;
+        display: grid; place-items: center; cursor: pointer;
+      }
+      .back:hover { background: rgba(255, 255, 255, 0.07); color: var(--ink); }
+      .crumb { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+      .crumb b { font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+      .crumb i { font-style: normal; font-size: 12.5px; color: var(--ink-3); }
+      .crumb .cur { color: var(--accent); }
+      .spacer { flex: 1; }
+      /* 时间/天气：不是"数据面板"，是一行安静的字（层级 3） */
+      .meta { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--ink-2); }
+      .meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-3); }
+
+      /* 左下：位置卡（唯一一块"卡片"，用半透明底 + 淡发光，不用描边） */
+      .place {
+        position: absolute; left: 14px; bottom: 14px;
+        display: flex; align-items: center; gap: 11px;
+        padding: 9px 14px 9px 11px; border-radius: var(--r);
+        background: var(--hud-bg); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42), inset 0 0 0 1px var(--hud-line);
+      }
+      .pin {
+        width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+        background: var(--accent-dim); color: var(--accent); font-size: 15px;
+      }
+      .place .nm { font-size: 14px; font-weight: 600; line-height: 1.25; }
+      .place .sub { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+
+      /* 右下：操作组（无边框按钮，靠颜色与"动作导向的标题"暗示可点） */
+      .ops { position: absolute; right: 14px; bottom: 14px; display: flex; align-items: center; gap: 9px; }
+      .icobtn {
+        width: 46px; height: 46px; border-radius: 15px; border: 0; cursor: pointer;
+        background: var(--hud-bg); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+        color: var(--ink-2); font-size: 20px; line-height: 1;
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4), inset 0 0 0 1px var(--hud-line);
+        display: grid; place-items: center; transition: transform 0.14s cubic-bezier(0.2, 0, 0, 1);
+      }
+      .icobtn:hover { color: var(--ink); transform: translateY(-1px); }
+      .icobtn:active { transform: translateY(0) scale(0.96); }
+      .cta {
+        height: 46px; padding: 0 20px; border-radius: 15px; border: 0; cursor: pointer;
+        background: var(--accent); color: #06231a; font-size: 14px; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 7px;
+        box-shadow: 0 10px 26px rgba(53, 211, 154, 0.3);
+        transition: transform 0.14s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s;
+      }
+      .cta:hover { transform: translateY(-1px); box-shadow: 0 14px 30px rgba(53, 211, 154, 0.38); }
+      .cta:active { transform: translateY(0) scale(0.98); }
+
+      /* 底部一句提示（层级 3，安静） */
+      .hint {
+        position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+        font-size: 12px; color: var(--ink-3); white-space: nowrap;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+      }
+
+      /* ── 入场：容器变换（Container Transform）──
+         起点 = 一张小卡（就是聊天页里那个小地图的位置与尺寸），终点 = 全屏。
+         只动 transform / opacity；进入用 decelerate（快起慢停）。 */
+      #boot {
+        position: absolute; z-index: 20;
+        left: 0; top: 0; width: 100%; height: 100%;
+        border-radius: 0; overflow: hidden;
+        transform-origin: 0 0;
+        will-change: transform, border-radius, opacity;
+        background: #0e1621;
+      }
+      #boot.anim { transition: transform 320ms cubic-bezier(0, 0, 0, 1), border-radius 320ms cubic-bezier(0, 0, 0, 1); }
+      #boot.closing { transition: transform 240ms cubic-bezier(0.3, 0, 1, 1), border-radius 240ms cubic-bezier(0.3, 0, 1, 1); }
+      #boot .card-face {
+        position: absolute; inset: 0; display: grid; place-items: center; gap: 6px;
+        color: var(--ink-2); font-size: 12px; text-align: center;
+        background: radial-gradient(120% 90% at 50% 0%, #17222f, #0e1621);
+      }
+      #boot .card-face .big { font-size: 26px; }
+      #boot .card-face .t { font-size: 12.5px; color: var(--ink-2); }
+      #boot .card-face .s { font-size: 11px; color: var(--ink-3); }
+      /* HUD 在变换结束后再淡入（错峰 20~40ms），避免"糊在一起长大" */
+      .hud .stagger { opacity: 0; transform: translateY(6px); transition: opacity 220ms linear, transform 220ms cubic-bezier(0, 0, 0, 1); }
+      .hud.in .stagger { opacity: 1; transform: none; }
+
+      .err {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        max-width: 80%; padding: 14px 18px; border-radius: 12px; font-size: 13px;
+        background: rgba(60, 18, 18, 0.85); color: #ffd9d9; z-index: 30; line-height: 1.6;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot.anim, #boot.closing { transition: none; }
+        .hud .stagger { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <!-- 地图主体：优先 PixiJS(WebGL)，上下文丢失/不可用时自动切 Canvas2D -->
+      <div id="stage"></div>
+      <!-- ⚠️ 必须显式写 width/height:100%：canvas 是**替换元素**，只写 `inset:0` 时
+           `width:auto` 会取它的固有尺寸 300×150，于是兜底画布只有 300×150（踩过）。 -->
+      <canvas id="stage2d" style="position:absolute;inset:0;width:100%;height:100%;display:none"></canvas>
+
+      <!-- HUD：只有 3 处常驻浮块（顶栏 / 位置卡 / 操作组），符合"同屏 ≤3" -->
+      <div class="hud" id="hud">
+        <header class="top">
+          <button class="back stagger" title="返回">←</button>
+          <div class="crumb stagger">
+            <b>世界模拟</b>
+            <i id="crumbPath">中国</i>
+          </div>
+          <span class="spacer"></span>
+          <div class="meta stagger">
+            <span id="mTime">--:--</span>
+            <span class="dot"></span>
+            <span id="mWx">天气不可用</span>
+          </div>
+        </header>
+
+        <div class="place stagger">
+          <div class="pin">◆</div>
+          <div>
+            <div class="nm" id="pName">中国</div>
+            <div class="sub" id="pSub">34 个省级区划 · 点击省份查看</div>
+          </div>
+        </div>
+
+        <div class="ops stagger">
+          <button class="icobtn" id="zoomOut" title="缩小">−</button>
+          <button class="icobtn" id="zoomIn" title="放大">＋</button>
+          <button class="cta" id="ctaEnter">进入 ▸</button>
+        </div>
+
+        <div class="hint stagger" id="hint">拖动平移 · 滚轮/双指缩放 · 点省份选中</div>
+      </div>
+
+      <!-- 入场用的容器（起点是小卡，终点是全屏） -->
+      <div id="boot">
+        <div class="card-face">
+          <div class="big">🌏</div>
+          <div class="t">世界模拟</div>
+          <div class="s">点一下进入</div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      /* ══════════════════════════════════════════════════════════════════════
+         0. 常量与小工具
+         ══════════════════════════════════════════════════════════════════════ */
+      const API = "http://127.0.0.1:8791";
+      const CORE_SRC = "/vendor/live2d/live2dcubismcore.min.js";
+      const MODEL_URL = "/vendor/l2d/haru/Haru.model3.json";
+
+      /* 配色：**背景要素一律低对比**（Mapbox 规范），唯一的高饱和色留给"用户内容"。
+         注：规范给的是街道图的语义（water/roads/buildings）；我们画的是行政区划图，
+         所以按同一套"层级"原则换算了角色：海域=背景、陆地=低对比底、省界=次级线、
+         选中=用户内容（主题色）。 */
+      const C = {
+        sea: 0x0e1621,
+        land: 0x243040,
+        landAlt: 0x27354a,
+        border: 0x3b4a5e,
+        borderHi: 0x5a7392, // hover
+        accent: 0x35d39a,
+        label: 0xffffff,
+        labelDim: 0xa9b6c7,
+      };
+
+      /* 全国视图只标这些（≤8 个）—— 标注分级的落地。
+         依据：Mapbox「缩放 0~4 只标国界 + 首都级」；我们全国视图塞 32 个省名必然重叠（实测 25/32 重叠）。 */
+      const ANCHORS = ["新疆维吾尔自治区", "西藏自治区", "内蒙古自治区", "黑龙江省", "四川省", "广东省", "北京市", "上海市"];
+
+      const $ = (s) => document.querySelector(s);
+      const fmt2 = (n) => String(n).padStart(2, "0");
+
+      /* Web Mercator：与后端 render_geo 同一套（纬度越高 y 越小） */
+      const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+
+      function fail(msg) {
+        const d = document.createElement("div");
+        d.className = "err";
+        d.innerHTML = msg;
+        $("#app").appendChild(d);
+      }
+
+      /* ══════════════════════════════════════════════════════════════════════
+         1. 加载运行时：Cubism Core → PixiJS → Live2D 插件
+            （照抄 src/components/game/live2d/live2d-runtime.ts 的加载顺序，
+              它是仓库里已经在跑的写法，不自己发明）
+         ══════════════════════════════════════════════════════════════════════ */
+      function loadScript(src) {
+        return new Promise((res, rej) => {
+          if (document.querySelector(`script[data-src="${src}"]`)) return res();
+          const s = document.createElement("script");
+          s.src = src;
+          s.async = true;
+          s.dataset.src = src;
+          s.onload = () => res();
+          s.onerror = () => rej(new Error("加载失败：" + src));
+          document.head.appendChild(s);
+        });
+      }
+
+      async function loadRuntime() {
+        await loadScript(CORE_SRC);
+        const [pixi, engine] = await Promise.all([
+          import("pixi.js"),
+          import("untitled-pixi-live2d-engine/cubism"),
+        ]);
+        pixi.extensions.add(engine.Live2DPlugin);
+        engine.configureCubismSDK({ memorySizeMB: 64 });
+        await engine.cubismReady();
+        return { pixi, engine };
+      }
+
+      /* ══════════════════════════════════════════════════════════════════════
+         2. 主流程
+         ══════════════════════════════════════════════════════════════════════ */
+      let pixi, engine, app, world, gLand, gSel, labelLayer, model;
+      let feats = []; // 投影后的要素
+      let charErr = ""; // 角色加载失败原因（采样脚本会读）
+      let ctxLostFlag = false; // 是否收到过 webglcontextlost
+      let ctxLost = () => null;
+      let view = { x: 0, y: 0, s: 1 }; // 相机（平移 + 缩放）
+      let fitScale = 1; // layout() 算出的「整幅刚好放下」的缩放；标注分级以它为基准
+
+
+      async function main() {
+        const t0 = performance.now();
+        try {
+          const rt = await loadRuntime();
+          pixi = rt.pixi;
+          engine = rt.engine;
+        } catch (e) {
+          return fail(`运行时加载失败：<br>${e.message}<br><br>检查 <code>public/vendor/live2d/live2dcubismcore.min.js</code> 是否存在。`);
+        }
+
+        // ① 先试 PixiJS(WebGL)：给 2 帧时间探测上下文是否健在
+        let ok = false;
+        try {
+          app = new pixi.Application();
+          await app.init({
+            background: C.sea,
+            resizeTo: $("#stage"),
+            antialias: false,
+            powerPreference: "high-performance",
+            autoDensity: true,
+            resolution: Math.min(2, window.devicePixelRatio || 1),
+            // 🔴 必须开：WebGL 默认不保留绘制缓冲，**无头截图会拍到一张空白画布**
+            // （实测两次截图逐字节相同）。真机看不出来，但验收链依赖截图。
+            preserveDrawingBuffer: true,
+          });
+          $("#stage").appendChild(app.canvas);
+          app.canvas.addEventListener("webglcontextlost", () => { ctxLostFlag = true; }, false);
+          await new Promise((r) => setTimeout(r, 420)); // 等两帧
+          const gl = app.renderer?.gl;
+          ok = !ctxLostFlag && gl && !gl.isContextLost();
+          if (!ok) console.warn("[wsgame] WebGL 上下文不可用，切 Canvas2D 兜底");
+        } catch (e) {
+          console.warn("[wsgame] Pixi 起不来，切 Canvas2D 兜底：", e);
+          ok = false;
+        }
+
+        // ② 选定后端
+        Object.assign(backend, ok ? makePixiBackend() : makeCanvas2dBackend());
+        backend.init();
+        if (backend.kind !== "pixi") { pixi = null; }
+
+        // ②b 看门狗：**一次探测不够** —— 实测 pixi 在 420ms 时报告"上下文健在"，
+        //     之后才丢（SwiftShader 下必现）。丢了就当场切 Canvas2D，并重画一遍。
+        //     这在 Android WebView 低端机上同样是真实场景，不是只为截图。
+        const watchdog = setInterval(() => {
+          if (backend.kind !== "pixi") return clearInterval(watchdog);
+          const gl = app?.renderer?.gl;
+          if (ctxLostFlag || (gl && gl.isContextLost())) {
+            clearInterval(watchdog);
+            switchToCanvas2d("WebGL 上下文丢失");
+          }
+        }, 200);
+        setTimeout(() => clearInterval(watchdog), 8000);
+
+        // ② 取数据 + 画地图
+        const gj = await fetch(`${API}/api/geo_json?ad=100000`).then((r) => r.json());
+        if (!gj || !gj.features) throw new Error("GeoJSON 没有 features");
+        buildFeatures(gj);
+        layout();
+        bindInput();
+        startClock();
+        console.log(`[wsgame] 首屏（运行时就绪 + 出图）：${Math.round(performance.now() - t0)} ms`);
+        // 调试句柄：采样脚本可以直接查场景图（自用层，无所谓暴露）
+        window.__WG__ = {
+          get view() { return view; },
+          // 注意 null 安全：切到 Canvas2D 后 app/gLand/labelLayer 都是 null，
+          // 采样脚本读这些字段不能把页面搞崩（踩过：整段采样报 javascript error）。
+          get size() { try { return [stageW(), stageH()]; } catch { return null; } },
+          get landBounds() { try { return gLand ? gLand.getLocalBounds() : null; } catch { return null; } },
+          get labels() { return labelLayer ? labelLayer.children.length : null; },
+          get hasModel() { return !!model; },
+          get charErr() { return charErr; },
+          get ctxLost() { return ctxLostFlag || ctxLost(); },
+          get renderer() { return backend.kind; },
+          get glLost() { return ctxLostFlag; },
+          feats: () => feats.map((f) => f.name),
+          aspect: () => [feats.w, feats.h],
+        };
+
+        // ③ 角色（只在 WebGL 可用时；失败不影响地图）
+        (backend.kind === "pixi" ? loadCharacter() : Promise.reject(new Error("无 WebGL，跳过 Live2D"))).catch((e) => {
+          charErr = String(e && e.message ? e.message : e);
+          console.warn("[wsgame] 角色没加载出来：", e);
+        });
+
+        // ④ 入场：容器变换
+        await new Promise((r) => setTimeout(r, 260));
+        playEnter();
+      }
+
+      /* ── 投影：经纬度 → 世界坐标（Web Mercator，x/y **必须同单位**）──
+         🔴 踩过的坑（2026-09-16）：原来写的是 `x = lng`（**度**）而 `y = mercY(lat)`（**弧度**），
+         两套单位混用 → x 的跨度是 y 的 80 倍 → 整张地图被**压成一条横线**，
+         看起来像"地图没画出来"，其实是画成了一条几乎退化的带子。
+         修法：经度也换成弧度（`lng * π / 180`），与 mercator 的 y 同量纲。 */
+      /* 纬度下限：**南海诸岛会把这个 bbox 一路拉到 3°N**，导致整幅图缩小、下面一大片空。
+         常规做法是把南海做成角上的插图；这里简单点：算「取景框」时把 16°N 以南的点排除，
+         岛屿照画（在框外一点点，不碍事），换取整幅陆地大一圈。 */
+      const FIT_LAT_MIN = 16;
+
+      function buildFeatures(gj) {
+        let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+        const proj = (ring) => {
+          const out = [];
+          for (const [lng, lat] of ring) {
+            const x = (lng * Math.PI) / 180;
+            const y = -mercY(lat);
+            if (lat >= FIT_LAT_MIN) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+            out.push(x, y);
+          }
+          return out;
+        };
+        feats = gj.features.map((f) => {
+          const polys = [];
+          const g = f.geometry;
+          if (g.type === "Polygon") polys.push(g.coordinates);
+          else if (g.type === "MultiPolygon") polys.push(...g.coordinates);
+          const rings = [];
+          for (const poly of polys) for (const ring of poly) rings.push(proj(ring));
+          return { name: f.properties?.name || "", adcode: String(f.properties?.adcode || ""), rings };
+        });
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        const w = maxX - minX, h = maxY - minY;
+        for (const f of feats) {
+          f.rings = f.rings.map((r) => {
+            const o = new Array(r.length);
+            for (let i = 0; i < r.length; i += 2) {
+              o[i] = (r[i] - cx) / w;
+              o[i + 1] = (r[i + 1] - cy) / w;
+            }
+            return o;
+          });
+        }
+        feats.w = 1; feats.h = h / w;
+      }
+
+      /* ── 标注：按缩放分级（全国 ≤8；放大 3.2 倍后放出全部）──
+         依据 Mapbox「缩放 0~4 只标国界 + 首都级」；实测全国视图塞 32 个省名会有 25 个重叠。 */
+      function labelList() {
+        const k = view.s / fitScale;
+        return k > 3.2 ? feats.map((f) => f.name) : ANCHORS;
+      }
+      function labelAnchors() {
+        const list = labelList();
+        const out = [];
+        for (const f of feats) {
+          if (!list.includes(f.name)) continue;
+          let sx = 0, sy = 0, n = 0;
+          for (const r of f.rings) for (let i = 0; i < r.length; i += 2) { sx += r[i]; sy += r[i + 1]; n++; }
+          if (!n) continue;
+          out.push({
+            name: f.name.replace(/(维吾尔|壮族|回族|特别行政)?自治区$/, "").replace(/省$|市$/, ""),
+            x: view.x + (sx / n) * view.s,
+            y: view.y + (sy / n) * view.s,
+          });
+        }
+        return out;
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         渲染后端：① PixiJS(WebGL)  ② Canvas2D 兜底
+         为什么必须有 ②：**Pixi 在 SwiftShader/低端 GPU 下会丢 WebGL 上下文**
+         （本机实测第 2 帧就丢：`isContextLost() === true`，页面全白且不报错）。
+         这在 Android WebView 上也是真实风险，所以不是"为了截图好看"。
+         ══════════════════════════════════════════════════════════════════ */
+      const backend = {
+        kind: "?",
+        resize() {},
+        render() {},
+        destroy() {},
+      };
+
+      function makePixiBackend() {
+        return {
+          kind: "pixi",
+          init() {
+            world = new pixi.Container();
+            app.stage.addChild(world);
+            gLand = new pixi.Graphics();
+            gSel = new pixi.Graphics();
+            world.addChild(gLand, gSel);
+            labelLayer = new pixi.Container();
+            app.stage.addChild(labelLayer);
+            this.drawStatic();
+          },
+          drawStatic() {
+            gLand.clear();
+            feats.forEach((f, i) => {
+              const fill = i % 2 === 0 ? C.land : C.landAlt;
+              for (const r of f.rings) gLand.poly(r).fill({ color: fill });
+              for (const r of f.rings) gLand.poly(r).stroke({ width: 0.6, color: C.border, alpha: 0.9 });
+            });
+          },
+          resize() { layout(); },
+          render() {
+            world.scale.set(view.s);
+            world.position.set(view.x, view.y);
+            gSel.clear();
+            if (selected) {
+              for (const r of selected.rings) {
+                gSel.poly(r).fill({ color: C.accent, alpha: 0.17 });
+                gSel.poly(r).stroke({ width: 1 / Math.max(0.001, view.s / fitScale), color: C.accent, alpha: 0.95 });
+              }
+            }
+            if (!labelLayer) return;
+            labelLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+            for (const a of labelAnchors()) {
+              const t = new pixi.Text({
+                text: a.name,
+                style: {
+                  fontFamily: 'system-ui, "Noto Sans SC", sans-serif',
+                  fontSize: 13, fontWeight: "600", fill: C.label,
+                  // 「淡发光」而不是描边方框 —— DCD 准则明确反对浮雕描边
+                  dropShadow: { color: 0x000000, alpha: 0.95, blur: 5, distance: 0, angle: 0 },
+                },
+              });
+              t.anchor.set(0.5);
+              t.position.set(Math.round(a.x), Math.round(a.y));
+              labelLayer.addChild(t);
+            }
+          },
+        };
+      }
+
+      /** WebGL 不可用时**当场**切到 Canvas2D（幂等） */
+      function switchToCanvas2d(reason) {
+        if (backend.kind === "canvas2d") return;
+        console.warn("[wsgame] 切 Canvas2D 兜底：", reason);
+        try {
+          app?.destroy({ removeView: true }, { children: true });
+        } catch {}
+        app = null;
+        pixi = null;
+        Object.assign(backend, makeCanvas2dBackend());
+        backend.init();
+        layout();
+      }
+
+      function makeCanvas2dBackend() {
+        const cv = $("#stage2d");
+        const g2 = cv.getContext("2d", { alpha: false });
+        function fit() {
+          const dpr = Math.min(2, window.devicePixelRatio || 1);
+          cv.width = Math.round(cv.clientWidth * dpr);
+          cv.height = Math.round(cv.clientHeight * dpr);
+          g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        return {
+          kind: "canvas2d",
+          init() {
+            $("#stage").style.display = "none";
+            cv.style.display = "block";
+            fit();
+          },
+          drawStatic() {},
+          resize() { fit(); },
+          render() {
+            const w = cv.clientWidth, h = cv.clientHeight;
+            g2.fillStyle = "#0e1621";
+            g2.fillRect(0, 0, w, h);
+            g2.save();
+            g2.translate(view.x, view.y);
+            g2.scale(view.s, view.s);
+            g2.lineWidth = 1 / view.s;
+            g2.strokeStyle = "rgba(59,74,94,0.9)";
+            feats.forEach((f, i) => {
+              g2.beginPath();
+              for (const r of f.rings) {
+                g2.moveTo(r[0], r[1]);
+                for (let k = 2; k < r.length; k += 2) g2.lineTo(r[k], r[k + 1]);
+                g2.closePath();
+              }
+              g2.fillStyle = i % 2 === 0 ? "#243040" : "#27354a";
+              g2.fill("evenodd");
+              g2.stroke();
+            });
+            if (selected) {
+              g2.beginPath();
+              for (const r of selected.rings) {
+                g2.moveTo(r[0], r[1]);
+                for (let k = 2; k < r.length; k += 2) g2.lineTo(r[k], r[k + 1]);
+                g2.closePath();
+              }
+              g2.fillStyle = "rgba(53,211,154,0.17)";
+              g2.fill("evenodd");
+              g2.lineWidth = 2 / view.s;
+              g2.strokeStyle = "rgba(53,211,154,0.95)";
+              g2.stroke();
+            }
+            g2.restore();
+            // 标注画在屏幕空间（字号不随缩放变）
+            g2.font = '600 13px system-ui, "Noto Sans SC", sans-serif';
+            g2.textAlign = "center";
+            g2.textBaseline = "middle";
+            g2.shadowColor = "rgba(0,0,0,0.95)";
+            g2.shadowBlur = 5;
+            g2.fillStyle = "#ffffff";
+            for (const a of labelAnchors()) g2.fillText(a.name, Math.round(a.x), Math.round(a.y));
+            g2.shadowBlur = 0;
+          },
+        };
+      }
+
+      /* ── 舞台尺寸（两个后端各自的取法）── */
+      const stageW = () =>
+        backend.kind === "pixi" ? app.renderer.width / app.renderer.resolution : $("#stage2d").clientWidth;
+      const stageH = () =>
+        backend.kind === "pixi" ? app.renderer.height / app.renderer.resolution : $("#stage2d").clientHeight;
+
+      /* ── 尺寸/位置：地图取「整幅放下」（contain），只留够 HUD 呼吸的边距 ──
+         ⚠️ 注意：全国图的数据 bbox 是**正方形**，contain 之后地图在屏幕上永远是正方形，
+         边长 ≈ 舞台高 − 52 ⇒ **面积占比天然受限**（904×341 的舞台上上限约 27%）。
+         想更满只能裁剪（`slice`），代价是砍掉黑龙江/新疆/西藏，**不划算**。
+         所以这里的目标是"地图尽量大 + 两侧空白变成有内容的侧栏"，不是硬凑面积占比。 */
+      function layout() {
+        const w = stageW(), h = stageH();
+        if (!w || !h) return;
+        const availW = w - 40, availH = h - 68;
+        const s = Math.min(availW / feats.w, availH / feats.h);
+        fitScale = s;
+        view.s = s;
+        view.x = w / 2;
+        view.y = h / 2 + 8;
+        applyView();
+      }
+
+      function applyView() {
+        backend.render();
+      }
+
+      /* ── 交互：拖拽平移 / 滚轮缩放 / 双指缩放 / 惯性 ── */
+      function bindInput() {
+        const el = app.canvas;
+        let dragging = false, lx = 0, ly = 0, vx = 0, vy = 0, raf = 0;
+        const pts = new Map();
+
+        const stopInertia = () => { if (raf) cancelAnimationFrame(raf), (raf = 0); };
+        const inertia = () => {
+          vx *= 0.92; vy *= 0.92;
+          if (Math.abs(vx) < 0.15 && Math.abs(vy) < 0.15) return stopInertia();
+          view.x += vx; view.y += vy; applyView();
+          raf = requestAnimationFrame(inertia);
+        };
+
+        el.addEventListener("pointerdown", (e) => {
+          stopInertia();
+          pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pts.size === 1) { dragging = true; lx = e.clientX; ly = e.clientY; vx = vy = 0; el.setPointerCapture(e.pointerId); }
+        });
+        el.addEventListener("pointermove", (e) => {
+          if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pts.size >= 2) {
+            // 双指：按两指距离比例缩放（围绕两指中点）
+            const [a, b] = [...pts.values()];
+            const d = Math.hypot(a.x - b.x, a.y - b.y);
+            if (bindInput.lastD) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / bindInput.lastD);
+            bindInput.lastD = d;
+            return;
+          }
+          if (!dragging) return;
+          const dx = e.clientX - lx, dy = e.clientY - ly;
+          lx = e.clientX; ly = e.clientY;
+          vx = dx; vy = dy;
+          view.x += dx; view.y += dy; applyView();
+        });
+        const up = (e) => {
+          pts.delete(e.pointerId);
+          if (pts.size < 2) bindInput.lastD = 0;
+          if (pts.size === 0 && dragging) { dragging = false; raf = requestAnimationFrame(inertia); }
+        };
+        el.addEventListener("pointerup", up);
+        el.addEventListener("pointercancel", up);
+        el.addEventListener(
+          "wheel",
+          (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12); },
+          { passive: false }
+        );
+
+        // 点选省份（用渲染器的命中测试：命中哪个图形就是哪个省）
+        el.addEventListener("click", (e) => {
+          const r = el.getBoundingClientRect();
+          const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+          for (const f of feats) {
+            for (const ring of f.rings) {
+              if (pointInPoly(p.x, p.y, ring)) return select(f);
+            }
+          }
+          select(null);
+        });
+
+        $("#zoomIn").onclick = () => zoomAt(app.canvas.clientWidth / 2, app.canvas.clientHeight / 2, 1.25);
+        $("#zoomOut").onclick = () => zoomAt(app.canvas.clientWidth / 2, app.canvas.clientHeight / 2, 1 / 1.25);
+      }
+
+      /** 在世界坐标 ring（归一化）里做点在多边形内测试（屏幕坐标 → 世界坐标） */
+      function pointInPoly(px, py, ring) {
+        const wx = (px - view.x) / view.s, wy = (py - view.y) / view.s;
+        let inside = false;
+        for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+          const xi = ring[i], yi = ring[i + 1], xj = ring[j], yj = ring[j + 1];
+          if (yi > wy !== yj > wy && wx < ((xj - xi) * (wy - yi)) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+      }
+
+      /** 以 (cx,cy) 为不动点缩放 */
+      function zoomAt(cx, cy, k) {
+        const ns = Math.max(view.s * 0.35, Math.min(view.s * 26, view.s * k));
+        const real = ns / view.s;
+        view.x = cx - (cx - view.x) * real;
+        view.y = cy - (cy - view.y) * real;
+        view.s = ns;
+        applyView();
+      }
+
+      /* ── 选中：**用户内容画在最上层**（图层顺序里最高）── */
+      let selected = null;
+      function select(f) {
+        selected = f;
+        gSel.clear();
+        if (f) {
+          for (const r of f.rings) {
+            gSel.poly(r).fill({ color: C.accent, alpha: 0.17 });
+            gSel.poly(r).stroke({ width: 1.6, color: C.accent, alpha: 0.95 });
+          }
+          $("#pName").textContent = f.name;
+          $("#pSub").textContent = `adcode ${f.adcode} · 点「进入」下钻`;
+          $("#crumbPath").innerHTML = `中国 <span class="cur">· ${f.name}</span>`;
+          $("#ctaEnter").textContent = `进入 ${f.name.replace(/省|市|自治区|维吾尔|壮族|回族/g, "").slice(0, 4)} ▸`;
+        } else {
+          $("#pName").textContent = "中国";
+          $("#pSub").textContent = "34 个省级区划 · 点击省份查看";
+          $("#crumbPath").textContent = "中国";
+          $("#ctaEnter").textContent = "进入 ▸";
+        }
+      }
+
+      /* ── 时间 / 天气：拿不到就说"不可用"，不编数据 ── */
+      function startClock() {
+        const paint = (h, wx) => {
+          const hh = Math.floor(h), mm = Math.floor((h % 1) * 60);
+          $("#mTime").textContent = `${fmt2(hh)}:${fmt2(mm)}`;
+          $("#mWx").textContent = wx;
+        };
+        const d = new Date();
+        paint(d.getHours() + d.getMinutes() / 60, "天气不可用");
+        fetch(`${API}/api/time`).then((r) => r.json()).then((t) => {
+          const h = Number(t?.hour ?? t?.hour_of_day);
+          if (Number.isFinite(h)) paint(h, $("#mWx").textContent);
+        }).catch(() => {});
+        fetch(`${API}/api/weather`).then((r) => r.json()).then((w) => {
+          const cur = w?.current || w?.weather?.[0] || w;
+          const desc = cur?.desc || cur?.weatherDesc?.[0]?.value || cur?.desc_en;
+          const t = cur?.temp_c ?? cur?.tempC ?? cur?.temp_C;
+          if (desc || t != null) $("#mWx").textContent = `${desc || ""}${t != null ? ` ${t}°` : ""}`.trim();
+        }).catch(() => {});
+      }
+
+      /* ── Live2D 角色：站在地图右下（这就是"用 l2d 那个引擎"的那一半）── */
+      async function loadCharacter() {
+        model = await engine.Live2DModel.from(MODEL_URL, {
+          ticker: app.ticker,
+          autoFocus: false,
+          autoHitTest: false,
+          eyeBlink: true,
+          idleMotionGroup: "Idle",
+          motionPreload: engine.MotionPreloadStrategy.IDLE,
+          useHighPrecisionMask: "auto",
+          textureOptions: { lod: "single-auto" },
+        });
+        const h = app.renderer.height / app.renderer.resolution;
+        const k = (h * 0.86) / model.height;
+        model.scale.set(k);
+        model.position.set(
+          app.renderer.width / app.renderer.resolution - model.width * 0.52,
+          h - model.height * 0.02
+        );
+        model.alpha = 0.97;
+        app.stage.addChild(model);
+        // 位置跟随：**必须判 null** —— WebGL 上下文丢失后看门狗会把 app 销毁（实测：
+        // 不判的话 ticker 回调抛 "Cannot read properties of null (reading 'renderer')"）。
+        app.ticker.add(() => {
+          if (!app || !model) return;
+          const W = app.renderer.width / app.renderer.resolution;
+          const H = app.renderer.height / app.renderer.resolution;
+          model.position.set(W - model.width * 0.52, H - model.height * 0.02);
+        });
+        model.on("pointertap", () => {
+          try { model.motion("TapBody"); } catch {}
+        });
+      }
+
+      /* ── 入场：容器变换（小卡 → 全屏）── */
+      function playEnter() {
+        const boot = $("#boot");
+        const small = { x: window.innerWidth - 190, y: window.innerHeight - 150, w: 168, h: 116, r: 14 };
+        const W = window.innerWidth, H = window.innerHeight;
+        // Invert：把全屏容器反演到小卡的位置/尺寸（只动 transform，不动 width/height）
+        const sx = small.w / W, sy = small.h / H;
+        boot.style.transform = `translate(${small.x}px, ${small.y}px) scale(${sx}, ${sy})`;
+        boot.style.borderRadius = small.r / Math.min(sx, sy) + "px";
+        requestAnimationFrame(() => {
+          boot.classList.add("anim");
+          boot.style.transform = "translate(0,0) scale(1,1)";
+          boot.style.borderRadius = "0px";
+        });
+        setTimeout(() => {
+          boot.style.display = "none";
+          $("#hud").classList.add("in");
+          // 错峰：HUD 三块依次淡入（20~40ms 间隔）
+          document.querySelectorAll("#hud .stagger").forEach((el, i) => (el.style.transitionDelay = `${i * 28}ms`));
+        }, 340);
+      }
+
+      window.addEventListener("resize", () => { if (backend.kind !== "?") { backend.resize(); layout(); } });
+      main().catch((e) => fail(`出错了：<br>${e.message}`));
+    </script>
+  </body>
+</html>

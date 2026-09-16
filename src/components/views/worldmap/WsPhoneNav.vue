@@ -68,7 +68,7 @@
 
 <script setup lang="ts">
   import { computed, ref, watch } from "vue";
-  import worldMapApi, { mapSvgUrl } from "@/api/services/worldMap";
+  import worldMapApi, { geoChildren, geoJson, mapSvgUrl } from "@/api/services/worldMap";
 
   const me = ref<{ lat: number; lng: number; area?: string; leafAd?: string; parentAd?: string } | null>(null);
   const destList = ref<Array<{ name: string; adcode: string }>>([]);
@@ -107,12 +107,12 @@
   }
   const flat = (ring: number[][]) => ring.flatMap(([lng, lat]) => [lng, lat]);
 
-  /** 目的地坐标：抓该区县的 GeoJSON，算面积质心 */
+  /** 目的地坐标：抓该区县的 GeoJSON，算面积质心。
+   *  ⚠️ 走 `geoJson()` 的**双通路**（真壳 invoke / 浏览器 HTTP），不要在组件里直连 8791 ——
+   *  那是本地调试端口，装进 APK 必然失败（我自己先犯过这个错，已改）。 */
   async function destLatLng(ad: string): Promise<{ lat: number; lng: number } | null> {
     try {
-      const r = await fetch(`http://127.0.0.1:8791/api/geo_json?ad=${ad}`);
-      const geo = await r.json();
-      const c = centroid(geo);
+      const c = centroid(await geoJson(ad));
       return c ? { lng: c[0], lat: c[1] } : null;
     } catch {
       return null;
@@ -137,14 +137,19 @@
       const ad = String(path[i]?.adcode || "");
       if (!ad || ad === leaf) continue;
       try {
-        const d = await (await fetch(`http://127.0.0.1:8791/api/geo/children?ad=${ad}`)).json();
-        const kids = (d?.children || []).filter((x: any) => String(x.adcode) !== leaf);
+        const kids = (await geoChildren(ad)).filter((x) => String(x.adcode) !== leaf);
         if (kids.length >= 2) return kids;
       } catch {
-        /* 这一级拿不到就继续往上 */
+        /* 这一级拿不到就继续往上。真壳里命令还没注册（见 worldMap.ts 的说明）→ 会一路走到空列表，
+           此时界面显示"目的地列表拿不到"，**不卡住、不白屏** */
       }
     }
     return [];
+  }
+
+  /** 只用于给"为什么没有目的地列表"一句人话解释；判定本身交给 worldMapApi 的双通路 */
+  function isTauriRuntimeHint() {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && !(window as any).__LINGCHAT_WEB_MOCK__;
   }
 
   async function init() {
@@ -165,6 +170,11 @@
         }
         // 目的地候选：从最近一级往上找，直到拿到 ≥2 个（见 loadDestList 的注释）
         destList.value = await loadDestList(path, leaf);
+        if (!destList.value.length) {
+          err.value = isTauriRuntimeHint()
+            ? "真壳里还需要 Rust 侧补 world_map_geo_children（浏览器预览可用）"
+            : "拿不到目的地列表（区域接口没返回下级）";
+        }
       } else {
         err.value = "定位没结果（可以先用 IP 估测）";
       }

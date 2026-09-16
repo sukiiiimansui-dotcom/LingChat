@@ -2,6 +2,8 @@
   <div class="main-box">
     <!-- 主界面始终渲染，加载动画期间在后台初始化 -->
     <FreeModeTools />
+    <!-- T5-1：悬浮手机入口（右下角常驻，一键呼出；八项功能见 WsPhone.vue 的 APPS） -->
+    <WsPhone @open-app="onPhoneApp" />
     <FullAccessWarning />
     <GameBackground></GameBackground>
     <!-- <GameAvatar ref="gameAvatarRef" @audio-ended="handleAudioFinished" />  -->
@@ -49,8 +51,27 @@
 </template>
 
 <script setup lang="ts">
+
+  /* T5-1 的 8 个应用位：T5-2~T5-8 各自接进来之前，**如实提示"还没接"**，不假装能用。
+     用项目里已有的 wsToast（世界模拟那套轻提示），不新造 API。
+     ⚠️ 这里只负责"点了要有可见反应"；等 T5-2~T5-8 落地时，把对应分支换成真路由/面板即可。 */
+  const PHONE_APP_LABEL: Record<string, string> = {
+    map: "地图/导航（T5-2）",
+    taxi: "打车（T5-3）",
+    transit: "公交地铁（T5-4）",
+    chat: "通讯（T5-5）",
+    plan: "日程待办（T5-6）",
+    weather: "天气（T5-7）",
+    music: "音乐（T5-8）",
+    me: "我的",
+  };
+  function onPhoneApp(key: string) {
+    wsToast(`${PHONE_APP_LABEL[key] || key} 还没接进来`, "info");
+  }
   import { getEnvConfigByKey } from "@/api/services/config";
   import FreeModeTools from "@/components/tools/FreeModeTools.vue";
+  import WsPhone from "@/components/views/worldmap/WsPhone.vue";
+  import { wsToast } from "@/components/views/worldsim/wsToast";
   import ToolActivityStatus from "@/components/tools/ToolActivityStatus.vue";
   import { dialogueMerge } from "@/core/events/dialogue-merge";
   import { eventQueue } from "@/core/events/event-queue";

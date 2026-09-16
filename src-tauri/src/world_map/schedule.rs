@@ -40,10 +40,15 @@ pub fn data_dir() -> Option<PathBuf> {
         let p = PathBuf::from(d);
         return if p.join("game_data").is_dir() { Some(p) } else { None };
     }
-    // 未初始化（独立运行 / 单测垫片）→ 安静降级，**不能**让 `get_data_dir()` panic
-    if !crate::init::static_copy::data_dir_initialized() {
-        return None;
-    }
+    /* 未初始化（独立运行 / 单测垫片 / 调试服务）→ 安静降级。
+     *
+     * ⚠️ 这里**故意不再问 `crate::init::static_copy::data_dir_initialized()`**
+     * （2026-09-16 为跟上 upstream 改的）：上游 `dev` 的 `b6828312`
+     * 「refactor: lib.rs 模块化，清理 init 合并到 app/setup」之后
+     * **`src-tauri/src/init/` 整个目录已经不存在了**，那个函数在新代码里没有对应物
+     * → 保持引用会在 rebase/合并上游时直接**编译不过**。
+     * 而它想挡的事情，下面这句 `is_dir()` 本来就能挡（而且更准：直接问"数据目录到底在不在"，
+     * 不依赖任何模块的初始化状态）。所以这里只留路径探测，去掉对 `init` 的依赖。 */
     let p = crate::api::data_dir();
     if p.join("game_data").is_dir() { Some(p) } else { None }
 }

@@ -1,0 +1,2096 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>世界模拟 · 入口与容器变换（预览）</title>
+    <!--
+      ────────────────────────────────────────────────────────────────────────
+      wsenter.html —— 「世界模拟」入口 + 聊天页小地图 + 容器变换展开（自用层，不进 PR）
+      ────────────────────────────────────────────────────────────────────────
+
+      这一页要回答机主的**两条**效果要求（原话）：
+        A.「在开始游戏里加第四个选项」
+        B.「在 chat 对话页里以小地图的形式显示，点击可丝滑放大，类似于手机系统
+            打开关键软件的那种动画」
+
+      一页跑完整条链路，可点、可测、可截图：
+        ① 主菜单 →「开始游戏」→ 模式菜单：自由对话 / 剧情模式(禁用) / 小游戏(禁用)
+           / **世界模拟（新，第 4 项）** / 返回
+           —— 用的是**真组件**：`src/components/views/menu/base` 的
+           `StartItem/StartLine/StartList`，写法照 `GameModeOptions.vue`。
+        ② 点「世界模拟」→ 模拟聊天页，右下角浮着**真地图**小地图（160×110）。
+        ③ 点小地图 → **容器变换动画**展开到全屏（Android「打开 App」那种），
+           再点「收起」缩回小地图。
+        ④ 展开后可拖拽平移 / 滚轮缩放 / 双指 pinch / 双击复位 / 点省份飞过去；
+           放大时省名标注走 **LOD**（按面积优先 + 贪心避让），并可一键切到
+           `/api/geo_svg` 的 **SVG 版**做对照（那边是固定字号硬画，必然重叠）。
+
+      ── 为什么是「容器变换」而不是「两个元素互相淡入淡出」 ──────────────────
+      全屏容器**始终是同一个 DOM 元素**（`position:fixed; inset:0`），缩略态只是把
+      它 `transform: translate(tx,ty) scale(sx,sy)` 反演到小地图的矩形上
+      （`transform-origin: 0 0`）。好处：
+        · 全程只改 `transform`（合成器属性）→ 不触发布局，不掉帧；
+        · 里面那块 **PixiJS canvas 一次都不重建**，只是被同一个变换带着放大
+          —— 视觉天然连贯（重建 canvas 会有一次黑闪）。
+      容器 scale 是**非等比**的（160/932 ≠ 110/430），所以相机做了反向补偿：
+      `stage.scale = (Z/sx, Z/sy)`，让地图内容在表观上始终等比、不被拉扁。
+      这也是为什么动画用 rAF 手写而不是 CSS `transition` —— 相机必须和容器
+      逐帧同步（顺带把「动画期间每一帧的间隔」精确量出来，见第 5 节）。
+
+      ── 数据 ────────────────────────────────────────────────────────────────
+      `http://127.0.0.1:8791/api/geo_json?ad=100000` → FeatureCollection，
+      582KB / 35 个要素（34 个省级 + 1 个 `100000_JD` 九段线，后者无名，只画不标注，
+      也**不参与**视野 fit —— 它一路伸到北纬 3.4°，算进去会把全国压得很小）。
+      8791 带 `access-control-allow-origin: *`；8788 那个静态服务**没有 CORS**，别用。
+
+      ── 打开方式 ────────────────────────────────────────────────────────────
+        http://127.0.0.1:5212/wsenter.html     ← 生产预览包（机主看的入口）
+        http://127.0.0.1:5210/wsenter.html     ← vite dev（改代码时用）
+      ⚠️ 本文件必须同时列在 `vite.webdev.config.ts` 的 `rollupOptions.input` 里，
+         否则它**不在任何验证管道里**（会直接 404，且构建不报错）。
+
+      ⚠️ 自用层：与 webdev.html / wsfx.html / wsux.html 同一档，进 PR 前整体剔除。
+    -->
+    <style>
+      @font-face {
+        font-family: "Maoken Assorted Sans";
+        src: url("/fonts/MaokenAssortedSans.woff2") format("woff2");
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+        background: #070b12;
+        color: #fff;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", Roboto,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #app {
+        height: 100%;
+      }
+
+      /* ── 屏幕（一次只显示一块） ───────────────────────────────────────── */
+      .screen {
+        position: fixed;
+        inset: 0;
+        display: none;
+      }
+      .screen.on {
+        display: block;
+      }
+
+      /* ══ 屏 1：开始菜单 ══════════════════════════════════════════════ */
+      #screenMenu .bg {
+        position: absolute;
+        inset: 0;
+        background-size: cover;
+        background-position: center;
+        transform: scale(1.04);
+      }
+      #screenMenu .vignette {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(120% 90% at 30% 40%, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.55) 100%),
+          linear-gradient(90deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0) 55%);
+      }
+      /* 菜单列的位置对齐真实 MainMenu：StartPage 是 flex 居中，桌面端 md:justify-start */
+      #menuHost {
+        position: absolute;
+        inset: 0;
+      }
+      .menu-flag {
+        position: absolute;
+        right: 14px;
+        top: 12px;
+        z-index: 30;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .pill {
+        font-size: 12px;
+        line-height: 1;
+        padding: 7px 11px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: rgba(10, 16, 26, 0.55);
+        color: #dfe8f3;
+        cursor: pointer;
+        backdrop-filter: blur(8px);
+        font-family: inherit;
+      }
+      .pill:hover {
+        border-color: rgba(255, 255, 255, 0.45);
+        color: #fff;
+      }
+      .pill .tag {
+        color: #7fd0ff;
+        font-weight: 700;
+      }
+      /* ⚠️ 唯一的「为了这一步好截图」的让步：真实 StartItem 的字号是
+         `clamp(40px,4vw,72px)`（为竖屏手机设计）。本页的验证舞台是 932×430
+         **横屏**（世界模拟沿用的 1:1 真实舞台），40px × 7 项会超出 StartPage 的
+         6vw 内边距而互相压住。这里只在**矮视口**下降一档字号/边距，
+         组件、配色、hover、转场全部保持原样。
+         （tailwind 的 utilities 在 @layer 里，未分层的本段天然优先，无需 !important） */
+      @media (max-height: 620px) {
+        #menuHost .start-page {
+          border-width: 3.2vh;
+        }
+        #menuHost .start-item {
+          margin-top: 6px;
+          font-size: clamp(17px, 5.6vh, 40px);
+        }
+      }
+
+      /* Vue 的 slide-left / slide-right 与 MainMenu.vue 里逐字一致 */
+      .slide-left-enter-active,
+      .slide-left-leave-active,
+      .slide-right-enter-active,
+      .slide-right-leave-active {
+        transition: all 0.4s cubic-bezier(0.7, 0, 0.2, 1);
+      }
+      .slide-left-leave-active,
+      .slide-right-leave-active {
+        position: absolute;
+      }
+      .slide-left-enter-from,
+      .slide-left-leave-to {
+        transform: translateX(-120%);
+        opacity: 0;
+      }
+      .slide-right-enter-from,
+      .slide-right-leave-to {
+        transform: translateX(120%);
+        opacity: 0;
+      }
+
+      /* ══ 屏 2：聊天页 ════════════════════════════════════════════════ */
+      #screenChat .bg {
+        position: absolute;
+        inset: 0;
+        background-size: cover;
+        background-position: center;
+        filter: brightness(0.42) saturate(0.85);
+      }
+      #screenChat .scrim {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, rgba(6, 10, 18, 0.72) 0%, rgba(6, 10, 18, 0.5) 100%);
+      }
+      .chat-wrap {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 10px 14px 12px;
+      }
+      .chat-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 10px;
+        border-radius: 14px;
+        background: rgba(12, 18, 28, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(10px);
+        flex: none;
+      }
+      .chat-top .av {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: linear-gradient(140deg, #6fb7ff, #b98cff);
+        flex: none;
+      }
+      .chat-top .nm {
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: 0.02em;
+      }
+      .chat-top .sb {
+        font-size: 11px;
+        color: #9fb2c8;
+        margin-top: 1px;
+      }
+      .chat-top .sp {
+        flex: 1;
+      }
+      .chat-list {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        padding: 12px 4px 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .row.me {
+        flex-direction: row-reverse;
+      }
+      .row .a {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        flex: none;
+        background: linear-gradient(140deg, #6fb7ff, #b98cff);
+      }
+      .row.me .a {
+        background: linear-gradient(140deg, #4d5b70, #2a3444);
+      }
+      .bub {
+        max-width: min(70%, 520px);
+        padding: 8px 12px;
+        border-radius: 14px;
+        font-size: 13.5px;
+        line-height: 1.6;
+        background: rgba(24, 34, 50, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+      }
+      .row.me .bub {
+        background: rgba(56, 106, 168, 0.9);
+        border-color: rgba(140, 200, 255, 0.35);
+      }
+      .bub .t {
+        display: block;
+        font-size: 10px;
+        color: #8ea4bd;
+        margin-top: 4px;
+      }
+      .chat-input {
+        flex: none;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 8px 7px 14px;
+        border-radius: 999px;
+        background: rgba(12, 18, 28, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        backdrop-filter: blur(10px);
+      }
+      .chat-input .ph {
+        flex: 1;
+        color: #7e90a6;
+        font-size: 13px;
+      }
+      .chat-input .send {
+        border: 0;
+        border-radius: 999px;
+        padding: 8px 16px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: #06121f;
+        background: linear-gradient(140deg, #9fd4ff, #6fb7ff);
+        cursor: pointer;
+      }
+
+      /* 小地图占位框：**只负责位置与尺寸**，真正的画面由地图容器（.map-host）
+         以「缩略态」盖在上面渲染。这样 FLIP 量到的是真实布局矩形。 */
+      #minimapSlot {
+        position: absolute;
+        right: 14px;
+        bottom: 74px;
+        width: 160px;
+        height: 110px;
+        pointer-events: none;
+      }
+      #minimapSlot .cap {
+        position: absolute;
+        left: 8px;
+        bottom: 6px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.9);
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+      }
+      #minimapSlot.on .cap {
+        display: none;
+      }
+
+      /* ══ 地图容器（容器变换的主角） ══════════════════════════════════ */
+      .map-host {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 100vw;
+        height: 100vh;
+        transform-origin: 0 0;
+        will-change: transform;
+        overflow: hidden;
+        z-index: 60;
+        background: #cfe3f5;
+        border: 4px solid rgba(255, 255, 255, 0.34);
+        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+        contain: paint;
+        transition: opacity 0.25s ease;
+        touch-action: none;
+        cursor: default;
+      }
+      .map-host.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .map-host.expanded {
+        cursor: grab;
+      }
+      .map-host.dragging {
+        cursor: grabbing;
+      }
+      .map-host canvas {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      /* 内容层随展开淡入淡出（`--p` 由 JS 逐帧写） */
+      .map-chrome {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: var(--p, 0);
+      }
+      .map-top {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 46px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px 0 14px;
+        background: linear-gradient(180deg, rgba(6, 12, 20, 0.82), rgba(6, 12, 20, 0));
+        color: #eaf2fb;
+      }
+      .map-top .ttl {
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: 0.03em;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+      }
+      .map-top .sub {
+        font-size: 11.5px;
+        color: #a9c0d6;
+      }
+      .map-top .sp {
+        flex: 1;
+      }
+      .map-top .pill,
+      .map-hint .pill {
+        pointer-events: auto;
+      }
+      /* ⚠️ 实测优化：`backdrop-filter: blur()` 每帧要把下层读回来做一次模糊。
+         在动画期间（图层本来就要被反复重光栅）它是纯亏，且此刻内容透明度很低、
+         肉眼看不出差别。展开/收起时挂 `.anim` 关掉它。 */
+      .map-host.anim .map-top,
+      .map-host.anim .map-hud {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+      .map-hud {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        max-width: min(62%, 560px);
+        padding: 9px 12px;
+        border-radius: 12px;
+        background: rgba(6, 12, 20, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        font-size: 11.5px;
+        line-height: 1.75;
+        color: #cfe0f0;
+        font-variant-numeric: tabular-nums;
+        backdrop-filter: blur(8px);
+      }
+      .map-hud b {
+        color: #fff;
+      }
+      .ok {
+        color: #6ee7a8;
+        font-weight: 700;
+      }
+      .bad {
+        color: #ff8f8f;
+        font-weight: 700;
+      }
+      .map-hint {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        font-size: 11.5px;
+        color: #b9cbdd;
+      }
+      /* SVG 对照层：同一个视野直接换成 /api/geo_svg 出图 */
+      .map-svg {
+        position: absolute;
+        inset: 0;
+        background: #cfe3f5;
+        display: none;
+      }
+      .map-svg.on {
+        display: block;
+      }
+      .map-svg img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+
+      /* 角落里的自检读数（不属于产品，只为验收） */
+      #diag {
+        position: fixed;
+        left: 8px;
+        top: 8px;
+        z-index: 90;
+        font-size: 11px;
+        line-height: 1.5;
+        padding: 6px 9px;
+        border-radius: 8px;
+        background: rgba(4, 8, 14, 0.72);
+        color: #9fd4ff;
+        border: 1px solid rgba(120, 190, 255, 0.28);
+        pointer-events: none;
+        max-width: 46vw;
+        font-variant-numeric: tabular-nums;
+      }
+      #diag.err {
+        color: #ffb4b4;
+        border-color: rgba(255, 120, 120, 0.5);
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="app"></div>
+
+    <!-- ══════════ 屏 1：开始菜单（Vue 挂载在这里，用真菜单组件） ══════════ -->
+    <section id="screenMenu" class="screen on">
+      <div class="bg" id="menuBg"></div>
+      <div class="vignette"></div>
+      <div id="menuHost"></div>
+      <div class="menu-flag">
+        <span class="pill" style="cursor: default">
+          原型页 <span class="tag">wsenter.html</span> · 自用层
+        </span>
+      </div>
+    </section>
+
+    <!-- ══════════ 屏 2：聊天页（简化但有真实观感） ══════════ -->
+    <section id="screenChat" class="screen">
+      <div class="bg" id="chatBg"></div>
+      <div class="scrim"></div>
+      <div class="chat-wrap">
+        <div class="chat-top">
+          <div class="av"></div>
+          <div>
+            <div class="nm">阿洛娜</div>
+            <div class="sb" id="chatSub">自由对话模式</div>
+          </div>
+          <div class="sp"></div>
+          <span class="pill" id="btnBackMenu">返回主菜单</span>
+        </div>
+
+        <div class="chat-list">
+          <div class="row">
+            <div class="a"></div>
+            <div class="bub">欢迎回来～今天想去哪里看看？<span class="t">阿洛娜 · 刚刚</span></div>
+          </div>
+          <div class="row me">
+            <div class="a"></div>
+            <div class="bub">右下角那个小地图是什么？<span class="t">你 · 刚刚</span></div>
+          </div>
+          <div class="row">
+            <div class="a"></div>
+            <div class="bub">
+              那是「世界模拟」的地图。点一下就能放大到全屏，拖一拖、捏一捏随便逛～
+              <span class="t">阿洛娜 · 刚刚</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input">
+          <div class="ph">说点什么…</div>
+          <button class="send">发送</button>
+        </div>
+      </div>
+
+      <!-- 小地图的**布局占位**：地图容器缩略态会精确盖在它上面 -->
+      <div id="minimapSlot"><span class="cap">世界模拟</span></div>
+    </section>
+
+    <!-- ══════════ 地图容器：从头到尾都是这一个元素 ══════════ -->
+    <div class="map-host hidden" id="mapHost">
+      <div class="map-svg" id="mapSvg"><img id="mapSvgImg" alt="SVG 对照" /></div>
+      <div class="map-chrome">
+        <div class="map-top">
+          <span class="ttl">世界模拟</span>
+          <span class="sub" id="mapSub">全国 · 34 个省级行政区</span>
+          <span class="sp"></span>
+          <button class="pill" id="btnSvg">切到 SVG 版对照</button>
+          <button class="pill" id="btnReset">复位</button>
+          <button class="pill" id="btnClose">收起 ✕</button>
+        </div>
+        <div class="map-hud" id="mapHud">等待数据…</div>
+        <div class="map-hint">
+          <span>拖拽平移 · 滚轮/双指缩放 · 双击复位 · 点省份飞过去</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="diag">wsenter 启动中…</div>
+
+    <script type="module">
+      import { createApp, h, ref, Transition } from "vue";
+      import { Application, Container, Graphics, Text } from "pixi.js";
+      // 真样式（tailwind + 安全区变量）：菜单真组件靠它才长对
+      import "@/assets/styles/base.css";
+      // **真组件**：与线上菜单是同一份源码
+      import { StartItem, StartLine, StartList, StartPage } from "@/components/views/menu/base";
+      import bgUrl from "@/assets/images/background2.png";
+
+      /* ══════════════════════════════════════════════════════════════════
+         0. 常量
+         ══════════════════════════════════════════════════════════════════ */
+      const API = "http://127.0.0.1:8791";
+      const GEO_URL = `${API}/api/geo_json?ad=100000`;
+      const svgUrl = (w, h) => `${API}/api/geo_svg?ad=100000&style=gaode&w=${w | 0}&h=${h | 0}`;
+
+      // 与后端 render_geo.rs `style_of("gaode")` 逐色一致，保证 Pixi 版和 SVG 版同观感
+      const C = {
+        bg: 0xcfe3f5,
+        land: 0xe9e7dc,
+        landAlt: 0xeeece2,
+        border: 0xffffff,
+        border2: 0xd8d4c6,
+        text: 0x3c4b5f,
+        halo: 0xffffff,
+        dot: 0xe05a6a,
+      };
+
+      const WORLD_W = 1000; // 世界坐标宽（等比缩放到这个数，方便读缩放倍数）
+      const ANIM_MS = 420;
+      let ANIM_MS_V = ANIM_MS; // 自检可临时改（截图要靠拉长动画才能拍到"中途"）
+      const EASE = [0.2, 0.8, 0.2, 1];
+
+      const $ = (id) => document.getElementById(id);
+      const host = $("mapHost");
+      const slot = $("minimapSlot");
+      const diag = $("diag");
+      const hud = $("mapHud");
+
+      /* ══════════════════════════════════════════════════════════════════
+         1. 小工具
+         ══════════════════════════════════════════════════════════════════ */
+      const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const now = () => performance.now();
+
+      // cubic-bezier(x1,y1,x2,y2) → y(x)，牛顿迭代 + 二分兜底
+      function bezier(x1, y1, x2, y2) {
+        const cx = 3 * x1,
+          bx = 3 * (x2 - x1) - cx,
+          ax = 1 - cx - bx;
+        const cy = 3 * y1,
+          by = 3 * (y2 - y1) - cy,
+          ay = 1 - cy - by;
+        const fx = (t) => ((ax * t + bx) * t + cx) * t;
+        const dx = (t) => (3 * ax * t + 2 * bx) * t + cx;
+        const fy = (t) => ((ay * t + by) * t + cy) * t;
+        return (x) => {
+          let t = x;
+          for (let i = 0; i < 5; i++) {
+            const e = fx(t) - x;
+            if (Math.abs(e) < 1e-5) return fy(t);
+            const d = dx(t);
+            if (Math.abs(d) < 1e-6) break;
+            t -= e / d;
+          }
+          let lo = 0,
+            hi = 1;
+          t = x;
+          for (let i = 0; i < 24; i++) {
+            const e = fx(t) - x;
+            if (Math.abs(e) < 1e-6) break;
+            if (e > 0) hi = t;
+            else lo = t;
+            t = (lo + hi) / 2;
+          }
+          return fy(t);
+        };
+      }
+      const easeExpand = bezier(...EASE);
+
+      const pct = (a, p) => {
+        if (!a.length) return 0;
+        const s = [...a].sort((x, y) => x - y);
+        return s[clamp(Math.ceil(p * s.length) - 1, 0, s.length - 1)];
+      };
+
+      /* ══════════════════════════════════════════════════════════════════
+         2. 数据层：GeoJSON → 世界坐标（Web Mercator，和后端 render_geo.rs 同一套）
+         ══════════════════════════════════════════════════════════════════ */
+      const T = {}; // 耗时埋点
+      const T0 = now();
+
+      function merc(lng, lat) {
+        const x = (lng + 180) / 360;
+        const s = clamp(Math.sin((lat * Math.PI) / 180), -0.9999, 0.9999);
+        const y = 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+        return [x, y];
+      }
+
+      const geo = {
+        ready: false,
+        error: null,
+        worldH: 0,
+        areas: [], // [{name, adcode, world:[ring...], holes, cx, cy, areaWorld, bbox}]
+        jd: [], // 九段线，只画不标注、不算 fit
+        totalPts: 0,
+      };
+
+      function ringsOf(geom) {
+        const out = [];
+        if (geom.type === "Polygon") out.push(geom.coordinates);
+        else if (geom.type === "MultiPolygon") for (const p of geom.coordinates) out.push(p);
+        return out; // 每个元素 = [外环, 洞1, 洞2...]
+      }
+
+      async function loadGeo() {
+        const t = now();
+        const res = await fetch(GEO_URL);
+        if (!res.ok) throw new Error(`geo_json ${res.status}`);
+        const json = await res.json();
+        T.fetch = now() - t;
+        T.bytes = Number(res.headers.get("content-length")) || 0;
+
+        const t2 = now();
+        // ① 先算 fit 用的包围盒 —— **只算有名字的**（九段线一路到北纬 3.4°，
+        //    算进去会把整个中国压成一条）
+        let minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity;
+        const raw = [];
+        for (const f of json.features) {
+          const p = f.properties || {};
+          const named = !!(p.name && String(p.name).trim());
+          const polys = ringsOf(f.geometry).map((poly) =>
+            poly.map((ring) => ring.map(([lng, lat]) => merc(lng, lat))),
+          );
+          const rec = { name: named ? p.name : "", adcode: p.adcode, polys, named };
+          raw.push(rec);
+          if (!named) continue;
+          for (const poly of polys)
+            for (const ring of poly)
+              for (const [x, y] of ring) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+        }
+        // ② 归一化到 [0,1000] × [0,H]
+        const kx = WORLD_W / (maxX - minX);
+        const ky = kx; // 等比！
+        geo.worldH = (maxY - minY) * ky;
+        const nx = (x) => (x - minX) * kx;
+        const ny = (y) => (y - minY) * ky;
+
+        let pts = 0;
+        for (const rec of raw) {
+          const world = rec.polys.map((poly) =>
+            poly.map((ring) => {
+              // ⚠️ 必须是**普通数组**：Pixi 的 `Graphics.poly()` 内部走
+              //    `new Polygon(points)`，而 Polygon 只认 `number[]` 或 `{x,y}[]` ——
+              //    喂 Float32Array 会落到「按 {x,y} 解析」的分支，整条路径变 NaN
+              //    （画面上就是「什么都没画，也不报错」）。
+              const flat = new Array(ring.length * 2);
+              for (let i = 0; i < ring.length; i++) {
+                flat[i * 2] = nx(ring[i][0]);
+                flat[i * 2 + 1] = ny(ring[i][1]);
+              }
+              pts += ring.length;
+              return flat;
+            }),
+          );
+          if (!rec.named) {
+            geo.jd.push(...world);
+            continue;
+          }
+          let a = 0,
+            bx0 = Infinity,
+            by0 = Infinity,
+            bx1 = -Infinity,
+            by1 = -Infinity;
+          // 锚点用**最大那块环**的包围盒中心，不用整个要素的：
+          // 海南省有 133 个环，最大的那个是海南岛（北纬 18.1~20.2），
+          // 其余是三沙的岛礁（一路到北纬 3.4）。用整体包围盒算中心，
+          // 「海南省」三个字会飘到南海正中间（后端 SVG 版就是这样）。
+          let bestA = -1,
+            ax0 = 0,
+            ay0 = 0,
+            ax1 = 0,
+            ay1 = 0;
+          for (const poly of world)
+            for (let ri = 0; ri < poly.length; ri++) {
+              const f = poly[ri];
+              let s = 0;
+              for (let i = 0, n = f.length / 2; i < n; i++) {
+                const j = (i + 1) % n;
+                s += f[i * 2] * f[j * 2 + 1] - f[j * 2] * f[i * 2 + 1];
+                const x = f[i * 2],
+                  y = f[i * 2 + 1];
+                if (x < bx0) bx0 = x;
+                if (x > bx1) bx1 = x;
+                if (y < by0) by0 = y;
+                if (y > by1) by1 = y;
+              }
+              if (ri === 0) {
+                const ar = Math.abs(s / 2);
+                a += ar;
+                if (ar > bestA) {
+                  bestA = ar;
+                  ax0 = ay0 = Infinity;
+                  ax1 = ay1 = -Infinity;
+                  for (let i = 0, n = f.length / 2; i < n; i++) {
+                    const x = f[i * 2],
+                      y = f[i * 2 + 1];
+                    if (x < ax0) ax0 = x;
+                    if (x > ax1) ax1 = x;
+                    if (y < ay0) ay0 = y;
+                    if (y > ay1) ay1 = y;
+                  }
+                }
+              }
+            }
+          const cx = bestA > 0 ? (ax0 + ax1) / 2 : (bx0 + bx1) / 2;
+          const cy = bestA > 0 ? (ay0 + ay1) / 2 : (by0 + by1) / 2;
+          geo.areas.push({
+            name: rec.name,
+            adcode: rec.adcode,
+            world,
+            area: a,
+            bbox: [bx0, by0, bx1, by1],
+            cx,
+            cy,
+          });
+        }
+        geo.totalPts = pts;
+        geo.ready = true;
+        T.geom = now() - t2;
+        T.total = now() - T0;
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         3. 渲染：一块画布，从头用到尾（展开时**不重建**）
+         ══════════════════════════════════════════════════════════════════ */
+      const VW = () => window.innerWidth;
+      const VH = () => window.innerHeight;
+
+      /* ── 渲染后端 ──────────────────────────────────────────────────────
+         默认 **PixiJS(WebGL)**；若 WebGL 不可用、或上下文被系统回收
+         （Android WebView 在低端机/后台切换时**真的会**丢上下文），
+         自动降级到 **Canvas2D**，地图、平移缩放、LOD 全部照常，只是
+         光栅质量与帧率降一档，并且会在 HUD 上标出来。
+         ⚠️ 这不是"为了好看"加的花样：验收用的无头 Chromium 只有
+            SwiftShader 软件 WebGL，实测**第 2 帧就丢上下文**（见报告），
+            没有这条兜底就一张图都截不到。
+         ──────────────────────────────────────────────────────────────── */
+      const R = { backend: "none", reason: "", lostEvents: [] };
+      let app = null;
+      let stage = null;
+      let landG = null;
+      let borderG = null;
+      let labelLayer = null;
+      let dotG = null;
+      const labels = []; // 预建：{ txt, a }
+
+      // Canvas2D 后端
+      let cv2 = null;
+      let ctx2 = null;
+      let raster = null; // 静态底图（陆地+省界+九段线）预光栅化，逐帧只 drawImage
+      const RASTER_S = 2; // 预光栅倍率：缩放到 2× 仍清晰，再往上会软（兜底档可接受）
+
+      let RENDER_N = 0;
+      const renderErr = [];
+      let labelAlpha = 0;
+
+      let renderOff = false; // 自检用：关掉绘制，只留 transform + 相机数学
+      let radiusOff = false; // 自检用：关掉圆角/描边的逐帧变化（paint 属性）
+      let blurOff = false; // 自检用：动画期间是否强制关 backdrop-filter
+      const redraw = () => {
+        applyCam();
+        if (renderOff) return;
+        if (R.backend === "pixi") {
+          try {
+            app.render();
+            RENDER_N++;
+          } catch (e) {
+            if (renderErr.length < 6) renderErr.push(String((e && e.message) || e));
+          }
+          // 丢上下文就换后端（第二帧才丢也算）
+          const gl = app.renderer && app.renderer.gl;
+          if (!gl || gl.isContextLost()) fallback2d("WebGL 上下文丢失");
+        } else if (R.backend === "canvas2d") {
+          draw2d();
+          RENDER_N++;
+        }
+      };
+
+      async function initPixi() {
+        app = new Application();
+        await app.init({
+          background: C.bg,
+          antialias: true,
+          // 静止时**不**重画：地图是静态矢量，只有相机变了才需要出新帧。
+          // （默认 ticker 会 60fps 空转，在手机上纯属烧电）
+          autoStart: false,
+          // 手机上 dpr 常常 2~3；不封顶会把像素量翻 4~9 倍
+          resolution: Math.min(window.devicePixelRatio || 1, 2),
+          autoDensity: true,
+          preference: "webgl",
+          width: VW(),
+          height: VH(),
+        });
+        host.insertBefore(app.canvas, host.firstChild);
+        app.canvas.addEventListener("webglcontextlost", (e) => {
+          e.preventDefault();
+          R.lostEvents.push({ t: Math.round(now()), msg: e.statusMessage || "" });
+          fallback2d("WebGL 上下文丢失（webglcontextlost）");
+        });
+        stage = new Container();
+        app.stage.addChild(stage);
+        R.backend = "pixi";
+        T.pixi = now() - T0;
+      }
+
+      function buildMap() {
+        const t = now();
+        landG = new Graphics();
+        borderG = new Graphics();
+        // ① 陆地：所有要素合并进**一个** Graphics（不同色交替 → 多次 fill）
+        //    洞用 `poly()` + `cut()` 挖掉（省界处必须挖，否则河北省会把北京天津盖住）
+        geo.areas.forEach((a, i) => {
+          const col = i % 2 ? C.landAlt : C.land;
+          for (const poly of a.world) {
+            landG.poly(poly[0], true);
+            landG.fill({ color: col });
+            for (let h = 1; h < poly.length; h++) {
+              landG.poly(poly[h], true);
+              landG.cut();
+            }
+          }
+        });
+        // ② 九段线：同一套投影，作为细线画出来
+        for (const ring of geo.jd) {
+          landG.poly(ring, true);
+          landG.fill({ color: 0x8aa0b6 });
+        }
+        // ③ 全部省界：合并成**一次** stroke（一个 draw call）
+        for (const a of geo.areas) for (const poly of a.world) borderG.poly(poly[0], true);
+        borderG.stroke({ width: 1.15, color: C.border, alpha: 0.95, join: "round" });
+
+        stage.addChild(landG, borderG);
+
+        // ④ 标注层：字号恒定（不随缩放变大），所以整层反向缩放 1/Z
+        labelLayer = new Container();
+        dotG = new Graphics();
+        labelLayer.addChild(dotG);
+        stage.addChild(labelLayer);
+        for (const a of geo.areas) {
+          const txt = new Text({
+            text: a.name,
+            style: {
+              fontFamily:
+                '"PingFang SC","Noto Sans CJK SC",system-ui,-apple-system,sans-serif',
+              fontSize: 12,
+              fontWeight: "600",
+              fill: C.text,
+              stroke: { color: C.halo, width: 3, join: "round" },
+              resolution: Math.min(window.devicePixelRatio || 1, 2),
+            },
+          });
+          txt.anchor.set(0.5);
+          txt.visible = false;
+          labelLayer.addChild(txt);
+          labels.push({ txt, a });
+        }
+        T.gfx = now() - t;
+        if (R.backend === "canvas2d" && !raster) buildRaster();
+      }
+
+      /* ── Canvas2D 兜底后端 ─────────────────────────────────────────── */
+      function buildRaster() {
+        const t = now();
+        raster = document.createElement("canvas");
+        raster.width = Math.round(WORLD_W * RASTER_S);
+        raster.height = Math.round(geo.worldH * RASTER_S);
+        const g = raster.getContext("2d");
+        g.scale(RASTER_S, RASTER_S);
+        g.fillStyle = "#cfe3f5";
+        g.fillRect(0, 0, WORLD_W, geo.worldH);
+        const ringPath = (ring) => {
+          g.moveTo(ring[0], ring[1]);
+          for (let i = 2; i < ring.length; i += 2) g.lineTo(ring[i], ring[i + 1]);
+          g.closePath();
+        };
+        // 陆地：所有环丢进**同一条** path 用 evenodd 填充 → 洞自动挖掉
+        // （这正是 Pixi 那边要手动 `cut()` 的事）
+        geo.areas.forEach((a, i) => {
+          g.beginPath();
+          for (const poly of a.world) for (const ring of poly) ringPath(ring);
+          g.fillStyle = i % 2 ? "#eeece2" : "#e9e7dc";
+          g.fill("evenodd");
+        });
+        g.beginPath();
+        for (const ring of geo.jd) ringPath(ring);
+        g.fillStyle = "#8aa0b6";
+        g.fill("evenodd");
+        g.beginPath();
+        for (const a of geo.areas) for (const poly of a.world) ringPath(poly[0]);
+        g.strokeStyle = "#ffffff";
+        g.lineWidth = 1.15;
+        g.lineJoin = "round";
+        g.stroke();
+        T.raster = now() - t;
+      }
+
+      function initCanvas2d(reason) {
+        R.backend = "canvas2d";
+        R.reason = reason;
+        cv2 = document.createElement("canvas");
+        cv2.style.cssText = "display:block;width:100%!important;height:100%!important";
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        cv2.width = Math.round(VW() * dpr);
+        cv2.height = Math.round(VH() * dpr);
+        ctx2 = cv2.getContext("2d");
+        host.insertBefore(cv2, host.firstChild);
+        if (geo.ready && !raster) buildRaster();
+        const d = $("diag");
+        d.className = "";
+        d.textContent = `渲染后端：Canvas2D 兜底（${reason}）· 自用层`;
+      }
+
+      // 从 Pixi 掉到 Canvas2D：把 WebGL canvas 摘掉，别留着黑块
+      function fallback2d(reason) {
+        if (R.backend === "canvas2d") return;
+        R.lostEvents.push({ t: Math.round(now()), msg: reason });
+        try {
+          if (app && app.canvas && app.canvas.parentNode) app.canvas.parentNode.removeChild(app.canvas);
+        } catch (_e) {
+          /* 忽略 */
+        }
+        try {
+          if (app) app.destroy(true, { children: true });
+        } catch (_e) {
+          /* 忽略 */
+        }
+        app = null;
+        // ⚠️ 必须置空：`app.destroy(true,{children:true})` 之后这些引用还在，
+        //    真值判断会通过、然后去操作已销毁对象 → applyCam() 抛错 →
+        //    调用它的 rAF 链断掉（表现为「测量 Promise 永远不 resolve」）。
+        stage = landG = borderG = labelLayer = dotG = null;
+        // Text 被 destroy 之后 `.style` 变成 null，再写 fontSize 会抛
+        // 「Cannot set properties of null」并把调用它的 rAF 链打断
+        for (const L of labels) L.txt = null;
+        initCanvas2d(reason);
+        redraw();
+      }
+
+      function draw2d() {
+        if (!ctx2) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const kx = cam.Z / xf.sx;
+        const ky = cam.Z / xf.sy;
+        const px = (cam.cx - (WORLD_W / 2) * cam.Z - xf.tx) / xf.sx;
+        const py = (cam.cy - (geo.worldH / 2) * cam.Z - xf.ty) / xf.sy;
+        ctx2.setTransform(1, 0, 0, 1, 0, 0);
+        ctx2.clearRect(0, 0, cv2.width, cv2.height);
+        ctx2.setTransform(dpr * kx, 0, 0, dpr * ky, dpr * px, dpr * py);
+        ctx2.imageSmoothingEnabled = true;
+        ctx2.imageSmoothingQuality = "high";
+        // 只采样**看得见的那块**底图。整张 2000×1943 每帧重采样一次是这一档最大的开销
+        // （缩放时源矩形远小于整图）。
+        const sx0 = clamp(-px / kx, 0, WORLD_W);
+        const sy0 = clamp(-py / ky, 0, geo.worldH);
+        const sx1 = clamp((VW() - px) / kx, 0, WORLD_W);
+        const sy1 = clamp((VH() - py) / ky, 0, geo.worldH);
+        if (sx1 > sx0 && sy1 > sy0) {
+          ctx2.drawImage(
+            raster,
+            sx0 * RASTER_S, sy0 * RASTER_S, (sx1 - sx0) * RASTER_S, (sy1 - sy0) * RASTER_S,
+            sx0, sy0, sx1 - sx0, sy1 - sy0,
+          );
+        }
+        // 标注画在**屏幕坐标**里（字号恒定），和 Pixi 版同一条 LOD 规则
+        ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx2.globalAlpha = labelAlpha;
+        ctx2.textAlign = "center";
+        ctx2.textBaseline = "middle";
+        ctx2.lineJoin = "round";
+        ctx2.lineWidth = 3;
+        ctx2.strokeStyle = "#ffffff";
+        ctx2.fillStyle = "#3c4b5f";
+        for (const i of lod.showList) {
+          const a = geo.areas[i];
+          const sx = cam.cx + (a.cx - WORLD_W / 2) * cam.Z;
+          const sy = cam.cy + (a.cy - geo.worldH / 2) * cam.Z;
+          ctx2.font = `600 ${lod.fs}px "PingFang SC","Noto Sans CJK SC",system-ui,sans-serif`;
+          ctx2.strokeText(a.name, sx, sy);
+          ctx2.fillText(a.name, sx, sy);
+        }
+        if (lod.tier >= 2) {
+          ctx2.fillStyle = "#e05a6a";
+          for (const i of lod.showList) {
+            const a = geo.areas[i];
+            ctx2.beginPath();
+            ctx2.arc(cam.cx + (a.cx - WORLD_W / 2) * cam.Z, cam.cy + (a.cy - geo.worldH / 2) * cam.Z, 2.6, 0, 6.2832);
+            ctx2.fill();
+          }
+        }
+        ctx2.globalAlpha = 1;
+        ctx2.setTransform(1, 0, 0, 1, 0, 0);
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         4. 相机
+            cam.Z   —— 表观「每世界单位多少屏幕像素」
+            cam.cx/cy —— 地图中心应落在**屏幕**上的位置
+         容器本身也有 transform（缩略态 sx,sy），所以 Pixi 侧要反着补偿，
+         这样地图内容在表观上永远等比、不被非等比缩放拉扁。
+         ══════════════════════════════════════════════════════════════════ */
+      const cam = { Z: 1, cx: 0, cy: 0 };
+      const xf = { tx: 0, ty: 0, sx: 1, sy: 1 }; // 容器当前 transform
+      let view = { x: 0, y: 0, w: 0, h: 0 }; // 表观可见矩形（屏幕坐标）
+
+      const fitZ = (w, h, pad) =>
+        Math.min((w - pad * 2) / WORLD_W, (h - pad * 2) / geo.worldH);
+
+      function applyCam() {
+        const kx = cam.Z / xf.sx;
+        const ky = cam.Z / xf.sy;
+        if (stage) {
+          stage.scale.set(kx, ky);
+          stage.position.set(
+            (cam.cx - (WORLD_W / 2) * cam.Z - xf.tx) / xf.sx,
+            (cam.cy - (geo.worldH / 2) * cam.Z - xf.ty) / xf.sy,
+          );
+          labelLayer.scale.set(1 / cam.Z, 1 / cam.Z);
+        }
+        view = {
+          x: cam.cx - (WORLD_W * cam.Z) / 2,
+          y: cam.cy - (geo.worldH * cam.Z) / 2,
+          w: WORLD_W * cam.Z,
+          h: geo.worldH * cam.Z,
+        };
+      }
+
+      function clampCam() {
+        const zf = fitZ(VW(), VH(), 20);
+        cam.Z = clamp(cam.Z, zf * 0.8, zf * 12);
+        const mw = WORLD_W * cam.Z,
+          mh = geo.worldH * cam.Z;
+        const slackX = Math.max(0, (mw - VW()) / 2) + (mw <= VW() ? (VW() - mw) * 0.25 : VW() * 0.15);
+        const slackY = Math.max(0, (mh - VH()) / 2) + (mh <= VH() ? (VH() - mh) * 0.25 : VH() * 0.15);
+        cam.cx = clamp(cam.cx, VW() / 2 - slackX, VW() / 2 + slackX);
+        cam.cy = clamp(cam.cy, VH() / 2 - slackY, VH() / 2 + slackY);
+      }
+
+      function fitCam(rect, pad) {
+        cam.Z = fitZ(rect.w, rect.h, pad);
+        cam.cx = rect.x + rect.w / 2;
+        cam.cy = rect.y + rect.h / 2;
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         5. 标注 LOD
+            规则（全部按「表观地图宽度」分档，与视口无关，可复现）：
+              < 220px  → 不画（缩略图档）
+              ≥ 220px  → 全量候选，按面积从大到小贪心放置，**重叠的直接不画**
+              ≥ 700px  → 字号 +1，并画锚点圆点
+              ≥ 1800px → 字号再 +1
+            这就是 Pixi 版相对 SVG 版的主要收益：SVG 是出图时把 34 个名字
+            按 bbox 中心硬画上去的，密处（京津冀/长三角）必然叠字。
+         ══════════════════════════════════════════════════════════════════ */
+      const lod = { tier: -1, shown: 0, dropped: 0, cand: 0, overlaps: 0, lastZ: 0, lastCx: 0, lastCy: 0, dotSig: "", showList: [], fs: 12 };
+
+      function estW(name, fs) {
+        let w = 0;
+        for (const ch of name) w += ch.charCodeAt(0) > 0x2e80 ? fs : fs * 0.55;
+        return w;
+      }
+
+      function solveLabels(force) {
+        if (!geo.ready) return;
+        const appW = WORLD_W * cam.Z;
+        const tier = appW < 220 ? 0 : appW < 700 ? 1 : appW < 1800 ? 2 : 3;
+        const fs = tier >= 3 ? 14 : tier === 2 ? 13 : 12;
+        const Zchg = lod.lastZ ? Math.abs(cam.Z - lod.lastZ) / lod.lastZ : 1;
+        const moved = Math.hypot(cam.cx - lod.lastCx, cam.cy - lod.lastCy);
+        if (!force && tier === lod.tier && Zchg < 0.04 && moved < 30) return;
+        lod.lastZ = cam.Z;
+        lod.lastCx = cam.cx;
+        lod.lastCy = cam.cy;
+
+        if (tier !== lod.tier && tier > 0) {
+          for (const L of labels)
+            if (L.txt && L.fs !== fs) {
+              L.fs = fs;
+              L.txt.style.fontSize = fs;
+            }
+        }
+        lod.tier = tier;
+
+        // 视口（表观）外扩一点，用来剔除屏幕外的标注
+        const vp = {
+          x0: 0 - 40,
+          y0: 0 - 40,
+          x1: VW() + 40,
+          y1: VH() + 40,
+        };
+        const cands = geo.areas
+          .map((a, i) => ({ a, i }))
+          .sort((p, q) => q.a.area - p.a.area);
+        const placed = [];
+        const show = new Set();
+        lod.cand = cands.length;
+        for (const { a, i } of cands) {
+          if (tier === 0) break;
+          // 世界 → 屏幕（表观）
+          const sx = cam.cx + (a.cx - WORLD_W / 2) * cam.Z;
+          const sy = cam.cy + (a.cy - geo.worldH / 2) * cam.Z;
+          const w = estW(a.name, fs) + 6;
+          const hh = fs * 1.35;
+          if (sx - w / 2 < vp.x0 || sx + w / 2 > vp.x1 || sy - hh / 2 < vp.y0 || sy + hh / 2 > vp.y1)
+            continue;
+          const box = { x0: sx - w / 2, y0: sy - hh / 2, x1: sx + w / 2, y1: sy + hh / 2 };
+          let hit = false;
+          for (const b of placed)
+            if (box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0) {
+              hit = true;
+              break;
+            }
+          if (hit) continue;
+          placed.push(box);
+          show.add(i);
+        }
+        lod.shown = show.size;
+        lod.dropped = lod.cand - lod.shown;
+        lod.overlaps = 0; // 贪心保证 0；留字段给对照读数
+        lod.boxes = placed;
+        lod.fs = fs;
+        lod.showList = [...show];
+
+        // Pixi 后端才需要动 Text 对象；Canvas2D 后端每帧按 lod.showList 直接画
+        if (labelLayer)
+          labels.forEach((L, i) => {
+            if (!L.txt) return;
+            const on = show.has(i);
+            L.txt.visible = on;
+            if (on) L.txt.position.set(L.a.cx, L.a.cy);
+          });
+        // 锚点圆点（tier≥2 才有，省得缩略图一团红点）
+        // ⚠️ 每次重建 GraphicsContext 都要重传 GPU buffer，所以只在「显示集合」真的
+        //    变了才重建；展开动画里 tier 一直停在 1，这里几乎不会触发。
+        const sig = tier >= 2 ? "2|" + [...show].sort((x, y) => x - y).join(",") : "0";
+        if (sig !== lod.dotSig) {
+          lod.dotSig = sig;
+          if (dotG) {
+            dotG.clear();
+            if (tier >= 2) {
+              for (const i of show) dotG.circle(geo.areas[i].cx, geo.areas[i].cy, 2.6);
+              dotG.fill({ color: C.dot });
+            }
+          }
+        }
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         6. 容器变换：小地图 ⇄ 全屏
+            p: 0 = 缩略态（贴在小地图矩形上），1 = 全屏
+            只改 transform / opacity / border-radius（无布局抖动）
+         ══════════════════════════════════════════════════════════════════ */
+      const st = { screen: "menu", expanded: false, animating: false, p: 0 };
+      let thumb = { x: 0, y: 0, w: 160, h: 110 };
+
+      function readThumb() {
+        const r = slot.getBoundingClientRect();
+        thumb = { x: r.left, y: r.top, w: r.width, h: r.height };
+      }
+
+      // 相机两端的「标准位姿」：缩略态 = 把全国 fit 进小地图；展开态 = fit 进全屏。
+      // ⚠️ 每次 paint 都重算 —— 曾经只在 init 算一次，而 init 时 #screenChat 还是
+      //    display:none（量到 0×0），fitZ 于是返回**负数**，整张地图缩放为负、什么都看不见。
+      function recomputeFit() {
+        readThumb();
+        thumbZ = fitZ(thumb.w, thumb.h, 5);
+        fullZ = fitZ(VW(), VH(), 22);
+        fullCx = VW() / 2;
+        fullCy = VH() / 2;
+      }
+
+      function paint(p) {
+        st.p = p;
+        recomputeFit();
+        const W = VW(),
+          H = VH();
+        xf.tx = lerp(thumb.x, 0, p);
+        xf.ty = lerp(thumb.y, 0, p);
+        xf.sx = lerp(thumb.w / W, 1, p);
+        xf.sy = lerp(thumb.h / H, 1, p);
+        host.style.transform = `translate(${xf.tx.toFixed(3)}px, ${xf.ty.toFixed(3)}px) scale(${xf.sx.toFixed(5)}, ${xf.sy.toFixed(5)})`;
+        // 圆角：容器被非等比缩放，所以半径要按平均缩放倒数放大，
+        // 表观上才是「约 14px 圆角」而不是被压成一条缝
+        const k = 14 / ((xf.sx + xf.sy) / 2);
+        host.style.borderRadius = `${(k * (1 - p)).toFixed(2)}px`;
+        host.style.borderColor = `rgba(255,255,255,${(0.34 * (1 - p)).toFixed(3)})`;
+        host.style.setProperty("--p", p.toFixed(4));
+        // 相机：从「缩略图 fit」插值到目标相机
+        cam.Z = lerp(thumbZ, fullZ, p);
+        cam.cx = lerp(thumb.x + thumb.w / 2, fullCx, p);
+        cam.cy = lerp(thumb.y + thumb.h / 2, fullCy, p);
+        applyCam();
+        // 标注只在下半程淡入（上半程还在缩略档，本来也不该有字）
+        labelAlpha = clamp((p - 0.5) / 0.5, 0, 1);
+        if (labelLayer) labelLayer.alpha = labelAlpha;
+        solveLabels(true);
+      }
+
+      let thumbZ = 0.1, // 缩略态的相机
+        fullZ = 0.4,
+        fullCx = 0,
+        fullCy = 0;
+
+      const perf = { anim: null, fpsIdle: 0, fpsDrag: 0 };
+
+      function preferReduce() {
+        return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      }
+
+      function animateTo(target, done) {
+        const from = { ...xf, Z: cam.Z, cx: cam.cx, cy: cam.cy };
+        const t0 = now();
+        const deltas = [];
+        const jsCost = [];
+        let last = t0;
+        st.animating = true;
+        if (!blurOff) host.classList.add("anim");
+        const step = () => {
+          const t = now();
+          deltas.push(t - last);
+          last = t;
+          const jsStart = now();
+          const raw = clamp((t - t0) / ANIM_MS_V, 0, 1);
+          const p = easeExpand(raw);
+          st.p = p;
+          xf.tx = lerp(from.tx, target.tx, p);
+          xf.ty = lerp(from.ty, target.ty, p);
+          xf.sx = lerp(from.sx, target.sx, p);
+          xf.sy = lerp(from.sy, target.sy, p);
+          host.style.transform = `translate(${xf.tx.toFixed(3)}px, ${xf.ty.toFixed(3)}px) scale(${xf.sx.toFixed(5)}, ${xf.sy.toFixed(5)})`;
+          if (!radiusOff) {
+            const k = 14 / ((xf.sx + xf.sy) / 2);
+            host.style.borderRadius = `${(k * (1 - p)).toFixed(2)}px`;
+            host.style.borderColor = `rgba(255,255,255,${(0.34 * (1 - p)).toFixed(3)})`;
+          }
+          host.style.setProperty("--p", p.toFixed(4));
+          cam.Z = lerp(from.Z, target.Z, p);
+          cam.cx = lerp(from.cx, target.cx, p);
+          cam.cy = lerp(from.cy, target.cy, p);
+          applyCam();
+          labelAlpha = clamp((p - 0.5) / 0.5, 0, 1);
+          if (labelLayer) labelLayer.alpha = labelAlpha;
+          // 节流版：Z 变化 <4% 且视口中心没挪 30px 就直接返回，
+          // 免得 35 个 Text / GraphicsContext 每帧重建（这是动画里唯一的可变开销）
+          solveLabels(false);
+          redraw();
+          // JS 侧每帧成本（不含浏览器光栅/合成）—— 这个数字才是能搬到真机上的
+          jsCost.push(now() - jsStart);
+          if (raw < 1) {
+            requestAnimationFrame(step);
+          } else {
+            st.animating = false;
+            host.classList.remove("anim");
+            // 丢掉第一帧（它是「出发帧」，间隔没意义）
+            const ds = deltas.slice(1);
+            const jc = jsCost.slice(1);
+            perf.anim = {
+              frames: ds.length,
+              avg: ds.reduce((a, b) => a + b, 0) / Math.max(1, ds.length),
+              p95: pct(ds, 0.95),
+              max: ds.length ? Math.max(...ds) : 0,
+              min: ds.length ? Math.min(...ds) : 0,
+              jsAvg: jc.reduce((a, b) => a + b, 0) / Math.max(1, jc.length),
+              jsP95: pct(jc, 0.95),
+              jsMax: jc.length ? Math.max(...jc) : 0,
+              total: now() - t0,
+            };
+            paint(st.expanded ? 1 : 0);
+            done && done();
+          }
+        };
+        requestAnimationFrame(step);
+      }
+
+      function expandMap() {
+        if (st.expanded || st.animating) return;
+        st.expanded = true;
+        host.classList.add("expanded");
+        recomputeFit();
+        // 出发态：贴在小地图上（先落到 DOM，读一次 rect 强制 flush，再起动画）
+        paint(0);
+        host.getBoundingClientRect();
+        if (preferReduce()) {
+          paint(1);
+          st.expanded = true;
+          return;
+        }
+        animateTo({ tx: 0, ty: 0, sx: 1, sy: 1, Z: fullZ, cx: fullCx, cy: fullCy }, renderHud);
+      }
+
+      function collapseMap() {
+        if (!st.expanded || st.animating) return;
+        st.expanded = false;
+        host.classList.remove("expanded");
+        recomputeFit();
+        if (preferReduce()) {
+          paint(0);
+          return;
+        }
+        animateTo(
+          {
+            tx: thumb.x,
+            ty: thumb.y,
+            sx: thumb.w / VW(),
+            sy: thumb.h / VH(),
+            Z: thumbZ,
+            cx: thumb.x + thumb.w / 2,
+            cy: thumb.y + thumb.h / 2,
+          },
+          renderHud,
+        );
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         7. 交互：拖拽平移 / 滚轮 / 双指 pinch / 惯性 / 双击复位 / 点省份
+         ══════════════════════════════════════════════════════════════════ */
+      const ptrs = new Map();
+      let drag = null; // {x,y,vx,vy,t}
+      let pinch = null; // {d, mx, my}
+
+      // 顶栏/按钮上的操作**不能**同时被当成地图拖拽或「点小地图展开」
+      const inChrome = (e) => !!(e.target && e.target.closest && e.target.closest(".map-chrome"));
+
+      function toWorld(sx, sy) {
+        return [
+          (sx - cam.cx) / cam.Z + WORLD_W / 2,
+          (sy - cam.cy) / cam.Z + geo.worldH / 2,
+        ];
+      }
+
+      host.addEventListener("pointerdown", (e) => {
+        if (!st.expanded || st.animating || inChrome(e)) return;
+        // 合成事件（自检用）没有真实 pointerId，捕获会抛 NotFoundError
+        try {
+          host.setPointerCapture(e.pointerId);
+        } catch (_e) {
+          /* 忽略：只是拿不到隐式捕获，拖拽逻辑照常 */
+        }
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (ptrs.size === 1) {
+          drag = { x: e.clientX, y: e.clientY, px: e.clientX, py: e.clientY, vx: 0, vy: 0, t: now(), moved: 0 };
+          host.classList.add("dragging");
+        } else if (ptrs.size === 2) {
+          const [a, b] = [...ptrs.values()];
+          pinch = {
+            d: Math.hypot(a.x - b.x, a.y - b.y),
+            Z: cam.Z,
+            mx: (a.x + b.x) / 2,
+            my: (a.y + b.y) / 2,
+          };
+          drag = null;
+        }
+      });
+
+      host.addEventListener("pointermove", (e) => {
+        if (!ptrs.has(e.pointerId)) return;
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && ptrs.size >= 2) {
+          const [a, b] = [...ptrs.values()];
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          const mx = (a.x + b.x) / 2,
+            my = (a.y + b.y) / 2;
+          const k = clamp(d / Math.max(1, pinch.d), 0.25, 4);
+          const target = clamp(pinch.Z * k, fitZ(VW(), VH(), 20) * 0.8, fitZ(VW(), VH(), 20) * 12);
+          const f = target / cam.Z;
+          // 以两指中点为锚点缩放 + 跟随中点平移
+          cam.cx = mx + (cam.cx - pinch.mx) * f;
+          cam.cy = my + (cam.cy - pinch.my) * f;
+          cam.Z = target;
+          pinch.mx = mx;
+          pinch.my = my;
+          clampCam();
+          solveLabels(false);
+          redraw();
+          return;
+        }
+        if (!drag) return;
+        const dx = e.clientX - drag.x,
+          dy = e.clientY - drag.y;
+        drag.x = e.clientX;
+        drag.y = e.clientY;
+        drag.moved += Math.abs(dx) + Math.abs(dy);
+        cam.cx += dx;
+        cam.cy += dy;
+        // 速度采样（用于松手后的惯性）
+        drag.vx = lerp(drag.vx, dx, 0.4);
+        drag.vy = lerp(drag.vy, dy, 0.4);
+        drag.px = e.clientX;
+        drag.py = e.clientY;
+        clampCam();
+        solveLabels(false);
+        redraw();
+      });
+
+      function endPointer(e) {
+        if (!ptrs.has(e.pointerId)) return;
+        ptrs.delete(e.pointerId);
+        if (ptrs.size < 2) pinch = null;
+        if (ptrs.size === 0) {
+          host.classList.remove("dragging");
+          if (drag) {
+            const vx = drag.vx,
+              vy = drag.vy,
+              moved = drag.moved;
+            const sx = drag.x,
+              sy = drag.y;
+            drag = null;
+            // 惯性
+            if (Math.abs(vx) > 0.4 || Math.abs(vy) > 0.4) {
+              let vX = vx,
+                vY = vy;
+              const glide = () => {
+                vX *= 0.93;
+                vY *= 0.93;
+                cam.cx += vX;
+                cam.cy += vY;
+                clampCam();
+                solveLabels(false);
+                redraw();
+                if (Math.abs(vX) > 0.12 || Math.abs(vY) > 0.12) requestAnimationFrame(glide);
+                else renderHud();
+              };
+              requestAnimationFrame(glide);
+            } else if (moved < 6) {
+              // 没怎么动 → 当成点击：点到哪个省就飞过去
+              pickProvince(sx, sy);
+            }
+          }
+        }
+      }
+      host.addEventListener("pointerup", endPointer);
+      host.addEventListener("pointercancel", endPointer);
+
+      host.addEventListener(
+        "wheel",
+        (e) => {
+          if (!st.expanded || st.animating) return;
+          e.preventDefault();
+          const f = Math.exp(-e.deltaY * 0.0016);
+          const target = clamp(cam.Z * f, fitZ(VW(), VH(), 20) * 0.8, fitZ(VW(), VH(), 20) * 12);
+          const k = target / cam.Z;
+          cam.cx = e.clientX + (cam.cx - e.clientX) * k;
+          cam.cy = e.clientY + (cam.cy - e.clientY) * k;
+          cam.Z = target;
+          clampCam();
+          solveLabels(false);
+          redraw();
+          renderHud();
+        },
+        { passive: false },
+      );
+
+      host.addEventListener("dblclick", () => {
+        if (!st.expanded) return;
+        cam.Z = fitZ(VW(), VH(), 22);
+        cam.cx = VW() / 2;
+        cam.cy = VH() / 2;
+        solveLabels(true);
+        redraw();
+        renderHud();
+      });
+
+      function pickProvince(sx, sy) {
+        const [wx, wy] = toWorld(sx, sy);
+        let best = null;
+        for (const a of geo.areas) {
+          const [x0, y0, x1, y1] = a.bbox;
+          if (wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1) {
+            if (!best || a.area < best.area) best = a;
+          }
+        }
+        if (!best) return;
+        flyTo(best);
+      }
+
+      function flyTo(a) {
+        const [x0, y0, x1, y1] = a.bbox;
+        const w = x1 - x0,
+          h = y1 - y0;
+        const Z = Math.min((VW() - 120) / w, (VH() - 90) / h);
+        // cam.cx 的语义是「世界中心(world 500,worldH/2)落在屏幕的哪个位置」，
+        // 所以要把目标要素的中心搬到屏幕中央，得**减**掉偏移（写成加号会把镜头甩到地图外，
+        // 症状是「飞过去之后一个字都看不到」）。
+        const cx = VW() / 2 - ((x0 + x1) / 2 - WORLD_W / 2) * Z;
+        const cy = VH() / 2 - ((y0 + y1) / 2 - geo.worldH / 2) * Z;
+        const from = { Z: cam.Z, cx: cam.cx, cy: cam.cy };
+        const t0 = now();
+        const step = () => {
+          const raw = clamp((now() - t0) / 520, 0, 1);
+          const p = easeExpand(raw);
+          cam.Z = lerp(from.Z, Z, p);
+          cam.cx = lerp(from.cx, cx, p);
+          cam.cy = lerp(from.cy, cy, p);
+          clampCam();
+          solveLabels(false);
+          redraw();
+          if (raw < 1) requestAnimationFrame(step);
+          else {
+            solveLabels(true);
+            redraw();
+            renderHud();
+          }
+        };
+        requestAnimationFrame(step);
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         8. 性能埋点（数字要真测，不靠感觉）
+         ══════════════════════════════════════════════════════════════════ */
+      function measureFps(ms, drive) {
+        return new Promise((res) => {
+          const t0 = now();
+          let n = 0;
+          let last = t0;
+          const ds = [];
+          const step = () => {
+            const t = now();
+            ds.push(t - last);
+            last = t;
+            n++;
+            // drive 抛错也必须继续走完并 resolve —— 否则 Promise 永远挂着，
+            // 外部读到的就是 null（踩过一次，白查半小时）
+            if (drive) {
+              try {
+                drive(t - t0);
+              } catch (e) {
+                if (renderErr.length < 12) renderErr.push("drive: " + String((e && e.message) || e));
+              }
+            }
+            if (t - t0 < ms) requestAnimationFrame(step);
+            else {
+              const d = ds.slice(1);
+              res({
+                frames: d.length,
+                fps: (d.length / ((now() - t0) / 1000)),
+                avg: d.reduce((a, b) => a + b, 0) / Math.max(1, d.length),
+                p95: pct(d, 0.95),
+                max: d.length ? Math.max(...d) : 0,
+              });
+            }
+          };
+          requestAnimationFrame(step);
+        });
+      }
+
+      function renderHud() {
+        const a = perf.anim;
+        const okA = a && a.max <= 32 && a.p95 <= 20;
+        const p = st.p;
+        const appW = Math.round(WORLD_W * cam.Z);
+        hud.innerHTML = [
+          `<div><b>展开动画</b> ${
+            a
+              ? `${a.frames} 帧 · 均 ${a.avg.toFixed(1)}ms · p95 ${a.p95.toFixed(1)}ms · 最长 ${a.max.toFixed(1)}ms ` +
+                `<span class="${okA ? "ok" : "bad"}">${okA ? "✅ 达标" : "❌ 超标"}</span>`
+              : "（还没播过，点小地图）"
+          }</div>`,
+          `<div><b>动画 JS 成本</b> ${
+            a ? `均 ${a.jsAvg.toFixed(2)}ms · p95 ${a.jsP95.toFixed(2)}ms · 最长 ${a.jsMax.toFixed(2)}ms（不含光栅/合成）` : "—"
+          }</div>`,
+          `<div><b>渲染后端</b> ${R.backend === "pixi" ? "PixiJS / WebGL" : "Canvas2D 兜底（" + R.reason + "）"}</div>`,
+          `<div><b>渲染帧率</b> 静止 ${
+            perf.fpsIdle ? perf.fpsIdle.toFixed(1) + "fps" : "—"
+          } · 拖拽 ${perf.fpsDrag ? perf.fpsDrag.toFixed(1) + "fps" : "—"}（软件 WebGL，真机有 GPU 更快）</div>`,
+          `<div><b>首屏</b> GeoJSON ${T.bytes ? (T.bytes / 1024).toFixed(0) + "KB/" : ""}${(T.fetch || 0).toFixed(0)}ms → 首帧 ${
+            T.first || 0
+          }ms · Pixi 初始化 ${(T.pixi || 0).toFixed(0)}ms · 建图 ${(T.gfx || 0).toFixed(0)}ms</div>`,
+          `<div><b>标注</b> LOD 档 ${lod.tier} · 显示 <b>${lod.shown}</b>/${lod.cand}（丢 ${lod.dropped}）重叠 <b>${lod.overlaps}</b>${
+            svgStat.tier ? ` · SVG 版 <b>${svgStat.labels}</b> 个重叠 <b class="bad">${svgStat.overlaps}</b>` : ""
+          }</div>`,
+          `<div><b>相机</b> Z=${cam.Z.toFixed(3)}（${(cam.Z / fitZ(VW(), VH(), 22)).toFixed(2)}× fit）· 表观地图宽 ${appW}px · 容器 scale ${xf.sx.toFixed(3)}/${xf.sy.toFixed(3)} · p=${p.toFixed(2)}</div>`,
+        ].join("");
+      }
+
+      const svgStat = { labels: 0, overlaps: 0, tier: 0 };
+
+      // 把 /api/geo_svg 的 <text> 抠出来，按后端同一套字宽估算，数「有几对是叠的」
+      async function svgOverlapStat(w, h) {
+        const txt = await (await fetch(svgUrl(w, h))).text();
+        const re = /<text[^>]*\bx="([\d.]+)"[^>]*\by="([\d.]+)"[^>]*\bfont-size="([\d.]+)"[^>]*>([^<]*)<\/text>/g;
+        const boxes = [];
+        let m;
+        while ((m = re.exec(txt))) {
+          const x = +m[1],
+            y = +m[2],
+            fs = +m[3],
+            name = m[4];
+          if (!name.trim()) continue;
+          const bw = estW(name, fs);
+          boxes.push({ x0: x - bw / 2, y0: y - fs * 0.86, x1: x + bw / 2, y1: y + fs * 0.24, name });
+        }
+        let ov = 0;
+        for (let i = 0; i < boxes.length; i++)
+          for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i],
+              b = boxes[j];
+            if (a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0) ov++;
+          }
+        svgStat.labels = boxes.length;
+        svgStat.overlaps = ov;
+        svgStat.tier = 1;
+        svgStat.boxes = boxes;
+        renderHud();
+        return svgStat;
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         9. 菜单（Vue + **真组件**）
+            GameModeOptions.vue 的结构原样搬过来，只在第 4 项加了「世界模拟」。
+         ══════════════════════════════════════════════════════════════════ */
+      const menuState = ref("main");
+      let onPickWorld = () => {};
+
+      const Item = (label, opts = {}) =>
+        h(
+          StartItem,
+          {
+            class: "menu-subitem",
+            disabled: opts.disabled || undefined,
+            onClick: opts.on,
+          },
+          () => label,
+        );
+      const Line = (child, props = {}) => h(StartLine, props, () => [child]);
+      const List = (children, props = {}) => h(StartList, props, () => children);
+
+      const Menu = {
+        setup() {
+          return () =>
+            h(StartPage, {}, () => [
+              h(
+                Transition,
+                { name: menuState.value === "main" ? "slide-left" : "slide-right" },
+                {
+                  default: () =>
+                    menuState.value === "main"
+                      ? List(
+                          [
+                            Line(Item("开始游戏", { on: () => (menuState.value = "gameMode") })),
+                            Line(Item("继续游戏", { on: () => {} })),
+                            Line(Item("创意工坊", { on: () => {} }), { mobile: false }),
+                            Line(Item("世界模拟", { on: () => onPickWorld("world") })),
+                            Line(Item("游戏配置", { on: () => {} })),
+                            Line(Item("致谢名单", { on: () => {} })),
+                            Line(Item("退出游戏", { on: () => {} })),
+                          ],
+                          { responsive: true, key: "main" },
+                        )
+                      : List(
+                          [
+                            // ↓↓↓ 与 GameModeOptions.vue 逐行对应，新增的只有第 4 项
+                            Line(Item("自由对话模式", { on: () => onPickWorld("free") })),
+                            Line(Item("剧情模式（在自由模式进入）", { disabled: true })),
+                            Line(Item("小游戏（开发中）", { disabled: true })),
+                            // ★ 新增的第 4 个选项（原来这里是「返回」，现在它排在第 5 位）
+                            Line(Item("世界模拟", { on: () => onPickWorld("world") })),
+                            Line(Item("返回", { on: () => (menuState.value = "main") })),
+                          ],
+                          { key: "gameMode" },
+                        ),
+                },
+              ),
+            ]);
+        },
+      };
+
+      createApp(Menu).mount("#menuHost");
+
+      /* ══════════════════════════════════════════════════════════════════
+         10. 屏幕切换 + 顶点
+         ══════════════════════════════════════════════════════════════════ */
+      function showScreen(name) {
+        st.screen = name;
+        $("screenMenu").classList.toggle("on", name === "menu");
+        $("screenChat").classList.toggle("on", name === "chat");
+        host.classList.toggle("hidden", name !== "chat");
+        if (name === "chat") {
+          // ⚠️ 必须**同步**量一次再 paint：`#screenChat` 刚从 display:none 变成
+          //    block，`getBoundingClientRect()` 会强制一次布局并拿到真实矩形。
+          //    若只放进 rAF，会有「容器还停留在上一状态（=满屏）」的一帧闪白。
+          paint(0);
+          redraw();
+          requestAnimationFrame(() => {
+            paint(0);
+            redraw();
+            renderHud();
+          });
+          diag.textContent = "聊天页 · 点右下角小地图展开";
+        } else {
+          diag.textContent = "开始菜单 · 开始游戏 → 世界模拟";
+        }
+      }
+
+      onPickWorld = (which) => {
+        if (which === "free") {
+          $("chatSub").textContent = "自由对话模式";
+          showScreen("chat");
+          return;
+        }
+        $("chatSub").textContent = "自由对话模式 · 世界模拟已开启";
+        showScreen("chat");
+      };
+
+      $("btnBackMenu").onclick = () => showScreen("menu");
+      $("btnClose").onclick = () => collapseMap();
+      let CLICK_N = 0;
+      host.addEventListener("click", (e) => {
+        CLICK_N++;
+        // 缩略态被点 → 展开（展开态里 click 有别的用途，见 pickProvince）
+        // ⚠️ 必须排掉「收起」等顶栏按钮冒泡上来的 click，否则会「收起完立刻又展开」
+        if (inChrome(e)) return;
+        if (!st.expanded && !st.animating) expandMap();
+      });
+      $("btnReset").onclick = () => {
+        cam.Z = fitZ(VW(), VH(), 22);
+        cam.cx = VW() / 2;
+        cam.cy = VH() / 2;
+        solveLabels(true);
+        redraw();
+        renderHud();
+      };
+      $("btnSvg").onclick = () => {
+        const on = $("mapSvg").classList.toggle("on");
+        $("btnSvg").textContent = on ? "切回 PixiJS 版" : "切到 SVG 版对照";
+        if (on) {
+          $("mapSvgImg").src = svgUrl(VW(), VH());
+          svgOverlapStat(VW(), VH());
+        }
+        renderHud();
+      };
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && st.expanded) collapseMap();
+      });
+
+      let rt = 0;
+      window.addEventListener("resize", () => {
+        clearTimeout(rt);
+        rt = setTimeout(() => {
+          if (app) app.renderer.resize(VW(), VH());
+          if (cv2) {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            cv2.width = Math.round(VW() * dpr);
+            cv2.height = Math.round(VH() * dpr);
+          }
+          if (R.backend === "none") return;
+          readThumb();
+          thumbZ = fitZ(thumb.w, thumb.h, 5);
+          fullZ = fitZ(VW(), VH(), 22);
+          fullCx = VW() / 2;
+          fullCy = VH() / 2;
+          paint(st.expanded ? 1 : 0);
+          renderHud();
+        }, 120);
+      });
+
+      $("menuBg").style.backgroundImage = `url(${bgUrl})`;
+      $("chatBg").style.backgroundImage = `url(${bgUrl})`;
+
+      /* ══════════════════════════════════════════════════════════════════
+         11. 起：先建 Pixi（早），再拉数据；数据一到就建图 → 缩略图立刻有画面。
+             这样**展开动画永远不会等网络**。
+         ══════════════════════════════════════════════════════════════════ */
+      window.__WS__ = {
+        get ready() {
+          return geo.ready && !!app;
+        },
+        state: () => ({
+          screen: st.screen,
+          menu: menuState.value,
+          expanded: st.expanded,
+          animating: st.animating,
+          p: st.p,
+          cam: { Z: cam.Z, cx: cam.cx, cy: cam.cy },
+          xf: { ...xf },
+          lod: { ...lod, boxes: undefined },
+          perf: { ...perf },
+          timings: { ...T },
+          geo: { ready: geo.ready, areas: geo.areas.length, pts: geo.totalPts, worldH: geo.worldH, error: geo.error },
+          svg: { ...svgStat, boxes: undefined },
+          viewport: [VW(), VH()],
+          thumb: { ...thumb },
+          render: (() => {
+            const gl = app && app.renderer ? app.renderer.gl : null;
+            const bb = landG ? landG.getBounds() : null;
+            return {
+              backend: R.backend,
+              reason: R.reason,
+              lostEvents: R.lostEvents.slice(0, 4),
+              type: app ? app.renderer.type : null, // 1=WEBGL 2=CANVAS
+              ctxLost: gl ? gl.isContextLost() : null,
+              renderer: gl ? String(gl.getParameter(gl.RENDERER)).slice(0, 60) : null,
+              canvasPx: app ? [app.canvas.width, app.canvas.height] : cv2 ? [cv2.width, cv2.height] : null,
+              stageKids: stage ? stage.children.length : -1,
+              landInst: landG ? landG.context.instructions.length : -1,
+              borderInst: borderG ? borderG.context.instructions.length : -1,
+              landBounds: bb ? [bb.x | 0, bb.y | 0, bb.width | 0, bb.height | 0] : null,
+              rasterPx: raster ? [raster.width, raster.height] : null,
+              labelVisible: labels.filter((l) => l.txt && l.txt.visible).length,
+              renderCount: RENDER_N,
+              clicks: CLICK_N,
+              renderErr: renderErr.slice(),
+            };
+          })(),
+          hostRect: (() => {
+            const r = host.getBoundingClientRect();
+            return { x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1) };
+          })(),
+        }),
+        showScreen,
+        setMenu: (v) => (menuState.value = v),
+        expand: () => expandMap(),
+        collapse: () => collapseMap(),
+        settle: () => paint(st.expanded ? 1 : 0),
+        reset: () => $("btnReset").click(),
+        showSvg: (b) => {
+          $("mapSvg").classList.toggle("on", !!b);
+          if (b) $("mapSvgImg").src = svgUrl(VW(), VH());
+        },
+        setCam: (Z, cx, cy) => {
+          cam.Z = Z;
+          cam.cx = cx;
+          cam.cy = cy;
+          clampCam();
+          solveLabels(true);
+          redraw();
+          renderHud();
+        },
+        fit: () => {
+          cam.Z = fitZ(VW(), VH(), 22);
+          cam.cx = VW() / 2;
+          cam.cy = VH() / 2;
+          solveLabels(true);
+          redraw();
+          renderHud();
+        },
+        flyToName: (name) => {
+          const a = geo.areas.find((x) => x.name.includes(name));
+          if (a) flyTo(a);
+          return !!a;
+        },
+        // 「静止」= 相机不动，但**每帧都重画一次**（量的是渲染吞吐，不是空转 rAF）
+        setRenderOff: (b) => {
+          renderOff = !!b;
+          return renderOff;
+        },
+        // 决定性对照：**一个什么都不装的空 div**，只做同样的 translate+scale 动画。
+        // 如果它跟地图容器一样慢 → 慢的是这台机器的软件合成，不是我们的渲染。
+        measurePlainTransform: async (ms = 420) => {
+          const d = document.createElement("div");
+          d.style.cssText = `position:fixed;left:0;top:0;width:100vw;height:100vh;background:#345;will-change:transform;transform-origin:0 0;z-index:95;`;
+          document.body.appendChild(d);
+          const t0 = now();
+          const ds = [];
+          let last = t0;
+          await new Promise((res) => {
+            const step = () => {
+              const t = now();
+              ds.push(t - last);
+              last = t;
+              const raw = clamp((t - t0) / ms, 0, 1);
+              const p = easeExpand(raw);
+              const W = VW(), H = VH();
+              const sx = lerp(0.1717, 1, p), sy = lerp(0.2558, 1, p);
+              d.style.transform = `translate(${lerp(758, 0, p)}px, ${lerp(246, 0, p)}px) scale(${sx},${sy})`;
+              if (raw < 1) requestAnimationFrame(step);
+              else res();
+              void W; void H;
+            };
+            requestAnimationFrame(step);
+          });
+          d.remove();
+          const dd = ds.slice(1);
+          return {
+            frames: dd.length,
+            avg: dd.reduce((a, b) => a + b, 0) / Math.max(1, dd.length),
+            p95: pct(dd, 0.95),
+            max: dd.length ? Math.max(...dd) : 0,
+          };
+        },
+        // 对照用的**空白基线**：一个什么都不做的 rAF 循环能跑多少帧间隔。
+        // 没有这个基线，任何"动画卡"的结论都可能是把环境本身的上限当成了代码的问题。
+        measureBaseline: async (ms = 1500) => measureFps(ms, null),
+        // 同一段展开动画，分别「带光栅」和「不带光栅」各跑一次 → 差值就是地图光栅的成本。
+        // 这是为了回答「不达标是卡在哪一步」，而不是笼统说一句"有点卡"。
+        measureAnim: async (ms = 420, off = false, noRadius = false, noBlur = false) => {
+          renderOff = !!off;
+          radiusOff = !!noRadius;
+          blurOff = !!noBlur;
+          ANIM_MS_V = ms;
+          perf.anim = null;
+          // 硬复位到缩略态（不走动画），再正常播一次展开
+          st.animating = false;
+          st.expanded = false;
+          host.classList.remove("expanded");
+          paint(0);
+          await new Promise((r) => requestAnimationFrame(r));
+          expandMap();
+          await new Promise((r) => setTimeout(r, ms + 600));
+          ANIM_MS_V = ANIM_MS;
+          renderOff = false;
+          radiusOff = false;
+          blurOff = false;
+          return perf.anim;
+        },
+        measureIdle: async (ms = 1500) => {
+          const r = await measureFps(ms, () => redraw());
+          perf.fpsIdle = r.fps;
+          perf.idleDetail = r;
+          renderHud();
+          return r;
+        },
+        // 「拖拽中」= 每帧改相机 + 重画（真实拖拽路径）
+        measureDrag: async (ms = 1500) => {
+          const r = await measureFps(ms, (t) => {
+            cam.cx = VW() / 2 + Math.sin(t / 260) * 90;
+            cam.cy = VH() / 2 + Math.cos(t / 310) * 40;
+            solveLabels(false);
+            redraw();
+          });
+          perf.fpsDrag = r.fps;
+          perf.dragDetail = r;
+          renderHud();
+          return r;
+        },
+        // 合成双指 pinch（无头里没法真捏，用 PointerEvent 走同一条处理链）
+        synthPinch: (k = 1.8, steps = 8) => {
+          const cx = VW() / 2,
+            cy = VH() / 2;
+          const mk = (type, id, x, y) =>
+            host.dispatchEvent(
+              new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, bubbles: true, isPrimary: id === 1, pointerType: "touch" }),
+            );
+          const d0 = 80;
+          const z0 = cam.Z;
+          mk("pointerdown", 1, cx - d0 / 2, cy);
+          mk("pointerdown", 2, cx + d0 / 2, cy);
+          for (let i = 1; i <= steps; i++) {
+            const d = (d0 * (1 + (k - 1) * (i / steps))) / 2;
+            mk("pointermove", 1, cx - d, cy);
+            mk("pointermove", 2, cx + d, cy);
+          }
+          mk("pointerup", 1, cx - (d0 * k) / 2, cy);
+          mk("pointerup", 2, cx + (d0 * k) / 2, cy);
+          const z1 = cam.Z;
+          return { z0, z1, ratio: z1 / z0, want: k };
+        },
+        synthWheel: (deltaY = -400, x = 0, y = 0) => {
+          const z0 = cam.Z;
+          host.dispatchEvent(
+            new WheelEvent("wheel", { deltaY, clientX: x || VW() / 2, clientY: y || VH() / 2, bubbles: true, cancelable: true }),
+          );
+          return { z0, z1: cam.Z };
+        },
+        synthDrag: (dx, dy, steps = 12) => {
+          const cx = VW() / 2,
+            cy = VH() / 2;
+          const mk = (type, x, y) =>
+            host.dispatchEvent(new PointerEvent(type, { pointerId: 7, clientX: x, clientY: y, bubbles: true, pointerType: "mouse" }));
+          const c0 = { x: cam.cx, y: cam.cy };
+          mk("pointerdown", cx, cy);
+          for (let i = 1; i <= steps; i++) mk("pointermove", cx + (dx * i) / steps, cy + (dy * i) / steps);
+          mk("pointerup", cx + dx, cy + dy);
+          return { dx: cam.cx - c0.x, dy: cam.cy - c0.y, want: [dx, dy] };
+        },
+        // 点某个省（走 pickProvince）
+        clickAt: (x, y) => {
+          host.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 9, clientX: x, clientY: y, bubbles: true, pointerType: "mouse" }));
+          host.dispatchEvent(new PointerEvent("pointerup", { pointerId: 9, clientX: x, clientY: y, bubbles: true, pointerType: "mouse" }));
+        },
+        renderHud,
+      };
+
+      (async () => {
+        try {
+          try {
+            await initPixi();
+          } catch (e) {
+            R.lostEvents.push({ t: Math.round(now()), msg: "initPixi 抛错：" + String((e && e.message) || e).slice(0, 120) });
+            initCanvas2d("WebGL 初始化失败");
+          }
+          showScreen("menu");
+          await loadGeo();
+          buildMap();
+          readThumb();
+          thumbZ = fitZ(thumb.w, thumb.h, 5);
+          fullZ = fitZ(VW(), VH(), 22);
+          fullCx = VW() / 2;
+          fullCy = VH() / 2;
+          cam.Z = fullZ;
+          cam.cx = fullCx;
+          cam.cy = fullCy;
+          solveLabels(true);
+          redraw();
+          T.first = +(now() - T0).toFixed(1);
+          showScreen("menu");
+          diag.textContent = `就绪 · ${geo.areas.length} 个省级要素 / ${geo.totalPts} 点 · 首帧 ${T.first}ms`;
+          renderHud();
+          // SVG 对照的统计（后台跑，不影响首屏）
+          svgOverlapStat(VW(), VH()).catch(() => {});
+          window.__WS_READY__ = true;
+        } catch (err) {
+          geo.error = String((err && err.stack) || err);
+          diag.className = "err";
+          diag.textContent = "启动失败：" + geo.error;
+          console.error(err);
+        }
+      })();
+    </script>
+  </body>
+</html>

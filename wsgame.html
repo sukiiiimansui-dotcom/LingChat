@@ -446,18 +446,50 @@
         const k = view.s / fitScale;
         return k > 3.2 ? feats.map((f) => f.name) : ANCHORS;
       }
+      /* 🔴 踩过的坑（2026-09-16 机主报「文字和地图严重错位」）：
+         原来用**全部顶点的平均值**当锚点 —— 但省份的顶点分布极不均匀（海岸线密、内陆疏，
+         还有一堆小岛），顶点平均会被密集处**拽跑**，标注就飘到省外/海边去了。
+         正解：取**面积最大的那个环**，用**多边形面积质心**（标准公式）当锚点。
+         这比顶点平均稳得多，也比 bbox 中心更贴形状。 */
+      function ringArea(r) {
+        let a = 0;
+        for (let i = 0, j = r.length - 2; i < r.length; j = i, i += 2) a += r[j] * r[i + 1] - r[i] * r[j + 1];
+        return a / 2;
+      }
+      function ringCentroid(r) {
+        let a = 0, cx = 0, cy = 0;
+        for (let i = 0, j = r.length - 2; i < r.length; j = i, i += 2) {
+          const f = r[j] * r[i + 1] - r[i] * r[j + 1];
+          a += f;
+          cx += (r[j] + r[i]) * f;
+          cy += (r[j + 1] + r[i + 1]) * f;
+        }
+        a /= 2;
+        if (Math.abs(a) < 1e-12) return null;
+        return [cx / (6 * a), cy / (6 * a)];
+      }
+      /** 每个要素的标注锚点（归一化世界坐标），只算一次 */
+      function anchorOf(f) {
+        if (f._anchor !== undefined) return f._anchor;
+        let best = null, bestA = 0;
+        for (const r of f.rings) {
+          const a = Math.abs(ringArea(r));
+          if (a > bestA) { bestA = a; best = r; }
+        }
+        f._anchor = best ? ringCentroid(best) : null;
+        return f._anchor;
+      }
       function labelAnchors() {
         const list = labelList();
         const out = [];
         for (const f of feats) {
           if (!list.includes(f.name)) continue;
-          let sx = 0, sy = 0, n = 0;
-          for (const r of f.rings) for (let i = 0; i < r.length; i += 2) { sx += r[i]; sy += r[i + 1]; n++; }
-          if (!n) continue;
+          const c = anchorOf(f);
+          if (!c) continue;
           out.push({
             name: f.name.replace(/(维吾尔|壮族|回族|特别行政)?自治区$/, "").replace(/省$|市$/, ""),
-            x: view.x + (sx / n) * view.s,
-            y: view.y + (sy / n) * view.s,
+            x: view.x + c[0] * view.s,
+            y: view.y + c[1] * view.s,
           });
         }
         return out;
@@ -653,13 +685,27 @@
           pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
           if (pts.size === 1) { dragging = true; lx = e.clientX; ly = e.clientY; vx = vy = 0; el.setPointerCapture(e.pointerId); }
         });
+        /** 视口坐标 → 画布本地坐标（zoomAt 的锚点必须是本地坐标，踩过） */
+        const local = (e) => {
+          const r = el.getBoundingClientRect();
+          return [e.clientX - r.left, e.clientY - r.top];
+        };
+
         el.addEventListener("pointermove", (e) => {
           if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
           if (pts.size >= 2) {
-            // 双指：按两指距离比例缩放（围绕两指中点）
+            /* 双指：按两指距离比例缩放，锚点 = 两指中点（**本地坐标**）。
+               🔴 踩过的坑（机主报「双手放大位移未知方向」）：这里原来
+               ① 用 client 坐标当锚点（画布若有偏移就错了）；
+               ② **没有清掉单指拖拽留下的速度** → 松手后惯性带着地图朝"上一次拖的方向"漂走。
+               两处一起修：锚点转本地坐标；进入双指时立刻停掉拖拽与速度。 */
+            if (dragging) { dragging = false; vx = vy = 0; stopInertia(); }
             const [a, b] = [...pts.values()];
             const d = Math.hypot(a.x - b.x, a.y - b.y);
-            if (bindInput.lastD) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / bindInput.lastD);
+            if (bindInput.lastD) {
+              const [mx, my] = local({ clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 });
+              zoomAt(mx, my, d / bindInput.lastD);
+            }
             bindInput.lastD = d;
             return;
           }
@@ -670,15 +716,21 @@
           view.x += dx; view.y += dy; applyView();
         });
         const up = (e) => {
+          const wasPinch = pts.size >= 2;
           pts.delete(e.pointerId);
           if (pts.size < 2) bindInput.lastD = 0;
+          if (wasPinch) { vx = vy = 0; dragging = false; stopInertia(); return; } // 双指结束不甩惯性
           if (pts.size === 0 && dragging) { dragging = false; raf = requestAnimationFrame(inertia); }
         };
         el.addEventListener("pointerup", up);
         el.addEventListener("pointercancel", up);
         el.addEventListener(
           "wheel",
-          (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12); },
+          (e) => {
+            e.preventDefault();
+            const [mx, my] = local(e); // 同样必须是本地坐标
+            zoomAt(mx, my, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+          },
           { passive: false }
         );
 

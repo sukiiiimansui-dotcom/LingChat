@@ -48,14 +48,23 @@
         </button>
       </div>
 
-      <div class="wsphone__grid">
+      <!-- 应用页：目前只接了「地图/导航」（T5-2）；其余点了会如实提示「还没接进来」 -->
+      <div v-if="app" class="wsphone__app-view">
+        <div class="wsphone__appbar">
+          <button class="wsphone__back" type="button" @click="app = ''">‹ 返回</button>
+          <span class="wsphone__appname">{{ appName }}</span>
+        </div>
+        <WsPhoneNav v-if="app === 'map'" />
+      </div>
+
+      <div v-else class="wsphone__grid">
         <button
           v-for="a in APPS"
           :key="a.key"
           class="wsphone__app"
           type="button"
           :title="a.hint"
-          @click="emit('open-app', a.key)"
+          @click="onApp(a.key)"
         >
           <span class="wsphone__ico">{{ a.icon }}</span>
           <span class="wsphone__nm">{{ a.name }}</span>
@@ -69,8 +78,9 @@
 </template>
 
 <script setup lang="ts">
-  import { onMounted, ref, watch } from "vue";
+  import { computed, onMounted, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
+  import WsPhoneNav from "./WsPhoneNav.vue";
 
   const { t } = useI18n();
 
@@ -97,6 +107,9 @@
 
   const KEY = "ws.phone.open";
   const open = ref(false);
+  /** 当前打开的应用 key（'' = 首页 8 宫格）。已接的只有 map（T5-2）。 */
+  const app = ref("");
+  const appName = computed(() => APPS.find((a) => a.key === app.value)?.name || "");
 
   function readSaved(): boolean {
     try {
@@ -105,8 +118,19 @@
       return false;
     }
   }
+  /** 已接的应用清单：T5-3~T5-8 落地时**加到这里**并把 WsPhoneNav 换成对应组件 */
+  const READY = new Set(["map"]);
+  function onApp(key: string) {
+    if (READY.has(key)) {
+      app.value = key;
+      return;
+    }
+    emit("open-app", key); // 交给外层如实提示"还没接进来"
+  }
+
   function toggle(v: boolean) {
     open.value = v;
+    if (!v) app.value = ""; // 收起时回到首页，下次打开是干净的
     try {
       localStorage.setItem(KEY, v ? "1" : "0");
     } catch {
@@ -217,6 +241,37 @@
   .wsphone__x:hover {
     background: rgba(255, 255, 255, 0.08);
     color: #fff;
+  }
+
+  .wsphone__app-view {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+  .wsphone__appbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px 2px;
+  }
+  .wsphone__back {
+    height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .wsphone__back:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+  .wsphone__appname {
+    font-size: 12.5px;
+    font-weight: 600;
   }
 
   .wsphone__grid {

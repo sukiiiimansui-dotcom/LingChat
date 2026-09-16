@@ -1264,3 +1264,43 @@ export async function geoSvgText(
     `&elevation=${elevation !== false ? 1 : 0}`;
   return await fetchSvgText(url);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// 几何数据（GeoJSON）与下级区划：**双通路**
+// ═══════════════════════════════════════════════════════════════════
+//
+// 为什么需要：手机里的「地图/导航」（T5-2）要**目的地坐标**才能调 `transport_plan`，
+// 而后端**没有「区县中心坐标」接口**（实测 `/api/blocks?ad=` 返回 `{ok:false}`、
+// `/api/location?ad=` 会忽略 ad）→ 只能拿该区县的 GeoJSON 自己算面积质心。
+// 目的地候选则来自 `/api/geo/children`。
+//
+// 🔴 **真壳侧的命令还不存在**（`world_map_geo_json` / `world_map_geo_children` 未注册）。
+//    这与 wsenter 交付里指出的是同一个缺口。**在 Rust 补上之前，真壳里这两个调用会 reject**，
+//    所以调用方必须 catch 并**优雅降级**（提示"真实机需要补命令"，而不是卡住/白屏）。
+//    浏览器/调试通路是通的（8791 的孪生路由），所以网页预览能完整验证。
+
+/** 取某个 adcode 的 GeoJSON（FeatureCollection）。失败一律 throw。 */
+export async function geoJson(ad: string): Promise<unknown> {
+  const code = String(ad || "").trim() || "100000";
+  if (isTauriRuntime()) {
+    // ⚠️ 待 Rust 侧补 `world_map_geo_json`（见上方说明）
+    return await invoke("world_map_geo_json", { ad: code });
+  }
+  const r = await fetch(`${API_BASE}/api/geo_json?ad=${encodeURIComponent(code)}`);
+  if (!r.ok) throw new Error(`/api/geo_json HTTP ${r.status}`);
+  return await r.json();
+}
+
+/** 取某个 adcode 的下级区划列表（`{name, adcode}`）。失败一律 throw。 */
+export async function geoChildren(ad: string): Promise<Array<{ name: string; adcode: string }>> {
+  const code = String(ad || "").trim() || "100000";
+  if (isTauriRuntime()) {
+    // ⚠️ 待 Rust 侧补 `world_map_geo_children`（见上方说明）
+    const d = (await invoke("world_map_geo_children", { ad: code })) as { children?: unknown };
+    return Array.isArray(d?.children) ? (d.children as Array<{ name: string; adcode: string }>) : [];
+  }
+  const r = await fetch(`${API_BASE}/api/geo/children?ad=${encodeURIComponent(code)}`);
+  if (!r.ok) throw new Error(`/api/geo/children HTTP ${r.status}`);
+  const d = (await r.json()) as { children?: unknown };
+  return Array.isArray(d?.children) ? (d.children as Array<{ name: string; adcode: string }>) : [];
+}

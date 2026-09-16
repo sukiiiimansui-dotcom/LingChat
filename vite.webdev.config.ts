@@ -37,11 +37,16 @@ export default defineConfig({
     //                    ⚠️ 它是**纯静态**页（无 script / 无 import，三张地图以 data URI 内嵌），
     //                    列在这里只是让它进同一条验证管道（会被 5212 服务到）；
     //                    rollup 对它只做原样拷贝，不产 chunk。
+    //   · wsenter.html —— 「世界模拟」入口原型：开始游戏第 4 项 + 聊天页小地图 +
+    //                    容器变换展开 + PixiJS 相机/LOD。有真 import（vue / pixi.js /
+    //                    菜单真组件），所以它**必须**列在这里才会被打包。
+    //                    ⚠️ 漏加 = 5212 直接 404，而且构建**不报错**（踩过一次）。
     rollupOptions: {
       input: {
         webdev: path.resolve(__dirname, "webdev.html"),
         wsfx: path.resolve(__dirname, "wsfx.html"),
         wsux: path.resolve(__dirname, "wsux.html"),
+        wsenter: path.resolve(__dirname, "wsenter.html"),
       },
     },
   },

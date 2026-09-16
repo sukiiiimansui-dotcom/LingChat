@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>世界模拟 · HUD 风格板（3 套，1:1 真实舞台）</title>
+    <!--
+      ═══════════════════════════════════════════════════════════════════════════
+      wsux.html —— 「世界模拟」HUD 风格板（自用层，不进 PR）
+      ═══════════════════════════════════════════════════════════════════════════
+
+      它是什么：**一页并排（竖排）三套候选 HUD**，每套都是 **932×430 的 1:1 真实舞台**
+      ——与机主实际窗口逐像素同尺寸，所以「字小不小、挤不挤」在手机上看就是真的。
+
+      ── 怎么打开 ─────────────────────────────────────────────────────────────
+        · 生产预览包（快，机主验收用）：http://127.0.0.1:5212/wsux.html
+        · vite dev（改代码时热更新）  ：http://127.0.0.1:5210/wsux.html
+        · 直接看文件（file:// 也能开，图是内嵌的）：file:///…/lingchat-fork/v052/wsux.html
+      本文件是**生成物**：由 `wsux.tpl.html` + `~/chk/uxm/build-wsux.mjs` 生成，
+      三张地图 SVG 以 data URI 内嵌（自包含、离线可看）。改版式改 tpl，别改这里。
+
+      ── 三套地图的来源（真实后端渲染，不是画的示意图）───────────────────────
+        后端 `http://127.0.0.1:8791/api/geo_svg?ad=100000&style=…&w=905&h=340`
+        （Rust `render_geo::render_geo_svg`，与 APK 里用的是同一份代码）
+        画布 905×340 = **与舞台同比**，于是地图方形正好按高度铺满，不留上下黑边。
+
+      ── 为什么三套都在「高 335 的舞台」里 ───────────────────────────────────
+        932×430 的窗口实测 chrome（顶栏 + 信息行）约 73px，舞台再吃掉外边距 ≈ 22px
+        → 舞台约 905×335。这个高度是**地图能有多大**的唯一天花板，所以三套都按它排版。
+
+      🔴 每套都解决这 4 条诊断（机主反馈「很乱、没体验感」的实测根因）：
+        ① 夜色蒙层压掉对比度 → A 夜里就是**深色主题**（深底 + 高对比文字 + 强调色），
+          不再「给白天界面蒙一层灰」；B/C 演示白天，不平白蒙色。
+        ② 地图太小 → 三套都让**舞台吃满窗口剩余高度**，画布与舞台同比放大，
+          地图方形从「按 620 高的兜底画布缩到 71px 舞台」的 ~76px 变成 ~288px。
+        ③ 省名标注糊成一团 → **不再把 32 个省名硬塞进 288px**（实测 25/32 互相重叠），
+          只留 5 个大地名做方位锚点，其余靠点选/悬停后在 HUD 里报名字。
+        ④ 浮层太多没主次 → 每套的常驻信息块都压到「1 条状态 + 1 处主操作」，
+          其余收进可展开的面板。
+      ═══════════════════════════════════════════════════════════════════════════
+    -->
+    <style>
+      :root {
+        --page-bg: #11141c;
+        --page-fg: #e6e9ef;
+        --page-dim: #98a0b3;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--page-bg);
+        color: var(--page-fg);
+        font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+        width: 932px;
+        overflow-x: hidden;
+      }
+      .doc { padding: 14px 16px 6px; }
+      .doc h1 { font-size: 17px; margin: 0 0 6px; }
+      .doc p { margin: 4px 0; color: var(--page-dim); font-size: 12.5px; }
+      .doc code { background: #1d2230; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+      .doc b { color: #e6e9ef; }
+
+      /* 每个方案 = 一个整块：1:1 舞台 + 下方取舍说明 */
+      .plan { margin: 12px 0 0; scroll-margin-top: 0; }
+      .plan:first-of-type { margin-top: 8px; }
+      .plan__title {
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 0 16px 6px;
+      }
+      .plan__tag {
+        font-size: 11px; font-weight: 700; letter-spacing: .04em;
+        padding: 2px 7px; border-radius: 999px; background: #2a3145; color: #cfd6e6;
+      }
+      .plan__name { font-size: 15px; font-weight: 700; }
+      .plan__one { font-size: 12.5px; color: var(--page-dim); }
+
+      /* ── 舞台外壳：这就是「932×430 的窗口 + 真实 chrome + 905×335 舞台」 ── */
+      .board {
+        width: 932px; height: 430px; position: relative; overflow: hidden;
+        display: flex; flex-direction: column;
+      }
+      /* 顶栏 + 信息行：与主界面同量级（合计约 73px），故意做薄 */
+      .chrome {
+        flex: 0 0 auto; display: flex; align-items: center; gap: 7px;
+        padding: 6px 14px 4px; font-size: 12.5px;
+      }
+      .chrome__brand { font-weight: 700; font-size: 13.5px; }
+      .chrome__crumb { padding: 2px 9px; border-radius: 999px; font-weight: 600; }
+      .chrome__spacer { flex: 1; }
+      .chrome__ctl {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 3px 8px; border-radius: 8px; font-size: 12px;
+      }
+      .info {
+        flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+        padding: 0 14px 5px; font-size: 11.5px;
+        min-width: 0; /* 不许把「当前：重庆市」挤到右半边控件底下（第一版实测被压住） */
+      }
+      .info > span { white-space: nowrap; }
+      .info__now { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+      .info__spacer { flex: 1; min-width: 0; }
+
+      /* 舞台：**锁死 335px**（= 932×430 窗口里舞台的真实高度）。
+         为什么不写 flex:1 —— flex 会被 chrome 的实际高度牵着走，实测落成 366px，
+         地图被顺带放大 1.09 倍，「1:1 真实舞台」就不成立了（字号也不再是真机字号）。
+         写死之后 chrome 只需吃掉 430-335-22≈73px，与真机实测的 chrome 高度吻合。 */
+      .stage {
+        position: relative; flex: 0 0 auto; height: 335px;
+        margin: 0 14px 6px; overflow: hidden;
+      }
+      .stage__map {
+        position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+        object-fit: contain; object-position: center;
+        display: block; pointer-events: none;
+      }
+      /* 省名：后端烘在 SVG 里的 10.1 单位字，在这尺寸下只有 10px 且 25/32 互相压住
+         → 三套一律**隐掉**，改由各方案自己用可读字号放「5 个方位锚点」。
+         这是本风格板对诊断 ③ 的统一处置，取舍写在每套下面的说明里。 */
+      .anchor {
+        position: absolute; transform: translate(-50%, -50%);
+        z-index: 3; /* 必须高于 .stage__map，否则被地图盖住（第一版就踩了） */
+        font-size: 11px; font-weight: 700; white-space: nowrap;
+        pointer-events: none; letter-spacing: .02em;
+      }
+
+      /* ══════════════ A：深色游戏 HUD ══════════════ */
+      .A { background: #0a1420; color: #c8dcf0; }
+      .A .chrome__brand { color: #eaf2fb; }
+      .A .chrome__crumb { background: #16304a; color: #7fd4ff; }
+      .A .chrome__ctl, .A .info { color: #8fa9c4; }
+      .A .chrome__ctl { background: #12202f; border: 1px solid #22384f; }
+      .A .crumb--on { background: #0f3f2f; color: #6ee7b0; }
+      .A .info__now { color: #eaf2fb; }
+      .A .stage { background: #0a1420; border-radius: 6px; } /* = style_of("dark").bg */
+      .A .stage__map { filter: none; }
+      .A .anchor { color: #dcebfa; text-shadow: 0 0 6px #0a1420, 0 1px 2px #0a1420; opacity: .95; }
+      /* 夜色：只压在地图那一层（.A__tod 在 chrome 之下），绝不去蒙顶栏/信息行 */
+      .A__tod {
+        position: absolute; inset: 0; z-index: 1; pointer-events: none;
+        background: linear-gradient(to top, rgba(255,138,74,.16), rgba(11,21,58,.30));
+      }
+      .A__side {
+        position: absolute; z-index: 3; top: 46px; width: 172px;
+        font-size: 11px; line-height: 1.65;
+      }
+      .A__side--l { left: 18px; }
+      /* 右列读数贴地图右侧、文字右对齐（HUD 习惯：数值挨着地图边缘） */
+      .A__side--r { right: 18px; text-align: right; }
+      .A__k { color: #6d87a8; letter-spacing: .06em; font-size: 10px; }
+      .A__v { color: #eaf2fb; font-weight: 700; font-size: 13px; }
+      .A__v small { font-weight: 400; color: #9db8d4; font-size: 11px; }
+      .A__dot { color: #ff8a5a; }
+      .A__cmd {
+        position: absolute; z-index: 4; left: 50%; transform: translateX(-50%);
+        bottom: 12px; display: flex; align-items: center; gap: 10px;
+        padding: 7px 10px; border-radius: 999px;
+        background: rgba(12,22,34,.9); border: 1px solid #23405c;
+        box-shadow: 0 6px 20px rgba(0,0,0,.55);
+      }
+      .A__hint { color: #8fa9c4; font-size: 11.5px; padding: 0 4px; }
+      .A__btn {
+        border: 0; border-radius: 999px; padding: 7px 15px; font: inherit;
+        font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
+      }
+      .A__btn--pri { background: #35d39a; color: #04241a; }
+      .A__btn--gho { background: #1b2f45; color: #cfe4f7; }
+
+      /* ══════════════ B：小清新奶油 ══════════════ */
+      .B { background: #fdfbf6; color: #4a463f; }
+      .B .chrome__brand { color: #33302b; }
+      .B .chrome__crumb { background: #eaf6f0; color: #3f8f74; }
+      .B .chrome__ctl { background: #fff; border: 1px solid #ece5da; color: #6b655c; }
+      .B .crumb--on { background: #e6f4ec; color: #2f8f6a; }
+      .B .info__now { color: #3a3631; }
+      .B .info { color: #8d867b; }
+      .B .stage { background: #cfe3f5; border-radius: 14px; box-shadow: 0 2px 10px rgba(160,150,130,.16); } /* = style_of("gaode").bg */
+      .B .anchor { color: #4a463f; text-shadow: 0 1px 0 #fff, 0 0 4px #fff; opacity: .9; }
+      .B__note {
+        position: absolute; z-index: 3; top: 12px; left: 12px;
+        background: #fff; border-radius: 12px; padding: 7px 12px;
+        box-shadow: 0 3px 12px rgba(150,140,120,.18);
+        font-size: 11.5px; color: #5c574e; line-height: 1.5;
+      }
+      .B__foot {
+        position: absolute; z-index: 3; left: 0; right: 0; bottom: 0;
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 14px 12px; border-radius: 0 0 14px 14px;
+        background: linear-gradient(to top, #fff 62%, rgba(255,255,255,0));
+      }
+      .B__hint { flex: 1; font-size: 12px; color: #7d776d; }
+      .B__btn {
+        border: 0; border-radius: 999px; padding: 9px 18px; font: inherit;
+        font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+      }
+      .B__btn--pri { background: #7fd1b0; color: #10402f; box-shadow: 0 3px 10px rgba(127,209,176,.45); }
+      .B__btn--gho { background: #f2ede4; color: #6b655c; }
+
+      /* ══════════════ C：现代简约 / 毛玻璃 ══════════════ */
+      .C { background: #eef1f5; color: #2f3640; }
+      .C .chrome__brand { color: #20262e; }
+      .C .chrome__crumb { background: rgba(255,255,255,.7); color: #55606e; }
+      .C .chrome__ctl {
+        background: rgba(255,255,255,.62); border: 1px solid rgba(255,255,255,.85);
+        color: #5b6470; backdrop-filter: blur(8px);
+      }
+      .C .crumb--on { background: #e3ecf4; color: #3f8fd0; }
+      .C .info__now { color: #2f3640; }
+      .C .info { color: #7c848f; }
+      .C .stage { background: #dfeaf2; border-radius: 10px; } /* = style_of("water").bg */
+      .C .anchor { color: #2f3640; opacity: .72; font-weight: 600; text-shadow: 0 1px 0 rgba(255,255,255,.8); }
+      .C__panel {
+        position: absolute; z-index: 3; right: 14px; top: 14px; width: 186px;
+        background: rgba(255,255,255,.55); border: 1px solid rgba(255,255,255,.75);
+        border-radius: 12px; padding: 11px 13px;
+        backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        box-shadow: 0 6px 22px rgba(60,70,90,.10);
+        font-size: 11.5px; color: #5b6470; line-height: 1.6;
+      }
+      .C__panel h4 { margin: 0 0 6px; font-size: 12.5px; color: #2f3640; }
+      .C__row { display: flex; justify-content: space-between; gap: 8px; }
+      .C__row b { color: #2f3640; font-weight: 700; }
+      .C__fold { margin-top: 8px; color: #4a90c2; font-weight: 600; cursor: pointer; }
+      .C__cmd {
+        position: absolute; z-index: 3; left: 14px; bottom: 14px;
+        display: flex; gap: 8px; align-items: center;
+      }
+      .C__btn {
+        border: 1px solid rgba(255,255,255,.8); border-radius: 9px;
+        padding: 8px 14px; font: inherit; font-size: 12.5px; font-weight: 600;
+        cursor: pointer; white-space: nowrap;
+        background: rgba(255,255,255,.62); color: #3a424d;
+        backdrop-filter: blur(8px);
+      }
+      .C__btn--pri { background: #3f8fd0; color: #fff; border-color: #3f8fd0; }
+
+      /* 取舍说明 */
+      .plan__notes { padding: 8px 16px 2px; font-size: 12.5px; color: #aab2c2; }
+      .plan__notes b { color: #e6e9ef; }
+      .plan__notes .good { color: #6ede9f; }
+      .plan__notes .cost { color: #f0a97c; }
+      .plan__notes ul { margin: 4px 0 0; padding-left: 18px; }
+      .plan__notes li { margin: 2px 0; }
+      .plan__sep { height: 1px; background: #232a3a; margin: 14px 16px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="doc">
+      <h1>「世界模拟」HUD 风格板 · 3 套候选（1:1 真实舞台）</h1>
+      <p>
+        每套都是 <b>932×430 的真实窗口</b>（机主实际尺寸），内含 <b>905×335 的舞台</b>。
+        地图是<b>后端真渲染</b>的 SVG（<code>/api/geo_svg</code>，与 APK 同一份 Rust 代码），
+        不是示意图；画布与舞台同比，所以地图按高度铺满。
+      </p>
+      <p>看完告诉机主选哪套（也可以混搭，例如「A 的底 + B 的按钮」）。</p>
+    </div>
+
+    <!-- ════════════════ A ════════════════ -->
+    <div class="plan">
+      <div class="plan__title">
+        <span class="plan__tag">方案 A</span>
+        <span class="plan__name">深色游戏 HUD</span>
+        <span class="plan__one">贴老线 · 夜色就是深色主题 · 地图当主角</span>
+      </div>
+      <div class="board A">
+        <div class="chrome">
+          <span class="chrome__brand">← 世界模拟</span>
+          <span class="chrome__crumb">全国</span>
+          <span class="chrome__crumb crumb--on">中国</span>
+          <span class="chrome__spacer"></span>
+          <span class="chrome__ctl">高德 ▾</span>
+          <span class="chrome__ctl">🍃 薄荷</span>
+          <span class="chrome__ctl">🌆 傍晚</span>
+        </div>
+        <div class="info">
+          <span>定位：IP 估测（城市级）</span>
+          <span>·</span>
+          <span class="info__now">当前：重庆市</span>
+          <span class="info__spacer"></span>
+          <span>重新引导</span>
+        </div>
+        <div class="stage">
+          <img class="stage__map" src="__MAP_A__" alt="全国地图（深色）" />
+          <div class="A__tod"></div>
+          <span class="anchor" style="left:39.9%;top:35.4%">新疆</span>
+          <span class="anchor" style="left:41.9%;top:53.9%">西藏</span>
+          <span class="anchor" style="left:53.8%;top:28.1%">内蒙古</span>
+          <span class="anchor" style="left:62.5%;top:22.2%">黑龙江</span>
+          <span class="anchor" style="left:49.3%;top:56.4%">四川</span>
+          <div class="A__side A__side--l">
+            <div class="A__k">时间</div>
+            <div class="A__v">18:42 <small>傍晚</small></div>
+            <div class="A__k" style="margin-top:8px">位置</div>
+            <div class="A__v"><span class="A__dot">◆</span> 重庆市</div>
+            <div class="A__k" style="margin-top:8px">区划</div>
+            <div class="A__v">34</div>
+          </div>
+          <div class="A__side A__side--r">
+            <div class="A__k">天气</div>
+            <div class="A__v">不可用</div>
+            <div class="A__k" style="margin-top:8px">状态</div>
+            <div class="A__v" style="color:#6ee7b0">定位命中</div>
+          </div>
+          <div class="A__cmd">
+            <span class="A__hint">已定位到 重庆市 · 点省份看名字</span>
+            <button class="A__btn A__btn--pri">进入 重庆市</button>
+            <button class="A__btn A__btn--gho">选别的地方</button>
+          </div>
+        </div>
+      </div>
+      <div class="plan__notes">
+        <b>取舍</b>
+        <ul>
+          <li><span class="good">夜色真解决</span>：背景/顶栏/底栏都是 <b>#0a1420 深色主题</b>，文字用 #eaf2fb 高对比；
+            夜色渐变 <b>只压在地图那一层</b>（不再蒙住顶栏），对比度不再被吃掉。</li>
+          <li><span class="good">地图最大</span>：地图方形约 <b>288×288</b>，占舞台高 <b>86%</b>；左右各 308px 空地
+            用状态读数填满，不留「两张白纸」。</li>
+          <li><span class="good">有主次</span>：常驻只有「左下/右状态读数 + 底部命令条」，1 处主操作。</li>
+          <li><span class="cost">代价</span>：深色对白天也有影响（白天靠调亮色阶，不如 B 通透）；
+            左右读数在 <b>竖屏手机</b>（约 430 宽）放不下，那档必须折叠进抽屉。</li>
+          <li>方向锚点只留 5 个（新疆/西藏/内蒙古/黑龙江/四川）——实测 32 个省名塞进 288px 会
+            <b>25 个互相重叠</b>，所以其余名字改成点选后在状态区报出。</li>
+        </ul>
+      </div>
+      <div class="plan__sep"></div>
+    </div>
+
+    <!-- ════════════════ B ════════════════ -->
+    <div class="plan">
+      <div class="plan__title">
+        <span class="plan__tag">方案 B</span>
+        <span class="plan__name">小清新奶油</span>
+        <span class="plan__one">贴老线「薄荷奶油」 · 白天最舒服 · 圆角柔和</span>
+      </div>
+      <div class="board B">
+        <div class="chrome">
+          <span class="chrome__brand">← 世界模拟</span>
+          <span class="chrome__crumb">全国</span>
+          <span class="chrome__crumb crumb--on">中国</span>
+          <span class="chrome__spacer"></span>
+          <span class="chrome__ctl">高德 ▾</span>
+          <span class="chrome__ctl">🍃 薄荷</span>
+          <span class="chrome__ctl">☀️ 白天</span>
+        </div>
+        <div class="info">
+          <span>定位：IP 估测（城市级）</span>
+          <span>·</span>
+          <span class="info__now">当前：重庆市</span>
+          <span class="info__spacer"></span>
+          <span>重新引导</span>
+        </div>
+        <div class="stage">
+          <img class="stage__map" src="__MAP_B__" alt="全国地图（高德浅色）" />
+          <span class="anchor" style="left:39.9%;top:35.4%">新疆</span>
+          <span class="anchor" style="left:41.9%;top:53.9%">西藏</span>
+          <span class="anchor" style="left:53.8%;top:28.1%">内蒙古</span>
+          <span class="anchor" style="left:62.5%;top:22.2%">黑龙江</span>
+          <span class="anchor" style="left:49.3%;top:56.4%">四川</span>
+          <div class="B__note">34 个区划 · 点一下省份就能看名字</div>
+          <div class="B__foot">
+            <span class="B__hint">定位命中：重庆市（已在地图上高亮）</span>
+            <button class="B__btn B__btn--pri">进入 重庆市</button>
+            <button class="B__btn B__btn--gho">选别的地方</button>
+          </div>
+        </div>
+      </div>
+      <div class="plan__notes">
+        <b>取舍</b>
+        <ul>
+          <li><span class="good">最贴合老线观感</span>：奶油底 #fdfbf6 + 薄荷主按钮 #7fd1b0，
+            与 `worldsim_style_preview.html` 的 B 线同源，机主已经看过一轮。</li>
+          <li><span class="good">白天最舒服</span>：圆角 14px + 柔和阴影，海色 #cfe3f5 与卡片同族，边界不刺眼。</li>
+          <li><span class="cost">代价</span>：<b>夜晚上要另做一套深色变量</b>（否则会退化成"A 的暗版"或者又变成蒙灰）；
+            低饱和配色在强光下对比度偏低，山顶/户外要再压深一档文字。</li>
+          <li>地图同样是 288×288 / 占舞台高 86%，底部渐隐托底 + 两枚按钮，常驻信息块只此 1 处 + 1 行提示。</li>
+        </ul>
+      </div>
+      <div class="plan__sep"></div>
+    </div>
+
+    <!-- ════════════════ C ════════════════ -->
+    <div class="plan">
+      <div class="plan__title">
+        <span class="plan__tag">方案 C</span>
+        <span class="plan__name">现代简约 / 毛玻璃</span>
+        <span class="plan__one">低饱和 · 信息收进可展开面板 · 留白即层级</span>
+      </div>
+      <div class="board C">
+        <div class="chrome">
+          <span class="chrome__brand">← 世界模拟</span>
+          <span class="chrome__crumb">全国</span>
+          <span class="chrome__crumb crumb--on">中国</span>
+          <span class="chrome__spacer"></span>
+          <span class="chrome__ctl">高德 ▾</span>
+          <span class="chrome__ctl">薄荷</span>
+          <span class="chrome__ctl">白天</span>
+        </div>
+        <div class="info">
+          <span>IP 估测（城市级）</span>
+          <span class="info__spacer"></span>
+          <span>当前：重庆市</span>
+        </div>
+        <div class="stage">
+          <img class="stage__map" src="__MAP_C__" alt="全国地图（水系浅色）" />
+          <span class="anchor" style="left:39.9%;top:35.4%">新疆</span>
+          <span class="anchor" style="left:41.9%;top:53.9%">西藏</span>
+          <span class="anchor" style="left:53.8%;top:28.1%">内蒙古</span>
+          <span class="anchor" style="left:62.5%;top:22.2%">黑龙江</span>
+          <span class="anchor" style="left:49.3%;top:56.4%">四川</span>
+          <div class="C__panel">
+            <h4>重庆市</h4>
+            <div class="C__row"><span>时间</span><b>18:42 傍晚</b></div>
+            <div class="C__row"><span>天气</span><b>不可用</b></div>
+            <div class="C__row"><span>区划</span><b>34</b></div>
+            <div class="C__fold">展开详情 ＋</div>
+          </div>
+          <div class="C__cmd">
+            <button class="C__btn C__btn--pri">进入 重庆市</button>
+            <button class="C__btn">选别的地方</button>
+          </div>
+        </div>
+      </div>
+      <div class="plan__notes">
+        <b>取舍</b>
+        <ul>
+          <li><span class="good">最整洁</span>：顶栏/信息行只留必要项，常驻信息块 <b>1 个毛玻璃卡片 + 1 组按钮</b>，
+            其余按需展开——"乱"的根因（同时 6~7 处信息）直接消掉。</li>
+          <li><span class="good">右侧卡片正好吃掉地图右侧的 308px 空地</span>，
+            不用给地图做裁剪，也不留「两张白纸」。</li>
+          <li><span class="cost">代价</span>：毛玻璃是 <code>backdrop-filter</code>，低端机上要掉帧
+            （仓库已有 <code>ws-perf-low</code> 降级档，得跟着改成纯色卡片）；
+            低饱和配色让"定位命中"这类状态不如 A 醒目，紧急提示要有第二通道（颜色+图标）。</li>
+          <li>信息藏进面板 → 首次使用者可能找不到「重新引导」这类入口，需要一次性的引导提示。</li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

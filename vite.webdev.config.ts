@@ -43,10 +43,14 @@ export default defineConfig({
     //                    ⚠️ 漏加 = 5212 直接 404，而且构建**不报错**（踩过一次）。
     rollupOptions: {
       input: {
-        webdev: path.resolve(__dirname, "webdev.html"),
-        wsfx: path.resolve(__dirname, "wsfx.html"),
-        wsux: path.resolve(__dirname, "wsux.html"),
-        wsenter: path.resolve(__dirname, "wsenter.html"),
+        // ⚠️ **所有自用页面都必须列在这里**。踩过的坑（2026-09-16）：
+        // `emptyOutDir` 会清空 dist-webdev → 手工拷进去、但不在 input 里的页面会被**冲掉**，
+        // 表现为「某个页面突然 404」。列进来就不会再有这个结构性风险。
+        webdev: path.resolve(__dirname, "webdev.html"),   // 主应用（带 Tauri 垫片）
+        wsfx: path.resolve(__dirname, "wsfx.html"),       // T4-1/T4-2 昼夜与天气
+        wsenter: path.resolve(__dirname, "wsenter.html"), // 开始游戏第 4 项 + 聊天页小地图 + 容器变换
+        wsux: path.resolve(__dirname, "wsux.html"),       // HUD 风格板（3 套候选）
+        wsgame: path.resolve(__dirname, "wsgame.html"),   // 游戏化界面（PixiJS + Live2D，本轮）
       },
     },
   },

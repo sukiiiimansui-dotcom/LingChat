@@ -59,6 +59,7 @@ export default {
     scriptEditor: "Workshop",
     cloudWorkshop: "Cloud Workshop",
     miniGame: "Mini Games (In Development)",
+    worldSim: "World Simulation",
     back: "Back",
   },
   pet: {

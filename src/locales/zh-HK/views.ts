@@ -57,6 +57,7 @@ export default {
     scriptEditor: "創意工坊",
     cloudWorkshop: "雲·創意工坊",
     miniGame: "小遊戲（開發緊）",
+    worldSim: "世界模擬",
     back: "返回",
   },
   pet: {

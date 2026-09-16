@@ -1213,8 +1213,15 @@
     (now, before) => {
       // 首次不触发：那时地图还没开始取（`before` 是兜底值，取了也是白取）
       if (!before || now === before) return;
-      // 只在**真的已经有一张图**的时候重取：引导/定位阶段本来就没图，重取是白跑一次网络
-      if (!sim.stage.value) return;
+      /* ⚠️ 这里**不能**加「已经有图了才重取」的守卫（2026-09-16 实测的竞态）：
+       *   `start()` 在 onMounted 里就用**兜底尺寸**（900×620）取了全国图，此时 `.ws-geo`
+       *   还没挂载；等它挂载、量到真实尺寸（905×357）触发本 watcher 时，
+       *   **图往往还在路上**（`sim.stage.value` 仍是 null）→ 守卫提前 return，
+       *   而尺寸之后不会再变 → **永远拿不到第二次机会**，地图就定格在 900×620，
+       *   被 `preserveAspectRatio: meet` 缩小 + 上下各留一大条空白。
+       *   实测两种结局都出现过（同一份代码，一次是 905×357、一次是 900×620），所以它是**竞态**不是必现。
+       *   `retryStage()` 只依赖 `lastStageReq`（`goStage` 一进来就写），stage 为空也能正确重取，
+       *   所以直接去掉守卫即可；防抖 250ms 保证旋屏/软键盘不会打风暴。 */
       if (sizeResizeTimer !== null) window.clearTimeout(sizeResizeTimer);
       sizeResizeTimer = window.setTimeout(() => {
         sizeResizeTimer = null;

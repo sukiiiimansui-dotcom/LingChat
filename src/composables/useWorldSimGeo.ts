@@ -186,8 +186,11 @@ export function useWorldSimGeo() {
     opts: { w?: number; h?: number; zoom?: number; fresh?: boolean } = {}
   ): Promise<GeoStageData | null> {
     const code = String(ad || "100000").trim() || "100000";
-    const w = Math.max(120, Math.round(opts.w || GEO_DEFAULT_W));
-    const h = Math.max(120, Math.round(opts.h || GEO_DEFAULT_H));
+    /* 下限别写太大：宽扁屏（横屏）舞台高度可能只有一两百像素，
+       夹到 120 会让「请求的画布」和「真实舞台」不一致（表现为地图偏小）。
+       64 足够避免 0/NaN，又不会替调用方做决定。 */
+    const w = Math.max(64, Math.round(opts.w || GEO_DEFAULT_W));
+    const h = Math.max(64, Math.round(opts.h || GEO_DEFAULT_H));
     const zoom = Math.min(3, Math.max(1, Math.round(opts.zoom ?? 2)));
     const key = keyOf(code, w, h, zoom);
     if (!opts.fresh) {

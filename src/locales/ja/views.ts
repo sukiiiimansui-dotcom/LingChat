@@ -58,6 +58,7 @@ export default {
     scriptEditor: "クリエイティブ工房",
     cloudWorkshop: "クラウド工房",
     miniGame: "ミニゲーム（開発中）",
+    worldSim: "ワールドシミュレーション",
     back: "戻る",
   },
   pet: {

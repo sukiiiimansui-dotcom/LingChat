@@ -67,6 +67,7 @@
           <GameModeOptions
             v-if="menuState === 'gameMode'"
             @back="backToMainMenu"
+            @open-world="() => router.push('/worldsim')"
             @open-scripts="showScriptModeMenu"
             :loadingScripts="loadingScripts"
             :scripts="scripts"

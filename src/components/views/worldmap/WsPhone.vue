@@ -58,6 +58,7 @@
         <WsPhoneTaxi v-else-if="app === 'taxi'" />
         <WsPhoneTransit v-else-if="app === 'transit'" />
         <WsPhonePlan v-else-if="app === 'plan'" />
+        <WsPhoneChat v-else-if="app === 'chat'" />
       </div>
 
       <div v-else class="wsphone__grid">
@@ -87,6 +88,7 @@
   import WsPhoneTaxi from "./WsPhoneTaxi.vue";
   import WsPhoneTransit from "./WsPhoneTransit.vue";
   import WsPhonePlan from "./WsPhonePlan.vue";
+  import WsPhoneChat from "./WsPhoneChat.vue";
 
   const { t } = useI18n();
 
@@ -125,7 +127,7 @@
     }
   }
   /** 已接的应用清单：T5-3~T5-8 落地时**加到这里**并把 WsPhoneNav 换成对应组件 */
-  const READY = new Set(["map", "taxi", "transit", "plan"]);
+  const READY = new Set(["map", "taxi", "transit", "plan", "chat"]);
   function onApp(key: string) {
     if (READY.has(key)) {
       app.value = key;

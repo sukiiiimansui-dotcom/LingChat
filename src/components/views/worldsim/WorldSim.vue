@@ -140,7 +140,12 @@
              只有底色与 SVG 里的海色**逐字一致**，那两条才不可见（否则像地图被挤在中间）。
              ⚠️ 这三个色值必须与后端 `render_geo::style_of()` 的 `bg` 保持一致。 -->
         <div ref="geoHost" class="ws-geo" :class="`ws-sea-${style}`" @click="onGeoClick">
+          <!-- 🆕 GeoJSON 矢量通路（UI 改造 S2）：一次取数、本地渲染，
+               缩放/平移只改变换矩阵 → 连续、丝滑（旧路每缩放一次都要请求后端重画）。 -->
+          <canvas v-show="geoOk" ref="geoCanvas" class="ws-geo__cv" />
+          <!-- 旧路（后端现画的 SVG）：GeoJSON 取不到时**原样保留**作兜底 -->
           <div
+            v-if="!geoOk"
             ref="geoPan"
             class="ws-geo__pan"
             :class="{ 'is-drag': gsDragging || gsInstant }"
@@ -156,13 +161,13 @@
 
         <!-- 缩放/复位：鼠标派与「不想捏合」的人的明路（也顺带让人看见缩放是有上限的） -->
         <div class="ws-zoomctl">
-          <button type="button" title="放大" :disabled="gsScale >= 3.99" @click="zoomBy(1.35)">
+          <button type="button" title="放大" :disabled="!geoOk && gsScale >= 3.99" @click="onZoomIn">
             ＋
           </button>
-          <button type="button" title="缩小" :disabled="gsScale <= 0.61" @click="zoomBy(1 / 1.35)">
+          <button type="button" title="缩小" :disabled="!geoOk && gsScale <= 0.61" @click="onZoomOut">
             －
           </button>
-          <button type="button" title="复位（也支持双击地图 / 双指双击）" @click="gsReset(false)">
+          <button type="button" title="复位（也支持双击地图 / 双指双击）" @click="onZoomReset">
             ⟲
           </button>
         </div>
@@ -470,6 +475,7 @@
   import { useElementSize, useWorldSimGeo, useWorldSimTheme } from "@/composables/useWorldSimGeo";
   import { useWorldSim } from "@/composables/useWorldSim";
   import { useWorldSimGestures } from "@/composables/useWorldSimGestures";
+  import { useWsGeoStage } from "@/composables/useWsGeoStage";
   import { useWsActors } from "@/composables/useWsActors";
   import { useWsPanel } from "@/composables/useWsPanel";
   import { useWorldTrips } from "@/composables/useWorldTrips";
@@ -502,6 +508,48 @@
     shouldSuppressClick,
   } = useWorldSimGestures({ target: geoHost, content: geoPan });
   const sim = useWorldSim({ geo, getViewport: () => sizeForBackend.value, t });
+
+  /* ── 🆕 UI 改造 S2：GeoJSON 矢量舞台（画布通路）─────────────────────────
+     与旧路（后端 SVG + `.geo-region` 事件委托）**并存**：`geoOk` 为假时页面照旧走 SVG。
+     取数/换级/高亮/兜底都在 composable 里，这里只做"接线"与两条路的分派。 */
+  const geoCanvas = ref<HTMLCanvasElement | null>(null);
+  const geoStage = useWsGeoStage({
+    host: geoHost,
+    canvas: geoCanvas,
+    adcode: () => sim.stage.value?.adcode || "",
+    dark: () => theme.dark.value,
+    onPick: (p) => {
+      // 点空白 = 取消选中（渲染器给空 adcode）
+      if (!p.adcode) sim.setPick("", "");
+      else sim.setPick(p.adcode, p.name);
+    },
+  });
+  const { ok: geoOk } = geoStage;
+  onMounted(() => geoStage.mount());
+  // 高亮（悬停/选中）走渲染器的本地绘制，不再靠改 DOM class
+  watch(
+    () => [sim.hitAd.value, sim.pickAd.value],
+    () => geoStage.highlight([sim.hitAd.value, sim.pickAd.value]),
+    { immediate: true }
+  );
+  // 换级复位缩放（与旧路 gsReset 同一时机）——canvas 模式由渲染器自己做 300ms 补间
+  watch(
+    () => sim.stage.value?.adcode,
+    () => geoOk.value && geoStage.reset()
+  );
+  /* 缩放/复位：两条路分派（按钮与双击都走这里） */
+  function onZoomIn() {
+    if (geoOk.value) geoStage.zoomBy(1.35);
+    else zoomBy(1.35);
+  }
+  function onZoomOut() {
+    if (geoOk.value) geoStage.zoomBy(1 / 1.35);
+    else zoomBy(1 / 1.35);
+  }
+  function onZoomReset() {
+    if (geoOk.value) geoStage.reset();
+    else gsReset(false);
+  }
 
   // 解构出来给模板用：Vue 模板对**顶层** ref 会自动解包，比满篇 `sim.xxx.value` 稳得多
   //（踩过一次：`:value="sim.style"` 忘了 .value，下拉框直接对不上任何选项）。
@@ -1412,6 +1460,17 @@
     height: 100%;
     min-height: 0;
   }
+  /* GeoJSON 画布的定位与尺寸。⚠️ `inset:0` 不够 —— canvas 是**替换元素**，默认 300×150，
+     只给 inset 不会拉伸（旧 Canvas2D 兜底就这么坑过一次），必须显式 width/height 100%。 */
+  .ws-geo__cv {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none; /* 手势自己处理（拖动/捏合），别让浏览器抢去滚动 */
+  }
+
   .ws-geo__inner {
     width: 100%;
     height: 100%;

@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>世界模拟 · GeoJSON 矢量地图（UI 改造 S1）</title>
+    <style>
+      /* ── 设计令牌：**全部对齐 LingChat 自己的语言**（见 UI-OVERHAUL.md）
+           主色只用 --accent-color（冰蓝）；无边框；白字 + text-shadow；玻璃面板。── */
+      @font-face {
+        font-family: "Maoken Assorted Sans";
+        src: url("/fonts/MaokenAssortedSans.woff2") format("woff2");
+        font-display: swap;
+      }
+      :root {
+        --accent-color: #79d9ff;
+        --glass: rgba(10, 16, 24, 0.55);
+        --glass-2: rgba(10, 16, 24, 0.72);
+        --fg: #ffffff;
+        --fg-dim: rgba(255, 255, 255, 0.72);
+        --shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0f1620; }
+      body {
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: var(--fg);
+        touch-action: manipulation;
+      }
+      /* 舞台：**全屏地图**（DCD：不要弹窗，内容铺到屏幕边缘） */
+      #stage { position: fixed; inset: 0; }
+      #map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+      /* 浮块 ①：顶栏（一行玻璃条）—— 返回 + 面包屑 + 天气 + ⋯ */
+      .bar {
+        position: fixed;
+        top: calc(10px + env(safe-area-inset-top, 0px));
+        left: calc(10px + env(safe-area-inset-left, 0px));
+        right: calc(10px + env(safe-area-inset-right, 0px));
+        display: flex; align-items: center; gap: 6px;
+        padding: 4px 6px;
+        border-radius: 16px;
+        background: var(--glass);
+        backdrop-filter: blur(14px) saturate(1.2);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        box-shadow: var(--shadow);
+        z-index: 20;
+      }
+      .ico {
+        width: 44px; height: 44px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border: none; background: transparent; color: var(--fg);
+        font-size: 18px; border-radius: 12px; cursor: pointer;
+        transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
+      }
+      .ico:hover { background: rgba(255, 255, 255, 0.1); color: var(--accent-color); }
+      .ico:active { transform: scale(0.94); }
+      .crumb { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow: hidden; }
+      .crumb button {
+        border: none; background: transparent; color: var(--fg-dim);
+        font-size: 13px; padding: 6px 4px; border-radius: 8px; cursor: pointer;
+        white-space: nowrap; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+      }
+      .crumb button.cur { color: var(--fg); font-weight: 600; }
+      .crumb button:hover { color: var(--accent-color); }
+      .crumb .sep { color: rgba(255, 255, 255, 0.4); font-size: 11px; }
+      .wx {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 4px 8px; border-radius: 10px; background: rgba(255, 255, 255, 0.08);
+        font-size: 12px; white-space: nowrap; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+      }
+
+      /* 浮块 ②：底部情境卡（当前选中 + 主操作） */
+      .sheet {
+        position: fixed;
+        left: 50%; transform: translateX(-50%);
+        bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        width: min(520px, calc(100vw - 20px));
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 12px;
+        border-radius: 18px;
+        background: var(--glass);
+        backdrop-filter: blur(14px) saturate(1.2);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        box-shadow: var(--shadow);
+        z-index: 20;
+      }
+      .sheet__txt { flex: 1; min-width: 0; }
+      .sheet__h { font-size: 12px; color: var(--fg-dim); text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5); }
+      .sheet__b { font-size: 15px; font-weight: 600; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5); }
+      /* 主按钮：无边框 + 主色（LingChat 的 Button type=big 语义） */
+      .go {
+        border: none; cursor: pointer;
+        min-height: 44px; padding: 0 18px; border-radius: 14px;
+        background: var(--accent-color); color: #06222e;
+        font-family: "Maoken Assorted Sans", -apple-system, sans-serif;
+        font-size: 20px; font-weight: 400;
+        box-shadow: 0 4px 14px rgba(121, 217, 255, 0.35);
+        transition: transform 200ms cubic-bezier(0.18, 0.89, 0.32, 1.28), box-shadow 200ms ease;
+      }
+      .go:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 8px 22px rgba(121, 217, 255, 0.5); }
+      .go:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+      .ghost {
+        border: none; background: rgba(255, 255, 255, 0.1); color: var(--fg);
+        min-height: 44px; padding: 0 14px; border-radius: 14px; cursor: pointer; font-size: 13px;
+      }
+      .ghost:hover { background: rgba(255, 255, 255, 0.18); }
+
+      /* 缩放控制：贴右下、44×44、无边框 */
+      .zoom {
+        position: fixed; right: calc(10px + env(safe-area-inset-right, 0px));
+        bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+        display: flex; flex-direction: column; gap: 6px; z-index: 20;
+      }
+      .zoom .ico { background: var(--glass); backdrop-filter: blur(10px); }
+
+      /* 浮块 ③（可选弹层）：设置抽屉 —— 把"风格/深色/水域/重新引导"都收进来 */
+      .drawer {
+        position: fixed; inset: auto 0 0 0; z-index: 30;
+        padding: 14px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+        border-radius: 22px 22px 0 0;
+        background: var(--glass-2);
+        backdrop-filter: blur(18px) saturate(1.2);
+        -webkit-backdrop-filter: blur(18px) saturate(1.2);
+        box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.45);
+        transform: translateY(101%);
+        transition: transform 300ms cubic-bezier(0, 0, 0, 1);
+      }
+      .drawer.open { transform: translateY(0); }
+      .drawer h3 {
+        margin: 0 0 10px; font-size: 16px; font-weight: 600;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+      }
+      .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+      .row > span { width: 52px; color: var(--fg-dim); font-size: 12px; }
+      .seg { display: flex; gap: 4px; background: rgba(255, 255, 255, 0.06); padding: 3px; border-radius: 12px; }
+      .seg button {
+        border: none; background: transparent; color: var(--fg-dim); cursor: pointer;
+        min-height: 38px; padding: 0 12px; border-radius: 9px; font-size: 13px;
+      }
+      .seg button.on { background: var(--accent-color); color: #06222e; font-weight: 600; }
+      .hint { color: var(--fg-dim); font-size: 11px; line-height: 1.6; }
+
+      /* 加载/空态 */
+      .load {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+        background: rgba(8, 12, 18, 0.55); z-index: 25; color: var(--fg);
+      }
+      .load[hidden] { display: none; }
+      .sp {
+        width: 26px; height: 26px; margin-right: 10px;
+        border: 2px solid rgba(255, 255, 255, 0.25); border-top-color: var(--accent-color);
+        border-radius: 50%; animation: spin 900ms linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        .sp { animation: none; }
+        .drawer { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="map"></canvas>
+    </div>
+
+    <!-- 浮块 ① 顶栏 -->
+    <div class="bar">
+      <button class="ico" id="back" title="返回上一级">‹</button>
+      <div class="crumb" id="crumb"></div>
+      <span class="wx" id="wx">⛅ —</span>
+      <button class="ico" id="more" title="设置">⋯</button>
+    </div>
+
+    <!-- 缩放（右下） -->
+    <div class="zoom">
+      <button class="ico" id="zin" title="放大">＋</button>
+      <button class="ico" id="zout" title="缩小">－</button>
+      <button class="ico" id="zreset" title="复位（双击地图同效）">⟲</button>
+    </div>
+
+    <!-- 浮块 ② 底部情境卡 -->
+    <div class="sheet">
+      <div class="sheet__txt">
+        <div class="sheet__h" id="sh-h">全国 · 34 个区划</div>
+        <div class="sheet__b" id="sh-b">点一个省份，或直接进入当前定位</div>
+      </div>
+      <button class="ghost" id="locate">定位</button>
+      <button class="go" id="enter" disabled>进入</button>
+    </div>
+
+    <!-- 抽屉：设置都收在这里（不再满屏小胶囊） -->
+    <div class="drawer" id="drawer">
+      <h3>显示设置</h3>
+      <div class="row">
+        <span>主题</span>
+        <div class="seg" id="seg-theme">
+          <button data-v="dark" class="on">深色</button>
+          <button data-v="light">白天</button>
+        </div>
+      </div>
+      <div class="row">
+        <span>标注</span>
+        <div class="seg" id="seg-label">
+          <button data-v="auto" class="on">自动</button>
+          <button data-v="macro">大区锚点</button>
+          <button data-v="none">不显示</button>
+        </div>
+      </div>
+      <div class="hint">
+        地图由客户端 GeoJSON 渲染（不再每次缩放都请求后端）—— 缩放/平移是本地变换，所以是丝滑的。<br />
+        全国视图只标 7 个大区锚点：32 个省名同屏会互相重叠（实测 25/32 重叠）。
+      </div>
+    </div>
+
+    <div class="load" id="load"><div class="sp"></div><span id="loadtxt">读取地图数据…</span></div>
+
+    <script type="module">
+      import { WsGeoMap, parseFeatures, THEME_DARK, THEME_LIGHT } from "/src/components/views/worldsim/wsGeoMap.ts";
+
+      const API = "http://127.0.0.1:8791";
+      const $ = (id) => document.getElementById(id);
+      const canvas = $("map");
+
+      const map = new WsGeoMap({
+        canvas,
+        theme: THEME_DARK,
+        onPick: (f) => {
+          sel = f;
+          map.setHighlight(f ? [f.adcode] : []);
+          render(true);
+        },
+      });
+
+      /** 当前路径：`{ad,name}[]`，第 0 项永远是"中国" */
+      let path = [{ ad: "100000", name: "中国" }];
+      let sel = null;
+      let busy = false;
+
+      const cache = new Map();
+      async function fetchFeatures(ad) {
+        if (cache.has(ad)) return cache.get(ad);
+        const r = await fetch(`${API}/api/geo_json?ad=${ad}`);
+        if (!r.ok) throw new Error(`geo_json ${ad} → ${r.status}`);
+        const fc = await r.json();
+        const feats = parseFeatures(fc);
+        cache.set(ad, feats);
+        return feats;
+      }
+
+      async function go(ad, name, { animate = true } = {}) {
+        busy = true;
+        $("load").hidden = false;
+        $("loadtxt").textContent = `读取 ${name} …`;
+        try {
+          const feats = await fetchFeatures(ad);
+          map.setFeatures(feats, { animate });
+          sel = null;
+          render(true);
+        } catch (e) {
+          $("loadtxt").textContent = `取不到数据：${e.message}`;
+          setTimeout(() => ($("load").hidden = true), 1600);
+          busy = false;
+          return;
+        }
+        $("load").hidden = true;
+        busy = false;
+      }
+
+      function render(updateSheet) {
+        // 面包屑
+        const c = $("crumb");
+        c.innerHTML = "";
+        path.forEach((p, i) => {
+          if (i) {
+            const s = document.createElement("span");
+            s.className = "sep";
+            s.textContent = "›";
+            c.appendChild(s);
+          }
+          const b = document.createElement("button");
+          b.textContent = p.name;
+          if (i === path.length - 1) b.className = "cur";
+          b.onclick = () => {
+            path = path.slice(0, i + 1);
+            void go(p.ad, p.name);
+          };
+          c.appendChild(b);
+        });
+        if (!updateSheet) return;
+        const cur = path[path.length - 1];
+        $("sh-h").textContent = sel ? `${sel.name} · ${sel.adcode}` : `${cur.name} · 点一个区域`;
+        $("sh-b").textContent = sel
+          ? "再点「进入」下钻一级"
+          : cur.ad === "100000"
+            ? "全国视图 · 只标 7 个大区锚点"
+            : `${cur.name} 的下一级`;
+        $("enter").disabled = !sel || !sel.adcode || sel.adcode === cur.ad;
+        $("back").disabled = path.length <= 1;
+      }
+
+      // ── 事件 ──
+      $("enter").onclick = () => {
+        if (!sel) return;
+        path = [...path, { ad: sel.adcode, name: sel.name }];
+        void go(sel.adcode, sel.name);
+      };
+      $("back").onclick = () => {
+        if (path.length <= 1) return;
+        path = path.slice(0, -1);
+        const p = path[path.length - 1];
+        void go(p.ad, p.name);
+      };
+      $("zin").onclick = () => map.animateZoomTo(map.zoom * 1.6);
+      $("zout").onclick = () => map.animateZoomTo(map.zoom / 1.6);
+      $("zreset").onclick = () => map.reset();
+      $("more").onclick = () => $("drawer").classList.toggle("open");
+      $("locate").onclick = async () => {
+        $("locate").disabled = true;
+        try {
+          const loc = await fetch(`${API}/api/location?fast=1`).then((r) => r.json());
+          $("wx").textContent = `📍 ${loc.area || "未知"}`;
+        } finally {
+          $("locate").disabled = false;
+        }
+      };
+      document.getElementById("seg-theme").onclick = (e) => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        [...b.parentNode.children].forEach((x) => x.classList.toggle("on", x === b));
+        map.setTheme(b.dataset.v === "light" ? THEME_LIGHT : THEME_DARK);
+        document.documentElement.style.setProperty("--glass", b.dataset.v === "light" ? "rgba(255,255,255,.62)" : "rgba(10,16,24,.55)");
+      };
+      document.getElementById("seg-label").onclick = (e) => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        [...b.parentNode.children].forEach((x) => x.classList.toggle("on", x === b));
+        map.setLabelMode(b.dataset.v);
+      };
+      canvas.addEventListener("dblclick", () => map.animateZoomTo(map.zoom * 1.6));
+      addEventListener("resize", () => map.layout());
+
+      // ── 启动：全国 + 天气 ──
+      void (async () => {
+        await go("100000", "中国", { animate: false });
+        try {
+          const w = await fetch(`${API}/api/weather`).then((r) => r.json());
+          $("wx").textContent = w.error ? "⛅ 天气不可用" : `${w.desc || ""} ${Math.round(w.temp_c)}°C`;
+        } catch {
+          $("wx").textContent = "⛅ 天气不可用";
+        }
+      })();
+
+      // 给自动化验证用（截图脚本读它）
+      window.__wsgeo = {
+        map,
+        get sel() { return sel; },
+        get path() { return path; },
+        /** 自动化用：字符串形式 `clickLL("114.5/38")` —— 逗号会被验证脚本当步骤分隔符，故用 `/` */
+        clickLL(str) {
+          const a = String(str).split("/");
+          return this.clickLngLat(Number(a[0]), Number(a[1]));
+        },
+        /** 自动化用：按经纬度点一下（走真实的 pointer 事件路径） */
+        clickLngLat(lng, lat) {
+          const p = map.project(lng, lat);
+          for (const type of ["pointerdown", "pointerup"]) {
+            canvas.dispatchEvent(
+              new PointerEvent(type, { clientX: p.x, clientY: p.y, pointerId: 1, bubbles: true, pointerType: "mouse" })
+            );
+          }
+          return p;
+        },
+        goTo(ad, name) { path = [...path, { ad, name }]; return go(ad, name); },
+        setLabelMode: (m) => map.setLabelMode(m),
+      };
+    </script>
+  </body>
+</html>

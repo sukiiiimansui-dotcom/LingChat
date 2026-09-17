@@ -1304,3 +1304,98 @@ export async function geoChildren(ad: string): Promise<Array<{ name: string; adc
   const d = (await r.json()) as { children?: unknown };
   return Array.isArray(d?.children) ? (d.children as Array<{ name: string; adcode: string }>) : [];
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// 行程（打车/出行）状态机：**双通路**
+// ═══════════════════════════════════════════════════════════════════
+//
+// 真壳命令（`src-tauri/src/lib.rs` 已注册，逐字核对过）：
+//   world_map_trip_start(req: Value) / world_map_trip_status(role) /
+//   world_map_trip_cancel(role, reason) / world_map_trip_speedup(speedup, enabled)
+// 浏览器通路：8791 的 `/api/trip_start|trip_tick|trip_status|trip_cancel`
+//   —— 那几条路由调的**就是 transport.rs 里同一份 start_trip/tick_trip**，
+//      所以「浏览器里验过的行程逻辑」与真壳是同一份代码，不是仿制。
+//
+// ⚠️ **推进方式不同**：真壳里由 Rust 侧按真实时间推进（`tick_to_now`）；
+//    浏览器里由**客户端推时钟**（`tripTick(dt)` 传"推进多少秒"），这样才能几秒走完几小时的行程。
+//    这只是"谁来打拍子"的差别，**状态推进逻辑仍是 Rust 的**。
+
+export interface WsTripPhase {
+  kind?: string;
+  mode_name?: string;
+  duration_min?: number;
+  distance_m?: number;
+  note?: string;
+}
+export interface WsTrip {
+  id?: string;
+  label?: string;
+  mode?: string;
+  mode_name?: string;
+  icon?: string;
+  status?: string;
+  cost?: number;
+  cost_text?: string;
+  total_duration_min?: number;
+  distance_m?: number;
+  elapsed_min?: number;
+  remaining_min?: number;
+  remaining_m?: number;
+  progress?: number;
+  finished?: boolean;
+  phases?: WsTripPhase[];
+}
+
+/** 开一次行程（参数与 `transportPlan` 一致，另加 label 与 scale）。失败 throw。 */
+export async function tripStart(
+  o: { from: { lat: number; lng: number }; to: { lat: number; lng: number }; prefer?: string; label?: string; scale?: number }
+): Promise<WsTrip> {
+  const req = {
+    from_lat: o.from.lat,
+    from_lng: o.from.lng,
+    to_lat: o.to.lat,
+    to_lng: o.to.lng,
+    prefer: o.prefer,
+    label: o.label || "",
+    scale: o.scale ?? 1,
+  };
+  if (isTauriRuntime()) {
+    const r = (await invoke("world_map_trip_start", { req })) as { trip?: WsTrip } | WsTrip;
+    return (r as { trip?: WsTrip })?.trip ?? (r as WsTrip);
+  }
+  const q = new URLSearchParams(Object.entries(req).filter(([, v]) => v !== undefined) as [string, string][]);
+  const res = await fetch(`${API_BASE}/api/trip_start?${q}`);
+  const d = (await res.json()) as { ok?: boolean; error?: string; trip?: WsTrip };
+  if (d?.ok === false) throw new Error(d.error || "开行程失败");
+  if (!d?.trip) throw new Error("开行程失败：没有返回 trip");
+  return d.trip;
+}
+
+/** 推进 `dt` 秒（**仅浏览器通路**；真壳由 Rust 侧自己走时钟）。返回推进后的行程。 */
+export async function tripTick(dt: number): Promise<WsTrip> {
+  const res = await fetch(`${API_BASE}/api/trip_tick?dt=${encodeURIComponent(String(dt))}`);
+  const d = (await res.json()) as { ok?: boolean; error?: string; trip?: WsTrip };
+  if (d?.ok === false) throw new Error(d.error || "推进行程失败");
+  if (!d?.trip) throw new Error("推进行程失败：没有返回 trip");
+  return d.trip;
+}
+
+/** 只读当前行程（真壳走 `world_map_trip_status`）。 */
+export async function tripStatus(): Promise<WsTrip | null> {
+  if (isTauriRuntime()) {
+    const r = (await invoke("world_map_trip_status", {})) as { trip?: WsTrip } | WsTrip;
+    return (r as { trip?: WsTrip })?.trip ?? (r as WsTrip) ?? null;
+  }
+  const res = await fetch(`${API_BASE}/api/trip_status`);
+  const d = (await res.json()) as { trip?: WsTrip };
+  return d?.trip ?? null;
+}
+
+/** 结束/清空当前行程。 */
+export async function tripCancel(reason = ""): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("world_map_trip_cancel", { reason });
+    return;
+  }
+  await fetch(`${API_BASE}/api/trip_cancel`);
+}

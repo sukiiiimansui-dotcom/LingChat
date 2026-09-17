@@ -34,8 +34,20 @@ const OK_MS = 30 * 60 * 1000;
 /** 拿不到时的重试间隔（2 分钟） */
 const RETRY_MS = 2 * 60 * 1000;
 
-/** 从接口返回里抠出「可用的天气」；拿不到就给出降级原因（人工可读，不编） */
-function usable(raw: unknown): WsWeatherState | { reason: string } {
+/**
+ * 从接口返回里抠出「可用的天气」；拿不到就给出降级原因（人工可读，不编）。
+ *
+ * 🔴 返回值必须是**能区分成功/失败**的判别式。这里踩过一次：
+ *    原来签名是 `WsWeatherState | { reason: string }`，调用方用 `"reason" in got` 判成功 ——
+ *    而 `normalize()` 产出的状态**自己就带 `reason: ""` 字段**（见 `wsWeather.ts`），
+ *    于是 `"reason" in got` **恒为真** → 每一次成功拿到的天气都被当成失败，
+ *    被转成 `degradedState("")` → 角标永远「天气不可用」，连 title 里的原因都是空的。
+ *    bug 被 wttr.in 的证书过期（2026-09-15 起，约两天）**掩盖**了：那期间"不可用"恰好是对的。
+ *    证书恢复、后端能返回真数据后才在浏览器里量出来（页面确实收到 200 + 霾 23°C，
+ *    角标仍是 `is-degraded`、title 只有「天气不可用」）。
+ *    自检用例：`~/rikka/Dsh-SYuki/world_map/weather_selftest_t2.mjs`。
+ */
+function usable(raw: unknown): { state: WsWeatherState } | { reason: string } {
   if (!raw || typeof raw !== "object") return { reason: "接口没有返回天气数据" };
   const o = raw as Record<string, unknown>;
   const err = o.error;
@@ -45,7 +57,7 @@ function usable(raw: unknown): WsWeatherState | { reason: string } {
   const hasTemp = cur.temp_c != null || cur.tempC != null || cur.temp != null;
   const hasDesc = String(cur.desc ?? cur.weather_desc ?? cur.text ?? "").trim() !== "";
   if (!hasTemp && !hasDesc) return { reason: "接口返回里没有温度也没有天气描述" };
-  return normalize(raw);
+  return { state: normalize(raw) };
 }
 
 export interface UseWorldWeather {
@@ -101,7 +113,8 @@ export function useWorldWeather(): UseWorldWeather {
     try {
       const got = usable(await worldMapApi.weather());
       if (!alive) return;
-      state.value = "reason" in got ? degradedState(got.reason) : got;
+      // 用 `"state" in got` 判成功 —— **不能**用 `"reason" in got`（normalize 的产物也带 reason，见 usable 的注释）
+      state.value = "state" in got ? got.state : degradedState(got.reason);
     } catch (e) {
       if (!alive) return;
       // 失败**不是异常路径**：转成降级态，角标显示「天气不可用」。

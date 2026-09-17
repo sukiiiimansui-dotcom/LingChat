@@ -59,6 +59,7 @@
         <WsPhoneTransit v-else-if="app === 'transit'" />
         <WsPhonePlan v-else-if="app === 'plan'" />
         <WsPhoneChat v-else-if="app === 'chat'" />
+        <WsPhoneWeather v-else-if="app === 'weather'" />
       </div>
 
       <div v-else class="wsphone__grid">
@@ -89,6 +90,7 @@
   import WsPhoneTransit from "./WsPhoneTransit.vue";
   import WsPhonePlan from "./WsPhonePlan.vue";
   import WsPhoneChat from "./WsPhoneChat.vue";
+  import WsPhoneWeather from "./WsPhoneWeather.vue";
 
   const { t } = useI18n();
 
@@ -108,7 +110,7 @@
     { key: "transit", icon: "🚇", name: "公交地铁", todo: "T5-4", hint: "真实换乘与票价（T5-4）" },
     { key: "chat", icon: "💬", name: "通讯", todo: "T5-5", hint: "接 LingChat 真实对话与角色（T5-5）" },
     { key: "plan", icon: "🗓", name: "日程待办", todo: "T5-6", hint: "接地图联动（T5-6）" },
-    { key: "weather", icon: "⛅", name: "天气", todo: "T5-7", hint: "依赖 T0-3 的 weather 命令（T5-7）" },
+    { key: "weather", icon: "⛅", name: "天气", todo: "T5-7", hint: "当前天气 + 与地图角标同源（T5-7）" },
     { key: "music", icon: "🎵", name: "音乐", todo: "T5-8", hint: "接 LingChat 网易云服务（T5-8）" },
     { key: "me", icon: "🙂", name: "我的", todo: "—", hint: "角色/玩家信息入口" },
   ] as const;
@@ -127,7 +129,7 @@
     }
   }
   /** 已接的应用清单：T5-3~T5-8 落地时**加到这里**并把 WsPhoneNav 换成对应组件 */
-  const READY = new Set(["map", "taxi", "transit", "plan", "chat"]);
+  const READY = new Set(["map", "taxi", "transit", "plan", "chat", "weather"]);
   function onApp(key: string) {
     if (READY.has(key)) {
       app.value = key;
@@ -256,6 +258,14 @@
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+    /* 🔴 必须能滚：手机面板的 `max-height: min(430px, 100vh-140px)` 会裁掉超高内容，
+       而天气（T5-7）比面板高 —— 不滚的话下半截（六格数据 + 数据源 + 「在地图上看」）
+       在 DOM 里有、屏幕上够不着（2026-09-18 实测：932×430 里只看到主卡的上半部分）。
+       这是**外壳**的修正，T5-2~T5-8 的所有应用一起受益。 */
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
   .wsphone__appbar {
     display: flex;

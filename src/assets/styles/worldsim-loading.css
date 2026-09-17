@@ -473,3 +473,103 @@
 .ws-root.ws-perf-low .ws-loading__bar > i {
   transition: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * UI 改造（2026-09-18）：加载指示器换成 **LingChat 自己的语言**
+ *
+ * 机主原话：「那个加载动画你也看着改吧喵～」。
+ * 换掉的是**五套小插画**（init 展开世界 / locate 雷达 / map 等高线 / draw 画笔 / list 骨架）：
+ *   · LingChat 全仓的"在忙"表达是「主色细线 + 白字 + 玻璃」，从不画插画；
+ *   · 插画还有一个实际代价：五套路径 = 五套关键帧 = 更多合成层（低端机上白给）。
+ * 现在只有一个**双环 + 一个主色点**：外环走主色（`--accent-color`），内环走 55% 透明，
+ * 点是主色实心（呼吸）。**场景差异全部交给文案说**（text/sub/阶段条照旧）。
+ *
+ * 纪律不变：只动 transform/opacity；reduced-motion 与 ws-perf-low 下停掉旋转只留淡入。
+ * 旧插画样式（`.ws-loading__art` / `.ws-anim-*`）已无引用，确认一轮后删除。
+ * ═════════════════════════════════════════════════════════════════════════ */
+.ws-ring {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  /* 主色可用 --accent-color（LingChat 全局）覆盖 --ws-primary（世界模拟皮肤） */
+  --ring: var(--accent-color, #79d9ff);
+}
+.ws-ring__arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  /* 主色那一段弧：conic-gradient 画不出来"只有一段的环"，所以用 border 两色 + 旋转 */
+  border-top-color: var(--ring);
+  border-right-color: var(--ring);
+  animation: ws-load-ring 900ms linear infinite;
+}
+.ws-ring__arc--b {
+  inset: 7px;
+  border-width: 1.6px;
+  opacity: 0.55;
+  animation-duration: 1400ms;
+  animation-direction: reverse;
+}
+.ws-ring__dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: var(--ring);
+  animation: ws-load-dot 1200ms ease-in-out infinite;
+}
+/* 100ms~1s 那一档（brief）：**不转**，只是安静地亮着 —— 快到看不见的东西不该显得很忙 */
+.ws-ring.is-quiet .ws-ring__arc,
+.ws-ring.is-quiet .ws-ring__dot {
+  animation: none;
+  opacity: 0.7;
+}
+@keyframes ws-load-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ws-load-dot {
+  0%,
+  100% {
+    transform: scale(0.7);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+/* 文字：白字 + 一层 text-shadow（LingChat 全站压在图上就这么读的），不再用薄荷色 */
+.ws-loading__text {
+  color: #fff;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+}
+.ws-loading__sub {
+  color: rgba(255, 255, 255, 0.72);
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+/* 加载态的外层容器：**去掉卡片边框**，只用一层很淡的暗化把注意力压到地图上 */
+.ws-loading {
+  border: none;
+  background: transparent;
+}
+.ws-mapmask .ws-loading {
+  background: transparent;
+}
+/* 降级：减少动态效果 / 低端机 → 停掉旋转（保留静态环，仍然"看得见在等"） */
+@media (prefers-reduced-motion: reduce) {
+  .ws-ring__arc,
+  .ws-ring__dot {
+    animation: none;
+  }
+}
+.ws-root.ws-perf-low .ws-ring__arc,
+.ws-root.ws-perf-low .ws-ring__dot {
+  animation: none;
+}

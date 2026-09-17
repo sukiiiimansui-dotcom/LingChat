@@ -9,7 +9,7 @@
     层级：.ws-root 用 z-index:2 —— 高于 WorldMapLayer 的叠加背景层(1，pointer-events:none)，
           低于菜单/弹窗(60/1000)。机主给的层叠表里，立绘是 1、菜单是 1000，这里不越级。
   -->
-  <div class="ws-root" :class="rootClass">
+  <div class="ws-root" :class="rootClassAll">
     <!-- ── 顶栏 ─────────────────────────────────────────────────────── -->
     <header class="ws-top">
       <button class="ws-btn ws-btn--ghost" type="button" title="回主菜单" @click="goMenu">←</button>
@@ -512,12 +512,32 @@
   /* ── 🆕 UI 改造 S2：GeoJSON 矢量舞台（画布通路）─────────────────────────
      与旧路（后端 SVG + `.geo-region` 事件委托）**并存**：`geoOk` 为假时页面照旧走 SVG。
      取数/换级/高亮/兜底都在 composable 里，这里只做"接线"与两条路的分派。 */
+  /* 天黑没黑：**与 `WsTimeLayer` 判 `is-night` 用的是同一个量**（`night > 0`）。
+     ⚠️ 这里刻意**不抽中间的 computed**：抽了一层之后模板里读到的是 `undefined`
+     （实测 `i=undefined`，而 `todNight` 本身是 1）—— 于是判据恒假、夜里永远不切深色。
+     判据直接写在用它的两个 computed 里，少一层就少一个这种坑。 */
+  const isNightNow = () => Number(todNight.value) > 0;
+  /** 夜里**换深色主题**，而不是给亮色界面盖一层灰（`UI-DESIGN-SPEC.md` 第六节判据 6）。
+      旧表现就是"薄荷浅色地图 + rgba(8,16,46,.56) 蒙层" → 整页发灰、对比度全丢。 */
+  const rootClassAll = computed<string | string[]>(() => {
+    const raw = rootClass.value as unknown;
+    // ⚠️ `rootClass` 是**数组**（Vue 的 :class 支持数组，直接 String() 会变成 "a,b," 这种带逗号的串）
+    const arr = Array.isArray(raw) ? raw.map(String) : String(raw || "").split(/\s+/);
+    if (!isNightNow() || theme.dark.value) return arr;
+    return arr.filter((c) => c && c !== "ws-light" && c !== "ws-sys-dark").concat("ws-dark");
+  });
+
   const geoCanvas = ref<HTMLCanvasElement | null>(null);
+  /* 地图本体在**夜里也走深色**：
+     旧表现是"浅色薄荷地图 + 一层夜色蒙层" → 整页发灰、对比度全丢（规格里明令禁止：
+     夜里要**换深色主题**，不是给白天界面蒙灰）。这里让画布跟着"是否天黑"一起变深，
+     于是夜里是「深底 + 冰蓝高亮」，白天才是浅底。 */
+  const mapDark = computed(() => theme.dark.value || isNightNow());
   const geoStage = useWsGeoStage({
     host: geoHost,
     canvas: geoCanvas,
     adcode: () => sim.stage.value?.adcode || "",
-    dark: () => theme.dark.value,
+    dark: () => mapDark.value,
     onPick: (p) => {
       // 点空白 = 取消选中（渲染器给空 adcode）
       if (!p.adcode) sim.setPick("", "");

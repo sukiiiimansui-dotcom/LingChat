@@ -28,27 +28,18 @@
       />
       <span class="ws-spacer" />
 
-      <!-- 地图本体仍是现有三套主题（高德/暗色/水系），只有外壳走小清新 -->
-      <select class="ws-sel" :value="style" @change="onStyle" title="地图主题">
-        <option value="gaode">高德</option>
-        <option value="dark">暗色</option>
-        <option value="water">水系</option>
-      </select>
+      <!-- 🔴 UI 改造（2026-09-18）：原来这里并排躺着「地图主题下拉 + 皮肤 + 深浅」三个控件，
+           加上定位来源行就是**同屏 7 处浮动信息**（机主原话"很乱、一点体验感没有"）。
+           规格要求常驻浮块 ≤3，所以三个低频开关**全部收进「⋯」抽屉**（地图主题/皮肤/深浅/重新引导），
+           顶栏只留：返回 · 面包屑 · 天气 · ⋯。 -->
       <button
-        class="ws-btn ws-btn--ghost"
+        class="ws-btn ws-btn--icon"
         type="button"
-        :title="`皮肤：${themeName === 'mint' ? '薄荷奶油' : '现代简约·毛玻璃'}`"
-        @click="cycleTheme"
+        title="显示设置（地图主题 / 皮肤 / 深浅 / 重新引导）"
+        :aria-expanded="drawerOpen ? 'true' : 'false'"
+        @click="drawerOpen = !drawerOpen"
       >
-        {{ themeName === "mint" ? "🍃 薄荷" : "🧊 玻璃" }}
-      </button>
-      <button
-        class="ws-btn ws-btn--ghost"
-        type="button"
-        :title="`深浅：${darkLabel}`"
-        @click="cycleDark"
-      >
-        {{ dark ? "🌙" : "☀️" }}
+        ⋯
       </button>
     </header>
 
@@ -62,14 +53,6 @@
            放在顶栏会把它挤到第二行（手机上实测 8 个元素超宽约 64px）；
            挪到这条信息行的最右边：同一条视觉带、不抢主操作，顶栏因此能保持**一行**
            —— 机主要求「手机跟电脑版一样」，桌面就是一行。 -->
-      <button
-        class="ws-btn ws-btn--ghost ws-srcbar__reset"
-        type="button"
-        title="清掉「上次位置」，从加载动画重新走一遍引导"
-        @click="restart"
-      >
-        {{ t("worldsim.restart") }}
-      </button>
     </div>
 
     <!-- ── 舞台 ─────────────────────────────────────────────────────── -->
@@ -363,6 +346,96 @@
          「夜间压暗应覆盖天气提亮」），少传它雨夜就会是亮的。 -->
     <WsWeatherLayer :weather="wxState" :tint="todTint" :low="perfLow" />
 
+    <!-- ── 显示设置抽屉（把原来散在顶栏/信息行的低频开关收进来）──────────────
+         浮块预算：顶栏 ①、底部动作条 ②、地图本身 ③ —— 抽屉只在用户点「⋯」时出现，
+         算临时浮层不算常驻。点遮罩或 Esc 关闭。 -->
+    <Teleport to="body">
+      <div v-if="drawerOpen" class="ws-drawer-mask" @click="drawerOpen = false" />
+      <aside v-if="drawerOpen" class="ws-drawer" role="dialog" aria-label="显示设置">
+        <div class="ws-drawer__h">
+          <span>显示设置</span>
+          <button class="ws-btn ws-btn--icon" type="button" @click="drawerOpen = false">✕</button>
+        </div>
+
+        <div class="ws-drawer__row">
+          <span class="ws-drawer__k">地图主题</span>
+          <div class="ws-seg">
+            <button
+              v-for="o in STYLE_OPTS"
+              :key="o.v"
+              class="ws-seg__b"
+              :class="{ 'is-on': style === o.v }"
+              type="button"
+              @click="setStyle(o.v)"
+            >
+              {{ o.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="ws-drawer__row">
+          <span class="ws-drawer__k">皮肤</span>
+          <div class="ws-seg">
+            <button
+              class="ws-seg__b"
+              :class="{ 'is-on': themeName === 'mint' }"
+              type="button"
+              @click="themeName !== 'mint' && cycleTheme()"
+            >
+              🍃 薄荷
+            </button>
+            <button
+              class="ws-seg__b"
+              :class="{ 'is-on': themeName !== 'mint' }"
+              type="button"
+              @click="themeName === 'mint' && cycleTheme()"
+            >
+              🧊 玻璃
+            </button>
+          </div>
+        </div>
+
+        <div class="ws-drawer__row">
+          <span class="ws-drawer__k">深浅</span>
+          <div class="ws-seg">
+            <button
+              class="ws-seg__b"
+              :class="{ 'is-on': darkPref === '' }"
+              type="button"
+              @click="setDarkPref('')"
+            >
+              跟随系统
+            </button>
+            <button
+              class="ws-seg__b"
+              :class="{ 'is-on': darkPref === 'dark' }"
+              type="button"
+              @click="setDarkPref('dark')"
+            >
+              深色
+            </button>
+            <button
+              class="ws-seg__b"
+              :class="{ 'is-on': darkPref === 'light' }"
+              type="button"
+              @click="setDarkPref('light')"
+            >
+              浅色
+            </button>
+          </div>
+        </div>
+
+        <div class="ws-drawer__note">
+          {{ darkLabel }}<template v-if="locLabel"> · 位置来源：{{ locLabel }}</template>
+        </div>
+
+        <button class="ws-drawer__danger" type="button" @click="restart(); drawerOpen = false">
+          {{ t("worldsim.restart") }}
+        </button>
+        <div class="ws-drawer__hint">会清掉「上次位置」，从加载动画重新走一遍引导</div>
+      </aside>
+    </Teleport>
+
     <!-- toast 容器（快捷动作「即将上线」这类提示必须有可见反应，绝不静默） -->
     <div class="ws-toasts" aria-live="polite">
       <div v-for="m in toastItems" :key="m.id" class="ws-toast" :class="`ws-toast--${m.kind}`">
@@ -610,6 +683,33 @@
     changeMapStyle,
   } = sim;
   const { rootClass, theme: themeName, dark, darkPref, cycleTheme, cycleDark } = theme;
+
+  /* ── UI 改造：显示设置抽屉（顶栏只留 返回 · 面包屑 · 天气 · ⋯）──────────────
+     为什么把这三个开关收进抽屉：规格要求**同屏常驻浮块 ≤3**，而它们全是低频动作
+     （地图主题/皮肤/深浅/重新引导），并排摆在顶栏就是"很乱"的主要来源。
+     抽屉只是临时浮层，不占常驻预算。 */
+  const drawerOpen = ref(false);
+  const STYLE_OPTS = [
+    { v: "gaode", label: "高德" },
+    { v: "dark", label: "暗色" },
+    { v: "water", label: "水系" },
+  ] as const;
+  /** 主题改成"点一下就切"（原来用 <select>，在手机上展开原生下拉很难受） */
+  async function setStyle(v: string) {
+    if (v === style.value) return;
+    await sim.changeMapStyle(v);
+  }
+  /** 深浅：直接指定，不用循环切换（循环切换要点三次才知道自己在哪一档） */
+  function setDarkPref(v: "" | "dark" | "light") {
+    if (darkPref.value === v) return;
+    darkPref.value = v;
+  }
+  // Esc 关抽屉（键盘派的唯一出口；触屏点遮罩即可）
+  function onDrawerKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && drawerOpen.value) drawerOpen.value = false;
+  }
+  onMounted(() => window.addEventListener("keydown", onDrawerKey));
+  onBeforeUnmount(() => window.removeEventListener("keydown", onDrawerKey));
 
   /* ══ T4-1：昼夜视觉表现 ═══════════════════════════════════════════════════
    * 时间从 `worldMapApi.time()`（真壳 `world_map_time`）取，拿不到就用本机时钟，
@@ -1480,6 +1580,129 @@
     height: 100%;
     min-height: 0;
   }
+  /* ── UI 改造：显示设置抽屉（底部弹出，玻璃 + 主色，无边框）──────────────
+     语言对齐 LingChat：不用实边框、玻璃底、主色只用 --accent-color（冰蓝）、
+     触控目标 ≥44px、只动 transform/opacity。 */
+  .ws-drawer-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .ws-drawer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 91;
+    /* 430px 视口实测 70vh 会把最后那行说明裁掉（内容 300+px），放宽到 78vh + 收紧行距 */
+    max-height: 78vh;
+    overflow-y: auto;
+    padding: 0.9em 1em calc(1em + env(safe-area-inset-bottom, 0px));
+    border-radius: 20px 20px 0 0;
+    background: var(--ws-panel-2, rgba(12, 18, 26, 0.92));
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.35);
+    color: var(--ws-fg, #fff);
+    animation: ws-drawer-in 0.28s cubic-bezier(0, 0, 0, 1) both;
+  }
+  @keyframes ws-drawer-in {
+    from {
+      transform: translateY(12%);
+      opacity: 0;
+    }
+  }
+  .ws-drawer__h {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 1.02em;
+    font-weight: 600;
+    margin-bottom: 0.6em;
+  }
+  .ws-drawer__row {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    margin-bottom: 0.5em;
+  }
+  .ws-drawer__k {
+    flex: none;
+    width: 4.4em;
+    opacity: 0.72;
+    font-size: 0.92em;
+  }
+  /* 分段控件：一个玻璃底 + 选中项用主色（LingChat 的 Button active 语义） */
+  .ws-seg {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    gap: 3px;
+    padding: 3px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .ws-seg__b {
+    flex: 1;
+    min-height: 40px;
+    padding: 0 0.6em;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: inherit;
+    opacity: 0.78;
+    font-size: 0.94em;
+    cursor: pointer;
+    transition:
+      background-color 0.18s ease,
+      opacity 0.18s ease;
+  }
+  .ws-seg__b.is-on {
+    background: var(--accent-color, #79d9ff);
+    color: #06222e;
+    opacity: 1;
+    font-weight: 600;
+  }
+  .ws-drawer__note {
+    margin: 0.2em 0 0.7em;
+    font-size: 0.86em;
+    opacity: 0.62;
+  }
+  /* 破坏性动作：靠"危险色 + 说明"表达，不靠边框 */
+  .ws-drawer__danger {
+    width: 100%;
+    min-height: 44px;
+    border: none;
+    border-radius: 12px;
+    background: rgba(255, 99, 99, 0.18);
+    color: #ffd9d9;
+    font-size: 0.96em;
+    cursor: pointer;
+  }
+  .ws-drawer__hint {
+    margin-top: 0.35em;
+    font-size: 0.82em;
+    opacity: 0.55;
+  }
+  /* 「⋯」这类纯图标按钮：无边框、方形触控区 */
+  .ws-btn--icon {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 1.2em;
+    line-height: 1;
+    border-radius: 12px;
+    cursor: pointer;
+  }
+  .ws-btn--icon:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--accent-color, #79d9ff);
+  }
+
   /* GeoJSON 画布的定位与尺寸。⚠️ `inset:0` 不够 —— canvas 是**替换元素**，默认 300×150，
      只给 inset 不会拉伸（旧 Canvas2D 兜底就这么坑过一次），必须显式 width/height 100%。 */
   .ws-geo__cv {

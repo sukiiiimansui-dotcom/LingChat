@@ -18,10 +18,15 @@
         'is-nopic': !picOk,
         'is-dragging': dragging,
         'is-draggable': drag,
+        'is-focused': focused,
+        'is-plain': plan.mode === 'plain',
+        'is-letter': plan.mode === 'letter',
+        'is-char': plan.ring === 'char',
       },
     ]"
     type="button"
     data-no-gesture
+    :data-actor="actor.id"
     :style="style"
     :title="title"
     :aria-label="label"
@@ -35,7 +40,7 @@
   >
     <span class="ws-av__ring">
       <img
-        v-if="actor.avatarUrl && picOk"
+        v-if="actor.avatarUrl && picOk && plan.mode === 'image'"
         class="ws-av__pic"
         :src="actor.avatarUrl"
         :alt="actor.name"
@@ -44,12 +49,24 @@
         decoding="async"
         @error="picOk = false"
       />
-      <span v-else class="ws-av__ph" aria-hidden="true">{{ initial }}</span>
+      <!-- T4-3：LingChat 角色拿不到图 → 首字母色块占位（**如实降级，绝不画假头像**） -->
+      <span v-else-if="plan.mode === 'letter'" class="ws-av__ph" aria-hidden="true">{{
+        plan.initial
+      }}</span>
+      <!-- 路人：一个纯色圆点（视觉上与角色区分开：更小、无描边、无字母） -->
+      <span v-else class="ws-av__dot" aria-hidden="true" />
       <span v-if="actor.isMe" class="ws-av__me" aria-hidden="true">★</span>
       <span v-if="actor.crowd > 1" class="ws-av__n" aria-hidden="true">{{ actor.crowd }}</span>
+      <!-- 占位原因角标：浏览器里是「需真壳命令」，真壳里是「该角色没有头像文件」。
+           两种都只在**页面级**的大小上显示（mini 太小），并且带 `title` 说清原因。 -->
+      <span v-if="showHint" class="ws-av__hint" aria-hidden="true">🛈</span>
     </span>
     <span v-if="showName" class="ws-av__name">{{ label }}</span>
     <span v-if="showPlace && actor.place" class="ws-av__place">{{ actor.place }}</span>
+    <!-- T4-3：重大事件聚焦的铭牌（事件标题跟在名字后面）。
+         放在按钮内部是**故意**的：它跟着头像一起被 `scale(1/zoom)` 抵消，
+         不需要任何额外的坐标换算 —— 位置天然就压在那一枚头像上。 -->
+    <span v-if="focused && focusTitle" class="ws-av__evt">{{ focusTitle }}</span>
   </button>
 </template>
 
@@ -57,6 +74,7 @@
   import { computed, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
   import { letterboxOf, gridToBox, type PlacedActor } from "./wsActors";
+  import { avatarFallbackText, avatarPlanOf, type AvatarPlan } from "./wsFocus";
   // P4-4：拖拽必须与地图手势**同一套口径** —— 阈值 4px、拖后抑制补发的 click（350ms）。
   // 直接复用那两个常量/纯函数，绝不在这里另写一组数（两套数必然手感不一致）。
   import { CLICK_SUPPRESS_MS, isDrag } from "@/composables/useWorldSimGestures";
@@ -89,8 +107,29 @@
        * 只有主地图那一层会打开它（WorldSim 的 `#pin` 插槽）。
        */
       drag?: boolean;
+      /**
+       * T4-3：这一枚头像的计划（`avatarPlanOf` 的结果）。
+       *
+       * 由 `WsAvatarLayer` **统一算一次**再传下来，而不是每个人自己算：
+       * 计划里含 `isTauriRuntime()`（模块级常量），逐个人算等于同一件事问 N 遍。
+       * 不传时退回默认值（等价于老行为：有 URL 就画图，否则画占位）。
+       */
+      plan?: AvatarPlan;
+      /** T4-3：这一枚正被重大事件聚焦（放大 + 描边 + 铭牌） */
+      focused?: boolean;
+      /** T4-3：聚焦事件的标题（铭牌上跟在名字后的那一行；空则不显示） */
+      focusTitle?: string;
     }>(),
-    { selected: false, size: "map", meName: "", zoom: 1, drag: false }
+    {
+      selected: false,
+      size: "map",
+      meName: "",
+      zoom: 1,
+      drag: false,
+      plan: undefined,
+      focused: false,
+      focusTitle: "",
+    }
   );
 
   const emit = defineEmits<{
@@ -119,14 +158,35 @@
     if (props.actor.isMe) return props.meName || t("worldsim.actor.me");
     return props.actor.name;
   });
-  const initial = computed(() => (label.value || "?").slice(0, 1));
+
+  /**
+   * T4-3：这一枚的画法。
+   *
+   * 传了 `plan` 就用（层里统一算的）；没传就**就地兜一个等价物** ——
+   * 默认值必须与 `avatarPlanOf` 的语义逐字一致，否则同一个组件在两条调用路径下
+   * 会长得不一样（小地图那一路最容易漏）。
+   */
+  const plan = computed<AvatarPlan>(
+    () =>
+      props.plan ||
+      avatarPlanOf(props.actor, !!String(props.actor.avatarUrl || "").trim(), false)
+  );
+
+  /** 占位原因角标：`letter` 档且不是 mini 才显示（mini 太小，画上去就是个污点） */
+  const showHint = computed(
+    () => props.size === "map" && plan.value.mode === "letter" && !!plan.value.fallback
+  );
+  const fallbackTip = computed(() => avatarFallbackText(plan.value.fallback).fallback);
+
   const showName = computed(() => props.size === "map");
   const showPlace = computed(() => props.size === "map" && !!props.actor.place);
 
   const title = computed(() => {
     const who = label.value;
     const what = props.actor.nowText || props.actor.place;
-    return what ? `${who} · ${what}` : who;
+    const base = what ? `${who} · ${what}` : who;
+    // 占位原因要能查到（否则"为什么这个人是字母"在真机上永远说不清）
+    return showHint.value && fallbackTip.value ? `${base} · ${fallbackTip.value}` : base;
   });
 
   /**
@@ -282,6 +342,55 @@
     color: var(--ws-on-primary);
     background: var(--ws-primary-soft);
   }
+  /* T4-3：路人 = 一个纯色圆点（**不画字母**：字母是"这个角色有头像但取不到"的语义，
+     给路人画字母会让人以为他也是 LingChat 角色）。尺寸比角色点小一圈，
+     一眼就能分出「有头像的角色 / 路人」。 */
+  .ws-av__dot {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: var(--ws-fg-dim);
+    opacity: 0.55;
+  }
+  /* T4-3：占位原因角标（右下角一枚小 🛈，`title` 里说清原因） */
+  .ws-av__hint {
+    position: absolute;
+    right: -0.1em;
+    bottom: -0.1em;
+    font-size: 0.5em;
+    line-height: 1;
+    opacity: 0.9;
+    text-shadow: 0 0 2px var(--ws-bg);
+    pointer-events: none;
+  }
+  /* T4-3：聚焦铭牌（事件标题）。放在名字下面一行，跟着头像一起缩放。 */
+  .ws-av__evt {
+    max-width: 8em;
+    margin-top: 0.1em;
+    padding: 0.05em 0.4em;
+    font-size: 0.72em;
+    font-weight: 700;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ws-fg);
+    background: var(--ws-accent);
+    border: 1px solid var(--ws-accent);
+    border-radius: 999px;
+    box-shadow: var(--ws-shadow);
+    animation: ws-av-evt 0.24s ease both;
+  }
+  @keyframes ws-av-evt {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
   .ws-av__me {
     position: absolute;
     right: 0;
@@ -342,6 +451,47 @@
   .ws-av.is-crowd .ws-av__ring {
     /* 一堆人挤在一起时加一点点描边，好区分 */
     outline: 1px solid var(--ws-border);
+  }
+  /* ── T4-3：LingChat 角色 vs 路人的**视觉区分**（卡片第 2 条硬要求）──────────
+     「头像点稍大 + 有描边」：角色点放大到 2.35em 并且描边加粗到 2.5px，
+     路人（is-plain）缩到 1.5em、用 1px 虚描边、去掉阴影。
+     两条规则都不动 left/top（动画纪律：只动 transform/颜色/尺寸这类可合成属性）。 */
+  .ws-av.is-char .ws-av__ring {
+    width: 2.35em;
+    height: 2.35em;
+    border-width: 2.5px;
+  }
+  .ws-av.is-plain .ws-av__ring {
+    width: 1.5em;
+    height: 1.5em;
+    border-width: 1px;
+    border-style: dashed;
+    border-color: var(--ws-border);
+    box-shadow: none;
+    background: var(--ws-bg);
+  }
+  /* ── T4-3：重大事件聚焦 ────────────────────────────────────────────────────
+     只做三件事：① 再放大一点（与选中态区分开：选中是 1.14，聚焦是 1.25）；
+     ② 描边换成强调色 + 更亮的光晕；③ 名字标签反白，让人一眼读到"是谁"。
+     抬到压暗层之上那条规则在 `WsAvatarLayer`（父级层叠上下文，这里够不着）。 */
+  .ws-av.is-focused .ws-av__ring {
+    border-color: var(--ws-accent);
+    border-width: 3px;
+    transform: scale(1.25);
+    /* ⚠️ 不用 `color-mix()`：它在 Android WebView 111+ 才有，而这台机器上
+       （以及很多老 WebView）会**整条 box-shadow 失效**。写成固定 rgba 最稳。 */
+    box-shadow:
+      0 0 0 3px rgba(255, 255, 255, 0.28),
+      0 0 18px 5px rgba(120, 170, 255, 0.55);
+  }
+  .ws-av.is-focused .ws-av__name {
+    color: var(--ws-bg);
+    background: var(--ws-accent);
+    border-color: var(--ws-accent);
+    font-weight: 700;
+  }
+  .ws-av.is-focused {
+    z-index: 9;
   }
   .ws-av:hover .ws-av__ring,
   .ws-av:focus-visible .ws-av__ring {

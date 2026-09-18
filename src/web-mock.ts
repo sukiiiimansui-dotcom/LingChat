@@ -114,6 +114,44 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
   // 完整的词条 JSON 传了进来**（`seedContent`），期望后端把它落盘再读回。
   // 我们直接回传 seedContent —— 于是浏览器里**四种语言都完整可用**，
   // 不会退化成"加载语言文件失败（使用内置词条）"。
+  /* 🔴 `get_character_list`：**必须给真数据，不能给空数组**（2026-09-18，P2-5 代理发现的洞）。
+   *
+   * 现象：浏览器预览里地图上**恒 0 个角色**，所有"点头像开面板"的验证都做不了。
+   * 根因：`loadWorldCharacters()` 只在**抛异常**时才往下一级兜底（HTTP `/api/schedule/chars`），
+   *       而 mock 对未登记命令返回的是 `undefined`（不抛）→ 名单静默退化成"没人"。
+   * 修法：这里直接**按真实后端的数据回**（调试服务 8791 的 `/api/schedule/chars`），
+   *       拿不到才回空数组。这样预览里的角色名单与真机/后端**逐字一致**，
+   *       不需要每个代理各自在 document-start 打补丁（P2-5 就是被迫这么干的）。
+   */
+  if (cmd === "get_character_list") {
+    const pick = (j: unknown): unknown[] | null => {
+      if (Array.isArray(j)) return j;
+      const arr = (j as { characters?: unknown })?.characters;
+      return Array.isArray(arr) ? arr : null;
+    };
+    // ① 先试前端约定的那条（⚠️ 实测调试服务上**是 404**，见本文件末尾备注）
+    try {
+      const r = await fetch("http://127.0.0.1:8791/api/schedule/chars");
+      if (r.ok) {
+        const got = pick(await r.json());
+        if (got) return got;
+      }
+    } catch {
+      /* 后端没起 → 往下试 */
+    }
+    // ② 兜底：`/api/schedule` 本来就带 `characters[]`（实测 3 个真实角色）
+    try {
+      const r2 = await fetch("http://127.0.0.1:8791/api/schedule");
+      if (r2.ok) {
+        const got2 = pick(await r2.json());
+        if (got2) return got2;
+      }
+    } catch {
+      /* 纯静态预览：维持空数组，调用方的降级照旧 */
+    }
+    return [];
+  }
+
   if (cmd === "get_locale_messages") {
     const seed = args?.seedContent;
     if (typeof seed === "string") return seed;

@@ -194,9 +194,15 @@
           </div>
         </WsCollapse>
 
-        <!-- ⑥ 快捷动作（P2-5：打招呼 / 约他出门已接真能力；送礼物方案未定，见弹层） -->
+        <!-- ⑥ 快捷动作（P2-5）
+             三个都有落地：
+               · 打招呼   → 页面 onQuick('hi') → 复用「去找他聊聊」（跳 /chat，零副作用）
+               · 约他出门 → 页面 onQuick('outing') → `world_map_trip_start` 让他动身来找你
+               · 送礼物   → 就地打开 `WsGiftSheet`（方案 B：地图商店 → 本机背包 → 送出记账）
+             ⚠️ 说明文案不再用 `worldsim.action.hint` —— 那句还写着「送礼物还没定方案」，
+                已经不成立了（见 wsGift.ts 顶部的文案口径）。 -->
         <WsCollapse :title="t('worldsim.panel.actions')" icon="⚡" :default-open="true">
-          <div class="ws-acts">
+          <div class="ws-acts ws-acts--quick">
             <button class="ws-btn" type="button" @click="quick('hi')">
               👋 {{ t("worldsim.action.hi") }}
             </button>
@@ -207,43 +213,22 @@
               🚶 {{ t("worldsim.action.outing") }}
             </button>
           </div>
-          <div class="ws-panel__hint">{{ t("worldsim.action.hint") }}</div>
+          <div class="ws-panel__hint">{{ gx("actionsHint") }}</div>
         </WsCollapse>
       </div>
 
-      <!-- ⑥.9 送礼物：**需求未澄清**（礼物从哪来 / 送完发生什么，机主还没定）。
-           按纪律：不发明一套礼物系统，只把「还没定 + 两个候选方案」说清楚，
-           接入点留在 WorldSim 的 onQuick('gift') 与这里的 giftOpen 上。
+      <!-- ⑥.9 送礼物选择器（P2-5）
            弹层挂在抽屉内部：`.ws-drawer` 已有 data-no-gesture 与指针 stop，
-           所以这里不会把事件漏给地图手势。 -->
-      <div
-        v-if="giftOpen"
-        class="ws-giftsheet"
-        data-no-gesture
-        @pointerdown.stop
-        @click.self="giftOpen = false"
-      >
-        <div class="ws-giftsheet__card ws-card">
-          <div class="ws-giftsheet__head">
-            <span class="ws-giftsheet__ico" aria-hidden="true">🎁</span>
-            <span class="ws-giftsheet__t">{{ t("worldsim.gift.title") }}</span>
-            <span class="ws-spacer" />
-            <button class="ws-btn ws-btn--ghost" type="button" @click="giftOpen = false">
-              {{ t("worldsim.gift.close") }}
-            </button>
-          </div>
-          <p class="ws-giftsheet__lead">{{ t("worldsim.gift.lead") }}</p>
-          <div class="ws-giftsheet__opt">
-            <div class="ws-giftsheet__optT">{{ t("worldsim.gift.optA") }}</div>
-            <div class="ws-giftsheet__optD">{{ t("worldsim.gift.optADesc") }}</div>
-          </div>
-          <div class="ws-giftsheet__opt">
-            <div class="ws-giftsheet__optT">{{ t("worldsim.gift.optB") }}</div>
-            <div class="ws-giftsheet__optD">{{ t("worldsim.gift.optBDesc") }}</div>
-          </div>
-          <p class="ws-panel__hint">{{ t("worldsim.gift.footer") }}</p>
-        </div>
-      </div>
+           所以这里不会把事件漏给地图手势。真实的扣减/记账在 WsGiftSheet + wsGift.ts 里。 -->
+      <WsGiftSheet
+        :open="giftOpen"
+        :role-name="actor?.name || ''"
+        :role-id="actor?.roleId || 0"
+        :is-me="!!actor?.isMe"
+        :facilities="facilities"
+        @close="giftOpen = false"
+        @sent="onGiftSent"
+      />
     </aside>
   </div>
 </template>
@@ -252,8 +237,10 @@
   import { computed, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
   import WsCollapse from "./WsCollapse.vue";
+  import WsGiftSheet from "./WsGiftSheet.vue";
   import WsLoading from "./WsLoading.vue";
   import { useWsIntervene, facilityNames } from "./wsIntervene";
+  import { fillText, GIFT_TEXT } from "./wsGift";
   import { useWsPortrait } from "@/composables/useWsPortrait";
   import { emotionFile, type WsActors } from "@/composables/useWsActors";
   import type { PlacedActor, ActorPosSource } from "./wsActors";
@@ -284,11 +271,13 @@
     (e: "portrait", v: boolean): void;
     (e: "goto-chat", a: PlacedActor): void;
     (e: "quick", action: string, a: PlacedActor): void;
+    /** P2-5：送礼弹层里真的送出了一件（本机已扣减+记账）—— 页面可据此接记忆/事件 */
+    (e: "gift", p: { actor: PlacedActor; name: string; icon: string; role: string }): void;
     /** P4-4：下一条「让他去某地」的指令（目的地是地名或设施名） */
     (e: "direct", to: string, a: PlacedActor): void;
   }>();
 
-  const { t } = useI18n();
+  const { t, te } = useI18n();
 
   /* ── 立绘（按需加载 + 关闭释放，全在 useWsPortrait 里）────────────────────── */
 
@@ -379,7 +368,9 @@
   /* ── ⑤ 快捷动作（P2-5：三个按钮都要有**真**行为或说清楚为什么没有）──────
    *   · 打招呼  → emit('quick','hi')   → 页面里复用「去找他聊聊」那条路（跳 /chat）
    *   · 约他出门 → emit('quick','outing') → 页面里调 world_map_trip_start（角色动身）
-   *   · 送礼物  → **需求未澄清**：不发明礼物系统，只把说明弹层打开（两个候选方案）
+   *   · 送礼物  → 就地打开 `WsGiftSheet`（**方案 B**：地图商店 → 本机背包 → 送出记账）；
+   *              送出成功后再 emit('gift', …) 给页面，留给主会话接记忆/事件
+   *              （前端目前没有"提交自定义事件"的通路，见 wsGift.ts 顶部）。
    * 三个动作的分派点都收在页面的 onQuick 里（一处就能看全，好测也好改）。 */
   const giftOpen = ref(false);
 
@@ -387,6 +378,22 @@
     if (!props.actor) return;
     emit("quick", action, props.actor);
     if (action === "gift") giftOpen.value = true;
+  }
+
+  /** 送礼弹层里真的送出去了一件 → 转告页面（可选接线：写记忆/触发事件） */
+  function onGiftSent(p: { name: string; icon: string; role: string }) {
+    if (!props.actor) return;
+    emit("gift", { actor: props.actor, name: p.name, icon: p.icon, role: p.role });
+  }
+
+  /** runtime 的设施表（送礼弹层据此列出「地图上的商店」；拿不到就只显示空态文案） */
+  const facilities = computed(() => props.data.runtime?.value?.facilities ?? null);
+
+  /** 送礼弹层的兜底文案（词条存在用词条，否则用 wsGift.ts 的中文原文 —— 同 schema-i18n 先例） */
+  function gx(key: string, params?: Record<string, string | number>): string {
+    const k = `worldsim.giftx.${key}`;
+    if (te(k)) return params ? t(k, params) : t(k);
+    return fillText(GIFT_TEXT[key] || key, params);
   }
 
   /* ── ⑤.5 P4-4：指挥他 + 干预开关 ──────────────────────────────────────── */
@@ -624,6 +631,19 @@
     gap: 0.4em;
     flex-wrap: wrap;
   }
+  /* P2-5 手感：快捷动作**无边框**（`border: 0`，不是"透明边框" —— 实测透明边框
+     的 border-width 仍是 1px，量出来就是"有边框"），默认只有一层主色淡底，
+     hover 才浮起来并转主色。 */
+  .ws-acts--quick .ws-btn {
+    border: 0;
+    background: var(--ws-primary-soft);
+    font-weight: 600;
+  }
+  .ws-acts--quick .ws-btn:hover:not(:disabled) {
+    color: var(--ws-on-primary);
+    background: var(--ws-primary);
+    box-shadow: var(--ws-shadow);
+  }
 
   /* ── P4-4：指挥他（目的地输入 + 干预开关）────────────────────────────────── */
   .ws-cmd {
@@ -661,58 +681,6 @@
     accent-color: var(--ws-primary-deep);
   }
 
-  /* ── 送礼物：说明弹层（方案未定，只解释 + 给候选，不做任何副作用）────────── */
-  .ws-giftsheet {
-    position: absolute;
-    inset: 0;
-    z-index: 5;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.8em;
-    background: rgba(20, 30, 32, 0.42);
-    animation: ws-fade-in 0.16s ease both;
-  }
-  .ws-giftsheet__card {
-    width: min(24em, 100%);
-    max-height: 86%;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 0.9em 1em 1em;
-    animation: ws-fade-up 0.2s ease both;
-  }
-  .ws-giftsheet__head {
-    display: flex;
-    align-items: center;
-    gap: 0.4em;
-  }
-  .ws-giftsheet__ico {
-    font-size: 1.1em;
-  }
-  .ws-giftsheet__t {
-    font-weight: 700;
-  }
-  .ws-giftsheet__lead {
-    margin: 0.55em 0 0.7em;
-    font-size: 0.9em;
-    line-height: 1.65;
-    color: var(--ws-fg);
-  }
-  .ws-giftsheet__opt {
-    margin-bottom: 0.5em;
-    padding: 0.5em 0.6em;
-    border: 1px solid var(--ws-border);
-    border-radius: var(--ws-radius-sm);
-    background: var(--ws-panel-2);
-  }
-  .ws-giftsheet__optT {
-    font-weight: 600;
-    font-size: 0.94em;
-  }
-  .ws-giftsheet__optD {
-    margin-top: 0.2em;
-    font-size: 0.86em;
-    line-height: 1.6;
-    color: var(--ws-fg-dim);
-  }
+  /* 送礼物弹层的样式已随组件搬进 `WsGiftSheet.vue`（scoped），这里不再重复一份 ——
+     两份样式一定会漂移，而且弹层现在要能被手机复用。 */
 </style>

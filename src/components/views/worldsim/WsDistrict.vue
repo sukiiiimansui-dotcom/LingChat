@@ -20,9 +20,24 @@
         :class="{ 'is-drag': gsDragging || gsInstant }"
         :style="gsStyle"
       >
-        <!-- ① 本地草图层（后端 sketch：确定性、毫秒级、不调 LLM） -->
+        <!-- ① 本地草图层（后端 sketch：确定性、毫秒级、不调 LLM）
+             🔴 机主 2026-09-19：「在小区草图阶段会异常卡顿，这里**直接用加载动画代替**，
+                后面用地图库直接使用」。
+             实测原因（不是感觉）：那张草图是一整张 78KB 的 SVG data-url，里面有几百个节点
+             （楼/路/树/水系 + 每栋楼一个 <g>），在手机上**每次手势变换都要重新合成整张图** ⇒ 掉帧。
+             所以这里**先不画草图**，只留加载动画；小区级改由 MapLibre（新引擎）呈现
+             —— 见看板卡「小区级 2.5D 化：草图贴地 + 真实楼房挤出 + 五层跟随投影」。
+             ⚠️ 图层（设施/交通/头像）的定位用的是 `WS_GRID` 网格 + 各自的数据，**不依赖这张图**，
+             所以关掉它不影响它们的数据；但没有底图时它们会"浮在空处"，
+             因此 `#pin` 插槽也一并隐藏（等 MapLibre 底图上来再一起显示）。 -->
         <div class="ws-neigh__layer" :class="{ 'is-out': aiVisible }">
-          <img v-if="sketchUrl" :src="sketchUrl" :alt="`${area} 小区草图`" />
+          <WsLoading
+            v-if="!sketchUrl"
+            variant="map"
+            :text="t('worldsim.loader.sketch.text')"
+            :sub="t('worldsim.loader.sketch.sub')"
+          />
+          <img v-else :src="sketchUrl" :alt="`${area} 小区草图`" />
           <!-- 草图通常 <1s 就回来了：靠 WsLoading 的 180ms 延迟兜住 ——
                快到看不见的时候**一个转圈都不该闪**（那比不显示更糟）。 -->
           <WsLoading
@@ -159,6 +174,8 @@
 <script setup lang="ts">
   import { computed, onBeforeUnmount, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
+  import { decideUpgrade } from "./wsSketchUpgrade";
+  import worldMapApi from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
   import {
     districtRenderSvg,
@@ -178,11 +195,59 @@
       area: string;
       /** 三套地图主题之一（gaode / dark / water），与行政区划图保持一致 */
       mapStyle?: string;
+      /** 区县中心坐标（可选）。传了才能拿到**按真实主朝向旋转**的草图（见 loadSketch 注释） */
+      lat?: number;
+      lng?: number;
     }>(),
     { mapStyle: "gaode" }
   );
 
   const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
+
+  /* ── 阶段 D-3：后台暖缓存（**按决策逻辑，别乱打 Overpass**）─────────────────────
+     Overpass 首取实测 15~90 秒（渝中区 24.9s、北京国贸 91.7s 后失败），所以：
+       · 冷却内（10 分钟）**一次都不打**；
+       · 打完记一笔时间戳（`localStorage`），刷新页面也不会重复打；
+       · 拿到楼（`count > 0`）就**重新渲染一次草图** —— 那时后端缓存已命中，草图会带上 rot，
+         整体旋转到真实主朝向；**没拿到就什么都不做**（不闪、不换图）。 */
+  const K_LAST_TRY = "wsm:v1:bldgTried";
+  let upgrading = false;
+  async function warmBuildings() {
+    if (upgrading) return; // 坐标由后端用"最近一次定位点"兜底（见 main.rs 的 LAST_LATLNG）
+    let lastTriedAt = 0;
+    try {
+      lastTriedAt = Number(localStorage.getItem(K_LAST_TRY) || 0) || 0;
+    } catch {
+      /* 隐私模式读不到就当从没试过 */
+    }
+    const action = decideUpgrade({
+      upgraded: false,
+      cacheHit: false,
+      buildingCount: 0,
+      lastTriedAt,
+      nowMs: Date.now(),
+      enabled: true,
+    });
+    if (action === "skip" || action === "defer") return;
+    upgrading = true;
+    try {
+      // 不传坐标：后端用 LAST_LATLNG（最近定位点）兜底 —— 免得给北京的页面暖重庆的缓存
+      const r = await fetch(`${worldMapApi.apiBase}/api/buildings?r=400`);
+      if (r.ok) {
+        const d = (await r.json()) as { count?: number };
+        try {
+          localStorage.setItem(K_LAST_TRY, String(Date.now()));
+        } catch {
+          /* 写不进去也不影响本次 */
+        }
+        if ((d?.count ?? 0) > 0) await loadSketch(); // 缓存已命中 → 这次草图会带上真实朝向
+      }
+    } catch {
+      /* 取不到就保持原样（不闪、不报错刷屏）——下次冷却过后再试 */
+    } finally {
+      upgrading = false;
+    }
+  }
 
   const { t } = useI18n();
 
@@ -279,7 +344,17 @@
   }
 
   /* ── 草图（秒出）────────────────────────────────────────────────────────── */
+  /** 🔴 机主 2026-09-19：草图阶段异常卡顿 → **暂不生成草图**（改用加载动画）。
+   *  桌面/调试想看老草图时把这里改成 `true`（或临时删掉这个早退）。 */
+  const SKETCH_DISABLED = true;
+
   async function loadSketch(fresh = false) {
+    if (SKETCH_DISABLED) {
+      // 不请求、不解析、不渲染那张 78KB 的 SVG —— 卡顿的主因就在这条链上
+      sketchLoading.value = false;
+      sketchError.value = "";
+      return;
+    }
     sketchLoading.value = true;
     sketchError.value = "";
     try {
@@ -297,8 +372,14 @@
            而设施图层（WsFacilityLayer）传的是**真实区名** → 两边是**两张不同的布局**，
            设施点会压在建筑上。修法就是这一行：把同一个区名传下去，两条通路同源。 */
         area: props.area || "广州市·越秀区",
+        /* 阶段 D-3（2026-09-19）：把坐标带上 —— 后端据此查**真实的楼体缓存**，
+           命中就把草图整体旋转到**真实主朝向**（渝中区实测 30~40°，旧的是轴对齐井字路网）。
+           ⚠️ 后端**只读缓存、不联网**（Overpass 一次 15~90 秒，会把"秒出"拖死）；
+           暖缓存由下面 `warmBuildings()` 按 `decideUpgrade()` 的冷却策略在后台做。 */
+        ...(props.lat != null && props.lng != null ? { lat: props.lat, lng: props.lng, r: 400 } : {}),
       });
       if (fresh) log("重新生成草图");
+      void warmBuildings(); // 后台暖缓存（不阻塞首屏）
       sketchUrl.value = svgToDataUrl(svg);
     } catch (e) {
       sketchError.value = e instanceof Error ? e.message : String(e);

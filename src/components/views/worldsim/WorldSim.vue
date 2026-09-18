@@ -207,6 +207,11 @@
           <template #pin>
             <!-- T4-1：窗户光。放在 `#pin` 里才和建筑同一套坐标系与手势变换。
                  低端机（ws-perf-low）直接关掉 —— 几百个节点在合成器上排队不值当。 -->
+            <!-- 🔴 机主 2026-09-19：小区草图已下线（异常卡顿 → 改用加载动画，见 WsDistrict 的
+                 `SKETCH_DISABLED`）。**没有底图时这些点会"浮在空处"**，所以这里整组先不渲染；
+                 等小区级改用 MapLibre 底图（看板卡「小区级 2.5D 化」）再一起打开。
+                 数据层不受影响：设施/交通/头像各自取数照旧，只是暂时不画。 -->
+            <template v-if="districtUnderlayVisible">
             <WsWindowLight :night="perfLow ? 0 : todNight" :size="WS_GRID" />
             <!-- T2-1：生活设施图层。放在窗户光之后、头像之前 —— 设施是"地面上的点"，
                  人必须压在它上面（层序即语义）。取不到数据时组件自己如实说明，不画假点。 -->
@@ -249,6 +254,7 @@
               :max="bubbleMax"
               :low="perfLow"
             />
+          </template>
           </template>
         </WsDistrict>
 
@@ -658,6 +664,9 @@
   }
 
   const { ok: geoOk } = geoStage;
+  /** 小区级底图是否可见（机主 2026-09-19：草图下线期间为 false —— 免得图层浮在空处）。
+   *  小区级改用 MapLibre 底图后，把它改成 true（或干脆删掉这个开关）。 */
+  const districtUnderlayVisible = false;
   onMounted(() => geoStage.mount());
   // 高亮（悬停/选中）走渲染器的本地绘制，不再靠改 DOM class
   watch(

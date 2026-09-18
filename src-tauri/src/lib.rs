@@ -720,6 +720,8 @@ pub fn run() {
             world_map::world_map_facilities,
             world_map::world_map_facilities_types,
             world_map::world_map_facility_at,
+            // ── T2-2：交通站点（公交/地铁/停车…），供 `WsTransitLayer` 把上下车点吸附到真实站点 ──
+            world_map::world_map_transport_nodes,
             // ── 应用内实时绘制（Channel 版；浏览器/调试服务的 SSE 路并存）──
             world_map::bridge::world_map_district_stream,
             world_map::bridge::world_map_district_stream_cancel,

@@ -211,6 +211,10 @@
             <!-- T2-1：生活设施图层。放在窗户光之后、头像之前 —— 设施是"地面上的点"，
                  人必须压在它上面（层序即语义）。取不到数据时组件自己如实说明，不画假点。 -->
             <WsFacilityLayer :area="areaLabel || '未知区域'" :grid="WS_GRID" :zoom="districtScale" />
+            <!-- T2-2：交通站点图层。**必须在头像层之前** —— 它和头像层同级（z-index 3），
+                 靠 DOM 顺序决定谁在上面；放前面，人才压着车站。
+                 ⚠️ 不要再打开 WsFacilityLayer 的「交通设施」分组（默认关），否则同一批点画两遍。 -->
+            <WsTransitLayer :area="areaLabel || '未知区域'" :grid="WS_GRID" :zoom="districtScale" />
             <WsAvatarLayer
               :placed="placedActors"
               :grid="WS_GRID"
@@ -531,6 +535,7 @@
   import WsCharPanel from "./WsCharPanel.vue";
   import WsMePanel from "./WsMePanel.vue";
   import WsFacilityLayer from "./WsFacilityLayer.vue";
+  import WsTransitLayer from "./WsTransitLayer.vue";
   import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   // P4-2 / P4-3：行程卡 + 地图上的交通工具（样式由组件自己 import worldsim-trip.css）
   import WsTripCard from "./WsTripCard.vue";

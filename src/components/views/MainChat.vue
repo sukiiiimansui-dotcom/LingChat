@@ -2,6 +2,8 @@
   <div class="main-box">
     <!-- 主界面始终渲染，加载动画期间在后台初始化 -->
     <FreeModeTools />
+    <!-- 悬浮手机**不在这里**：机主 2026-09-18 明确「手机是仅在地图里的功能」，
+         所以它挂在 `/worldsim`（见 WsCityEntry.vue）。聊天页保持干净。 -->
     <FullAccessWarning />
     <GameBackground></GameBackground>
     <!-- <GameAvatar ref="gameAvatarRef" @audio-ended="handleAudioFinished" />  -->

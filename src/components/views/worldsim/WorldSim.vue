@@ -208,6 +208,9 @@
             <!-- T4-1：窗户光。放在 `#pin` 里才和建筑同一套坐标系与手势变换。
                  低端机（ws-perf-low）直接关掉 —— 几百个节点在合成器上排队不值当。 -->
             <WsWindowLight :night="perfLow ? 0 : todNight" :size="WS_GRID" />
+            <!-- T2-1：生活设施图层。放在窗户光之后、头像之前 —— 设施是"地面上的点"，
+                 人必须压在它上面（层序即语义）。取不到数据时组件自己如实说明，不画假点。 -->
+            <WsFacilityLayer :area="areaLabel || '未知区域'" :grid="WS_GRID" :zoom="districtScale" />
             <WsAvatarLayer
               :placed="placedActors"
               :grid="WS_GRID"
@@ -314,6 +317,8 @@
         :open="wsPanel.open.value"
         :selected-id="wsPanel.targetId.value"
         :me-name="meName"
+        :feats="geoStage.feats.value"
+        :dark="mapDark"
         @close="wsPanel.closePanel"
         @pick="onActorPick"
         @refresh="actors.loadTimeWeather()"
@@ -436,6 +441,12 @@
       </aside>
     </Teleport>
 
+    <!-- ── 悬浮手机（T5-1）────────────────────────────────────────────────
+         机主 2026-09-18：「手机是**仅在地图里**的功能」→ 入口从聊天页搬到这里。
+         八项应用见 `WsPhone.vue` 的 APPS；已接的（READY）点开即用，未接的点了会如实提示。
+         z-index 用令牌：`--z-ws-phone: 60`，高于叠加层（40）、低于 toast（80）。 -->
+    <WsPhone @open-app="onPhoneApp" />
+
     <!-- toast 容器（快捷动作「即将上线」这类提示必须有可见反应，绝不静默） -->
     <div class="ws-toasts" aria-live="polite">
       <div v-for="m in toastItems" :key="m.id" class="ws-toast" :class="`ws-toast--${m.kind}`">
@@ -519,6 +530,8 @@
   import WsAvatarLayer from "./WsAvatarLayer.vue";
   import WsCharPanel from "./WsCharPanel.vue";
   import WsMePanel from "./WsMePanel.vue";
+  import WsFacilityLayer from "./WsFacilityLayer.vue";
+  import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   // P4-2 / P4-3：行程卡 + 地图上的交通工具（样式由组件自己 import worldsim-trip.css）
   import WsTripCard from "./WsTripCard.vue";
   import WsVehicleMark from "./WsVehicleMark.vue";
@@ -617,6 +630,16 @@
       else sim.setPick(p.adcode, p.name);
     },
   });
+  /* 悬浮手机：没接进来的应用点了要**如实提示**（绝不静默 —— 点了没反应最伤体验）。
+     清单同 `WsPhone.vue` 的 APPS；已接的（READY）由 WsPhone 内部直接打开，不走这里。 */
+  const PHONE_APP_LABEL: Record<string, string> = {
+    music: "音乐（T5-8）",
+    me: "我的",
+  };
+  function onPhoneApp(key: string) {
+    wsToast(`${PHONE_APP_LABEL[key] || key} 还没接进来`, "info");
+  }
+
   const { ok: geoOk } = geoStage;
   onMounted(() => geoStage.mount());
   // 高亮（悬停/选中）走渲染器的本地绘制，不再靠改 DOM class

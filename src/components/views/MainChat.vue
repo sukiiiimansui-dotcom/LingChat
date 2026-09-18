@@ -2,8 +2,8 @@
   <div class="main-box">
     <!-- 主界面始终渲染，加载动画期间在后台初始化 -->
     <FreeModeTools />
-    <!-- T5-1：悬浮手机入口（右下角常驻，一键呼出；八项功能见 WsPhone.vue 的 APPS） -->
-    <WsPhone @open-app="onPhoneApp" />
+    <!-- 悬浮手机**不在这里**：机主 2026-09-18 明确「手机是仅在地图里的功能」，
+         所以它挂在 `/worldsim`（见 WorldSim.vue）。聊天页保持干净。 -->
     <FullAccessWarning />
     <GameBackground></GameBackground>
     <!-- <GameAvatar ref="gameAvatarRef" @audio-ended="handleAudioFinished" />  -->
@@ -70,7 +70,6 @@
   }
   import { getEnvConfigByKey } from "@/api/services/config";
   import FreeModeTools from "@/components/tools/FreeModeTools.vue";
-  import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   import { wsToast } from "@/components/views/worldsim/wsToast";
   import ToolActivityStatus from "@/components/tools/ToolActivityStatus.vue";
   import { dialogueMerge } from "@/core/events/dialogue-merge";

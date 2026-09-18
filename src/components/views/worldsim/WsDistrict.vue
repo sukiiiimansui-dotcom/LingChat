@@ -291,6 +291,12 @@
         zoom: 3,
         size: SKETCH_SIZE,
         seed: hash32(props.area || "world"),
+        /* 🔴 T2-1 抓到的真 bug（2026-09-18）：后端布局种子是
+           `sha256("{area}|{seed}")` —— **区名本身就是种子的一部分**（不是文案）。
+           这里原来不传 area → 后端用默认区名「广州市·越秀区」建布局，
+           而设施图层（WsFacilityLayer）传的是**真实区名** → 两边是**两张不同的布局**，
+           设施点会压在建筑上。修法就是这一行：把同一个区名传下去，两条通路同源。 */
+        area: props.area || "广州市·越秀区",
       });
       if (fresh) log("重新生成草图");
       sketchUrl.value = svgToDataUrl(svg);

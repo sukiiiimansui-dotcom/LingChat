@@ -116,17 +116,18 @@
           :default-open="true"
           :count="placed.length"
         >
-          <div class="ws-mini" data-no-gesture>
-            <WsAvatarLayer
-              class="ws-mini__layer"
-              :placed="placed"
-              :grid="grid"
-              size="mini"
-              :selected-id="selectedId"
-              :me-name="meName"
-              @pick="(a) => emit('pick', a)"
-            />
-          </div>
+          <!-- 圆形小地图（机主 2026-09-18：圆形 + 自由缩放 + 拖拽）。
+               地图内容与主地图同一份要素（`feats` 由 WorldSim 透传），头像点与地图
+               在**同一个变换层**里一起动 —— 分开变换就会"地图动了人没动"。 -->
+          <WsMiniMap
+            :feats="feats"
+            :placed="placed"
+            :grid="grid"
+            :selected-id="selectedId"
+            :me-name="meName"
+            :dark="dark"
+            @pick="(a) => emit('pick', a)"
+          />
           <div class="ws-panel__hint">{{ t("worldsim.me.minimapHint") }}</div>
           <div class="ws-mini__list ws-scroll">
             <button
@@ -176,7 +177,8 @@
 <script setup lang="ts">
   import { computed, ref } from "vue";
   import { useI18n } from "vue-i18n";
-  import WsAvatarLayer from "./WsAvatarLayer.vue";
+  import WsMiniMap from "./WsMiniMap.vue";
+  import type { GeoFeat } from "./wsGeoMap";
   import WsCollapse from "./WsCollapse.vue";
   import { shrinkImageToDataUrl, type PlacedActor } from "./wsActors";
   import type { WsActors } from "@/composables/useWsActors";
@@ -192,8 +194,12 @@
       open?: boolean;
       selectedId?: string;
       meName?: string;
+      /** 当前级地图要素（与主地图同一份，供圆形小地图渲染真地图内容） */
+      feats?: GeoFeat[];
+      /** 深色主题（与主地图一起切） */
+      dark?: boolean;
     }>(),
-    { grid: 28, areaText: "", narrow: false, open: false, selectedId: "", meName: "" }
+    { grid: 28, areaText: "", narrow: false, open: false, selectedId: "", meName: "", feats: () => [], dark: true }
   );
 
   const emit = defineEmits<{

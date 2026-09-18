@@ -714,6 +714,12 @@ pub fn run() {
             world_map::world_map_transport_plan,
             world_map::world_map_osm_summary,
             world_map::world_map_time,
+            // ── T2-1：生活设施（7 类）。组件 `WsFacilityLayer` 优先走这三条命令，
+            //    浏览器预览走调试服务 8791 的 `/api/facilities`；两条路都不通时**如实显示取不到**，
+            //    不画假点（T2-1 卡的硬要求）。──
+            world_map::world_map_facilities,
+            world_map::world_map_facilities_types,
+            world_map::world_map_facility_at,
             // ── 应用内实时绘制（Channel 版；浏览器/调试服务的 SSE 路并存）──
             world_map::bridge::world_map_district_stream,
             world_map::bridge::world_map_district_stream_cancel,

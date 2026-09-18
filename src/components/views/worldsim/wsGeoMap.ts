@@ -105,6 +105,10 @@ export interface WsGeoMapOpts {
   onHover?: (f: GeoFeat | null) => void;
   /** 视图变化（缩放/平移后），给外部同步 UI（例如"复位"按钮可用性） */
   onView?: (v: { zoom: number }) => void;
+  /** 是否自己接管指针手势（默认 true）。
+   *  小地图（`WsMiniMap`）要**自己**做拖拽/缩放（它还要带动同一层的头像点一起变换），
+   *  所以传 false —— 渲染器只负责把图静态画出来。 */
+  interactive?: boolean;
 }
 
 interface View {
@@ -146,7 +150,7 @@ export class WsGeoMap {
     this.ctx = ctx;
     this.theme = opts.theme || THEME_DARK;
     this.layout();
-    this.bindPointer();
+    if (opts.interactive !== false) this.bindPointer();
   }
 
   // ── 数据 ───────────────────────────────────────────────────────────────

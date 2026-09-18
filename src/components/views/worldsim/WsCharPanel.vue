@@ -206,6 +206,13 @@
             <button class="ws-btn" type="button" @click="quick('hi')">
               👋 {{ t("worldsim.action.hi") }}
             </button>
+            <!-- 可玩性切片 A：好感是**世界的状态**，不是装饰 —— 送礼会让它涨，面板立刻可见 -->
+            <div class="ws-aff" :title="`好感 ${affinity} / 100`">
+              <span class="ws-aff__k">好感</span>
+              <span class="ws-aff__v">{{ affinity ?? 0 }}</span>
+              <span class="ws-aff__r">{{ affinityRank || "陌生" }}</span>
+              <i class="ws-aff__bar"><b :style="{ width: Math.max(0, Math.min(100, affinity ?? 0)) + '%' }" /></i>
+            </div>
             <button class="ws-btn" type="button" @click="quick('gift')">
               🎁 {{ t("worldsim.action.gift") }}
             </button>
@@ -262,6 +269,10 @@
       portraitOpen?: boolean;
       /** 当前正在对话的角色 id（决定「去找他聊聊」是直连还是提醒） */
       currentRoleId?: number;
+      /** 好感 0~100（页面从 `wsRelation` 读出来传进来；不传 = 0，面板照旧） */
+      affinity?: number;
+      /** 好感档位文案（页面用 `rankOf()` 算好传进来，面板不重复实现判据） */
+      affinityRank?: string;
     }>(),
     { areaText: "", narrow: false, open: false, portraitOpen: false, currentRoleId: 0 }
   );
@@ -273,6 +284,8 @@
     (e: "quick", action: string, a: PlacedActor): void;
     /** P2-5：送礼弹层里真的送出了一件（本机已扣减+记账）—— 页面可据此接记忆/事件 */
     (e: "gift", p: { actor: PlacedActor; name: string; icon: string; role: string }): void;
+    /** 好感（可玩性切片 A：由页面从 `wsRelation` 读出来传进来；不传 = 0） */
+    // 说明：prop 声明在下方 defineProps 里，这里只是事件表的注释锚点
     /** P4-4：下一条「让他去某地」的指令（目的地是地名或设施名） */
     (e: "direct", to: string, a: PlacedActor): void;
   }>();
@@ -423,6 +436,36 @@
 </script>
 
 <style scoped>
+  /* 好感条（可玩性切片 A）：细、无边框、主色填充 —— 与 LingChat 的语言一致 */
+  .ws-aff {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    margin: 0.3em 0 0.5em;
+    font-size: 0.9em;
+    opacity: 0.95;
+  }
+  .ws-aff__k { opacity: 0.66; }
+  .ws-aff__v { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ws-aff__r {
+    padding: 0 0.4em;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    font-size: 0.86em;
+  }
+  .ws-aff__bar {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.16);
+    overflow: hidden;
+  }
+  .ws-aff__bar > b {
+    display: block;
+    height: 100%;
+    background: var(--accent-color, #79d9ff);
+    transition: width 0.3s cubic-bezier(0, 0, 0, 1);
+  }
   .ws-drawer {
     position: absolute;
     inset: 0;

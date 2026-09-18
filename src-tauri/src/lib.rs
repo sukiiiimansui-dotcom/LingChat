@@ -722,6 +722,10 @@ pub fn run() {
             world_map::world_map_facility_at,
             // ── T2-2：交通站点（公交/地铁/停车…），供 `WsTransitLayer` 把上下车点吸附到真实站点 ──
             world_map::world_map_transport_nodes,
+            // ── 真 2.5D 楼房（OSM 建筑轮廓 + 楼高）。浏览器通路走调试服务的 `/api/buildings`，
+            //    真壳走这条命令。⚠️ 数据质量实测：OSM 楼高覆盖率只有 13~18%，其余回落默认 8m
+            //    （见 world_map/PROJECT-STATE.md 的覆盖率表；要真实天际线需引 Overture/Cesium）。──
+            world_map::world_map_buildings,
             // ── 应用内实时绘制（Channel 版；浏览器/调试服务的 SSE 路并存）──
             world_map::bridge::world_map_district_stream,
             world_map::bridge::world_map_district_stream_cancel,

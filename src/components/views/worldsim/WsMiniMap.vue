@@ -143,7 +143,14 @@
   };
 
   function onDown(e: PointerEvent) {
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    /* ⚠️ `setPointerCapture` 在某些情况下会**抛异常**（例如合成事件、或指针已被释放）——
+       不接住的话整个 onDown 就断了，表现成"拖不动"且**没有报错**。
+       实测：我的自动化测试派发合成 PointerEvent 时就撞上了这条。 */
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* 拿不到捕获也能拖：下面照样按 pointermove 更新 */
+    }
     pts.set(e.pointerId, local(e));
     if (pts.size === 1) dragging.value = true;
     if (pts.size === 2) {

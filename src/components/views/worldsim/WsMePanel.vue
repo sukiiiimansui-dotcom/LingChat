@@ -375,21 +375,12 @@
     display: none;
   }
 
-  /* ── 小地图 ───────────────────────────────────────────────────────────── */
-  .ws-mini {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: var(--ws-radius);
-    border: 1px solid var(--ws-border);
-    background: var(--ws-stage-bg);
-    overflow: hidden;
-  }
-  /* 小地图是「缩略总览」：点谁选谁，绝不参与地图手势 */
-  .ws-mini__layer {
-    position: absolute;
-    inset: 0;
-  }
+  /* ── 小地图列表（**圆形容器本身的样式在 `WsMiniMap.vue` 里**）─────────────
+     🔴 教训（2026-09-18 自主轮次 2 实测抓到）：这里原来有一份 `.ws-mini { border-radius: var(--ws-radius) }`
+     —— 换成 `<WsMiniMap>` 之后**标记删了、样式没删**，而 Vue 的 scoped CSS 会把**父组件的 scope id
+     也加到子组件的根元素**上，于是这条 16px 的圆角把子组件自己的 `border-radius: 50%` 盖掉了：
+     小地图变成了圆角方块（采样值 `miniRadius: "16px"`）。
+     ⇒ 规则：**组件换实现时，旧样式要一起删**，否则 scoped 继承会让它"复活"。 */
   .ws-mini__list {
     margin-top: 0.4em;
     max-height: 11em;

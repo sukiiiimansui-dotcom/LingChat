@@ -219,10 +219,19 @@ pub fn render_svg(layout: &Value, o: &Opts) -> String {
 
     let mut p: Vec<String> = Vec::with_capacity(512);
     p.push(format!(r#"<rect width="{w}" height="{h}" fill="{}"/>"#, st.bg));
-    p.push(format!(
-        r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="{}" rx="6"/>"#,
-        ox, oy, cell * size, cell * size, st.blockbg
-    ));
+    /* 真实主朝向（`sketch::make_sketch` 透传的 `rot`）。**必须在画街区底色之前读**：
+       旋转后正方形的四角会转出去，底色若还是那块小矩形，四角就会露出页面底色（白三角）。 */
+    let rot = num(layout, "rot", 0.0);
+    let rotated = rot.abs() > 0.01;
+    if rotated {
+        // 旋转时底色铺满整张画布 ⇒ 四角不会露底（观感问题，2026-09-19 对照图里发现的）
+        p.push(format!(r#"<rect width="{w}" height="{h}" fill="{}"/>"#, st.blockbg));
+    } else {
+        p.push(format!(
+            r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="{}" rx="6"/>"#,
+            ox, oy, cell * size, cell * size, st.blockbg
+        ));
+    }
     // 阶段 C：从这里到"数据卡片"之前是**地图内容**（街区块、路网、水系…）。
     // 真实主朝向要转的就是这一段 —— **背景与数据卡片必须保持正立**（卡片跟着歪是明显的丑）。
     let content_start = p.len();
@@ -551,8 +560,7 @@ pub fn render_svg(layout: &Value, o: &Opts) -> String {
        （schema 只有 x/y/w/h），逐个转中心点会得到"街道斜着、楼还是正的"——比不转更难看。
        在这里统一施加旋转，对**线段与矩形都精确**，且**不动 schema**。
        `rot` 来自 `sketch::make_sketch` 的真实楼体主朝向（0 = 轴对齐 = 历史行为）。 */
-    let rot = num(layout, "rot", 0.0);
-    if rot.abs() > 0.01 {
+    if rotated {
         let (rcx, rcy) = (w / 2.0, h / 2.0);
         p.insert(
             content_start,

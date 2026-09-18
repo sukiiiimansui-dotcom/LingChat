@@ -105,6 +105,10 @@ export interface WsGeoMapOpts {
   onHover?: (f: GeoFeat | null) => void;
   /** 视图变化（缩放/平移后），给外部同步 UI（例如"复位"按钮可用性） */
   onView?: (v: { zoom: number }) => void;
+  /** "铺满画布"时的留白系数（默认 0.94 = 四周留 6%）。
+   *  小地图传更小的值（如 0.76）⇒ 内容**溢出**圆形视口 ⇒ 1× 时也有可拖动余量
+   *  （否则夹紧逻辑会让"没放大就拖不动"，机主要的"自由拖拽"就落空了）。 */
+  fitPad?: number;
   /** 是否自己接管指针手势（默认 true）。
    *  小地图（`WsMiniMap`）要**自己**做拖拽/缩放（它还要带动同一层的头像点一起变换），
    *  所以传 false —— 渲染器只负责把图静态画出来。 */
@@ -176,7 +180,7 @@ export class WsGeoMap {
 
   /** 数值上"铺满画布"的视图：contain + 6% 边距 */
   private fitView(): View {
-    const pad = 0.94;
+    const pad = this.opts.fitPad ?? 0.94;
     if (!this.feats.length) return { k: 1, tx: 0, ty: 0 };
     let minX = Infinity;
     let minY = Infinity;

@@ -197,6 +197,10 @@
       canvas: cv.value,
       theme: props.dark ? THEME_DARK : THEME_LIGHT,
       interactive: false,
+      /* 0.76 ⇒ 地图**故意溢出**圆形视口（约 24%），这样即使 scale=1 也有可拖动的余量。
+         用 0.94（主地图那个值）时会"没放大就拖不动"——夹紧逻辑不允许无余量平移，
+         而机主要的原话是「自由缩放，**拖拽**」。 */
+      fitPad: 0.76,
     });
     map.setFeatures(props.feats, { animate: false });
   }

@@ -223,6 +223,8 @@
               :zoom="districtScale"
               :drag="true"
               :drag-pin="dragPin"
+              :focus="focus.queue.value"
+              :low="perfLow"
               @pick="onActorPick"
               @dragstart="onDragStart"
               @dragmove="onDragMove"
@@ -537,6 +539,7 @@
   import WsFacilityLayer from "./WsFacilityLayer.vue";
   import WsTransitLayer from "./WsTransitLayer.vue";
   import WsPhone from "@/components/views/worldmap/WsPhone.vue";
+  import { useWsFocus } from "./wsFocus";
   // P4-2 / P4-3：行程卡 + 地图上的交通工具（样式由组件自己 import worldsim-trip.css）
   import WsTripCard from "./WsTripCard.vue";
   import WsVehicleMark from "./WsVehicleMark.vue";
@@ -901,10 +904,22 @@
    * bubble 通道由 composable 自己写 `bubbles`（组件 `WsEventBubble` 只负责画），
    * speech 通道**前端不做额外事**（后端已把事件注进「最近：…」，见 composable 文件头）。
    * ⚠️ 生命周期：进到小区图才 `start()`（引擎要 `scene` 才有意义），离开本页 `stop()`。 */
+  /* T4-3：重大事件聚焦（压暗 + 亮圈 + 铭牌）。
+     `useWsFocus` 里那份是**演示兜底**，页面这份优先 —— 两条路都不打架（见 wsFocus 注释）。
+     判据全在纯函数 `focusLevelOf()` 里：**只有"重大 + 这个角色真的在地图上"才会聚焦**，
+     人在画面外/名字对不上就自然不聚焦（不会出现"聚了个寂寞"）。 */
+  const focus = useWsFocus();
   const wsEvents = useWorldEvents({
     role: currentRoleName,
     onFired: (e) => {
-      // 关掉这一路就该安静（气泡那一路由 composable 内部判，这里只管提示条）
+      // ① 聚焦队列（与提示条无关，先喂）
+      focus.focusEvent({
+        category: e.event?.category,
+        role: e.role,
+        title: e.event?.title || "",
+        hasActor: placedActors.value.some((a) => a.name === e.role || a.folder === e.role),
+      });
+      // ② 提示条：关掉这一路就该安静（气泡那一路由 composable 内部判）
       if (!wsEvents.channels.value.popup) return;
       wsToast(e.popup || e.event?.title || "", popupKindOf(e.event?.category));
     },

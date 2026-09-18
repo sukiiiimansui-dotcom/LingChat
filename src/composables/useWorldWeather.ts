@@ -20,7 +20,7 @@
 //   成功：30 分钟一次（与后端缓存 TTL 一致）。
 //   失败：2 分钟一次（真源恢复得快，但也不能打成刷屏）。
 
-import { computed, onBeforeUnmount, onMounted, ref, type ComputedRef, type Ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch, type ComputedRef, type Ref } from "vue";
 import worldMapApi from "@/api/services/worldMap";
 import {
   degradedState,
@@ -88,7 +88,14 @@ export interface UseWorldWeather {
  * 演示页现在自己有一份（页内函数），不依赖这里。
  */
 
-export function useWorldWeather(): UseWorldWeather {
+/**
+ * @param opts.city 当前应查的城市（跟随定位）。
+ *   🔴 为什么必须能传：后端在没有 city 时会**回落到"最近一次定位到的城市"**，
+ *   而页面加载时天气请求**早于**定位完成 → 角标会先缓存成默认城市（北京）的天气，
+ *   而且要等 30 分钟 TTL 才纠正。实测过：定位行写「当前：重庆市」、角标却是北京的「晴 29°C」。
+ *   传了 city 之后，定位一出来（city 变化）就立刻重拉，角标与定位永远一致。
+ */
+export function useWorldWeather(opts: { city?: () => string } = {}): UseWorldWeather {
   const fallback = degradedState("还没开始拉取天气");
   const state = ref<WsWeatherState>(fallback);
 
@@ -111,7 +118,7 @@ export function useWorldWeather(): UseWorldWeather {
   async function refresh(): Promise<void> {
     if (!alive) return;
     try {
-      const got = usable(await worldMapApi.weather());
+      const got = usable(await worldMapApi.weather(opts.city?.() || undefined));
       if (!alive) return;
       // 用 `"state" in got` 判成功 —— **不能**用 `"reason" in got`（normalize 的产物也带 reason，见 usable 的注释）
       state.value = "state" in got ? got.state : degradedState(got.reason);
@@ -130,6 +137,14 @@ export function useWorldWeather(): UseWorldWeather {
     if (typeof document === "undefined") return;
     if (document.visibilityState === "visible") void refresh();
   }
+
+  /* 定位城市一变就重拉（否则要等 30 分钟 TTL 才纠正 → 角标显示别的城市的天气） */
+  watch(
+    () => opts.city?.() || "",
+    (c, prev) => {
+      if (c && c !== prev) void refresh();
+    }
+  );
 
   onMounted(() => {
     alive = true;

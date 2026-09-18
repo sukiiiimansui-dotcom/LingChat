@@ -1604,6 +1604,24 @@ fn opt_bool(s: &str) -> Option<bool> {
 /// 返回 `{ok, route, options, modes}` 或 `{ok:false, error}`。
 /// 规划 + 顺带给出方案列表，前端一次拿全。
 pub fn api_plan(params: &Value) -> Value {
+    api_plan_with_ctx(params, None)
+}
+
+/// **带小区上下文的算路**（T2-2 step2 的桥）—— 与 [`api_plan`] 逐字段同形，
+/// 唯一区别是把 [`makes_context`] 的产物喂进规划器，于是**接驳段吸附到真实站点**。
+///
+/// 为什么单开一个函数而不是给 `api_plan` 加参数：
+///   · `api_plan` 是 `world_map_transport_plan`（真壳）与 `/api/transport_plan`（调试服务）
+///     共用的入口，签名一动两边都要动；而且**旧调用方必须保持逐字节同行为**
+///     （T5-2/T5-3/T5-4 三个手机页面都在用它），所以默认路径原样走 `None`。
+///
+/// 有 ctx 与没 ctx 的实际差别（`build_legs` 里就这两处）：
+///   · 没 ctx：上下车点 = `offset_point(a, b, access_km)` —— 从起点朝终点挪一小段，**几何猜的**，
+///     文案是通用名（「接驳到公交站」）；
+///   · 有 ctx：上下车点 = `facilities` 里最近的那个**真实站点**的经纬度，
+///     文案带真实站名（「接驳到人民路站」）。
+/// 判断标准写进自检：上下车点到「最近的同类真实站点」的距离，有 ctx 时应为 **0 米**。
+pub fn api_plan_with_ctx(params: &Value, context: Option<&Value>) -> Value {
     let flng = q(params, "from_lng").parse::<f64>();
     let flat = q(params, "from_lat").parse::<f64>();
     let tlng = q(params, "to_lng").parse::<f64>();
@@ -1620,9 +1638,28 @@ pub fn api_plan(params: &Value) -> Value {
     let urban = opt_bool(&q(params, "urban"));
     // Python 这里包了一层 try/except 返回 {ok:false,error}；Rust 版规划路径不会失败，
     // 所以异常分支换成了上面的坐标解析失败分支
-    let route = plan_route(a, b, prefer.as_deref(), water, urban, "balanced", None);
-    let options = plan_options(a, b, water, urban, "balanced", None, Some(5), None);
+    let route = plan_route(a, b, prefer.as_deref(), water, urban, "balanced", context);
+    let options = plan_options(a, b, water, urban, "balanced", None, Some(5), context);
     json!({"ok": true, "route": route, "options": options, "modes": modes_table()})
+}
+
+/// 给定「小区网格的中心点」，算出网格**原点**（格 `(0,0)`）的经纬度。
+///
+/// 为什么需要它：`coord::grid_to_world` 的锚点是**原点**（格 (0,0)），
+/// 而前端手上只有「我人在哪」——那对应的是网格**中心**（格 `size/2, size/2`），
+/// 两者差半张图的距离（28 格 × 30m ≈ 420m）。差这一下，站点吸附就会整体偏移半格网，
+/// 表现为「上车点落在隔壁街区」。
+///
+/// 与 `coord::grid_to_world` 的 y 轴约定一致：格 +y 向**南**（所以中心 → 原点是往西北退）。
+pub fn anchor_for_center(
+    center_lng: f64,
+    center_lat: f64,
+    grid_size: f64,
+    cell_meters: f64,
+) -> (f64, f64) {
+    let half = if grid_size > 0.0 { grid_size / 2.0 } else { 0.0 };
+    let (wx, wy) = coord::grid_to_world(-half, -half, center_lng, center_lat, cell_meters);
+    coord::world_to_lng_lat(wx, wy)
 }
 
 /// GET /api/transport_modes → 9 种交通工具参数表

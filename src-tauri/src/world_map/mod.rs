@@ -769,15 +769,227 @@ pub async fn world_map_schedule(
     ))
 }
 
+/// 交通设施层上下文（T2-2 step2）—— 把「路径规划器」与「地图上那些车站」接到同一份设施表上。
+///
+/// ## 为什么需要它
+/// `transport.rs` 在没有上下文时会用 `offset_point()` **几何猜**上下车点：从起点朝终点挪一小段
+/// （`access_km`）。那个点通常落在街区内部（= 卡片里说的"空地"），文案也只能写通用名「接驳到公交站」。
+/// 把 [`facilities`] 生成的真实交通节点喂进去后，上下车点 = **最近的真实站点**的经纬度，
+/// 文案带真实站名（「接驳到人民路站」）。
+///
+/// ## 与地图同源（关键）
+/// 站点的身份 = `(area, size, seed, level)` 四元组（`facilities::generate_all` 内部按
+/// `sha256("{area}|{size}|{salt}")` 播种）。所以**要与地图上那枚图标逐一对应**，调用方必须传
+/// **与 T2-1 设施图层相同的四个值**（前端是 `area=区域名`、`size=28`、`seed=hash32(area)`）。
+/// 只给坐标不给这四个值时也能吸附（以起点为中心、用默认区名生成一份草图），
+/// 位置仍在合理街区上，但**未必与地图上画的那枚图标重合** —— 这一点在 `source` 字段里如实标出
+/// （`explicit`/`maplib`/`sketch`）。
+#[derive(Default)]
+struct TransitOpts {
+    layout: Option<Value>,
+    key: Option<String>,
+    area: Option<String>,
+    size: Option<i32>,
+    seed: Option<u64>,
+    level: Option<String>,
+    /// 网格原点（格 (0,0)）的经纬度 —— 优先级最高，调用方自己算好了锚点就用它
+    anchor: Option<(f64, f64)>,
+    /// 网格**中心**的经纬度（「我人在哪」就是这个）→ 内部换算成原点
+    center: Option<(f64, f64)>,
+    /// 兜底中心（算路时用起点）：只在前面都没给时才用
+    fallback_center: Option<(f64, f64)>,
+}
+
+/// 交通上下文的构造结果：喂给规划器的那份 + 给前端/自检看的那份
+struct TransitCtx {
+    /// 送进 `transport::api_plan_with_ctx` 的上下文（含完整 facilities 数组）
+    ctx: Value,
+    /// 回给调用方的摘要（**不含** facilities 全量，只带节点要点，免得响应肥一圈）
+    report: Value,
+    /// 这份上下文用的布局与锚点 —— 三级对比（社区/区县/城市）必须复用**同一份布局**，
+    /// 否则三档之间连"网格大小/空地分布"都变了，比出来的数量差没有意义
+    layout: Value,
+    /// 锚点；`None` = 调用方没给任何地理位置 → **节点照给，但不编经纬度**（`geo:false`）
+    anchor: Option<(f64, f64)>,
+    grid: i64,
+}
+
+/// 由「布局 + 锚点 + 层级」生成交通节点与规划上下文。
+///
+/// 与 T2-1 的设施图层走**同一条生成链**（`facilities::generate_all` 内部用 `seed + 1`
+/// 生成交通节点），所以这里的站点与 `/api/facilities` 返回的 `transport` 数组是**同一批** ——
+/// 地图上画的那枚图标，就是规划器用来当上下车点的那一个（前提是 `area/size/seed` 传得一样）。
+fn transit_nodes_of(
+    layout: &Value,
+    area: &str,
+    level: &str,
+    seed: Option<u64>,
+    anchor: Option<(f64, f64)>,
+) -> Option<(Value, Value)> {
+    let all = facilities::generate_all(layout, area, None, level, seed.map(|s| s as i64));
+    let nodes = all.get("transport").and_then(|v| v.as_array()).cloned()?;
+    if nodes.is_empty() {
+        return None;
+    }
+    let grid = layout
+        .get("size")
+        .and_then(|v| v.as_i64())
+        .filter(|v| *v > 0)
+        .unwrap_or(28);
+    let mpc = facilities::DEFAULT_CELL_METERS;
+    // 没有锚点就没有"规划上下文"（`station_in_grid` 本来也要求 anchor）——
+    // 这时**节点照给**，只是不带经纬度：地图图层用的是格点坐标，够画；
+    // 而规划那条路本来就必须有锚点，缺了就如实退回几何估计。
+    let ctx = match anchor {
+        Some(a) => transport::makes_context(&nodes, a, mpc, Some(grid as f64)),
+        None => Value::Null,
+    };
+    // 节点也带上经纬度：前端要画"我上车的那个站"，自检要量"上车点离真实站点多远"。
+    // ⚠️ 换算公式必须与 `transport.rs::station_in_grid` 逐字一致
+    //    （`grid_to_world(gx, gy, anchor, mpc)` → `world_to_lng_lat`），
+    //    否则"画出来的图标"与"规划器认定的站点"会差一点，验收就对不上了。
+    let with_ll: Vec<Value> = nodes
+        .iter()
+        .map(|n| {
+            let mut n2 = n.clone();
+            if let Some((alng, alat)) = anchor {
+                let gx = n.get("gx").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let gy = n.get("gy").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let (wx, wy) = coord::grid_to_world(gx, gy, alng, alat, mpc);
+                let (lng, lat) = coord::world_to_lng_lat(wx, wy);
+                if let Some(m) = n2.as_object_mut() {
+                    m.insert("lng".into(), json!((lng * 1e6).round() / 1e6));
+                    m.insert("lat".into(), json!((lat * 1e6).round() / 1e6));
+                }
+            }
+            n2
+        })
+        .collect();
+    Some((ctx, Value::Array(with_ll)))
+}
+
+/// 构造交通上下文。**任何一步失败都返回 `None`**（规划退回几何估计），
+/// 绝不让"算不出站点"变成"算不出路线"。
+fn transit_context(app: &AppHandle, o: TransitOpts) -> Option<TransitCtx> {
+    let area = o
+        .area
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "广州市·越秀区".to_string());
+    let level = o
+        .level
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "community".to_string());
+    // 与 T2-1 的设施图层默认值保持一致（`WsDistrict` 的 SKETCH_SIZE = 28）
+    let size = o.size.unwrap_or(28).clamp(8, 200);
+    // 地图库布局的 meta 里带 lat/lng，可以当中心用（这是「与地图库那张图同源」的路径）
+    let key_center = o.key.as_deref().and_then(|k| {
+        let lib = maplib::MapLib::new(maplib_root(app));
+        lib.list_layouts(Some(200)).into_iter().find_map(|it| {
+            if it.get("key").and_then(|v| v.as_str()) != Some(k) {
+                return None;
+            }
+            let m = it.get("meta")?;
+            Some((m.get("lng")?.as_f64()?, m.get("lat")?.as_f64()?))
+        })
+    });
+    // ── 锚点从哪来（**来源与取值分开记**，绝不为了"看起来完整"编一个 (0,0)）──
+    // 优先级：显式锚点 → 显式中心 → 地图库 meta 的经纬度 → 算路起点（只有规划路径才有）。
+    // 四个都没有 → `None`：节点照给、不带经纬度、不进规划器。
+    let (center, anchor, anchor_source) = if let Some(a) = o.anchor {
+        (None, Some(a), "explicit-anchor")
+    } else if let Some(c) = o.center.or(key_center) {
+        (
+            Some(c),
+            Some(transport::anchor_for_center(
+                c.0,
+                c.1,
+                size as f64,
+                facilities::DEFAULT_CELL_METERS,
+            )),
+            if o.center.is_some() { "center" } else { "maplib-meta" },
+        )
+    } else if let Some(c) = o.fallback_center {
+        (
+            Some(c),
+            Some(transport::anchor_for_center(
+                c.0,
+                c.1,
+                size as f64,
+                facilities::DEFAULT_CELL_METERS,
+            )),
+            "trip-origin",
+        )
+    } else {
+        (None, None, "none")
+    };
+    // 布局来源（与 world_map_render 同一条链：layout → 地图库 key → 本地草图）
+    let source = if o.layout.is_some() {
+        "layout"
+    } else if o.key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
+        "maplib"
+    } else {
+        "sketch"
+    };
+    let layout = match o.layout.clone() {
+        Some(v) => normalize_layout(Some(v))?,
+        None => {
+            // 有 key 就用地图库那份（真源），否则用草图
+            let keyed = o
+                .key
+                .clone()
+                .filter(|k| !k.trim().is_empty())
+                .and_then(|k| maplib::MapLib::new(maplib_root(app)).get_layout(&k));
+            match keyed {
+                Some(l) => l,
+                None => sketch::make_sketch(&area, size, o.seed, None),
+            }
+        }
+    };
+    if !layout.is_object() {
+        return None;
+    }
+    let grid = layout
+        .get("size")
+        .and_then(|v| v.as_i64())
+        .filter(|v| *v > 0)
+        .unwrap_or(size as i64);
+    let (ctx, with_ll) = transit_nodes_of(&layout, &area, &level, o.seed, anchor)?;
+    let count = with_ll.as_array().map(|a| a.len()).unwrap_or(0);
+    let report = json!({
+        "source": source,
+        "area": area,
+        "level": level,
+        "grid": grid,
+        "cell_meters": facilities::DEFAULT_CELL_METERS,
+        // `geo=false` 是**如实标注**：没有锚点就没有经纬度，前端别拿格点当经纬度用
+        "geo": anchor.is_some(),
+        "anchor": anchor.map(|a| json!({"lng": a.0, "lat": a.1})).unwrap_or(Value::Null),
+        // 锚点是从哪儿来的（显式 / 中心 / 地图库 meta / 算路起点）—— 与"布局来源"是两件事
+        "anchor_source": anchor_source,
+        "center": center.map(|c| json!({"lng": c.0, "lat": c.1})).unwrap_or(Value::Null),
+        "count": count,
+        "nodes": with_ll,
+    });
+    Some(TransitCtx { ctx, report, layout, anchor, grid })
+}
+
 /// 两点之间的交通方案（`transport.rs`，9 种交通工具 + 接驳）
 ///
 /// 坐标两种给法都行（前端 `worldMap.ts` 用的是前一种）：
 ///   · `from`/`to` = `{lat, lng}`（也认 `{lat, lon}` 与 `[lng, lat]`）
 ///   · 或者平铺的 `fromLng`/`fromLat`/`toLng`/`toLat`（对应 HTTP 版 `?from_lng=…`）
 /// `prefer` 是交通方式偏好（bus/subway/train/…，别名见 `transport.rs` 的 ALIASES）。
-/// 返回 `{ ok, route, options, modes }`。
+///
+/// **T2-2 step2 起多了"站点吸附"**（见 [`TransitOpts`] 的整段说明）：
+/// 传了 `area`/`key`/`anchorLng…` 就吸附到真实站点，上下车点落在站点上而不是空地；
+/// `stations=0` 可以显式退回旧行为（逐字节一致，给回归用）。
+/// 返回 `{ ok, route, options, modes, stations? }` —— `stations` 里如实写着用了哪份布局、
+/// 锚点在哪、以及每个站点的经纬度（前端画"我上车的那个站"要用）。
 #[tauri::command]
 pub async fn world_map_transport_plan(
+    app: AppHandle,
     from: Option<Value>,
     to: Option<Value>,
     prefer: Option<String>,
@@ -787,6 +999,17 @@ pub async fn world_map_transport_plan(
     to_lat: Option<f64>,
     water: Option<bool>,
     urban: Option<bool>,
+    stations: Option<bool>,
+    layout: Option<Value>,
+    key: Option<String>,
+    area: Option<String>,
+    size: Option<i32>,
+    seed: Option<u64>,
+    level: Option<String>,
+    anchor_lng: Option<f64>,
+    anchor_lat: Option<f64>,
+    center_lng: Option<f64>,
+    center_lat: Option<f64>,
 ) -> Result<Value, String> {
     let mut q = serde_json::Map::new();
     let pick = |flat: Option<f64>, p: &Option<Value>, k: &str| -> Option<f64> {
@@ -817,7 +1040,161 @@ pub async fn world_map_transport_plan(
     if let Some(v) = urban {
         q.insert("urban".into(), json!(v));
     }
-    Ok(transport::api_plan(&Value::Object(q)))
+    // T2-2 step2：站点吸附。`stations=0` 显式退回旧行为（几何估计的虚拟站点）。
+    let use_stations = stations.unwrap_or(true);
+    let tc = if use_stations {
+        transit_context(
+            &app,
+            TransitOpts {
+                layout,
+                key,
+                area,
+                size,
+                seed,
+                level,
+                anchor: match (anchor_lng, anchor_lat) {
+                    (Some(a), Some(b)) => Some((a, b)),
+                    _ => None,
+                },
+                center: match (center_lng, center_lat) {
+                    (Some(a), Some(b)) => Some((a, b)),
+                    _ => None,
+                },
+                // 兜底：以**起点**为中心建网格（"我在自己小区里叫车/坐公交"这个真实场景）
+                fallback_center: match (flng, flat) {
+                    (Some(a), Some(b)) => Some((a, b)),
+                    _ => None,
+                },
+            },
+        )
+    } else {
+        None
+    };
+    let mut out = transport::api_plan_with_ctx(
+        &Value::Object(q),
+        tc.as_ref().map(|c| &c.ctx).filter(|c| !c.is_null()),
+    );
+    if let (Some(c), Some(o)) = (tc.as_ref(), out.as_object_mut()) {
+        o.insert("stations".into(), c.report.clone());
+    }
+    Ok(out)
+}
+
+/// 交通设施节点（T2-2 step2）—— 只取 `facilities.rs` 生成的那 7 类交通设施。
+///
+/// 与 `world_map_facilities` 的关系：那个命令一次给「生活 + 交通」，
+/// 这个只给交通，并且多带两样前端画图/切换要用的东西：
+///   · `nodes` 里每个站点都算了 **lng/lat**（用 `anchor` + `cell_meters` 换算，
+///     与 `transport.rs` 的 `station_in_grid` 用**同一个公式**，所以画出来的图标位置
+///     与规划器认为的站点位置逐位一致）；
+///   · `levels` 给出社区/区县/城市三级的**实际数量与种类**（卡片要求"能看出差别"，
+///     前后端不该各写一份 LEVEL_PLAN）。
+///
+/// `level` 不传时默认 `community`（与规划器、设施图层的默认值一致）。
+#[tauri::command]
+pub async fn world_map_transport_nodes(
+    app: AppHandle,
+    layout: Option<Value>,
+    key: Option<String>,
+    area: Option<String>,
+    size: Option<i32>,
+    seed: Option<u64>,
+    level: Option<String>,
+    anchor_lng: Option<f64>,
+    anchor_lat: Option<f64>,
+    center_lng: Option<f64>,
+    center_lat: Option<f64>,
+    all_levels: Option<bool>,
+) -> Result<Value, String> {
+    let area_s = area
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "广州市·越秀区".to_string());
+    let level_s = level
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "community".to_string());
+    let size_i = size.unwrap_or(28);
+    let anchor = match (anchor_lng, anchor_lat) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => match (center_lng, center_lat) {
+            (Some(a), Some(b)) => Some(transport::anchor_for_center(
+                a,
+                b,
+                size_i as f64,
+                facilities::DEFAULT_CELL_METERS,
+            )),
+            _ => None,
+        },
+    };
+    let tc = transit_context(
+        &app,
+        TransitOpts {
+            layout,
+            key,
+            area: Some(area_s.clone()),
+            size: Some(size_i),
+            seed,
+            level: Some(level_s.clone()),
+            anchor,
+            center: match (center_lng, center_lat) {
+                (Some(a), Some(b)) => Some((a, b)),
+                _ => None,
+            },
+            fallback_center: None,
+        },
+    );
+    let Some(tc) = tc else {
+        // 构造不出来就如实说"没有"，**不返回空数组假装"这里没有车站"**
+        return Ok(json!({
+            "ok": false,
+            "error": "这份布局生成不出交通节点（布局不合法或没有可用空格）",
+            "level": level_s, "area": area_s,
+        }));
+    };
+    let mut out = tc.report.clone();
+    if let Some(o) = out.as_object_mut() {
+        o.insert("ok".into(), json!(true));
+        o.insert("types".into(), facilities::types_payload());
+        // 三级对比：**同一份布局**跑三档，只带数量/种类。
+        // 卡片要求"社区级/区县级/城市级要能看出差别"，而差别来自 `facilities.rs` 的 LEVEL_PLAN
+        // —— 前端不该再写一份（两份必然漂移），所以由后端一次算好。
+        if all_levels.unwrap_or(true) {
+            let mut lv: Vec<Value> = Vec::new();
+            for l in ["community", "district", "city"] {
+                let (cnt, kinds) = match transit_nodes_of(&tc.layout, &area_s, l, seed, tc.anchor) {
+                    Some((_ctx, nodes)) => {
+                        let mut ks: Vec<String> = nodes
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|n| n.get("type").and_then(|t| t.as_str()))
+                                    .map(String::from)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        ks.sort();
+                        ks.dedup();
+                        (nodes.as_array().map(|a| a.len()).unwrap_or(0), ks)
+                    }
+                    None => (0, Vec::new()),
+                };
+                lv.push(json!({"level": l, "zh": level_zh_of(l), "count": cnt, "kinds": kinds}));
+            }
+            o.insert("levels".into(), Value::Array(lv));
+        }
+    }
+    Ok(out)
+}
+
+/// 层级中文名（`facilities.rs` 的 `level_zh` 是私有的，这里给命令层用一份同样的表）
+fn level_zh_of(level: &str) -> &'static str {
+    match level {
+        "community" => "小区",
+        "district" => "区县",
+        "city" => "城市",
+        _ => "小区",
+    }
 }
 
 /// 区域 OSM（Overpass）摘要（`osm.rs`）
@@ -897,6 +1274,110 @@ pub async fn world_map_osm_summary(
             "cached": false,
             "error": "本地没有这份 OSM 缓存",
             "hint": "要真去抓请传 force=true（走 Overpass，可能几十秒）",
+            "source": "rust",
+        })),
+    }
+}
+
+/// **真实楼房轮廓 + 楼高 → GeoJSON**（给 MapLibre 的 `fill-extrusion` 挤成 2.5D）
+///
+/// 与 [`world_map_osm_summary`] 的分工：
+///   · 那个产出的是**给 LLM 看的一句话摘要**（只有种类与计数，没有几何）；
+///   · 这个产出的是**几何**：每栋楼的闭合多边形 + 米制楼高，直接喂渲染器。
+/// 两条通路**各用各的磁盘缓存**（`osm::BUILDINGS_KEY_PREFIX`），不会互相覆盖。
+///
+/// 高度优先级（`osm::building_height`，逐栋带 `height_src` 回到前端）：
+/// `building:height` → `height` → `building:levels`×3m → 默认 8m。
+/// 换算常量随数据返回（`stats.default_height_m` / `stats.levels_meters`），
+/// **前端不要自己写 8 和 3** —— 两边写死就会"哪些楼是猜的"说不清。
+///
+/// 返回 `{ ok, lat, lng, radius, key, cached, count, geojson, stats, meta, source }`；
+/// 取不到时 `ok=false` + `error`/`hint`（**不返回 Err**：前端要能显示"取不到 + 原因"，
+/// 而不是一个异常）。这个形状与调试服务 `/api/buildings` **逐字段一致**，
+/// 所以浏览器里验过的渲染代码，换成 Tauri 通路不用改一行。
+///
+/// ## ⚠️ 磁盘增长：这是本命令第二条会写盘的通路
+///
+/// 与 `world_map_osm_summary` 一样按 200m 网格落盘，键空间随"访问过的地点"无界增长。
+/// 这里**刻意**与那条不同：缓存未命中就真去抓（否则页面第一次打开永远是空的，
+/// 那这个功能没有意义）。⇒ 代价是**调用方必须只在"相机停稳后"调它**
+/// （比如 `moveend` + 去抖），**绝不能每帧/每次 mousemove 调** ——
+/// 那会从"有天花板的正当缓存"变成真正无界的写盘源 + Overpass 限流。
+/// 需要强制刷新时传 `force=true`。
+#[tauri::command]
+pub async fn world_map_buildings(
+    app: AppHandle,
+    lat: f64,
+    lng: f64,
+    radius: Option<f64>,
+    force: Option<bool>,
+) -> Result<Value, String> {
+    let radius = radius.unwrap_or(300.0);
+    let force = force.unwrap_or(false);
+
+    // 参数校验：宁可明确报错，也不要把 NaN/越界坐标丢给 Overpass（那边会返回空，
+    // 于是"参数写错了"会被显示成"这里没有楼房"）
+    if !lat.is_finite() || !lng.is_finite() || !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lng)
+    {
+        return Ok(json!({
+            "ok": false, "lat": lat, "lng": lng, "radius": radius, "count": 0,
+            "error": "坐标非法", "hint": "lat ∈ [-90,90]、lng ∈ [-180,180]", "source": "rust",
+        }));
+    }
+    if !radius.is_finite() || radius <= 0.0 || radius > 2000.0 {
+        return Ok(json!({
+            "ok": false, "lat": lat, "lng": lng, "radius": radius, "count": 0,
+            "error": "半径非法", "hint": "radius ∈ (0, 2000] 米（再大楼房数量会让手机端渲染垮掉）",
+            "source": "rust",
+        }));
+    }
+
+    let dir = osm_dir(&app);
+    let key = osm::buildings_cache_key(lat, lng, radius);
+    let mut cached = false;
+    let mut data = None;
+    if !force {
+        data = osm::load_cached(&dir, &key);
+        cached = data.is_some();
+    }
+    if data.is_none() {
+        // ⚠️ 必须注入预配置的 TLS 后端（与 `world_map_osm_summary` 同一处坑，见其注释）
+        let tls = crate::utils::tls::build_tls_config()?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(45))
+            .tls_backend_preconfigured(tls)
+            .build()
+            .map_err(|e| format!("HTTP 客户端创建失败: {e}"))?;
+        data = osm::fetch_buildings(&client, &dir, lat, lng, radius, force).await;
+    }
+
+    match data {
+        Some(v) => {
+            let (geojson, stats) = osm::buildings_geojson(&v);
+            Ok(json!({
+                "ok": true,
+                "lat": lat,
+                "lng": lng,
+                "radius": radius,
+                "key": key,
+                "cached": cached,
+                "count": stats.get("count").cloned().unwrap_or(json!(0)),
+                "geojson": geojson,
+                "stats": stats,
+                "meta": v.get("_meta").cloned().unwrap_or(Value::Null),
+                "source": "rust",
+            }))
+        }
+        None => Ok(json!({
+            "ok": false,
+            "lat": lat,
+            "lng": lng,
+            "radius": radius,
+            "key": key,
+            "cached": false,
+            "count": 0,
+            "error": "Overpass 三个端点都没取到楼房数据",
+            "hint": "公共 Overpass 会限流/502，隔一会儿重试；已成功的区域会缓存在 osm/ 目录",
             "source": "rust",
         })),
     }

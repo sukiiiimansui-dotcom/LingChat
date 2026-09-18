@@ -24,9 +24,11 @@ import type {
   FacTypeMeta,
   FacTypesPayload,
   FacPayload,
+  TransitLevelRow,
+  TransportStations,
 } from "@/api/services/worldMap";
 
-export type { FacPoint, FacTypeMeta, FacTypesPayload, FacPayload };
+export type { FacPoint, FacTypeMeta, FacTypesPayload, FacPayload, TransitLevelRow, TransportStations };
 
 /** 生活设施 7 类的**展示顺序**（与 `facilities.rs` 的 ALL_TYPES 前 7 项一致） */
 export const LIFE_ORDER = [
@@ -346,20 +348,29 @@ export function emptyState(o: {
   total: number;
   shown: number;
   area?: string;
+  /**
+   * 这一层画的是「什么」（默认「设施」）。
+   *
+   * 为什么要这个参数：交通图层说「设施数据取不到」不算错、但不够准确 ——
+   * 用户看到的是"车站那一层"，就该说"车站数据取不到"。文案精确性是这个项目
+   * 反复强调的东西（"取不到"≠"没有"），连名词也不该含糊。
+   */
+  noun?: string;
 }): FacEmpty {
-  if (o.loading) return { kind: "loading", text: "正在取设施…" };
+  const n = o.noun || "设施";
+  if (o.loading) return { kind: "loading", text: `正在取${n}…` };
   if (o.error) {
     return {
       kind: "error",
-      text: "设施数据取不到",
+      text: `${n}数据取不到`,
       detail: o.error,
     };
   }
   if (o.total === 0) {
     return {
       kind: "empty",
-      text: o.area ? `${o.area} 这张图上没有设施` : "这张图上没有设施",
-      detail: "后端返回了 0 个点 —— 不是加载失败，是这份布局确实没生成出设施",
+      text: o.area ? `${o.area} 这张图上没有${n}` : `这张图上没有${n}`,
+      detail: `后端返回了 0 个点 —— 不是加载失败，是这份布局确实没生成出${n}`,
     };
   }
   if (o.shown === 0) {
@@ -391,6 +402,30 @@ export function gridMismatch(grid: unknown, expect: number): string {
   return `后端网格 ${g}×${g} ≠ 前端 ${expect}×${expect}，设施点会整体错位`;
 }
 
+/**
+ * **锚点**来源的中文说明 —— 与"布局来源"是两件事，别混成一句。
+ *
+ * 为什么必须分开说：可以出现「布局来自草图 + 锚点来自算路起点」这种组合
+ * （手机页面调 `transportPlan` 不给 area 时就是这样）。只说"草图"会让人以为
+ * 站点位置与地图上那枚图标重合；只说"起点"又看不出布局是哪份。
+ */
+export function anchorSourceText(src: unknown): string {
+  switch (String(src || "")) {
+    case "explicit-anchor":
+      return "锚点由调用方显式给出";
+    case "center":
+      return "锚点由「中心点」退半张图算出";
+    case "maplib-meta":
+      return "锚点取自地图库布局的经纬度";
+    case "trip-origin":
+      return "锚点取自算路起点（没给地理位置）";
+    case "none":
+      return "没有锚点";
+    default:
+      return src ? String(src) : "锚点来源未标注";
+  }
+}
+
 /** 布局来源的中文说明（面板上如实展示"设施画在哪份布局上"） */
 export function sourceText(src: unknown): string {
   switch (String(src || "")) {
@@ -403,4 +438,133 @@ export function sourceText(src: unknown): string {
     default:
       return "未知来源";
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 二、交通设施（T2-2 step2）—— 形状、三级差别、算路吸附状态
+ *
+ * 为什么放在这个文件里：交通站点与生活设施是**同一份数据结构**（`FacPoint`），
+ * 清洗/配色/几何/空态全部复用上面那套；这里只加"交通特有"的三件纯逻辑。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 站点形状：让"公交 vs 地铁 vs 机场"不用看图标也能一眼分开（卡片要求） */
+export type TransitShape = "circle" | "ring" | "square" | "diamond" | "pill" | "plane" | "anchor";
+
+/**
+ * 类型 → 形状。选型理由（都是"在 20px 大小下也分得开"的形状）：
+ *   · 公交站 = 实心圆（最常见，最不起眼 → 视觉权重最低）
+ *   · 地铁站 = 空心圈（与公交同族但中空，城市里成串出现时一眼区分）
+ *   · 停车场 = 方块（"P" 的联想，规整）
+ *   · 加油站 = 菱形（尖角 = 危险品/服务点）
+ *   · 火车站 = 圆角长条（比公交大一号，是地标）
+ *   · 机场   = 长条 + 飞机（占地本来就 3×2）
+ *   · 码头   = 圆形 + 锚（临水）
+ * 后端没登记的类型一律回落到 `circle`（**不丢点**，只是形状没个性）。
+ */
+export const TRANSIT_SHAPE: Record<string, TransitShape> = {
+  bus_stop: "circle",
+  subway: "ring",
+  parking: "square",
+  gas: "diamond",
+  train_station: "pill",
+  airport: "plane",
+  pier: "anchor",
+};
+
+export function transitShapeOf(type: string): TransitShape {
+  return TRANSIT_SHAPE[type] || "circle";
+}
+
+/** 三级对比的一行（在 `TransitLevelRow` 上补"相对上一级多了/少了哪些类型"） */
+export interface LevelDiffRow {
+  level: string;
+  zh: string;
+  count: number;
+  kinds: string[];
+  /** 相对**上一级**新增的类型（小区级没有上一级 → 空） */
+  added: string[];
+  /** 相对上一级消失的类型（正常配置里不会出现，出现就是配置改了，要看得见） */
+  lost: string[];
+}
+
+/**
+ * 把后端的 `levels` 数组算成"逐级差别"。
+ *
+ * 为什么需要它：卡片要求"社区级/区县级/城市级要能看出差别"，而后端给的是三组独立的数量+种类。
+ * 三个数字并排（8 / 13 / 23）读者还得自己比对；直接告诉他"区县比小区多了地铁、加油站、火车站"
+ * 才是"看得出差别"。**只做差集，不猜语义**（新增/消失都如实列，配置改了也藏不住）。
+ */
+export function levelDiffs(
+  levels: TransitLevelRow[] | null | undefined,
+  types?: Record<string, FacTypeMeta> | null
+): LevelDiffRow[] {
+  const rows = Array.isArray(levels) ? levels : [];
+  const out: LevelDiffRow[] = [];
+  let prev: Set<string> | null = null;
+  for (const r of rows) {
+    const cur = new Set(Array.isArray(r?.kinds) ? r.kinds : []);
+    const added = prev ? [...cur].filter((k) => !prev!.has(k)) : [];
+    const lost = prev ? [...prev].filter((k) => !cur.has(k)) : [];
+    out.push({
+      level: String(r?.level ?? ""),
+      zh: String(r?.zh ?? r?.level ?? ""),
+      count: Number(r?.count) || 0,
+      kinds: [...cur],
+      added: added.map((k) => metaOf(k, types).zh),
+      lost: lost.map((k) => metaOf(k, types).zh),
+    });
+    prev = cur;
+  }
+  return out;
+}
+
+/** 三级差别的一句话（面板上用；`→` 串起来） */
+export function levelSummary(
+  levels: TransitLevelRow[] | null | undefined,
+  types?: Record<string, FacTypeMeta> | null
+): string {
+  const rows = levelDiffs(levels, types);
+  if (!rows.length) return "";
+  return rows
+    .map((r, i) => {
+      const head = `${r.zh} ${r.count} 个`;
+      if (i === 0) return head;
+      const bits: string[] = [];
+      if (r.added.length) bits.push(`+${r.added.join("、")}`);
+      if (r.lost.length) bits.push(`-${r.lost.join("、")}`);
+      return bits.length ? `${head}（${bits.join(" ")}）` : head;
+    })
+    .join(" → ");
+}
+
+/** 算路结果的站点状态：**有没有真的吸附到站点**，如实说 */
+export interface PlanStationLine {
+  /** `true` = 上下车点落在真实站点上 */
+  snapped: boolean;
+  text: string;
+}
+
+/**
+ * 从 `TransportPlan.stations` 生成一行说明。
+ *
+ * 三种情况分得很清楚（这正是本卡最容易含糊过去的地方）：
+ *   · 没有 `stations` 字段 → 后端**没走**站点吸附（旧行为）：上下车点是几何估计的
+ *   · 有但没有 `nodes` → 后端走了但一个站点也没生成（布局没空地）→ 同样是几何估计
+ *   · 有且有节点 → 吸附成立，并说出用了哪份布局（`source`）与锚点状态（`geo`）
+ */
+export function planStationLine(stations?: TransportStations | null): PlanStationLine {
+  if (!stations) {
+    return { snapped: false, text: "上下车点：几何估计（本次算路没启用站点吸附）" };
+  }
+  const n = Number(stations.count) || (stations.nodes ? stations.nodes.length : 0);
+  if (!n) {
+    return { snapped: false, text: "上下车点：几何估计（这份布局没有生成出交通站点）" };
+  }
+  const src = sourceText(stations.source);
+  const asrc = anchorSourceText((stations as { anchor_source?: string }).anchor_source);
+  const geo = stations.geo === false ? "，本次没给锚点所以站点没有经纬度" : "";
+  return {
+    snapped: true,
+    text: `上下车点吸附到 ${n} 个真实站点（${src}；${asrc}${geo}）`,
+  };
 }

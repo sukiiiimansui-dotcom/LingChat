@@ -312,6 +312,9 @@
         @goto-chat="onGotoChat"
         @quick="onQuick"
         @direct="onDirect"
+        @gift="onGift"
+        :affinity="currentAffinity"
+        :affinity-rank="relRankOf(currentAffinity)"
       />
       <WsMePanel
         v-else-if="wsPanel.open.value && wsPanel.isMe.value"
@@ -540,6 +543,7 @@
   import WsTransitLayer from "./WsTransitLayer.vue";
   import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   import { useWsFocus } from "./wsFocus";
+  import { rankOf as relRankOf, useWsRelation } from "./wsRelation";
   // P4-2 / P4-3：行程卡 + 地图上的交通工具（样式由组件自己 import worldsim-trip.css）
   import WsTripCard from "./WsTripCard.vue";
   import WsVehicleMark from "./WsVehicleMark.vue";
@@ -909,6 +913,27 @@
      判据全在纯函数 `focusLevelOf()` 里：**只有"重大 + 这个角色真的在地图上"才会聚焦**，
      人在画面外/名字对不上就自然不聚焦（不会出现"聚了个寂寞"）。 */
   const focus = useWsFocus();
+
+  /* ── 可玩性切片 A：关系/好感（看板卡 t-mu6w69y4-xkz9t0）──────────────────
+     以前送礼只写一条 localStorage 记账 + 一句 toast，**世界不会因为"你送过它东西"而改变** ——
+     这正是"地图一点可玩性没有"的根因之一（见 BORROW-LIST.md：我们缺的不是新系统，是把零件接起来）。
+     这一步先打通最前面两环：**送礼 → 好感数值落盘 → 面板立刻可见**。
+     （"日程跟着变 + 地图上看得见"是下一步，本卡还没做完。） */
+  const relation = useWsRelation();
+  /** 当前面板看着的角色 → 它的好感（模板直接读） */
+  const currentAffinity = computed(() =>
+    currentActor.value ? relation.affinityOf(currentActor.value.name) : 0
+  );
+  function onGift(p: { name: string; icon: string; role: string }) {
+    const role = String(p?.role || "").trim();
+    if (!role) {
+      // 拿不到角色名就不假装记上了（宁可少做，不可编数据）
+      wsToast("这个角色还没有绑定的角色库 ID，好感没能记下", "info");
+      return;
+    }
+    const row = relation.gift(role);
+    wsToast(`${p.icon || "🎁"} ${p.name || "礼物"} 已送出 · ${role} 好感 ${row.affinity}（${relRankOf(row.affinity)}）`, "info");
+  }
   const wsEvents = useWorldEvents({
     role: currentRoleName,
     onFired: (e) => {

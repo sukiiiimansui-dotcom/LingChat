@@ -561,6 +561,20 @@ export interface RenderProbeOpts {
   charts?: boolean;
   size?: number;
   seed?: number;
+  /**
+   * 区域名「广州市·越秀区」——⚠️ **它参与布局播种，不只是文案**。
+   *
+   * 后端 `sketch::seed_of(area, seed) = sha256("{area}|{seed}")`：区域名是种子的**一部分**。
+   * 所以「同一张草图」的身份 = (area, size, seed) 三元组；少传 `area`，
+   * 后端就用它自己的默认区名（`resolve_layout` 里是「广州市·越秀区」）
+   * → **与传了 area 的那次不是同一张布局**。
+   *
+   * 为什么现在补上这个字段：T2-1 的设施图层要把设施点摆到**页面正在显示的那张图**上，
+   * 就必须用与渲染完全相同的三元组去生成布局；而此前这个函数把 `area` 悄悄丢了
+   * （`WsDistrict` 也没传），于是「渲染用的布局」和「设施用的布局」天然是两张图。
+   * 这里补的是**通路**：调用方传了才带；不传时行为与本改动前逐字节一致（后端仍走默认区名）。
+   */
+  area?: string;
 }
 
 /** 拼 /api/render/probe 地址（也可直接给 <img> 或新窗口用） */
@@ -572,6 +586,7 @@ export function renderProbeUrl(o: RenderProbeOpts = {}): string {
   if (o.charts) q.set("charts", "1");
   if (o.size) q.set("size", String(o.size));
   if (o.seed !== undefined) q.set("seed", String(o.seed));
+  if (o.area) q.set("area", o.area);
   return `${API_BASE}/api/render/probe?${q.toString()}`;
 }
 
@@ -1398,4 +1413,214 @@ export async function tripCancel(reason = ""): Promise<void> {
     return;
   }
   await fetch(`${API_BASE}/api/trip_cancel`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// T2-1/T2-2 · 设施图层（生活 7 类 + 交通 7 类）
+// ═══════════════════════════════════════════════════════════════════
+//
+// 背景：`facilities.rs`（110KB、18 个单测、与 Python 对拍过）早就移植完了，
+// 但**一条命令都没暴露** —— 前端拿不到数据，地图上也就没有设施图层。这一段就是那扇门。
+//
+// 三条通路（真壳命令 / 调试服务 HTTP 路由 / 前端的降级）对同一个形状负责：
+//   · 真壳：`world_map_facilities` / `world_map_facilities_types` / `world_map_facility_at`
+//     （定义在 `src-tauri/src/world_map/mod.rs` 末尾）
+//   · 浏览器：`/api/facilities` / `/api/facilities/types` / `/api/facility_at`
+//     （定义在 `world_map_rs/src/main.rs`，**与真壳同形**，两边的字段契约由
+//      `~/rikka/Dsh-SYuki/world_map/facilities_layer_selftest.mjs` 的断言守着）
+//
+// ⚠️ 坐标不是经纬度：`gx/gy` 是**小区图的格点**（与 `WorldSim.vue` 的 `WS_GRID=28`、
+//    `WsDistrict` 的 `SKETCH_SIZE=28` 同一套）。设施图层要铺在 `#pin` 插槽里
+//    （`.ws-neigh__pan` 那个手势变换容器内），**不要**往 GeoJSON 画布上按经纬度投影 ——
+//    那是行政区划图的坐标系，两套东西。
+//
+// ⚠️ 确定性：同 `area`+`size`+`seed` 永远同一批落点（后端 sha256 播种）。
+//    前端每次都传同一个 `seed`（`WsDistrict` 画草图用的是 `hash32(area)`），
+//    所以「刷新后设施位置不变」；反过来，传 `Date.now()` 会让设施每次刷新乱跳。
+
+/** 一个设施点（`facilities.rs::_mk_fac` 的产物，字段名与 Python 原型逐字相同） */
+export interface FacPoint {
+  id: string;
+  /** 格点坐标（占地**左上角**，单位=格） */
+  gx: number;
+  gy: number;
+  /** 占地尺寸（格） */
+  w: number;
+  h: number;
+  /** 类型 key：residential/commercial/education/medical/leisure/civic/lodging + 7 类交通 */
+  type: string;
+  /** 类型中文名（后端已给，前端不再自己映射一份） */
+  type_zh?: string;
+  name: string;
+  icon?: string;
+  /** `[r,g,b]` */
+  color?: number[];
+  /** `"life"` | `"transport"` */
+  group: string;
+  /** 室内/室外（`facilities::indoor_of`） */
+  indoor?: boolean;
+  cell_meters?: number;
+  /** 只有「最近设施」查询才带：与查询点的格距 */
+  dist?: number;
+}
+
+/** 一类设施的元数据（`facilities::types_payload()` 的一条） */
+export interface FacTypeMeta {
+  zh: string;
+  icon: string;
+  color: number[];
+  group: string;
+  prefix?: string;
+  w?: number;
+  h?: number;
+  group_zh?: string;
+}
+
+/** `/api/facilities/types`（= `world_map_facilities_types`）的返回 */
+export interface FacTypesPayload {
+  /** 14 类：7 生活 + 7 交通 */
+  types?: Record<string, FacTypeMeta>;
+  /** 层级中文名：community/district/city */
+  levels?: Record<string, string>;
+  /** 各层级生成哪些交通设施及个数 */
+  level_plan?: Record<string, Record<string, number>>;
+  cell_meters?: number;
+}
+
+/** `/api/facilities`（= `world_map_facilities`）的返回 —— 两条通路**同形** */
+export interface FacPayload {
+  ok?: boolean;
+  area?: string;
+  level?: string;
+  /** 小区图网格边长；应等于前端的 `WS_GRID`，不等说明两边不是同一张图 */
+  grid?: number;
+  cell_meters?: number;
+  layout_name?: string | null;
+  /** 设施落在哪份布局上：`layout` / `maplib` / `sketch`（如实展示，便于判断有没有贴住真建筑） */
+  layout_source?: string;
+  life_count?: number;
+  transport_count?: number;
+  /** 生活设施（7 类） */
+  facilities?: FacPoint[];
+  /** 交通设施（7 类，按 level 出不同组合） */
+  transport?: FacPoint[];
+  stats?: {
+    total?: number;
+    by_type?: Record<string, number>;
+    by_group?: Record<string, number>;
+  } | null;
+}
+
+/** 「这个角色现在在哪个设施」的结果（`world_map_facility_at` / `/api/facility_at`） */
+export interface FacAtResult {
+  ok?: boolean;
+  gx?: number;
+  gy?: number;
+  /** `cell`=格点落在设施占地内；`near`=半径内最近；`none`=附近没有 */
+  source?: "cell" | "near" | "none" | string;
+  facility?: FacPoint | null;
+}
+
+/** 取设施的参数（三项都不传时后端用默认区域 + 28×28 草图） */
+export interface FacQuery {
+  /** 区域名「广州市·越秀区」——同时决定草图与设施播种 */
+  area?: string;
+  /** 网格边长（前端固定传 `WS_GRID=28`，与显示的小区图对齐） */
+  size?: number;
+  /** 随机种子：**必须稳定**。前端传 `hash32(area)`，刷新后位置不变 */
+  seed?: number;
+  /** 交通设施层级：community（默认）/ district / city */
+  level?: string;
+  /** 地图库布局缓存 key —— 传了就落在**玩家实际看到的那张图**上（最准） */
+  key?: string;
+}
+
+/**
+ * 取设施清单。真壳 invoke，浏览器 HTTP。
+ *
+ * 失败一律 **throw**（HTTP 非 2xx、`ok===false`、缺 `facilities` 都算失败）：
+ * 调用方（`WsFacilityLayer`）会把它显示成「设施数据取不到 + 原因」，
+ * **绝不静默返回空数组** —— 空数组在界面上等于"这里没有设施"，那是假话。
+ */
+export async function facilitiesAuto(q: FacQuery = {}): Promise<FacPayload> {
+  if (isTauriRuntime()) {
+    const r = await invoke<FacPayload>("world_map_facilities", {
+      area: q.area,
+      size: q.size,
+      seed: q.seed,
+      level: q.level,
+      key: q.key,
+    });
+    return assertFacPayload(r);
+  }
+  return assertFacPayload(
+    await httpGet<FacPayload>("/api/facilities", {
+      area: q.area,
+      size: q.size,
+      seed: q.seed,
+      level: q.level,
+      key: q.key,
+    })
+  );
+}
+
+/** 取设施类型元数据（中文名/图标/配色/各层级计划）—— 图例与"按类别过滤"的开关用 */
+export async function facilitiesTypesAuto(): Promise<FacTypesPayload> {
+  const r = isTauriRuntime()
+    ? await invoke<FacTypesPayload>("world_map_facilities_types")
+    : await httpGet<FacTypesPayload>("/api/facilities/types");
+  if (!r || typeof r !== "object" || !r.types || typeof r.types !== "object") {
+    throw new Error("设施类型表为空（后端没给 types）");
+  }
+  return r;
+}
+
+/**
+ * 按格点查「这个角色现在在哪个设施」。
+ *
+ * `facilities` 传了就不重新生成（与 `world_map_schedule` 同一个约定）：
+ * 前端手上那份才是**与画面一致**的那一份。
+ */
+export async function facilityAtAuto(o: {
+  gx: number;
+  gy: number;
+  radius?: number;
+  facilities?: FacPoint[];
+  area?: string;
+  size?: number;
+  seed?: number;
+  level?: string;
+}): Promise<FacAtResult> {
+  const radius = o.radius === undefined ? 3 : o.radius;
+  if (isTauriRuntime()) {
+    return await invoke<FacAtResult>("world_map_facility_at", {
+      facilities: o.facilities && o.facilities.length ? o.facilities : undefined,
+      gx: o.gx,
+      gy: o.gy,
+      radius,
+      area: o.area,
+      size: o.size,
+      seed: o.seed,
+      level: o.level,
+    });
+  }
+  return await httpGet<FacAtResult>("/api/facility_at", {
+    gx: o.gx,
+    gy: o.gy,
+    radius,
+    area: o.area,
+    size: o.size,
+    seed: o.seed,
+    level: o.level,
+  });
+}
+
+/** 校验设施返回的**最低契约**：少了 `facilities` 就是失败，不能当成"没有设施" */
+function assertFacPayload(r: unknown): FacPayload {
+  const d = r as FacPayload | null;
+  if (!d || typeof d !== "object") throw new Error("设施接口没有返回对象");
+  if (d.ok === false) throw new Error("设施接口返回 ok=false");
+  if (!Array.isArray(d.facilities)) throw new Error("设施接口没有返回 facilities 数组");
+  if (!Array.isArray(d.transport)) throw new Error("设施接口没有返回 transport 数组");
+  return d;
 }

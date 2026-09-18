@@ -926,3 +926,167 @@ pub async fn world_map_time() -> Result<Value, String> {
         "source": "rust",
     }))
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// T2-1/T2-2 · 设施图层（生活 7 类 + 交通 7 类）
+// ══════════════════════════════════════════════════════════════════════
+//
+// `facilities.rs` 早就移植完了（含 18 个单测），但一直**没有任何命令暴露它** ——
+// 前端拿不到设施数据，地图上也就没有设施图层。下面三个命令把它接出来。
+//
+// 坐标约定（前端最容易踩的一条）：设施坐标 `gx/gy` 是**小区图的格点**，
+// 与 `WorldSim.vue` 的 `WS_GRID = 28` / `WsDistrict` 的 `SKETCH_SIZE = 28` 是同一套，
+// **不是**经纬度。所以设施图层要铺在 `.ws-neigh__pan` 那个手势变换容器里
+// （与 WsAvatarLayer/WsVehicleMark 同一个 `#pin` 插槽），不要往 GeoJSON 画布上画。
+//
+// 确定性（卡片明确要求「刷新后位置不变」）：设施由 `sha256("{area}|{size}|{salt}")` 播种，
+// 同 `area` + 同 `size` + 同 `seed` 永远同一批落点。前端只要每次都传同一个种子
+// （`WsDistrict` 用的是 `hash32(area)`，已实测与 `sketch::make_sketch` 的取图一致）
+// 就不会每次刷新换位置。
+//
+// 与前端的对应关系见 `src/api/services/worldMap.ts` 的三个 `*Auto()` 包装。
+
+/// 设施清单的**统一返回壳**（Tauri 命令与 8791 的 `/api/facilities` 返回同一个形状，
+/// 所以 `worldMap.ts` 两条通路可以共用一套类型）。
+///
+/// 为什么不把这层壳放进 `facilities.rs`：那个模块是逐行对照 Python 原型的移植件，
+/// 改它会破坏「两边结构逐字段相同」这条对拍前提 —— 组装 JSON 是「接口层」的事，
+/// 归命令层（本文件）与调试服务（`world_map_rs/src/main.rs`）各自负责。
+///
+/// ⚠️ 刻意**不放**耗时字段（曾经有 `gen_ms`，已删）：这份返回必须是输入的纯函数
+/// （同 area/size/seed/key → 逐字节相同），否则「刷新后设施位置不变」就没法用
+/// 「两次请求 sha256 相等」来证明 —— 掺进去一个毫秒数，两次请求必然不同。
+fn facilities_payload(lay: &Value, area: &str, level: &str, seed: Option<i64>, source: &str) -> Value {
+    let all = facilities::generate_all(lay, area, None, level, seed);
+    // `size` 以**布局自己的**为准（调用方给的 size 只用来生成草图，草图可能自带 size）
+    let grid = all.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+    let life = all.get("facilities").cloned().unwrap_or_else(|| json!([]));
+    let trans = all.get("transport").cloned().unwrap_or_else(|| json!([]));
+    let n_life = life.as_array().map(|a| a.len()).unwrap_or(0);
+    let n_trans = trans.as_array().map(|a| a.len()).unwrap_or(0);
+    let out = json!({
+        "ok": true,
+        "area": all.get("area").cloned().unwrap_or_else(|| json!(area)),
+        "level": all.get("level").cloned().unwrap_or_else(|| json!(level)),
+        "grid": grid,
+        "cell_meters": facilities::DEFAULT_CELL_METERS,
+        "layout_name": lay.get("name").cloned().unwrap_or(Value::Null),
+        "layout_source": source,
+        "life_count": n_life,
+        "transport_count": n_trans,
+        "facilities": life,
+        "transport": trans,
+        "stats": all.get("stats").cloned().unwrap_or(Value::Null),
+    });
+    out
+}
+
+/// 生成/返回设施清单（生活 + 交通）。
+///
+/// 取布局的优先级与 `world_map_render` 完全一致（`resolve_layout`）：
+/// `layout` → 地图库布局缓存 `key` → 本地规则草图 `area`+`size`+`seed`。
+/// 传 `key`（地图库里那份 AI 精绘布局）时，设施会落在**玩家实际看到的那张图**的空地上；
+/// 只给 `area/size/seed` 时落在本地草图上（网格相同，但 AI 精绘后建筑可能不同）。
+///
+/// * `seed`：同时喂给草图与设施播种（同一个数字，避免两处取图对不上）。
+///   JS 侧传 `hash32(area)`（与 `WsDistrict` 画草图用的是同一个），刷新后位置不变。
+///
+/// 设施条数按网格面积估算（`generate_all` 内部 `max(4, size²/26)`），所以**没有** `count` 参数；
+/// 卡片里提过它，但 `generate_all` 不接收（只有 `generate_facilities` 收）。
+/// 与其在这里假装能调，不如不暴露 —— 要调密度得先改 `facilities.rs` 的签名（属另一个功能域）。
+#[tauri::command]
+pub async fn world_map_facilities(
+    app: AppHandle,
+    layout: Option<Value>,
+    key: Option<String>,
+    area: Option<String>,
+    size: Option<i32>,
+    seed: Option<u64>,
+    level: Option<String>,
+) -> Result<Value, String> {
+    let area_s = area.unwrap_or_else(|| "广州市·越秀区".to_string());
+    let level_s = level.unwrap_or_else(|| "community".to_string());
+    let src = if layout.is_some() {
+        "layout"
+    } else if key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
+        "maplib"
+    } else {
+        "sketch"
+    };
+    let lay = resolve_layout(&app, layout, key, Some(area_s.clone()), size, seed)?;
+    // seed 统一成 i64 传给设施播种：hash32 的结果是 32 位无符号，转 i64 不会溢出
+    Ok(facilities_payload(
+        &lay,
+        &area_s,
+        &level_s,
+        seed.map(|s| s as i64),
+        src,
+    ))
+}
+
+/// 设施类型的元数据表（中文名/图标/配色/分组/占地尺寸 + 各层级计划）——
+/// 前端图例与「按类别过滤」的开关直接用这张表，不自己写死一份颜色。
+///
+/// 返回 `{ types, levels, level_plan, cell_meters }`，与 Python 原型 `facilities.types_payload()` 同形。
+#[tauri::command]
+pub async fn world_map_facilities_types() -> Result<Value, String> {
+    Ok(facilities::types_payload())
+}
+
+/// 「这个角色现在在哪个设施里」—— 按格点坐标查设施。
+///
+/// 两级语义（都试，结果里用 `source` 如实说明是哪一级命中的）：
+///   1. `cell`：该格点**落在某个设施的占地范围**内（`facility_at`，角色站在图书馆里）；
+///   2. `near`：范围外则找 `radius` 格内最近的设施（`find_facilities` 的 near 语义，
+///      结果带 `dist` 字段）——「他就在便利店旁边」。
+///
+/// `facilities` 传了就**不重新生成**（与 `world_map_schedule` 同一个约定：
+/// 前端已经把设施表拿在手上了，再生成一次既浪费又可能与它显示的那份不是同一批）；
+/// 不传则按 `area/size/seed/level` 从草图重新生成。
+///
+/// ⚠️ 若前端的设施来自地图库布局（`key`），这里必须把 `facilities` 数组传回来 ——
+/// 本命令没有 `key` 参数，重新生成只会得到草图上的那一批。
+#[tauri::command]
+pub async fn world_map_facility_at(
+    facilities: Option<Vec<Value>>,
+    gx: i64,
+    gy: i64,
+    radius: Option<f64>,
+    area: Option<String>,
+    size: Option<i32>,
+    seed: Option<u64>,
+    level: Option<String>,
+) -> Result<Value, String> {
+    let area_s = area.unwrap_or_else(|| "广州市·越秀区".to_string());
+    let level_s = level.unwrap_or_else(|| "community".to_string());
+    let list = match facilities {
+        Some(v) if !v.is_empty() => Value::Array(v),
+        _ => {
+            let lay = sketch::make_sketch(&area_s, size.unwrap_or(28), seed, None);
+            facilities::generate_all(&lay, &area_s, None, &level_s, seed.map(|s| s as i64))
+                .get("facilities")
+                .cloned()
+                .unwrap_or_else(|| json!([]))
+        }
+    };
+    let hit = facilities::facility_at(&list, gx, gy);
+    if !hit.is_null() {
+        return Ok(json!({
+            "ok": true, "gx": gx, "gy": gy, "source": "cell", "facility": hit,
+        }));
+    }
+    // 范围外：找最近的（radius 默认 3 格；传 0 表示「只要精确命中」）
+    let r = radius.unwrap_or(3.0).max(0.0);
+    if r <= 0.0 {
+        return Ok(json!({
+            "ok": true, "gx": gx, "gy": gy, "source": "none", "facility": Value::Null,
+        }));
+    }
+    let near = facilities::find_facilities(&list, None, None, Some((gx as f64, gy as f64)), Some(r), None, Some(1));
+    let first = near.as_array().and_then(|a| a.first()).cloned();
+    Ok(json!({
+        "ok": true, "gx": gx, "gy": gy,
+        "source": if first.is_some() { "near" } else { "none" },
+        "facility": first.unwrap_or(Value::Null),
+    }))
+}

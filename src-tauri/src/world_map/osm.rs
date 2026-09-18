@@ -1331,3 +1331,156 @@ mod tests {
         eprintln!("[osm::tests] 真缓存解析检查了 {checked} 份 bldg_*.json");
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 真实楼体 → 草图生成器的输入（B 方案的地基，2026-09-19 自主轮次 16）
+//
+// 为什么需要（实测结论，别再回头试 A）：渝中区 400m 的 **152 栋真实楼体**量出来，
+// 真实城市肌理**主朝向 ≈30~40°**（渝中区顺江岸斜着长），而 `make_sketch` 生成的是
+// **轴对齐（0°/90°）井字路网**，差 30~40°；更致命的是草图楼体位置是 **RNG 生成**
+// ⇒ **逐栋对齐在数学上不可能**。所以不是"把草图贴到真实地图上"，而是
+// **反过来：让草图按真实数据长出来**（按真实朝向排路网、楼放在真实相对位置）。
+//
+// 这个函数只做第一件事：**从真实楼体的边里估出主朝向**。
+// ⚠️ 用**边长加权**而不是"数边"：长边（临街立面）才代表街区走向，短边多是阳台/凹凸。
+// ⚠️ 角度取**模 90°**：矩形街区的两个方向等价（0° 与 90° 是同一套肌理）。
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// 从一组多边形环里估主朝向：返回 `(度数 0~90, 强度 0~1)`。
+/// 强度 = 峰值桶（5° 宽）的边长占比 —— 越高说明城市肌理越规整。
+pub fn dominant_orientation_deg(rings: &[Vec<[f64; 2]>]) -> (f64, f64) {
+    let mut bins = [0.0f64; 18];
+    let mut total = 0.0f64;
+    for ring in rings {
+        if ring.len() < 2 {
+            continue;
+        }
+        for i in 0..ring.len() - 1 {
+            let dx = ring[i + 1][0] - ring[i][0];
+            let dy = ring[i + 1][1] - ring[i][1];
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-12 {
+                continue;
+            }
+            let ang = dy.atan2(dx).to_degrees();
+            // 模 90°（负数也要落进 [0,90)）
+            let m = ((ang % 90.0) + 90.0) % 90.0;
+            let idx = ((m / 5.0) as usize).min(17);
+            bins[idx] += len;
+            total += len;
+        }
+    }
+    if total <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let mut best = 0usize;
+    for i in 1..bins.len() {
+        if bins[i] > bins[best] {
+            best = i;
+        }
+    }
+    (best as f64 * 5.0 + 2.5, bins[best] / total)
+}
+
+/// 把 Overpass 的建筑 `way`（`out geom` 的 `geometry: [{lat,lon},…]`）转成环。
+/// 只取闭合主环；点少于 4 个（含首尾重复）直接丢。
+pub fn building_rings(osm: &serde_json::Value) -> Vec<Vec<[f64; 2]>> {
+    let mut out = Vec::new();
+    let els = match osm.get("elements").and_then(|e| e.as_array()) {
+        Some(a) => a,
+        None => return out,
+    };
+    for el in els {
+        let geom = match el.get("geometry").and_then(|g| g.as_array()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let mut ring: Vec<[f64; 2]> = Vec::with_capacity(geom.len());
+        for p in geom {
+            let lat = p.get("lat").and_then(|v| v.as_f64());
+            let lon = p.get("lon").and_then(|v| v.as_f64());
+            if let (Some(la), Some(lo)) = (lat, lon) {
+                ring.push([lo, la]); // 统一成 [经度, 纬度]，与前端 wsBuildingHint 一致
+            }
+        }
+        if ring.len() >= 4 {
+            out.push(ring);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 造一个旋转 θ 度的矩形环（度为单位，尺度不影响朝向估计）
+    fn rect(cx: f64, cy: f64, w: f64, h: f64, deg: f64) -> Vec<[f64; 2]> {
+        let t = deg.to_radians();
+        let (c, s) = (t.cos(), t.sin());
+        let pts = [
+            (-w / 2.0, -h / 2.0),
+            (w / 2.0, -h / 2.0),
+            (w / 2.0, h / 2.0),
+            (-w / 2.0, h / 2.0),
+            (-w / 2.0, -h / 2.0),
+        ];
+        pts.iter()
+            .map(|(x, y)| [cx + x * c - y * s, cy + x * s + y * c])
+            .collect()
+    }
+
+    #[test]
+    fn 轴对齐矩形的主朝向是零度附近() {
+        let (deg, strength) = dominant_orientation_deg(&[rect(0.0, 0.0, 0.001, 0.0004, 0.0)]);
+        assert!(deg <= 5.0, "deg={deg}");
+        assert!(strength > 0.8, "strength={strength}");
+    }
+
+    #[test]
+    fn 旋转三十五度能估出来() {
+        let (deg, _) = dominant_orientation_deg(&[rect(0.0, 0.0, 0.001, 0.0004, 35.0)]);
+        assert!((deg - 35.0).abs() <= 5.0, "deg={deg}");
+    }
+
+    #[test]
+    fn 近似九十度也算轴对齐的那条轴() {
+        // 模 90° 之后 88° 仍落在 88 附近（= 90° 那条轴），**不是** 2.5
+        let (deg, _) = dominant_orientation_deg(&[rect(0.0, 0.0, 0.001, 0.0004, 88.0)]);
+        let to_axis = deg.min(90.0 - deg);
+        assert!(to_axis <= 5.0, "deg={deg}");
+    }
+
+    #[test]
+    fn 两个正交方向会把强度摊薄() {
+        let rings = vec![
+            rect(0.0, 0.0, 0.001, 0.0004, 10.0),
+            rect(0.0, 0.0, 0.001, 0.0004, 60.0),
+        ];
+        let (_, mixed) = dominant_orientation_deg(&rings);
+        let (_, single) = dominant_orientation_deg(&[rect(0.0, 0.0, 0.001, 0.0004, 10.0)]);
+        assert!(mixed < single, "mixed={mixed} single={single}");
+    }
+
+    #[test]
+    fn 空输入不炸() {
+        assert_eq!(dominant_orientation_deg(&[]), (0.0, 0.0));
+        assert_eq!(dominant_orientation_deg(&[vec![]]), (0.0, 0.0));
+    }
+
+    #[test]
+    fn 从_overpass_建筑里抽环_经纬度顺序是经度在前() {
+        let osm = json!({"elements": [
+            {"type":"way","id":1,"geometry":[
+                {"lat":29.1,"lon":106.1},{"lat":29.1,"lon":106.2},
+                {"lat":29.2,"lon":106.2},{"lat":29.2,"lon":106.1}
+            ]},
+            {"type":"node","id":2},
+            {"type":"way","id":3,"geometry":[{"lat":29.1,"lon":106.1}]}
+        ]});
+        let rings = building_rings(&osm);
+        assert_eq!(rings.len(), 1, "只有一条合法闭合环（node 与点太少的 way 被丢）");
+        assert_eq!(rings[0][0], [106.1, 29.1], "必须是 [经度, 纬度]");
+    }
+}

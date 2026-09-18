@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>世界模拟 · 游戏化界面（PixiJS + Live2D 原型）</title>
+    <title>世界模拟 · 游戏化界面（PixiJS 原型 · Live2D 已禁用）</title>
     <!--
       ════════════════════════════════════════════════════════════════════════
       wsgame.html —— 「世界模拟」的游戏化界面原型（**自用层，不进 PR**）
@@ -379,7 +379,7 @@
         };
 
         // ③ 角色（只在 WebGL 可用时；失败不影响地图）
-        (backend.kind === "pixi" ? loadCharacter() : Promise.reject(new Error("无 WebGL，跳过 Live2D"))).catch((e) => {
+        (Promise.reject(new Error("Live2D 已按机主要求在地图上禁用（2026-09-18）；立绘改走 PNG 模式"))).catch((e) => {
           charErr = String(e && e.message ? e.message : e);
           console.warn("[wsgame] 角色没加载出来：", e);
         });

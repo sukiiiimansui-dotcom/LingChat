@@ -19,6 +19,16 @@ pub struct OsmHint {
     pub highway_kinds: usize,
     pub has_water: bool,
     pub has_park: bool,
+    /* ── B 方案（2026-09-19）：让草图**按真实数据长出来**，而不是"贴到真实地图上" ──
+       为什么走 B：渝中区 400m 的 152 栋真实楼体实测 ⇒ 真实城市肌理**主朝向 ≈30~40°**，
+       而本文件生成的是**轴对齐 0°/90° 井字路网**（差 30~40°）；且楼体位置是 RNG 生成
+       ⇒ **逐栋对齐在数学上不可能**。（详见 world_map/NEXT-STEP.md） */
+    /// 真实楼体主朝向（度，0~90）；0 表示"没有信息，按轴对齐"
+    pub orientation_deg: f64,
+    /// 真实楼体清单（已归一化到 0~1，见 `osm::HintBuilding`）；空 = 没有信息
+    pub buildings: Vec<super::osm::HintBuilding>,
+    /// 采样半径内**真实存在的楼栋总数**（`buildings` 可能被 `max_n` 截断 —— 别让调用方以为只有这么多）
+    pub buildings_total: usize,
 }
 
 impl OsmHint {
@@ -49,7 +59,27 @@ impl OsmHint {
             highway_kinds: len("highway_types"),
             has_water: has("leisure", "water") || has("landuse", "water"),
             has_park: has("leisure", "park") || has("leisure", "garden"),
+            // ⚠️ 真实楼体信息**不在 summary 里**（summary 是聚合结果，没有逐栋几何）——
+            // 要它得拿 Overpass 原始 JSON 走 `with_real_buildings()`。
+            // 这里显式写全字段（不用 `..Default::default()`）是有意的：
+            // 以后再加字段时**编译器会强制我在这里做决定**，而不是悄悄漏掉。
+            orientation_deg: 0.0,
+            buildings: Vec::new(),
+            buildings_total: 0,
         }
+    }
+
+    /// 在已有摘要的基础上**补上真实楼体信息**（B 方案用）。
+    ///
+    /// ⚠️ 这一步**不会改变 `make_sketch` 的任何现有行为** ——
+    /// `make_sketch` 目前只读 density/has_water/has_park；新字段先落在这里，
+    /// 等路网/楼体排布改造时再消费（分阶段做，每阶段都能独立验收）。
+    pub fn with_real_buildings(mut self, osm: &Value, max_n: usize) -> Self {
+        let (deg, _strength, list, total) = super::osm::hint_buildings(osm, max_n);
+        self.orientation_deg = deg;
+        self.buildings = list;
+        self.buildings_total = total;
+        self
     }
 
     /// 建筑排布密度 0.35~0.95
@@ -298,6 +328,27 @@ mod tests {
                 assert!(!overlap, "建筑重叠: {i} 与 {j}");
             }
         }
+    }
+
+    /// 🔴 阶段 A 的**回归护栏**：新增字段**不得**改变现有生成行为。
+    /// 做法：同样的 (area, size, seed)，一次用"只有旧字段"的 hint、一次用"补了真实楼体"的 hint，
+    /// 生成结果必须**逐字节相同**（等路体排布改造时，这条测试会**故意红**，那时才该改它）。
+    #[test]
+    fn 新增真实楼体字段不改变现有生成结果() {
+        let plain = OsmHint { building_kinds: 6, highway_kinds: 6, ..Default::default() };
+        let osm = serde_json::json!({"elements":[
+            {"type":"way","id":1,"tags":{"height":30},"geometry":[
+                {"lon":106.00,"lat":29.00},{"lon":106.01,"lat":29.00},
+                {"lon":106.01,"lat":29.01},{"lon":106.00,"lat":29.01},{"lon":106.00,"lat":29.00}]}
+        ]});
+        let with_b = OsmHint { building_kinds: 6, highway_kinds: 6, ..Default::default() }
+            .with_real_buildings(&osm, 8);
+        assert_eq!(with_b.buildings_total, 1, "真实楼栋数应被记下");
+        assert_eq!(with_b.buildings.len(), 1);
+        assert!(with_b.orientation_deg >= 0.0 && with_b.orientation_deg <= 90.0);
+        let a = make_sketch("广州市·越秀区", 28, Some(42), Some(&plain));
+        let b = make_sketch("广州市·越秀区", 28, Some(42), Some(&with_b));
+        assert_eq!(a, b, "阶段 A 不该改变生成结果（改了就必须是**有意的**并更新本测试）");
     }
 
     #[test]

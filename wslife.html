@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>世界模拟 · 街区生活（PixiJS + Live2D 原型 v2）</title>
+    <title>世界模拟 · 街区生活（PixiJS 原型 v2 · Live2D 已禁用）</title>
     <!--
       ════════════════════════════════════════════════════════════════════════
       wslife.html —— 「世界模拟」原型 **v2：按修正后的概念重做**（自用层，不进 PR）
@@ -359,7 +359,7 @@
         bindInput();
         startClock();
         placeBubble();
-        (backend.kind === "pixi" ? loadCharacter() : Promise.reject(new Error("无 WebGL，跳过 Live2D")))
+        (Promise.reject(new Error("Live2D 已按机主要求在地图上禁用（2026-09-18）；立绘改走 PNG 模式")))
           .catch((e) => { charErr = String(e?.message || e); console.warn("[wslife] 角色没加载出来：", e); });
 
         console.log(`[wslife] 首屏 ${Math.round(performance.now() - t0)} ms，后端=${backend.kind}`);

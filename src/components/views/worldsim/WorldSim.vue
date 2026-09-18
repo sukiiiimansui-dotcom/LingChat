@@ -573,7 +573,7 @@
   import { useElementSize, useWorldSimGeo, useWorldSimTheme } from "@/composables/useWorldSimGeo";
   import { useWorldSim } from "@/composables/useWorldSim";
   import { useWorldSimGestures } from "@/composables/useWorldSimGestures";
-  import { useWsGeoStage } from "@/composables/useWsGeoStage";
+  import { useWsMapLibre } from "@/composables/useWsMapLibre";
   import { useWsActors } from "@/composables/useWsActors";
   import { useWsPanel } from "@/composables/useWsPanel";
   import { useWorldTrips } from "@/composables/useWorldTrips";
@@ -631,7 +631,12 @@
      夜里要**换深色主题**，不是给白天界面蒙灰）。这里让画布跟着"是否天黑"一起变深，
      于是夜里是「深底 + 冰蓝高亮」，白天才是浅底。 */
   const mapDark = computed(() => theme.dark.value || isNightNow());
-  const geoStage = useWsGeoStage({
+  /* 🔴 P1a 换引擎（2026-09-18）：Canvas2D → **MapLibre GL**（成熟库，相机/惯性/pitch/bearing 全原生）。
+     两个 composable **逐项同名同义**（11/11，见 useWsMapLibre 的对照表），所以这里只改工厂函数名；
+     要回退就把这一行换回 `useWsGeoStage`。
+     ⚠️ **不能在 `if` 里二选一调用**（组合式 API 不能在条件分支里注册 watch）——
+     回退靠它自己：引擎不可用/上下文丢失时 `ok=false`，页面自动继续渲染后端 SVG 那条老路，不会白屏。 */
+  const geoStage = useWsMapLibre({
     host: geoHost,
     canvas: geoCanvas,
     adcode: () => sim.stage.value?.adcode || "",

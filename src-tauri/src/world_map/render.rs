@@ -223,6 +223,9 @@ pub fn render_svg(layout: &Value, o: &Opts) -> String {
         r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="{}" rx="6"/>"#,
         ox, oy, cell * size, cell * size, st.blockbg
     ));
+    // 阶段 C：从这里到"数据卡片"之前是**地图内容**（街区块、路网、水系…）。
+    // 真实主朝向要转的就是这一段 —— **背景与数据卡片必须保持正立**（卡片跟着歪是明显的丑）。
+    let content_start = p.len();
 
     // ── 绿地（z1）──
     for pk in arr(layout, "parks") {
@@ -543,6 +546,21 @@ pub fn render_svg(layout: &Value, o: &Opts) -> String {
     }
 
     // ── 数据卡片（可选）──
+    /* ── 阶段 C（2026-09-19）：真实主朝向 → **场景级旋转** ────────────────────
+       为什么在这里而不是在生成端逐个元素转坐标：草图的楼/公园/水域是**轴对齐矩形**
+       （schema 只有 x/y/w/h），逐个转中心点会得到"街道斜着、楼还是正的"——比不转更难看。
+       在这里统一施加旋转，对**线段与矩形都精确**，且**不动 schema**。
+       `rot` 来自 `sketch::make_sketch` 的真实楼体主朝向（0 = 轴对齐 = 历史行为）。 */
+    let rot = num(layout, "rot", 0.0);
+    if rot.abs() > 0.01 {
+        let (rcx, rcy) = (w / 2.0, h / 2.0);
+        p.insert(
+            content_start,
+            format!(r#"<g class="wm-rot" transform="rotate({rot:.2} {rcx:.1} {rcy:.1})">"#),
+        );
+        p.push("</g>".into());
+    }
+
     if o.charts {
         p.push(charts_svg(layout, &st, w, pad));
     }
@@ -706,6 +724,37 @@ mod tests {
         assert!(with.contains("animateMotion"), "应有车流/人流动画");
         assert!(!without.contains("animateMotion"));
         assert!(!without.contains("@keyframes"));
+    }
+
+    /// 阶段 C：`rot` 要真的生效，且**只转地图内容**（背景与数据卡片保持正立）
+    #[test]
+    fn 场景旋转只作用于地图内容() {
+        let mut l = crate::world_map::sketch::make_sketch("测试小区", 20, Some(7), None);
+        // rot=0 → 完全不出旋转组（历史行为）
+        let plain = render_svg(&l, &Opts::default());
+        assert!(!plain.contains("wm-rot"), "rot=0 时不该有旋转组");
+        // rot=30 → 出现旋转组且角度写进 transform
+        l["rot"] = serde_json::json!(30.0);
+        let on = render_svg(&l, &Opts::default());
+        assert!(on.contains("wm-rot"), "rot≠0 时必须有旋转组");
+        assert!(on.contains("rotate(30.00"), "角度要写进 transform，实际：{}", &on[..on.len().min(400)]);
+        // 背景矩形必须在旋转组**之前**（否则连底色都被转，边缘会露白）
+        let rot_at = on.find("wm-rot").unwrap();
+        let bg_at = on.find("<rect width=").unwrap();
+        assert!(bg_at < rot_at, "背景应在旋转组之前");
+        // 打开数据卡片：卡片必须在旋转组**之外**（否则卡片会歪着显示）
+        let with_charts = render_svg(&l, &Opts { charts: true, ..Default::default() });
+        let rot_open = with_charts.find("wm-rot").unwrap();
+        // ⚠️ `str::find` 只有"模式"一个参数（没有"从某处开始找"的重载）→ 自己切片 + 加偏移
+        let rot_close = rot_open
+            + with_charts[rot_open..]
+                .find("</g>")
+                .expect("旋转组必须有闭合标签")
+            + 4;
+        let charts_at = with_charts.find("wm-charts").expect("开了 charts 就该有卡片");
+        assert!(charts_at > rot_close, "数据卡片必须在旋转组闭合之后（不能跟着歪）");
+        // 关掉 charts 时不该有卡片
+        assert!(!on.contains("wm-charts"));
     }
 
     #[test]

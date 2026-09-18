@@ -81,6 +81,33 @@ pub const BUCKET_KEYS: [&str; 5] = ["building", "highway", "amenity", "leisure",
 /// 默认关心这 5 类标签（建筑/道路/设施/休闲/用地）
 pub const DEFAULT_KINDS: [&str; 5] = ["building", "highway", "amenity", "leisure", "landuse"];
 
+// ── 真实楼房（2.5D 挤出的输入）──────────────────────────────────────────
+//
+// 上面那套「按种类取」的查询**拿不到楼高**（`out center tags` 只给中心点，
+// 连轮廓都没有），所以楼房要单开一条查询：`out geom` 拿整条 way 的几何。
+
+/// `building:levels` → 米 的层高。**这是 OSM 的通用约定值**，不是我们编的：
+/// OSM wiki 明确写 "building:levels … 3 metres per level" 是缺省换算。
+pub const LEVEL_METERS: f64 = 3.0;
+
+/// 既无高度也无层数时的默认楼高（米）。
+///
+/// ⚠️ **这个值必须随数据一起返回给前端**（`stats.default_height_m`）——
+/// 让前端自己写一个 8 就会两边不一致，"哪些楼是猜的"也就说不清了。
+pub const DEFAULT_HEIGHT_M: f64 = 8.0;
+
+/// 楼高上限（米）。OSM 里偶见明显错值（民房上写 `levels=100`）。
+/// 不夹的话，一台相机被一栋 300 米的"民房"顶穿是很难查的现场。
+pub const MAX_HEIGHT_M: f64 = 500.0;
+
+/// 建筑缓存键前缀。
+///
+/// 🔴 **必须与摘要缓存分开**：两者用的是同一个 200m 网格 `grid_key`，
+/// 若共用文件名，`fetch_area`（按种类取）与 `fetch_buildings`（取轮廓）
+/// 会**互相覆盖同一份缓存** —— 表现为"楼房时有时无、摘要里出现 geometry 字段"，
+/// 而且两份数据都"看起来是对的"，极难定位。加前缀后键空间互不相交。
+pub const BUILDINGS_KEY_PREFIX: &str = "bldg_";
+
 /// 缓存网格边长：0.002° ≈ 200m。同一个小区反复打开时命中同一份缓存。
 const GRID: f64 = 0.002;
 
@@ -174,6 +201,39 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// 把一条 Overpass 查询按 [`ENDPOINTS`] 顺序逐个试，返回**第一个带 `elements` 字段**的响应
+/// 以及命中的端点。
+///
+/// 抽出来给 `fetch_area`（按种类取摘要）和 `fetch_buildings`（取楼房轮廓）共用：
+/// 两处的失败语义**必须完全一致**，否则会重演下面这个坑 ——
+/// 回退循环只判 `elements` **字段在不在**（`if j.get("elements").is_none() { continue; }`），
+/// 因为局部镜像（如 `overpass.osm.ch`）对没有数据的地区返回的是
+/// `200 + {"elements": []}`：这份空结果会被**当成最终答案**，后续端点根本没机会跑。
+/// 所以「字段不在」= 这次不算数、继续试；「字段在但为空」= 这就是答案（真的是空的）。
+async fn post_overpass(client: &reqwest::Client, q: &str) -> Option<(Value, &'static str)> {
+    for ep in ENDPOINTS {
+        let resp = client
+            .post(ep)
+            .header("User-Agent", "LSYuki-maps/1.0")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(form_encode(&[("data", q)]))
+            .send()
+            .await;
+        let j = match resp {
+            Ok(r) if r.status().is_success() => match r.json::<Value>().await {
+                Ok(v) => v,
+                Err(_) => continue,
+            },
+            _ => continue,
+        };
+        if j.get("elements").is_none() {
+            continue;
+        }
+        return Some((j, ep));
+    }
+    None
+}
+
 /// 拉取区域 OSM 数据。缓存优先；所有端点都失败返回 None（调用方降级为纯 LLM）。
 ///
 /// 返回值里会附 `_meta`（坐标、半径、时间戳、命中的端点）便于排障与增量刷新。
@@ -197,36 +257,459 @@ pub async fn fetch_area(
     }
 
     let q = overpass_query(lat, lng, radius_m, &kinds);
-    for ep in ENDPOINTS {
-        let resp = client
-            .post(ep)
-            .header("User-Agent", "LSYuki-maps/1.0")
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(form_encode(&[("data", q.as_str())]))
-            .send()
-            .await;
-        let j = match resp {
-            Ok(r) if r.status().is_success() => match r.json::<Value>().await {
-                Ok(v) => v,
-                Err(_) => continue,
-            },
-            _ => continue,
-        };
-        if j.get("elements").is_none() {
-            continue;
-        }
-        let mut j = j;
-        j["_meta"] = json!({
-            "lat": lat, "lng": lng, "radius_m": radius_m,
-            "ts": now_secs(), "endpoint": ep,
-        });
-        let _ = std::fs::create_dir_all(dir);
-        if let Ok(txt) = serde_json::to_string(&j) {
-            let _ = std::fs::write(cache_path(dir, &key), txt);
-        }
-        return Some(j);
+    let (mut j, ep) = post_overpass(client, &q).await?;
+    j["_meta"] = json!({
+        "lat": lat, "lng": lng, "radius_m": radius_m,
+        "ts": now_secs(), "endpoint": ep,
+    });
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(txt) = serde_json::to_string(&j) {
+        let _ = std::fs::write(cache_path(dir, &key), txt);
     }
-    None
+    Some(j)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 真实楼房：Overpass → GeoJSON（给 MapLibre `fill-extrusion` 挤成 2.5D）
+// ══════════════════════════════════════════════════════════════════════
+//
+// 这一段与上面的 `fetch_area`/`summarize` 是**两条独立通路**：
+//   · `fetch_area` 的产物是"给 LLM 看的一句话摘要"（只要种类与计数）；
+//   · 这一段产出的是**几何**（`out geom`，整条 way 的轮廓）+ 楼高，给渲染用。
+// 所以它们**不共用缓存**（见 `BUILDINGS_KEY_PREFIX` 的注释）。
+
+/// 取楼房的 Overpass QL。
+///
+/// 与 `overpass_query` 的三点不同：
+///   · `out geom` —— 要**整条轮廓**（`out center` 只有中心点，挤不出体块）；
+///   · 单条件 `["building"]` —— 楼高不在"种类"维度上，是"每个要素的标签"；
+///   · 带上 `["building"!="no"]` —— OSM 里 `building=no` 是"这里不是楼"的显式否，
+///     有些编辑器会用它压掉误标，不该被画成一栋楼。
+///
+/// ⚠️ **`building:part` 不会被匹配**（键名不同），这是对的：它是"楼的一部分"，
+/// 与父要素同时渲染会**双重挤出**（部件从楼里穿出来）。真要细分体块得另开一条路。
+///
+/// ⚠️ `relation["building"]` 也取回来了，但 [`buildings_geojson`] **只解析 way**：
+/// 多边形的环组装（outer/inner 配对、洞）是另一件事，草率地"取点数最多的 outer"
+/// 会把带内院的楼画成实心块，且**不报任何错**。所以关系被**计数但不渲染**
+/// （`stats.skipped.relation`）—— 数据缺口必须看得见，不能悄悄少画。
+pub fn buildings_query(lat: f64, lng: f64, radius_m: f64) -> String {
+    format!(
+        "[out:json][timeout:40];(\
+         way[\"building\"][\"building\"!=\"no\"](around:{radius_m},{lat},{lng});\
+         relation[\"building\"][\"building\"!=\"no\"](around:{radius_m},{lat},{lng});\
+         );out geom;"
+    )
+}
+
+/// 楼房缓存的键（**带前缀**，与摘要缓存隔离；理由见 `BUILDINGS_KEY_PREFIX`）
+pub fn buildings_cache_key(lat: f64, lng: f64, radius_m: f64) -> String {
+    format!("{BUILDINGS_KEY_PREFIX}{}", grid_key(lat, lng, radius_m))
+}
+
+/// 取楼房数据（Overpass → 原始 JSON），缓存优先。
+///
+/// 与 `fetch_area` 同款语义：**没缓存就真去抓**，三个端点全失败返回 None。
+/// 磁盘增长与"别接到自动路径上"的告警见 `mod.rs` 的 `world_map_buildings` 文档。
+pub async fn fetch_buildings(
+    client: &reqwest::Client,
+    dir: impl AsRef<Path>,
+    lat: f64,
+    lng: f64,
+    radius_m: f64,
+    force: bool,
+) -> Option<Value> {
+    let dir = dir.as_ref();
+    let key = buildings_cache_key(lat, lng, radius_m);
+
+    if !force {
+        if let Some(v) = load_cached(dir, &key) {
+            return Some(v);
+        }
+    }
+
+    let q = buildings_query(lat, lng, radius_m);
+    let (mut j, ep) = post_overpass(client, &q).await?;
+    j["_meta"] = json!({
+        "lat": lat, "lng": lng, "radius_m": radius_m,
+        "ts": now_secs(), "endpoint": ep, "kind": "buildings",
+    });
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(txt) = serde_json::to_string(&j) {
+        let _ = std::fs::write(cache_path(dir, &key), txt);
+    }
+    Some(j)
+}
+
+/// 解析一个 OSM 长度值 → 米。
+///
+/// OSM 的约定：**不带单位就是米**（`height=25` = 25 米）。但也真的存在
+/// `82 ft` / `250 cm` 这类写法，所以按单位后缀换算，而不是"把数字抠出来就算"。
+///
+/// 返回 `None` 的三种情况（都要让调用方落到下一优先级，而不是当成 0）：
+/// 空串、开头没有数字、数字不是正有限值（`0` 与负数都不是"高度"）。
+pub fn parse_len_m(raw: &str) -> Option<f64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut i = if b[0] == b'+' { 1 } else { 0 };
+    let start = i;
+    let mut dot = false;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_digit() {
+            i += 1;
+        } else if c == b'.' && !dot {
+            dot = true;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i == start {
+        return None; // 开头就没有数字（"约 20 米" 这种中文前缀）
+    }
+    let num: f64 = s[start..i].parse().ok()?;
+    if !num.is_finite() {
+        return None;
+    }
+    // 单位只看数字后面那截（大小写无关）
+    let unit = s[i..].trim().to_ascii_lowercase();
+    let m = if unit.starts_with("ft") || unit.starts_with('\'') {
+        num * 0.3048
+    } else if unit.starts_with("km") {
+        num * 1000.0
+    } else if unit.starts_with("cm") {
+        num / 100.0
+    } else if unit.starts_with("in") || unit.starts_with('"') {
+        num * 0.0254
+    } else {
+        num // 无单位 = 米（OSM 默认）
+    };
+    if m.is_finite() && m > 0.0 {
+        Some(m)
+    } else {
+        None
+    }
+}
+
+/// 一栋楼的楼高判定结果
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeightPick {
+    /// 楼高（米，已夹到 `MAX_HEIGHT_M`）
+    pub height_m: f64,
+    /// 底座高（米，`min_height`/`building:min_level`；没有就是 0）
+    pub min_height_m: f64,
+    /// 高度**来源**：`"height"` | `"levels"` | `"default"`
+    pub source: &'static str,
+    /// 具体是哪个标签给的（`"building:height"` | `"height"` | `"building:levels"` | `"default"`）
+    pub tag: &'static str,
+    /// 层数（只有 `levels` 来源才有）
+    pub levels: Option<f64>,
+    /// 高度被 `MAX_HEIGHT_M` 夹过
+    pub clamped: bool,
+    /// 写了高度标签但解析不出来（数据质量指标）
+    pub bad_height: bool,
+    /// 写了层数标签但解析不出来（数据质量指标）
+    pub bad_levels: bool,
+}
+
+fn tag_str<'a>(tags: &'a serde_json::Map<String, Value>, k: &str) -> Option<&'a str> {
+    tags.get(k)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+}
+
+/// 底座高：`building:min_height` → `min_height` → `building:min_level` × 层高
+fn min_height_of(tags: &serde_json::Map<String, Value>) -> f64 {
+    for k in ["building:min_height", "min_height"] {
+        if let Some(v) = tag_str(tags, k).and_then(parse_len_m) {
+            return v;
+        }
+    }
+    if let Some(v) = tag_str(tags, "building:min_level").and_then(parse_len_m) {
+        return v * LEVEL_METERS;
+    }
+    0.0
+}
+
+/// 楼高判定（**优先级是这一段的契约，别改顺序**）：
+///
+/// 1. `building:height` —— 建筑专用标签，最可信
+/// 2. `height` —— 通用高度标签（OSM 里**比 ①更常见**，同样是显式高度，
+///    所以它与 ① 归成同一个 `source="height"`，但 `tag` 分开记，便于看数据来源）
+/// 3. `building:levels` × [`LEVEL_METERS`]（3m/层）
+/// 4. 都没有 → [`DEFAULT_HEIGHT_M`]（8m）
+///
+/// 单位换算与"解析不出来怎么办"都在 [`parse_len_m`]：**解析失败要落到下一档**，
+/// 绝不能当成 0 —— 0 高的楼在地图上等于不存在，而"数据脏"会被伪装成"这里没楼"。
+pub fn building_height(tags: &serde_json::Map<String, Value>) -> HeightPick {
+    let mut bad_height = false;
+    for tag in ["building:height", "height"] {
+        if let Some(raw) = tag_str(tags, tag) {
+            match parse_len_m(raw) {
+                Some(h) => {
+                    let (h, clamped) = if h > MAX_HEIGHT_M {
+                        (MAX_HEIGHT_M, true)
+                    } else {
+                        (h, false)
+                    };
+                    let min_h = min_height_of(tags).min(h);
+                    let levels = tag_str(tags, "building:levels").and_then(parse_len_m);
+                    return HeightPick {
+                        height_m: h,
+                        min_height_m: min_h,
+                        source: "height",
+                        tag,
+                        levels,
+                        clamped,
+                        bad_height,
+                        bad_levels: false,
+                    };
+                }
+                // 标签在、值读不出来 → 记一笔，继续往下一档走
+                None => bad_height = true,
+            }
+        }
+    }
+
+    let mut bad_levels = false;
+    if let Some(raw) = tag_str(tags, "building:levels") {
+        match parse_len_m(raw) {
+            Some(lv) => {
+                let raw_h = lv * LEVEL_METERS;
+                let (h, clamped) = if raw_h > MAX_HEIGHT_M {
+                    (MAX_HEIGHT_M, true)
+                } else {
+                    (raw_h, false)
+                };
+                let min_h = min_height_of(tags).min(h);
+                return HeightPick {
+                    height_m: h,
+                    min_height_m: min_h,
+                    source: "levels",
+                    tag: "building:levels",
+                    levels: Some(lv),
+                    clamped,
+                    bad_height,
+                    bad_levels,
+                };
+            }
+            None => bad_levels = true,
+        }
+    }
+
+    HeightPick {
+        height_m: DEFAULT_HEIGHT_M,
+        min_height_m: 0.0,
+        source: "default",
+        tag: "default",
+        levels: None,
+        clamped: false,
+        bad_height,
+        bad_levels,
+    }
+}
+
+/// 保留 2 位小数（JSON 里的高度不需要更多精度，少几个字节 × 几百栋也可观）
+fn round2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+/// 坐标保留 7 位（≈1cm，远超渲染需要，但能把 payload 压下来）
+fn round7(x: f64) -> f64 {
+    (x * 1e7).round() / 1e7
+}
+
+/// 把 `out geom` 给的一条 way 几何变成**闭合的 GeoJSON 环**（`[[lng,lat],…]`）。
+///
+/// 返回 `None` = 这条几何**整条不可用**（宁可少画一栋，也不要画一个畸形的块）：
+///   · 有空点 / 坐标不是有限数 / 经纬度越界；
+///   · 去重后不足 3 个不同点（构不成面）。
+///
+/// 去重是必须的：OSM 的 way 首尾是**同一个节点**（闭合环），
+/// 直接转 GeoJSON 会得到一个首尾重复的 4 点环 —— 多数渲染器能忍，
+/// 但退化到"首尾节点重合且只有 2 个不同点"时就不是面了。
+fn ring_of(geom: &[Value]) -> Option<Vec<Value>> {
+    let mut pts: Vec<(f64, f64)> = Vec::with_capacity(geom.len() + 1);
+    for p in geom {
+        let lat = p.get("lat")?.as_f64()?;
+        let lon = p.get("lon")?.as_f64()?;
+        if !lat.is_finite() || !lon.is_finite() {
+            return None;
+        }
+        if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+            return None; // 越界坐标：宁可不要，也不要把地图拉飞
+        }
+        let q = (round7(lon), round7(lat)); // GeoJSON 是 [lng, lat]
+        match pts.last() {
+            Some(last) if (last.0 - q.0).abs() < 1e-9 && (last.1 - q.1).abs() < 1e-9 => {}
+            _ => pts.push(q),
+        }
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    // 闭合环：首 != 尾就补一个（首 == 尾说明本来就是闭合 way）
+    let first = pts[0];
+    let last = *pts.last().unwrap();
+    if (first.0 - last.0).abs() > 1e-9 || (first.1 - last.1).abs() > 1e-9 {
+        pts.push(first);
+    }
+    Some(pts.into_iter().map(|(x, y)| json!([x, y])).collect())
+}
+
+/// Overpass 原始 JSON → `(GeoJSON FeatureCollection, 统计)`
+///
+/// **两个返回值都要**：
+///   · FC 是给 MapLibre 的（保持成**纯 GeoJSON**，不掺自定义字段，
+///     免得哪天渲染器对多余成员挑食）；
+///   · 统计是给人看的 —— 「多少栋楼的高度是真数据、多少栋是我猜的」必须可回答，
+///     否则"地图上楼房看起来挺对"这件事无法与"其实全是默认 8 米"区分开。
+///
+/// 每个要素的 `properties`：
+/// `{ osm_id, height, min_height, height_src, height_tag, levels, kind, name }`
+/// —— `height_src` 逐栋带上，前端做图例/排查时不用回头猜。
+pub fn buildings_geojson(osm: &Value) -> (Value, Value) {
+    let empty: Vec<Value> = Vec::new();
+    let els = osm
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .unwrap_or(&empty);
+
+    let mut feats: Vec<Value> = Vec::new();
+    let mut heights: Vec<f64> = Vec::new();
+    let (mut n_height, mut n_levels, mut n_default) = (0u64, 0u64, 0u64);
+    let (mut tag_bh, mut tag_h) = (0u64, 0u64);
+    let (mut bad_h, mut bad_lv) = (0u64, 0u64);
+    let (mut clamped, mut min_used) = (0u64, 0u64);
+    let (mut skip_geom, mut skip_rel, mut skip_other) = (0u64, 0u64, 0u64);
+
+    for e in els {
+        match e.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "way" => {}
+            // 关系（multipolygon）：计数但不渲染 —— 理由见 `buildings_query` 的文档
+            "relation" => {
+                skip_rel += 1;
+                continue;
+            }
+            _ => {
+                skip_other += 1;
+                continue;
+            }
+        }
+
+        let ring = match e.get("geometry").and_then(|g| g.as_array()) {
+            Some(g) => match ring_of(g) {
+                Some(r) => r,
+                None => {
+                    skip_geom += 1;
+                    continue;
+                }
+            },
+            None => {
+                skip_geom += 1;
+                continue;
+            }
+        };
+
+        let no_tags = serde_json::Map::new();
+        let tags = e
+            .get("tags")
+            .and_then(|t| t.as_object())
+            .unwrap_or(&no_tags);
+        let pick = building_height(tags);
+
+        match pick.source {
+            "height" => {
+                n_height += 1;
+                if pick.tag == "building:height" {
+                    tag_bh += 1;
+                } else {
+                    tag_h += 1;
+                }
+            }
+            "levels" => n_levels += 1,
+            _ => n_default += 1,
+        }
+        if pick.bad_height {
+            bad_h += 1;
+        }
+        if pick.bad_levels {
+            bad_lv += 1;
+        }
+        if pick.clamped {
+            clamped += 1;
+        }
+        if pick.min_height_m > 0.0 {
+            min_used += 1;
+        }
+        heights.push(pick.height_m);
+
+        let osm_id = format!(
+            "{}/{}",
+            e.get("type").and_then(|v| v.as_str()).unwrap_or("way"),
+            e.get("id").and_then(|v| v.as_i64()).unwrap_or(0)
+        );
+        let name = tag_str(tags, "name").unwrap_or("");
+        let kind = tag_str(tags, "building").unwrap_or("yes");
+
+        feats.push(json!({
+            "type": "Feature",
+            "id": osm_id,
+            "properties": {
+                "osm_id": osm_id,
+                "height": round2(pick.height_m),
+                "min_height": round2(pick.min_height_m),
+                "height_src": pick.source,
+                "height_tag": pick.tag,
+                "levels": pick.levels,
+                "kind": kind,
+                "name": if name.is_empty() { Value::Null } else { Value::String(name.to_string()) },
+            },
+            "geometry": { "type": "Polygon", "coordinates": [ring] },
+        }));
+    }
+
+    let count = feats.len() as u64;
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let max_h = heights.last().copied().unwrap_or(0.0);
+    // 上中位数（偶数个取偏大的那个）—— 只用来描述数据质量，不参与渲染
+    let median_h = if heights.is_empty() {
+        0.0
+    } else {
+        heights[heights.len() / 2]
+    };
+
+    let fc = json!({ "type": "FeatureCollection", "features": feats });
+    let stats = json!({
+        "count": count,
+        // 「高度来源分布」——本功能最该被追问的一个数：有多少是真数据
+        "height_source": { "height": n_height, "levels": n_levels, "default": n_default },
+        // 更细一档：具体吃的是哪个标签（三项之和 == count）
+        "height_tag": {
+            "building:height": tag_bh,
+            "height": tag_h,
+            "building:levels": n_levels,
+            "default": n_default,
+        },
+        // 数据质量：写了标签但读不出来（这些楼最后落到了 default）
+        "unparsable": { "height": bad_h, "levels": bad_lv },
+        "clamped": clamped,
+        "min_height_used": min_used,
+        // 没画出来的（必须可见，不然"少画了"会被读成"这里没有"）
+        "skipped": { "geometry": skip_geom, "relation": skip_rel, "other": skip_other },
+        // 换算常量随数据一起返回 —— 前端**不要**自己写 8 和 3
+        "levels_meters": LEVEL_METERS,
+        "default_height_m": DEFAULT_HEIGHT_M,
+        "max_height_m": round2(max_h),
+        "median_height_m": round2(median_h),
+    });
+
+    (fc, stats)
 }
 
 /// 按出现次数排序取前 n（同数保持「首次出现」顺序，与 Python 的稳定排序一致）
@@ -522,5 +1005,329 @@ mod tests {
         let p = cache_path("/data/x/osm", "1_2_3");
         assert!(p.ends_with("1_2_3.json"));
         assert!(p.starts_with("/data/x/osm"));
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 真实楼房（2.5D 挤出）
+    // ══════════════════════════════════════════════════════════════════
+
+    fn tags(o: Value) -> serde_json::Map<String, Value> {
+        o.as_object().unwrap().clone()
+    }
+
+    /// 一条闭合的 way 几何（正方形），四角 + 回到起点（OSM 的真实形状）
+    fn square_geom(lat: f64, lon: f64) -> Value {
+        json!([
+            {"lat": lat, "lon": lon},
+            {"lat": lat, "lon": lon + 0.0005},
+            {"lat": lat + 0.0005, "lon": lon + 0.0005},
+            {"lat": lat + 0.0005, "lon": lon},
+            {"lat": lat, "lon": lon}
+        ])
+    }
+
+    #[test]
+    fn buildings_query_asks_for_geometry_not_centers() {
+        let q = buildings_query(29.5630, 106.5516, 300.0);
+        assert!(q.starts_with("[out:json][timeout:40];("), "{q}");
+        // 🔴 这条是本查询存在的理由：`out center` 只有中心点，挤不出体块
+        assert!(q.ends_with(");out geom;"), "必须用 out geom：{q}");
+        assert!(!q.contains("out center"), "不能退回 out center：{q}");
+        assert!(q.contains("way[\"building\"][\"building\"!=\"no\"](around:300,29.563,106.5516);"));
+        assert!(q.contains("relation[\"building\"]"));
+        // `building:part` 不该被匹配（键名不同）——匹配了会与父要素双重挤出
+        assert!(!q.contains("building:part"), "不该查 building:part：{q}");
+    }
+
+    #[test]
+    fn buildings_cache_key_never_collides_with_summary() {
+        // 同一个网格、同一个半径：两条通路的键必须不同，否则互相覆盖缓存
+        let k_sum = grid_key(29.5630, 106.5516, 300.0);
+        let k_bld = buildings_cache_key(29.5630, 106.5516, 300.0);
+        assert_ne!(k_sum, k_bld);
+        assert_eq!(k_bld, format!("bldg_{k_sum}"));
+        assert!(k_bld.starts_with(BUILDINGS_KEY_PREFIX));
+    }
+
+    #[test]
+    fn parse_len_units() {
+        // 无单位 = 米（OSM 约定）
+        assert_eq!(parse_len_m("25"), Some(25.0));
+        assert_eq!(parse_len_m(" 25 "), Some(25.0));
+        assert_eq!(parse_len_m("+25"), Some(25.0));
+        assert_eq!(parse_len_m("25.5"), Some(25.5));
+        assert_eq!(parse_len_m("25 m"), Some(25.0));
+        assert_eq!(parse_len_m("25 meters"), Some(25.0));
+        // 英制/其它单位要换算，不能把数字直接当米
+        assert_eq!(parse_len_m("82 ft"), Some(24.9936));
+        assert_eq!(parse_len_m("82'"), Some(24.9936));
+        assert_eq!(parse_len_m("250 cm"), Some(2.5));
+        assert_eq!(parse_len_m("0.25 km"), Some(250.0));
+        assert_eq!(parse_len_m("120 in"), Some(3.048));
+        assert_eq!(parse_len_m("15 M"), Some(15.0), "单位大小写无关");
+        // 读不出来的一律 None（**绝不能是 0**：0 高的楼等于不存在）
+        assert_eq!(parse_len_m(""), None);
+        assert_eq!(parse_len_m("   "), None);
+        assert_eq!(parse_len_m("约 20 米"), None, "中文前缀不该被抠出 20");
+        assert_eq!(parse_len_m("abc"), None);
+        assert_eq!(parse_len_m("0"), None);
+        assert_eq!(parse_len_m("-3"), None);
+        assert_eq!(parse_len_m("."), None);
+    }
+
+    #[test]
+    fn height_priority_is_building_height_then_height_then_levels_then_default() {
+        // ① building:height 胜过一切
+        let p = building_height(&tags(json!({
+            "building": "yes", "building:height": "30", "height": "99", "building:levels": "100"
+        })));
+        assert_eq!((p.height_m, p.source, p.tag), (30.0, "height", "building:height"));
+
+        // ② 只有通用 height → 仍算显式高度，但 tag 记下来（数据来源要能区分）
+        let p = building_height(&tags(json!({
+            "building": "yes", "height": "18", "building:levels": "6"
+        })));
+        assert_eq!((p.height_m, p.source, p.tag), (18.0, "height", "height"));
+
+        // ③ 只有层数 → × 3m
+        let p = building_height(&tags(json!({"building": "yes", "building:levels": "7"})));
+        assert_eq!((p.height_m, p.source, p.levels), (21.0, "levels", Some(7.0)));
+
+        // ④ 什么都没有 → 默认 8m，且**来源如实标 default**（不许让前端以为是真数据）
+        let p = building_height(&tags(json!({"building": "apartments"})));
+        assert_eq!((p.height_m, p.source, p.tag), (DEFAULT_HEIGHT_M, "default", "default"));
+    }
+
+    #[test]
+    fn height_falls_through_on_garbage_values() {
+        // 高度标签是脏的 → 落到层数（而不是当成 0）
+        let p = building_height(&tags(json!({
+            "building": "yes", "height": "很高", "building:levels": "4"
+        })));
+        assert_eq!((p.height_m, p.source), (12.0, "levels"));
+        assert!(p.bad_height, "脏的高度标签要被记下来");
+
+        // 层数也是脏的 → 落到默认
+        let p = building_height(&tags(json!({
+            "building": "yes", "height": "unknown", "building:levels": "?"
+        })));
+        assert_eq!((p.height_m, p.source), (DEFAULT_HEIGHT_M, "default"));
+        assert!(p.bad_height && p.bad_levels);
+
+        // 高度是脏的、层数是好的，但层数标签本身也脏时不能把 bad_levels 丢掉
+        let p = building_height(&tags(json!({"building": "yes", "building:levels": "3.5"})));
+        assert_eq!(p.height_m, 10.5, "小数层数要能用");
+    }
+
+    #[test]
+    fn height_is_clamped_and_min_height_supported() {
+        // levels=100 → 300m，**没到**上限，是"离谱但合法"的数据，必须原样保留
+        let p = building_height(&tags(json!({"building": "yes", "building:levels": "100"})));
+        assert_eq!(p.height_m, 300.0);
+        assert!(!p.clamped);
+
+        // levels=200 → 600m > 500m 上限 → 夹住并标记
+        let p = building_height(&tags(json!({"building": "yes", "building:levels": "200"})));
+        assert_eq!(p.height_m, MAX_HEIGHT_M, "超过上限的楼高要被夹住");
+        assert!(p.clamped);
+
+        // 显式高度同样受夹
+        let p = building_height(&tags(json!({"building": "yes", "height": "900"})));
+        assert_eq!(p.height_m, MAX_HEIGHT_M);
+        assert!(p.clamped);
+
+        let p = building_height(&tags(json!({
+            "building": "yes", "height": "60", "min_height": "12"
+        })));
+        assert_eq!((p.height_m, p.min_height_m), (60.0, 12.0));
+
+        let p = building_height(&tags(json!({
+            "building": "yes", "height": "60", "building:min_level": "2"
+        })));
+        assert_eq!(p.min_height_m, 6.0, "min_level × 层高");
+
+        // 底座比楼还高是脏数据 → 夹到楼高（否则挤出体块会翻过来）
+        let p = building_height(&tags(json!({
+            "building": "yes", "height": "10", "min_height": "80"
+        })));
+        assert_eq!(p.min_height_m, 10.0);
+    }
+
+    #[test]
+    fn ring_is_closed_deduped_and_lng_lat_ordered() {
+        // OSM 的闭合 way：首尾同点 → GeoJSON 环必须**只有一份**首点，且首尾相同
+        let r = ring_of(square_geom(29.563, 106.5516).as_array().unwrap()).unwrap();
+        assert_eq!(r.len(), 5, "4 个角 + 闭合点");
+        assert_eq!(r[0], r[4], "环必须闭合");
+        assert_eq!(r[0], json!([106.5516, 29.563]), "GeoJSON 是 [lng, lat]");
+        assert_eq!(r[1], json!([106.5521, 29.563]));
+    }
+
+    #[test]
+    fn ring_rejects_broken_geometry() {
+        let bad = |v: Value| ring_of(v.as_array().unwrap()).is_none();
+        // 点太少
+        assert!(bad(json!([{"lat": 1.0, "lon": 2.0}, {"lat": 1.1, "lon": 2.1}])));
+        // 去重后不足 3 个不同点
+        assert!(bad(json!([
+            {"lat": 1.0, "lon": 2.0}, {"lat": 1.0, "lon": 2.0}, {"lat": 1.0, "lon": 2.0}
+        ])));
+        // 缺字段 / 非数字
+        assert!(bad(json!([{"lat": 1.0}, {"lat": 1.1, "lon": 2.1}, {"lat": 1.2, "lon": 2.2}])));
+        assert!(bad(json!([
+            {"lat": "1.0", "lon": 2.0}, {"lat": 1.1, "lon": 2.1}, {"lat": 1.2, "lon": 2.2}
+        ])));
+        // 越界（把地图拉飞的那种）
+        assert!(bad(json!([
+            {"lat": 91.0, "lon": 2.0}, {"lat": 1.1, "lon": 2.1}, {"lat": 1.2, "lon": 2.2}
+        ])));
+        assert!(bad(json!([
+            {"lat": 1.0, "lon": 181.0}, {"lat": 1.1, "lon": 2.1}, {"lat": 1.2, "lon": 2.2}
+        ])));
+        // 空几何
+        assert!(ring_of(&[]).is_none());
+    }
+
+    #[test]
+    fn geojson_shape_and_stats_add_up() {
+        let osm = json!({"elements": [
+            {"type": "way", "id": 1, "geometry": square_geom(29.563, 106.5516),
+             "tags": {"building": "apartments", "building:height": "30", "name": "测试楼"}},
+            {"type": "way", "id": 2, "geometry": square_geom(29.564, 106.5526),
+             "tags": {"building": "yes", "building:levels": "5"}},
+            {"type": "way", "id": 3, "geometry": square_geom(29.565, 106.5536),
+             "tags": {"building": "house"}},
+            // 关系（multipolygon）：计数但不渲染
+            {"type": "relation", "id": 9, "tags": {"building": "yes"}},
+            // 几何坏掉的 way
+            {"type": "way", "id": 4, "geometry": [{"lat": 1.0, "lon": 2.0}], "tags": {"building": "yes"}},
+            // 不是建筑的要素（不该混进来）
+            {"type": "node", "id": 5, "tags": {"amenity": "cafe"}},
+        ]});
+
+        let (fc, st) = buildings_geojson(&osm);
+        assert_eq!(fc["type"], "FeatureCollection");
+        let feats = fc["features"].as_array().unwrap();
+        assert_eq!(feats.len(), 3, "只有 3 条是能画的 way");
+        assert_eq!(st["count"], json!(3));
+
+        // 🔴 关键不变量：三档来源之和 == 画出来的栋数（分布不能自己骗自己）
+        let h = st["height_source"]["height"].as_u64().unwrap();
+        let l = st["height_source"]["levels"].as_u64().unwrap();
+        let d = st["height_source"]["default"].as_u64().unwrap();
+        assert_eq!((h, l, d), (1, 1, 1));
+        assert_eq!(h + l + d, st["count"].as_u64().unwrap());
+
+        // 细一档的标签分布同样是"可加"的
+        let t = &st["height_tag"];
+        assert_eq!(
+            t["building:height"].as_u64().unwrap()
+                + t["height"].as_u64().unwrap()
+                + t["building:levels"].as_u64().unwrap()
+                + t["default"].as_u64().unwrap(),
+            st["count"].as_u64().unwrap()
+        );
+        assert_eq!(t["building:height"], json!(1));
+        assert_eq!(t["height"], json!(0), "样本里没有通用 height 标签");
+
+        // 没画出来的必须被计数（"少画了"不能伪装成"这里没有"）
+        assert_eq!(st["skipped"]["relation"], json!(1));
+        assert_eq!(st["skipped"]["geometry"], json!(1));
+        assert_eq!(st["skipped"]["other"], json!(1));
+
+        // 换算常量随数据返回 —— 前端不该自己写 8 / 3
+        assert_eq!(st["default_height_m"], json!(DEFAULT_HEIGHT_M));
+        assert_eq!(st["levels_meters"], json!(LEVEL_METERS));
+        assert_eq!(st["max_height_m"], json!(30.0));
+        assert_eq!(st["median_height_m"], json!(15.0), "15(默认8/层数15/高度30) 的上中位数");
+
+        // 逐栋的属性：高度 + 来源 + 原始标签都要带上
+        let f0 = &feats[0]["properties"];
+        assert_eq!(f0["height"], json!(30.0));
+        assert_eq!(f0["height_src"], json!("height"));
+        assert_eq!(f0["height_tag"], json!("building:height"));
+        assert_eq!(f0["kind"], json!("apartments"));
+        assert_eq!(f0["name"], json!("测试楼"));
+        assert_eq!(f0["osm_id"], json!("way/1"));
+        assert_eq!(feats[2]["properties"]["height"], json!(DEFAULT_HEIGHT_M));
+        assert_eq!(feats[2]["properties"]["height_src"], json!("default"));
+        assert_eq!(feats[2]["properties"]["name"], Value::Null, "没名字就给 null 不是空串");
+        assert_eq!(feats[1]["properties"]["levels"], json!(5.0));
+
+        // 每条几何都是**闭合的 Polygon**
+        for f in feats {
+            assert_eq!(f["geometry"]["type"], json!("Polygon"));
+            let ring = f["geometry"]["coordinates"][0].as_array().unwrap();
+            assert!(ring.len() >= 4);
+            assert_eq!(ring[0], ring[ring.len() - 1], "环必须闭合：{f}");
+        }
+    }
+
+    #[test]
+    fn geojson_tolerates_junk_input() {
+        // 没有 elements：给空 FC + 全 0 的统计，**不 panic、也不返回 None**
+        let (fc, st) = buildings_geojson(&json!({}));
+        assert_eq!(fc["features"].as_array().unwrap().len(), 0);
+        assert_eq!(st["count"], json!(0));
+        assert_eq!(st["max_height_m"], json!(0.0));
+        assert_eq!(st["median_height_m"], json!(0.0));
+
+        // elements 不是数组
+        let (fc, _) = buildings_geojson(&json!({"elements": 5}));
+        assert_eq!(fc["features"].as_array().unwrap().len(), 0);
+
+        // 元素不是对象
+        let (fc, st) = buildings_geojson(&json!({"elements": [1, "x", null]}));
+        assert_eq!(fc["features"].as_array().unwrap().len(), 0);
+        assert_eq!(st["skipped"]["other"], json!(3));
+
+        // way 没有 tags：仍然要画出来（默认高度），不能因为没标签就丢
+        let (fc, st) = buildings_geojson(&json!({"elements": [
+            {"type": "way", "id": 7, "geometry": square_geom(29.5, 106.5)}
+        ]}));
+        assert_eq!(fc["features"].as_array().unwrap().len(), 1);
+        assert_eq!(st["height_source"]["default"], json!(1));
+        assert_eq!(fc["features"][0]["properties"]["kind"], json!("yes"));
+    }
+
+    /// 端到端形状：真缓存文件（如果本机有）也要能被解析成合法 GeoJSON。
+    /// 没有缓存就跳过断言（不联网 —— 单测绝不依赖 Overpass 可用性）。
+    #[test]
+    fn parses_real_cached_payload_if_present() {
+        let dir = PathBuf::from(
+            std::env::var("WM_OSM_DIR").unwrap_or_else(|_| {
+                format!(
+                    "{}/rikka/Dsh-SYuki/world_map/worlddata/osm",
+                    std::env::var("HOME").unwrap_or_default()
+                )
+            }),
+        );
+        let mut checked = 0;
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if !name.starts_with(BUILDINGS_KEY_PREFIX) || !name.ends_with(".json") {
+                    continue;
+                }
+                let Ok(raw) = std::fs::read_to_string(e.path()) else {
+                    continue;
+                };
+                let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+                    continue;
+                };
+                let (fc, st) = buildings_geojson(&v);
+                let n = fc["features"].as_array().unwrap().len() as u64;
+                assert_eq!(n, st["count"].as_u64().unwrap(), "{name}: count 与实际要素数不符");
+                for f in fc["features"].as_array().unwrap() {
+                    let h = f["properties"]["height"].as_f64().unwrap();
+                    assert!(h > 0.0 && h <= MAX_HEIGHT_M, "{name}: 楼高出界 {h}");
+                    let ring = f["geometry"]["coordinates"][0].as_array().unwrap();
+                    assert_eq!(ring[0], ring[ring.len() - 1], "{name}: 环未闭合");
+                }
+                checked += 1;
+            }
+        }
+        // 只是提示，不是失败：本机没有缓存是正常状态
+        eprintln!("[osm::tests] 真缓存解析检查了 {checked} 份 bldg_*.json");
     }
 }

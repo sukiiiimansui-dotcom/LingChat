@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>OSM 真 2.5D 楼房 · MapLibre fill-extrusion（真实轮廓 + 楼高）</title>
+    <style>
+      /* 语言对齐 LingChat：深色 + 冰蓝单主色 + 无边框玻璃。这一页验技术，不做皮肤。 */
+      @font-face {
+        font-family: "Maoken Assorted Sans";
+        src: url("/fonts/MaokenAssortedSans.woff2") format("woff2");
+        font-display: swap;
+      }
+      :root {
+        --accent-color: #79d9ff;
+        --glass: rgba(10, 16, 24, 0.62);
+        --warn: #ffb454;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1017; }
+      body {
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #fff;
+      }
+      #map { position: fixed; inset: 0; }
+      .p {
+        position: fixed;
+        top: calc(10px + env(safe-area-inset-top, 0px));
+        left: calc(10px + env(safe-area-inset-left, 0px));
+        right: calc(10px + env(safe-area-inset-right, 0px));
+        display: flex; flex-wrap: wrap; gap: 5px 10px;
+        padding: 8px 10px;
+        border-radius: 14px;
+        background: var(--glass);
+        backdrop-filter: blur(14px) saturate(1.2);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        font-size: 12px;
+        z-index: 20;
+      }
+      .p b { color: var(--accent-color); font-weight: 600; }
+      .p b.warn { color: var(--warn); }
+      .k { display: inline-flex; gap: 4px; align-items: baseline; }
+      .ops {
+        position: fixed;
+        left: 50%; transform: translateX(-50%);
+        bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        display: flex; gap: 6px; z-index: 20;
+      }
+      .ops button {
+        min-height: 44px; padding: 0 12px;
+        border: none; border-radius: 12px;
+        background: var(--glass); color: #fff;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        font-size: 13px; cursor: pointer;
+      }
+      .ops button.on { background: var(--accent-color); color: #06222e; font-weight: 600; }
+      #fallback {
+        position: fixed; inset: 0; display: none;
+        align-items: center; justify-content: center; padding: 24px;
+        background: #0b1017; z-index: 40; text-align: center; line-height: 1.8;
+      }
+      #fallback.on { display: flex; }
+      #note {
+        position: fixed; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+        max-width: 320px; padding: 6px 10px; border-radius: 10px;
+        background: var(--glass); font-size: 11px; line-height: 1.5; opacity: .85; z-index: 20;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+
+    <div class="p" id="panel">
+      <span class="k">引擎 <b id="m-engine">—</b></span>
+      <span class="k">楼房 <b id="m-bld">—</b></span>
+      <span class="k">高度标签 <b id="m-h">—</b></span>
+      <span class="k">层数 <b id="m-lv">—</b></span>
+      <span class="k">默认 <b id="m-def" class="warn">—</b></span>
+      <span class="k">加载 <b id="m-load">—</b></span>
+      <span class="k">FPS <b id="m-fps">—</b></span>
+      <span class="k">帧均 <b id="m-frame">—</b> ms</span>
+      <span class="k">pitch <b id="m-pitch">—</b></span>
+      <span class="k">上下文丢失 <b id="m-ctx" class="warn">0</b></span>
+      <span class="k">错误 <b id="m-err">0</b></span>
+    </div>
+
+    <div class="ops">
+      <button id="b-25d">2.5D 倾斜</button>
+      <button id="b-src">按高度来源着色</button>
+      <button id="b-place">换个地点</button>
+    </div>
+
+    <div id="note">高度来源：<b>高度标签</b>=<code>building:height</code>/<code>height</code>，
+      <b>层数</b>=<code>building:levels</code>×3m，<b>默认</b>=OSM 没写高度 → 8m（本页把它标成橙色）。</div>
+
+    <div id="fallback">
+      <div>
+        <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px">WebGL 不可用 → 已回退</div>
+        <div style="opacity: .72">没有 WebGL 时要能优雅回退（写清原因），而不是白屏。</div>
+      </div>
+    </div>
+
+    <link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css" />
+
+    <script type="module">
+      /* ⚠️ 三条实测教训（都写下来免得后人再踩，与 wsmaplibre.html 同一套）：
+         ① v6 是 ESM-only，且带 worker + 共享 chunk；在 HTML 里写**静态**
+            `import ... from "/vendor/..."` 会让 rollup 去解析该路径并**构建失败**
+            ⇒ 必须用**运行时动态 import + `@vite-ignore`**，页面放 `public/`。
+         ② 样式对象里**绝不能写 `glyphs: undefined`** → 样式校验失败 →
+            `load` 永不触发 → 没有图层、没有 FPS、面板全是"—"，而页面**零报错**。
+            （本页不用任何文字标注，所以整份样式里根本没有 glyphs 键。）
+         ③ WebGL canvas 必须 `preserveDrawingBuffer: true`，否则**无头截图拍到空白**
+            （页面其实是好的，别当成 bug）。 */
+      let maplibregl = null;
+
+      const API = "http://127.0.0.1:8791";
+      const $ = (id) => document.getElementById(id);
+      const errs = [];
+      const bumpErr = () => { $("m-err").textContent = String(errs.length); };
+      window.addEventListener("error", (e) => { errs.push(String(e.message || e)); bumpErr(); });
+
+      /* 几个真实地点：半径 400m，都有 OSM 楼房数据。渝中区是默认（也是验证用的那个） */
+      const PLACES = [
+        { name: "重庆·渝中区", lat: 29.5630, lng: 106.5516, zoom: 16.6 },
+        { name: "广州·越秀区", lat: 23.1291, lng: 113.2644, zoom: 16.6 },
+        { name: "北京·东城区", lat: 39.9150, lng: 116.4070, zoom: 16.6 },
+      ];
+      const RADIUS = 400;
+      let placeIdx = 0;
+
+      function hasWebGL() {
+        try {
+          const c = document.createElement("canvas");
+          return !!(c.getContext("webgl2") || c.getContext("webgl"));
+        } catch { return false; }
+      }
+      function showFallback(reason) {
+        $("fallback").classList.add("on");
+        window.__wsb = { ok: false, reason, errs: errs.slice(0, 5) };
+      }
+
+      void (async () => {
+        try {
+          const mod = await import(/* @vite-ignore */ "/vendor/maplibre/maplibre-gl.mjs");
+          maplibregl = mod?.default || mod;
+        } catch (e) {
+          errs.push("模块加载失败: " + e);
+          showFallback("module-load-failed");
+          return;
+        }
+        if (!maplibregl?.Map) { showFallback("module-shape-unexpected"); return; }
+        if (!hasWebGL()) { showFallback("no-webgl"); return; }
+        boot();
+      })();
+
+      function boot() {
+        const t0 = performance.now();
+        const style = {
+          version: 8,
+          name: "ws-buildings",
+          sources: {},
+          layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b1017" } }],
+          /* ⚠️ 这里**故意没有** `glyphs` 键 —— 见文件头 ② 号坑。
+             本页不需要任何文字标注（OSM 楼名要 glyphs 服务才画得出来，我们不起瓦片/字体服务）。 */
+        };
+        const map = new maplibregl.Map({
+          container: "map",
+          style,
+          center: [PLACES[0].lng, PLACES[0].lat],
+          zoom: PLACES[0].zoom,
+          pitch: 55,          // 一进来就 2.5D：挤出效果要一眼看得见
+          bearing: -20,
+          attributionControl: false,
+          dragRotate: true,
+          pitchWithRotate: true,
+          touchZoomRotate: true,
+          fadeDuration: 120,
+          preserveDrawingBuffer: true, // 见文件头 ③ 号坑
+        });
+
+        const metrics = { buildings: 0, src: { height: 0, levels: 0, default: 0 }, loadMs: null, fps: null, frameMs: null, ctxLost: 0, ctxRestored: 0, healed: 0 };
+        window.__wsb = { ok: true, map, errs, metrics, place: PLACES[0], radius: RADIUS };
+
+        map.on("error", (e) => { errs.push(String(e?.error?.message || e)); bumpErr(); });
+        $("m-engine").textContent = "maplibre " + (maplibregl.getVersion?.() || "?");
+
+        /* ── 🔴 WebGL 上下文丢失：**本机无头环境真的会丢**（2026-09-18 实测，与 P1a 的发现一致）
+           现象极隐蔽：丢失后 MapLibre 把 `map.style` 置空 → 图层全没 → 画布变空白，
+           而**页面零报错**、我们的计数器（179 栋）还挂在面板上。
+           所以这里做两件事：① 把丢失/恢复/自愈次数**暴露到指标里**（绝不装作没发生）；
+           ② 恢复时重建 source + 图层（真机切后台回来也会用到这条路）。 ── */
+        const canvas = map.getCanvas();
+        canvas.addEventListener("webglcontextlost", () => {
+          metrics.ctxLost++;
+          const el = $("m-ctx"); if (el) el.textContent = String(metrics.ctxLost);
+          errs.push(`webgl 上下文丢失（第 ${metrics.ctxLost} 次）— 本机无头软件渲染已知问题，非页面缺陷`);
+          bumpErr();
+        });
+        canvas.addEventListener("webglcontextrestored", () => {
+          metrics.ctxRestored++;
+          /* ⚠️ **恢复的那一刻样式还没就绪**：直接 addLayer 会抛
+             `Error: Style is not done loading.`（第一次就是这么失败的，实测）。
+             所以有界重试（最多 20 × 250ms = 5s）；等不到就**如实报"放弃"**，绝不假装好了。 */
+          let tries = 0;
+          const heal = () => {
+            try {
+              if (!lastFc) return; // 还没取到数据，等下次 loadBuildings 自己建
+              if (!map.isStyleLoaded()) {
+                if (++tries < 20) return void setTimeout(heal, 250);
+                errs.push("上下文恢复后自愈放弃：样式 5s 内一直没就绪");
+                bumpErr();
+                return;
+              }
+              ensureLayers(lastFc);
+              metrics.healed++;
+            } catch (e) {
+              errs.push("自愈失败: " + e);
+              bumpErr();
+            }
+          };
+          heal();
+        });
+
+        /* 高度 → 颜色：真数据用冷色、默认值用暖色（一眼看出"哪些楼是猜的"） */
+        const byHeight = ["interpolate", ["linear"], ["get", "height"], 3, "#1d3b52", 10, "#2f6d8f", 25, "#5fb0cf", 60, "#a8e2f2"];
+        const bySource = ["match", ["get", "height_src"],
+          "height", "#79d9ff", "levels", "#63a6c9", "default", "#ffb454", "#555"];
+
+        let lastFc = null; // 上下文恢复后要靠它重建图层（丢了就只剩空白画布）
+
+        /* 建/补图层。**幂等**：首次加载与「上下文恢复后自愈」走同一段，
+           所以两种路径不可能长出不一样的地图（分开写迟早漂移）。 */
+        function ensureLayers(fc) {
+          if (!map.getLayer("bg")) {
+            map.addLayer({ id: "bg", type: "background", paint: { "background-color": "#0b1017" } });
+          }
+          if (!map.getSource("bld")) {
+            map.addSource("bld", { type: "geojson", data: fc });
+          } else {
+            map.getSource("bld").setData(fc);
+          }
+          // 挤出：**高度直接用要素自己的 `height` 字段**（Rust 侧算好的米制值），
+          // 底座用 `min_height`（OSM 的 min_height / building:min_level，没有就是 0）
+          if (!map.getLayer("bld-ext")) {
+            map.addLayer({
+              id: "bld-ext",
+              type: "fill-extrusion",
+              source: "bld",
+              paint: {
+                "fill-extrusion-color": byHeight,
+                "fill-extrusion-height": ["get", "height"],
+                "fill-extrusion-base": ["get", "min_height"],
+                "fill-extrusion-opacity": 0.94,
+              },
+            });
+          }
+          // 底面描边：低 pitch 时轮廓比体块更清楚
+          if (!map.getLayer("bld-line")) {
+            map.addLayer({
+              id: "bld-line",
+              type: "line",
+              source: "bld",
+              paint: { "line-color": "rgba(121,217,255,0.35)", "line-width": 0.6 },
+            });
+          }
+          // 「按来源着色」开着时，自愈后要接着用来源色（否则悄悄变回按高度）
+          if ($("b-src").classList.contains("on")) {
+            map.setPaintProperty("bld-ext", "fill-extrusion-color", bySource);
+          }
+        }
+
+        async function loadBuildings(p) {
+          const t1 = performance.now();
+          const url = `${API}/api/buildings?lat=${p.lat}&lng=${p.lng}&r=${RADIUS}`;
+          const r = await fetch(url);
+          const body = await r.json();
+          if (!body.ok) throw new Error(body.error || "接口返回 ok=false");
+          const fc = body.geojson;
+          const st = body.stats || {};
+          const n = (fc.features || []).length;
+          lastFc = fc;
+
+          const src = st.height_source || {};
+          $("m-bld").textContent = String(n);
+          $("m-h").textContent = String(src.height ?? 0);
+          $("m-lv").textContent = String(src.levels ?? 0);
+          // 「默认」是**猜的**那部分，必须刺眼：它就是数据质量的答案
+          $("m-def").textContent = `${src.default ?? 0}（${n ? Math.round((100 * (src.default ?? 0)) / n) : 0}%）`;
+          $("m-load").textContent = `${Math.round(performance.now() - t1)} ms`;
+
+          metrics.buildings = n;
+          metrics.src = { height: src.height ?? 0, levels: src.levels ?? 0, default: src.default ?? 0 };
+          metrics.loadMs = Math.round(performance.now() - t1);
+          metrics.stats = st;
+          metrics.cached = !!body.cached;
+          metrics.at = { lat: p.lat, lng: p.lng, radius: RADIUS, name: p.name };
+
+          ensureLayers(fc);
+          window.__wsb.metrics.loaded = true;
+          window.__wsb.metrics.features = n;
+        }
+
+        map.on("load", async () => {
+          try {
+            await loadBuildings(PLACES[placeIdx]);
+          } catch (e) {
+            errs.push("buildings: " + e);
+            bumpErr();
+            // 取不到就说清楚取不到 —— **不画假楼**，也不说成"这里没有楼房"
+            $("m-bld").textContent = "取不到";
+            $("m-load").textContent = "—";
+            if (window.__wsb) window.__wsb.metrics.error = String(e);
+          }
+        });
+
+        /* ── FPS 采样（滚动 1 秒窗口，与主项目同一口径）── */
+        let last = performance.now(), frames = 0, acc = 0, win = 0;
+        function tick(now) {
+          const dt = now - last; last = now;
+          frames++; acc += dt; win += dt;
+          if (win >= 1000) {
+            const fps = Math.round((frames * 1000) / win);
+            $("m-fps").textContent = String(fps);
+            $("m-frame").textContent = (acc / frames).toFixed(1);
+            if (window.__wsb?.metrics) { window.__wsb.metrics.fps = fps; window.__wsb.metrics.frameMs = +(acc / frames).toFixed(2); }
+            frames = 0; acc = 0; win = 0;
+          }
+          $("m-pitch").textContent = String(Math.round(map.getPitch()));
+          requestAnimationFrame(tick);
+        }
+        map.once("load", () => requestAnimationFrame(tick));
+
+        /* ── 三个按钮 ── */
+        $("b-25d").onclick = (e) => {
+          const on = map.getPitch() < 5;
+          map.easeTo({ pitch: on ? 58 : 0, bearing: on ? -20 : 0, duration: 520 });
+          e.currentTarget.classList.toggle("on", on);
+        };
+        $("b-src").onclick = (e) => {
+          const on = !e.currentTarget.classList.contains("on");
+          if (map.getLayer("bld-ext")) {
+            map.setPaintProperty("bld-ext", "fill-extrusion-color", on ? bySource : byHeight);
+          }
+          e.currentTarget.classList.toggle("on", on);
+        };
+        $("b-place").onclick = async (e) => {
+          placeIdx = (placeIdx + 1) % PLACES.length;
+          const p = PLACES[placeIdx];
+          window.__wsb.place = p;
+          map.easeTo({ center: [p.lng, p.lat], zoom: p.zoom, duration: 600 });
+          try { await loadBuildings(p); } catch (err) { errs.push("buildings: " + err); bumpErr(); }
+        };
+
+        /* 自动化验证入口：**同步返回一个对象**（verify-window 的采样是 execute/sync） */
+        window.__wsb.probe = () => ({
+          ok: true,
+          engine: maplibregl.getVersion?.() || "?",
+          buildings: window.__wsb.metrics.buildings,
+          src: window.__wsb.metrics.src,
+          defaultPct: window.__wsb.metrics.buildings
+            ? Math.round((100 * window.__wsb.metrics.src.default) / window.__wsb.metrics.buildings) : null,
+          loadMs: window.__wsb.metrics.loadMs,
+          cached: window.__wsb.metrics.cached ?? null,
+          fps: window.__wsb.metrics.fps ?? null,
+          frameMs: window.__wsb.metrics.frameMs ?? null,
+          pitch: Math.round(map.getPitch()),
+          zoom: +map.getZoom().toFixed(2),
+          center: [+map.getCenter().lng.toFixed(4), +map.getCenter().lat.toFixed(4)],
+          layers: (map.getStyle()?.layers || []).map((l) => l.id),
+          // 真源里的要素数（不是我们记的计数器 —— 两者不一致就说明数据没进渲染器）
+          rendered: map.getSource("bld") ? map.querySourceFeatures("bld").length : 0,
+          maxHeight: window.__wsb.metrics.stats?.max_height_m ?? null,
+          skipped: window.__wsb.metrics.stats?.skipped ?? null,
+          // 上下文丢失/恢复/自愈次数：**本机无头环境的已知问题**，暴露出来免得被当成页面缺陷
+          ctxLost: window.__wsb.metrics.ctxLost,
+          ctxRestored: window.__wsb.metrics.ctxRestored,
+          healed: window.__wsb.metrics.healed,
+          errs: errs.slice(0, 5),
+          sinceBootMs: Math.round(performance.now() - t0),
+        });
+      }
+    </script>
+  </body>
+</html>

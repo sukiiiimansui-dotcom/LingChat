@@ -105,6 +105,13 @@ pub fn make_sketch(area_name: &str, size: i32, seed: Option<u64>, osm: Option<&O
     let dens = osm.map(|o| o.density()).unwrap_or(0.5);
     let has_water = osm.map(|o| o.has_water).unwrap_or(false);
     let has_park = osm.map(|o| o.has_park).unwrap_or(false);
+    /* ── 阶段 B（2026-09-19）：真实主朝向 → **场景级旋转** ─────────────────────
+       为什么用"场景级 `rot` 字段"而不是逐个元素转坐标：
+       草图的楼/公园/水域是**轴对齐矩形**（schema 只有 x/y/w/h），只转中心点会让
+       "街道斜着、楼还是正的" —— 比不转更难看。而场景级旋转由渲染器统一施加，
+       对所有元素（线段 + 矩形）都是**精确**的，且**不动 schema**。
+       ⚠️ 渲染器还没消费这个字段（阶段 C 做）—— 在它消费之前，本字段只是**数据就绪**。 */
+    let rot = osm.map(|o| o.orientation_deg).unwrap_or(0.0);
 
     let mut buildings: Vec<Value> = Vec::new();
     let mut roads: Vec<Value> = Vec::new();
@@ -261,6 +268,9 @@ pub fn make_sketch(area_name: &str, size: i32, seed: Option<u64>, osm: Option<&O
     json!({
         "name": area_name,
         "size": s,
+        // 场景旋转（度，绕中心）。0 = 轴对齐（与历史行为一致）。
+        // ⚠️ 这里只能是普通注释：`json!` 宏内部是表达式，Rust 不允许表达式上的 `///` 文档属性
+        "rot": rot,
         "buildings": buildings,
         "roads": roads,
         "parks": parks,
@@ -348,7 +358,46 @@ mod tests {
         assert!(with_b.orientation_deg >= 0.0 && with_b.orientation_deg <= 90.0);
         let a = make_sketch("广州市·越秀区", 28, Some(42), Some(&plain));
         let b = make_sketch("广州市·越秀区", 28, Some(42), Some(&with_b));
-        assert_eq!(a, b, "阶段 A 不该改变生成结果（改了就必须是**有意的**并更新本测试）");
+        /* 阶段 A 的契约是"逐字节相同"；阶段 B **有意**改成"**只差 `rot`**"：
+           真实主朝向要透传到输出（渲染器在阶段 C 才会消费它）。
+           所以这里把 `rot` 抹掉再比 —— 其余任何字段不同都算回归。 */
+        let strip = |v: &Value| {
+            let mut o = v.clone();
+            if let Some(m) = o.as_object_mut() {
+                m.remove("rot");
+            }
+            o
+        };
+        assert_eq!(strip(&a), strip(&b), "除了 rot，生成结果必须完全相同（阶段 B 只透传朝向）");
+        assert_eq!(a.get("rot").and_then(|v| v.as_f64()).unwrap_or(-1.0), 0.0, "没有真实数据时 rot 必须是 0");
+        assert!(
+            b.get("rot").and_then(|v| v.as_f64()).unwrap_or(-1.0) > 0.0,
+            "有真实楼体时 rot 必须透传（实测那条矩形是轴对齐的，桶中心约 2.5°）"
+        );
+    }
+
+    /// 阶段 B：真实朝向能透传到输出（旋转 35° 的楼群 ⇒ rot ≈ 35）
+    #[test]
+    fn 真实主朝向透传到输出的_rot() {
+        let t = 35f64.to_radians();
+        let (c, sn) = (t.cos(), t.sin());
+        let mut geom = Vec::new();
+        for (x, y) in [(0.0, 0.0), (0.01, 0.0), (0.01, 0.01), (0.0, 0.01), (0.0, 0.0)] {
+            geom.push(json!({"lon": 106.0 + x * c - y * sn, "lat": 29.0 + x * sn + y * c}));
+        }
+        let osm = json!({"elements":[{"type":"way","id":1,"tags":{"height":20},"geometry":geom}]});
+        let hint = OsmHint::default().with_real_buildings(&osm, 4);
+        let out = make_sketch("测试区", 20, Some(1), Some(&hint));
+        let rot = out.get("rot").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+        assert!((rot - 35.0).abs() <= 5.0, "rot 应≈35°，实际 {rot}");
+        // 轴对齐输入 ⇒ rot 接近 0（桶中心 2.5°），不应被误当成"斜的"
+        let axis = json!({"elements":[{"type":"way","id":2,"tags":{},"geometry":[
+            {"lon":106.0,"lat":29.0},{"lon":106.01,"lat":29.0},
+            {"lon":106.01,"lat":29.01},{"lon":106.0,"lat":29.01},{"lon":106.0,"lat":29.0}]}]});
+        let hint2 = OsmHint::default().with_real_buildings(&axis, 4);
+        let rot2 = make_sketch("测试区", 20, Some(1), Some(&hint2))
+            .get("rot").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+        assert!(rot2 <= 5.0, "轴对齐输入的 rot 应≤5°，实际 {rot2}");
     }
 
     #[test]

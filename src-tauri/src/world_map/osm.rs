@@ -1484,3 +1484,220 @@ mod orientation_tests {
         assert_eq!(rings[0][0], [106.1, 29.1], "必须是 [经度, 纬度]");
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 真实楼体 → 草图生成器的「相对坐标 + 高度」清单（B 方案第 2 块，自主轮次 17）
+//
+// 上一步已能从真实楼体估出**主朝向**；这一步把楼体本身整理成生成器能直接吃的形式：
+//   · 坐标**归一化到 0~1**（相对包围盒），与草图的 `size×size` 网格解耦 ——
+//     生成器乘一下 size 就能用，不必知道经纬度；
+//   · 每栋带 `height_m` 与 `src`（height / levels / default 三态留痕），
+//     让"楼高覆盖率低"这件事在**生成阶段**就可量化，而不是等画出来才发现一片 8m；
+//   · 按占地**降序**并截断（生成器只画得下前 N 栋；地标/大楼优先）。
+//
+// ⚠️ 高度 fallback 链与前端 `wsBuildingHint.ts` 同口径：height → levels×3 → 默认 8m。
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// 一栋真实楼（归一化坐标 + 高度）
+#[derive(Debug, Clone, PartialEq)]
+pub struct HintBuilding {
+    /// 占地中心的归一化坐标（0~1，左上为原点；与草图网格同向）
+    pub x: f64,
+    pub y: f64,
+    /// 占地面积的**相对值**（用于排序与"这栋大不大"的判断，非平方米）
+    pub area: f64,
+    pub height_m: f64,
+    /// "height" / "levels" / "default"
+    pub src: &'static str,
+    /// OSM 名字（地标优先用），没有就是空串
+    pub name: String,
+}
+
+/// 多边形环的面积（平面 shoelace；坐标是经纬度，只作**相对**比较）
+fn ring_area_rel(ring: &[[f64; 2]]) -> f64 {
+    let mut a = 0.0;
+    for i in 0..ring.len().saturating_sub(1) {
+        a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+    }
+    (a / 2.0).abs()
+}
+
+/// 面积质心（**不用顶点平均**：密集顶点会把中心带跑 —— 前端 wsgame 上真踩过这个坑）
+fn ring_centroid(ring: &[[f64; 2]]) -> Option<(f64, f64)> {
+    if ring.len() < 3 {
+        return None;
+    }
+    let mut a = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    for i in 0..ring.len() - 1 {
+        let (x0, y0) = (ring[i][0], ring[i][1]);
+        let (x1, y1) = (ring[i + 1][0], ring[i + 1][1]);
+        let cross = x0 * y1 - x1 * y0;
+        a += cross;
+        cx += (x0 + x1) * cross;
+        cy += (y0 + y1) * cross;
+    }
+    if a.abs() < 1e-15 {
+        // 退化（共线/面积≈0）→ 退回顶点平均，至少给个位置
+        let n = (ring.len() - 1).max(1) as f64;
+        let sx: f64 = ring[..ring.len() - 1].iter().map(|p| p[0]).sum();
+        let sy: f64 = ring[..ring.len() - 1].iter().map(|p| p[1]).sum();
+        return Some((sx / n, sy / n));
+    }
+    Some((cx / (3.0 * a), cy / (3.0 * a)))
+}
+
+/// 由 OSM 元素取"高度 + 来源"（与前端同口径）
+fn height_of(tags: &serde_json::Map<String, serde_json::Value>) -> (f64, &'static str) {
+    if let Some(h) = tags.get("height").and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok())) {
+        if h > 0.0 {
+            return (h, "height");
+        }
+    }
+    if let Some(l) = tags.get("building:levels").and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok())) {
+        if l > 0.0 {
+            return (l * 3.0, "levels");
+        }
+    }
+    (8.0, "default")
+}
+
+/// 把 Overpass 建筑整理成生成器输入：`(主朝向度, 强度, 归一化楼体清单)`
+///
+/// @param max_n 最多返回多少栋（按占地降序；生成器画不下的部分直接丢，**但调用方应把
+///              `total` 与实际返回数的差值显示出来**，别悄悄少画）
+pub fn hint_buildings(osm: &serde_json::Value, max_n: usize) -> (f64, f64, Vec<HintBuilding>, usize) {
+    let rings = building_rings(osm);
+    let (deg, strength) = dominant_orientation_deg(&rings);
+
+    // 归一化的包围盒（只由**有效环**决定；没有楼就返回空）
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for r in &rings {
+        for p in r {
+            min_x = min_x.min(p[0]);
+            max_x = max_x.max(p[0]);
+            min_y = min_y.min(p[1]);
+            max_y = max_y.max(p[1]);
+        }
+    }
+    if !min_x.is_finite() || max_x <= min_x || max_y <= min_y {
+        return (deg, strength, Vec::new(), 0);
+    }
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+
+    let els = osm.get("elements").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+    let mut out: Vec<HintBuilding> = Vec::new();
+    for el in &els {
+        let geom = match el.get("geometry").and_then(|g| g.as_array()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let mut ring: Vec<[f64; 2]> = Vec::with_capacity(geom.len());
+        for p in geom {
+            if let (Some(la), Some(lo)) = (
+                p.get("lat").and_then(|v| v.as_f64()),
+                p.get("lon").and_then(|v| v.as_f64()),
+            ) {
+                ring.push([lo, la]);
+            }
+        }
+        if ring.len() < 4 {
+            continue;
+        }
+        let Some((cx, cy)) = ring_centroid(&ring) else { continue };
+        let tags = el.get("tags").and_then(|t| t.as_object()).cloned().unwrap_or_default();
+        let (h_m, src) = height_of(&tags);
+        let name = tags.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        out.push(HintBuilding {
+            x: (cx - min_x) / w,
+            // ⚠️ y 轴翻转：纬度向上、网格向下（与前端 wsGridGeo 的约定一致；写错整张图上下颠倒）
+            y: (max_y - cy) / h,
+            area: ring_area_rel(&ring) / (w * h),
+            height_m: h_m,
+            src,
+            name,
+        });
+    }
+    let total = out.len();
+    out.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(max_n);
+    (deg, strength, out, total)
+}
+
+#[cfg(test)]
+mod hint_buildings_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn way(id: u64, lng: f64, lat: f64, side: f64, tags: serde_json::Value) -> serde_json::Value {
+        json!({"type":"way","id":id,"tags":tags,"geometry":[
+            {"lon":lng,"lat":lat},
+            {"lon":lng+side,"lat":lat},
+            {"lon":lng+side,"lat":lat+side},
+            {"lon":lng,"lat":lat+side},
+            {"lon":lng,"lat":lat}
+        ]})
+    }
+
+    #[test]
+    fn 归一化坐标落在零到一之间且_y_轴翻转正确() {
+        // 左下角那栋应在 y≈1（网格向下），右上角那栋应在 y≈0
+        let osm = json!({"elements": [
+            way(1, 106.0, 29.0, 0.001, json!({"height": 30})),
+            way(2, 106.009, 29.009, 0.001, json!({"height": 30}))
+        ]});
+        let (_, _, list, total) = hint_buildings(&osm, 10);
+        assert_eq!(total, 2);
+        assert_eq!(list.len(), 2);
+        let low_left = list.iter().find(|b| b.x < 0.5).expect("左下");
+        let up_right = list.iter().find(|b| b.x > 0.5).expect("右上");
+        assert!(low_left.y > 0.9, "左下角 y 应接近 1，实际 {}", low_left.y);
+        assert!(up_right.y < 0.1, "右上角 y 应接近 0，实际 {}", up_right.y);
+        for b in &list {
+            assert!((0.0..=1.0).contains(&b.x) && (0.0..=1.0).contains(&b.y), "越界: {:?}", b);
+        }
+    }
+
+    #[test]
+    fn 高度三态留痕() {
+        let osm = json!({"elements": [
+            way(1, 106.0, 29.0, 0.001, json!({"height": 120, "name": "高塔"})),
+            way(2, 106.002, 29.0, 0.001, json!({"building:levels": 10})),
+            way(3, 106.004, 29.0, 0.001, json!({}))
+        ]});
+        let (_, _, list, _) = hint_buildings(&osm, 10);
+        let by = |n: &str| list.iter().find(|b| b.name == n).cloned();
+        assert_eq!(by("高塔").unwrap().height_m, 120.0);
+        assert_eq!(by("高塔").unwrap().src, "height");
+        assert_eq!(list.iter().find(|b| b.src == "levels").unwrap().height_m, 30.0);
+        assert_eq!(list.iter().find(|b| b.src == "default").unwrap().height_m, 8.0);
+    }
+
+    #[test]
+    fn 按占地降序并截断但_total_如实() {
+        let osm = json!({"elements": [
+            way(1, 106.000, 29.000, 0.001, json!({})),
+            way(2, 106.005, 29.005, 0.004, json!({})),   // 更大
+            way(3, 106.002, 29.002, 0.002, json!({}))
+        ]});
+        let (_, _, list, total) = hint_buildings(&osm, 2);
+        assert_eq!(total, 3, "total 必须是真实总数（别让调用方以为只有 2 栋）");
+        assert_eq!(list.len(), 2, "截断到 max_n");
+        assert!(list[0].area >= list[1].area, "必须按占地降序");
+    }
+
+    #[test]
+    fn 空与退化输入不炸() {
+        assert_eq!(hint_buildings(&json!({}), 5).3, 0);
+        assert_eq!(hint_buildings(&json!({"elements":[]}), 5).3, 0);
+        // 只有 3 个点（不闭合、不成面）→ 丢
+        let bad = json!({"elements":[{"type":"way","id":9,"geometry":[
+            {"lon":106.0,"lat":29.0},{"lon":106.1,"lat":29.0},{"lon":106.1,"lat":29.1}]}]});
+        assert_eq!(hint_buildings(&bad, 5).3, 0);
+    }
+}

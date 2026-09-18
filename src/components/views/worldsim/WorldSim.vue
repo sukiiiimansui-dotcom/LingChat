@@ -752,7 +752,16 @@
    * 数据走 `worldMapApi.weather()`（真壳 `world_map_weather` / 浏览器 `/api/weather`），
    * **拿不到就是"天气不可用"**（角标明说 + 无粒子），不编一个晴天出来。
    * 判定/强度/粒子全在 `wsWeather.ts`（纯函数），这里只做挂载。 */
-  const wx = useWorldWeather();
+  /* 天气要**跟着定位城市**：`areaLabel` 形如「中国·重庆市·500100」，
+     取最后一段**不是裸 adcode** 的名字（裸 adcode 给 wttr.in 查不到东西）。 */
+  const wxCity = computed(() => {
+    const parts = String(areaLabel.value || "")
+      .split(/[·・>]/)
+      .map((x) => x.trim())
+      .filter((x) => x && !/^\d+$/.test(x) && x !== "中国");
+    return parts.length ? parts[parts.length - 1]! : "";
+  });
+  const wx = useWorldWeather({ city: () => wxCity.value });
   const { state: wxState } = wx;
 
   /* ══ P2：地图上的「人」+ 面板 ══════════════════════════════════════════════

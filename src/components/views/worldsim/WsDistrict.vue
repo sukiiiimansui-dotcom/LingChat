@@ -40,18 +40,6 @@
             :sub="t('worldsim.loader.sketch.sub')"
           />
           <img v-else :src="sketchUrl" :alt="`${area} 小区草图`" />
-          <!-- 草图通常 <1s 就回来了：靠 WsLoading 的 180ms 延迟兜住 ——
-               快到看不见的时候**一个转圈都不该闪**（那比不显示更糟）。 -->
-          <WsLoading
-            v-else-if="sketchLoading"
-            variant="map"
-            :text="t('worldsim.loader.sketch.text')"
-            :sub="t('worldsim.loader.sketch.sub')"
-          />
-          <div v-else class="ws-dist__fail">
-            <div class="ws-note ws-note--err">草图没画出来：{{ sketchError || "未知原因" }}</div>
-            <button class="ws-btn" type="button" @click="loadSketch(true)">重试草图</button>
-          </div>
         </div>
 
         <!-- ② AI 精绘层（流式增量；第一条要素到了就淡入接管）

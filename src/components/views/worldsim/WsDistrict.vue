@@ -31,8 +31,10 @@
              所以关掉它不影响它们的数据；但没有底图时它们会"浮在空处"，
              因此 `#pin` 插槽也一并隐藏（等 MapLibre 底图上来再一起显示）。 -->
         <div class="ws-neigh__layer" :class="{ 'is-out': aiVisible }">
+          <!-- 🆕 机主 2026-09-19：「后面用**地图库直接使用**」→ 小区级改由 MapLibre 渲染 -->
+          <WsDistrictMapLibre v-if="USE_MAPLIBRE" :area="area" :radius="600" :pitch="55" />
           <WsLoading
-            v-if="!sketchUrl"
+            v-else-if="!sketchUrl"
             variant="map"
             :text="t('worldsim.loader.sketch.text')"
             :sub="t('worldsim.loader.sketch.sub')"
@@ -177,6 +179,7 @@
   import { decideUpgrade } from "./wsSketchUpgrade";
   import worldMapApi from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
+  import WsDistrictMapLibre from "./WsDistrictMapLibre.vue";
   import {
     districtRenderSvg,
     startDistrictStream,
@@ -344,6 +347,9 @@
   }
 
   /* ── 草图（秒出）────────────────────────────────────────────────────────── */
+  /** 🆕 小区级改用 MapLibre 渲染（机主：「后面用地图库直接使用」）。关掉它就回到"加载动画"。 */
+  const USE_MAPLIBRE = true;
+
   /** 🔴 机主 2026-09-19：草图阶段异常卡顿 → **暂不生成草图**（改用加载动画）。
    *  桌面/调试想看老草图时把这里改成 `true`（或临时删掉这个早退）。 */
   const SKETCH_DISABLED = true;

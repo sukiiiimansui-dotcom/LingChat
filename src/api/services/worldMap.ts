@@ -175,6 +175,66 @@ export interface TransportPlan {
   route: Record<string, unknown>;
   options: Record<string, unknown>[];
   modes: Record<string, unknown>[];
+  /**
+   * T2-2 step2：这次算路用的是哪份站点表（**没有这个字段 = 走的还是几何估计的虚拟站点**）。
+   * 前端拿它做两件事：把「我上车的那个站」画出来；以及在界面上如实说明站点来自哪。
+   */
+  stations?: TransportStations;
+}
+
+/** 站点吸附上下文（`transportPlan` 的第 4 个参数；全部可选，给得越多越可能与地图同源） */
+export interface TransitPlanCtx {
+  /** 区域名「广州市·越秀区」——与地图图层用同一个值才可能同源 */
+  area?: string;
+  /** 网格边长（前端传 `WS_GRID` = 28） */
+  size?: number;
+  /** 稳定种子（前端传 `hash32(area)`） */
+  seed?: number;
+  /** 交通设施层级 community/district/city */
+  level?: string;
+  /** 地图库布局 key（有 AI 精绘布局时最准） */
+  key?: string;
+  /** 网格**原点**（格 (0,0)）的经纬度 —— 一般不用给，给 `center*` 更直观 */
+  anchorLng?: number;
+  anchorLat?: number;
+  /** 网格**中心**的经纬度（「我人在哪」就是这个）→ 后端退半张图换算成原点 */
+  centerLng?: number;
+  centerLat?: number;
+  /** `false` = 显式关掉站点吸附（退回旧行为） */
+  stations?: boolean;
+}
+
+/** 站点吸附的实况（后端 `stations` 字段） */
+export interface TransportStations {
+  /** `explicit-anchor` / `maplib` / `layout` / `sketch` / `sketch-centered` … */
+  source?: string;
+  area?: string;
+  level?: string;
+  grid?: number;
+  cell_meters?: number;
+  /** `false` = 没有锚点，**节点没有经纬度**（别拿格点当经纬度用） */
+  geo?: boolean;
+  anchor?: { lng: number; lat: number } | null;
+  center?: { lng: number; lat: number } | null;
+  count?: number;
+  nodes?: TransitNode[];
+}
+
+/** HTTP 通路的查询串（Tauri 那条用驼峰形参，不走这里） */
+function transitCtxQuery(ctx?: TransitPlanCtx): Record<string, string | number | undefined> {
+  if (!ctx) return {};
+  return {
+    area: ctx.area,
+    size: ctx.size,
+    seed: ctx.seed,
+    level: ctx.level,
+    key: ctx.key,
+    anchor_lng: ctx.anchorLng,
+    anchor_lat: ctx.anchorLat,
+    center_lng: ctx.centerLng,
+    center_lat: ctx.centerLat,
+    stations: ctx.stations === undefined ? undefined : ctx.stations ? 1 : 0,
+  };
 }
 
 // ── 接口（HTTP 版）──
@@ -197,7 +257,8 @@ const http = {
   transportPlan: (
     a: { lat: number; lng: number },
     b: { lat: number; lng: number },
-    prefer?: string
+    prefer?: string,
+    ctx?: TransitPlanCtx
   ) =>
     httpGet<TransportPlan>("/api/transport_plan", {
       from_lat: a.lat,
@@ -205,6 +266,8 @@ const http = {
       to_lat: b.lat,
       to_lng: b.lng,
       prefer,
+      // T2-2 step2：站点上下文（不传 = 与改造前逐字节一致，仍走几何估计的虚拟站点）
+      ...transitCtxQuery(ctx),
     }),
   mapImg: (ad: string, style = "gaode") => `${API_BASE}/api/map?ad=${ad}&style=${style}`,
   bigmapImg: (ad: string, style = "gaode", scale = 1) =>
@@ -365,14 +428,38 @@ export const worldMapApi = {
           facilities: facilities && facilities.length ? facilities : undefined,
         })
       : http.schedule(now, area),
+  /**
+   * 两点之间的交通方案。**T2-2 step2 起第 4 个参数可以给站点上下文**：
+   * 给了就把「上下车点」吸附到地图上那些真实站点（公交站/地铁站/停车场…），
+   * 不给就还是几何估计的虚拟站点（旧行为，逐字节不变）。
+   *
+   * 与地图上的图标**逐一对应**的关键：`area`/`size`/`seed`/`level` 四个值要和
+   * `WsTransitLayer` / `WsFacilityLayer` 取设施时用的一模一样
+   * （前端惯例：`area` = 区域名、`size` = `WS_GRID`、`seed` = `hash32(area)`）。
+   * 只给坐标不给这四个值时后端会自动建一份"以起点为中心"的草图 ——
+   * 位置仍落在合理街区上，但**未必与你地图上画的那枚图标重合**（响应里 `stations.source` 如实写着）。
+   */
   transportPlan: async (
     a: { lat: number; lng: number },
     b: { lat: number; lng: number },
-    prefer?: string
+    prefer?: string,
+    ctx?: TransitPlanCtx
   ): Promise<TransportPlan> => {
     if (isTauriRuntime())
-      return invoke<TransportPlan>("world_map_transport_plan", { from: a, to: b, prefer });
-    return http.transportPlan(a, b, prefer);
+      return invoke<TransportPlan>("world_map_transport_plan", {
+        from: a,
+        to: b,
+        prefer,
+        ...(ctx || {}),
+        // Tauri 侧形参是 snake_case → JS 必须写驼峰（`anchor_lng` → `anchorLng`）
+        anchorLng: ctx?.anchorLng,
+        anchorLat: ctx?.anchorLat,
+        centerLng: ctx?.centerLng,
+        centerLat: ctx?.centerLat,
+        // 显式给 `stations: false` 才是关（不传 = 后端默认开）
+        stations: ctx?.stations,
+      });
+    return http.transportPlan(a, b, prefer, ctx);
   },
   // 下面三个是**死代码**（全仓 grep 无调用方，仅为兼容保留）：
   // mapImg → `/api/map`、bigmapImg → `/api/bigmap_img` 都是 Python 侧车（8790）时代的路由，
@@ -1622,5 +1709,118 @@ function assertFacPayload(r: unknown): FacPayload {
   if (d.ok === false) throw new Error("设施接口返回 ok=false");
   if (!Array.isArray(d.facilities)) throw new Error("设施接口没有返回 facilities 数组");
   if (!Array.isArray(d.transport)) throw new Error("设施接口没有返回 transport 数组");
+  return d;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// T2-2 · 交通设施（7 类：公交站/地铁/停车场/加油站/火车站/机场/码头）
+// ═══════════════════════════════════════════════════════════════════
+//
+// 与 T2-1 的设施图层是**同一批数据**（`facilities.rs` 的 `generate_all().transport`），
+// 这里单独开一条通路，是因为交通设施多两样前端要用的东西：
+//   · 每个站点带 **lng/lat**（用锚点换算，公式与规划器 `transport_in_grid` 逐字一致）
+//     → 前端能把「我上车的那个站」画在地图上，且与规划器认为的位置**逐位相同**；
+//   · **三级对比**（社区 8 / 区县 13 / 城市 23，种类也不同）—— 卡片要求"能看出差别"，
+//     数量与种类由后端按 `LEVEL_PLAN` 算好，前端**不写第二份**（两份必然漂移）。
+//
+// ⚠️ 坐标：`gx/gy` 是小区图**格点**（图层用这个画）；`lng/lat` 只在给了锚点时才有
+//    （`geo === false` 时**一个经纬度字段都没有** —— 这是如实标注，不是缺字段）。
+//
+// 真壳命令：`world_map_transport_nodes`（src-tauri/src/world_map/mod.rs）
+// 浏览器路由：`/api/transport_nodes`（world_map_rs/src/main.rs，同形）
+
+/** 一个交通站点：设施点 + 可选经纬度 */
+export interface TransitNode extends FacPoint {
+  /** 只在 `geo === true` 时存在 */
+  lng?: number;
+  lat?: number;
+}
+
+/** 某个层级下的交通配置（数量 + 种类） */
+export interface TransitLevelRow {
+  /** community | district | city */
+  level: string;
+  /** 小区 / 区县 / 城市 */
+  zh: string;
+  count: number;
+  /** 这一级会出现哪些类型（后端按 LEVEL_PLAN 算的） */
+  kinds: string[];
+}
+
+/** `/api/transport_nodes`（= `world_map_transport_nodes`）的返回 */
+export interface TransitNodesPayload {
+  ok?: boolean;
+  error?: string;
+  area?: string;
+  level?: string;
+  grid?: number;
+  cell_meters?: number;
+  /** **布局**来源：maplib / layout / sketch … */
+  source?: string;
+  /** **锚点**来源：explicit-anchor / center / maplib-meta / trip-origin / none（与布局来源是两件事） */
+  anchor_source?: string;
+  /** 有没有经纬度（false = 没给锚点，只有格点坐标） */
+  geo?: boolean;
+  anchor?: { lng: number; lat: number } | null;
+  center?: { lng: number; lat: number } | null;
+  count?: number;
+  nodes?: TransitNode[];
+  /** 14 类元数据（含 7 类交通的图标/配色） */
+  types?: FacTypesPayload;
+  /** 三级对比（`all_levels=0` 时不返回） */
+  levels?: TransitLevelRow[];
+}
+
+/** 取交通站点的参数 */
+export interface TransitQuery {
+  area?: string;
+  /** 网格边长（前端传 `WS_GRID`） */
+  size?: number;
+  /** 稳定种子：传 `hash32(area)` 就与 T2-1 图层、与算路吸附**三方同源** */
+  seed?: number;
+  level?: string;
+  key?: string;
+  anchorLng?: number;
+  anchorLat?: number;
+  centerLng?: number;
+  centerLat?: number;
+  /** `false` = 不要三级对比 */
+  allLevels?: boolean;
+}
+
+/**
+ * 取交通站点。真壳 invoke，浏览器 HTTP。失败一律 throw
+ * （调用方显示「取不到 + 原因」，**不静默返回空数组** —— 空数组在界面上等于"这里没有车站"）。
+ */
+export async function transportNodesAuto(q: TransitQuery = {}): Promise<TransitNodesPayload> {
+  const r = isTauriRuntime()
+    ? await invoke<TransitNodesPayload>("world_map_transport_nodes", {
+        area: q.area,
+        size: q.size,
+        seed: q.seed,
+        level: q.level,
+        key: q.key,
+        anchorLng: q.anchorLng,
+        anchorLat: q.anchorLat,
+        centerLng: q.centerLng,
+        centerLat: q.centerLat,
+        allLevels: q.allLevels,
+      })
+    : await httpGet<TransitNodesPayload>("/api/transport_nodes", {
+        area: q.area,
+        size: q.size,
+        seed: q.seed,
+        level: q.level,
+        key: q.key,
+        anchor_lng: q.anchorLng,
+        anchor_lat: q.anchorLat,
+        center_lng: q.centerLng,
+        center_lat: q.centerLat,
+        all_levels: q.allLevels === undefined ? undefined : q.allLevels ? 1 : 0,
+      });
+  const d = r as TransitNodesPayload | null;
+  if (!d || typeof d !== "object") throw new Error("交通站点接口没有返回对象");
+  if (d.ok === false) throw new Error(d.error || "交通站点接口返回 ok=false");
+  if (!Array.isArray(d.nodes)) throw new Error("交通站点接口没有返回 nodes 数组");
   return d;
 }

@@ -88,6 +88,15 @@
            这一条只在真的被压到低档时出现（软渲染/降级路），见 `fallback2d()`。 -->
       <span v-if="stats.perf" class="is-warn">{{ stats.perf }}</span>
       <span v-if="stats.note" class="is-warn">{{ stats.note }}</span>
+      <!-- 🔴 2026-09-20 机主拍板「**两条都要**：有真数据用真的，真数据不够时自动叠示意层 + 标注」。
+           这句话就是这条 HUD 的**验收标准**，所以它必须同时说清三件事：
+             ① **真楼几栋**（N 是真数出来的，不是估的）；
+             ② **为什么亮示意层**（"稀疏" = N 低于阈值，而不是"我们爱看"）；
+             ③ **哪部分不是真的**（"非事实"三个字不许省）。
+           节奏上是"真数据优先"：N ≥ 阈值时这一条**根本不出现**（示意层同时被摘掉，见 `syncAiLayers`）。 -->
+      <span v-if="aiOn" class="is-ai">
+        真楼 {{ stats.count }} 栋（稀疏）· {{ aiDrawn > 0 ? "已叠加 AI 示意层（非事实）" : "AI 示意层待生成" }}
+      </span>
     </div>
   </div>
 </template>
@@ -101,7 +110,7 @@
      为什么这个组件也要拿它：**降级决定发生在这里** —— 只有这里知道"最后到底走了哪条渲染路"，
      而档位必须跟着那条路走（见 `fallback2d()` 里 `perf.forceLow()` 那段）。 */
   import { useWsPerf } from "./wsPerf";
-  import { aiFeatureCollection, type AiItem } from "./wsAiLayers";
+  import { aiFeatureCollection, aiFeatures, boxAround as aiBoxAround, type AiItem, type BBox } from "./wsAiLayers";
   /* 「楼多高、什么颜色」的纯逻辑（`wsBuildingLook.ts`，独立文件 ⇒ 可单测、不跟渲染纠缠）。
      2026-09-19 机主：「这个 ai 2d 小区好丑，直接试一下 3d 路线我看看效果」——
      这一刀就是"3D 路线"的美术部分：真轮廓 + 有起伏的高度 + 有层次的光照。 */
@@ -168,10 +177,23 @@
        * **默认关**（2026-09-19）。理由见 `syncAiLayers()` 的说明：AI 图元用的是
        * "草图网格 → 整区 bbox"的示意映射，一栋"楼"在地图上几百米宽，是**薄饼不是楼**，
        * 叠在真楼房旁边只会把画面弄脏。等 AI 图元带上真实经纬度（或走独立的示意模式）再默认开。
+       *
+       * 🆕 2026-09-20：它现在是**强制开**的开关（`aiAuto` 负责"自动"那半边）。
+       * 想"无论如何都别画示意层"就传 `:ai-auto="false"`（见下）。
        */
       showAi?: boolean;
+      /**
+       * 真数据稀疏时**自动**叠示意层（默认开）。
+       *
+       * 机主 2026-09-20 的原话就是验收标准：「**有真数据用真的，真数据不够时自动叠示意层 + 标注**」。
+       * 所以这里不是"显示开关"，是**数据稀疏的兜底**：
+       *   · 真楼 ≥ `BLD_SPARSE`（40 栋）⇒ 只用真楼，示意层**摘掉**；
+       *   · 真楼 < 40（含"一栋都没有"）⇒ 自动叠上，并在 HUD 如实写明"非事实"。
+       * 显式传 `false` 可关掉这个自动行为（那时只有 `showAi=true` 才画）。
+       */
+      aiAuto?: boolean;
     }>(),
-    { area: "", radius: 600, pitch: 55, markers: () => [], grid: 28, aiItems: () => [], showAi: false }
+    { area: "", radius: 600, pitch: 55, markers: () => [], grid: 28, aiItems: () => [], showAi: false, aiAuto: true }
   );
 
   const host = ref<HTMLElement | null>(null);
@@ -198,6 +220,45 @@
   let mlMod: any = null;
   /** 上一次取楼的"中心+半径"缓存键（相同就不重复请求） */
   let lastBldKey = "";
+
+  /* ── 「真数据优先，空了亮示意」——机主 2026-09-20 拍板的两条路 ─────────────────
+     背景（都是实测数）：OSM 在中国的楼房覆盖**极不均**。同一个后端：
+       渝中区驻地 400m → **152 栋**（成片）；涪陵区驻地 400m → **0 栋**、600m → 3、1400m → 29。
+     这不是渲染问题，是**数据问题** —— 所以机主在涪陵看到的"零星几栋"再多调渲染也没用。
+     ⇒ 两条路一起走：
+        ① 真数据够（≥ `BLD_SPARSE`）⇒ **只用真楼**，示意层根本不出现；
+        ② 真数据稀疏 / 为空 ⇒ 自动叠 AI 示意层，**并在 HUD 写明"非事实"**。
+     为什么阈值取 40：一屏想看到"成片"，至少得有这么几栋；而实测的稀疏区（涪陵）连 2000m
+     都只有 29 栋 —— 40 这条线正好把"渝中那种成片"和"涪陵那种零星"分开，不误伤密集区。 */
+  const BLD_SPARSE = 40;
+
+  /**
+   * 示意街区铺多大（米，正方形边长）。
+   *
+   * 🔴 这个数**必须**是"小区尺度"，不能拿整个区县的 bbox 当画布 ——
+   * 涪陵区 bbox 实测 **74.9km × 70.9km**，28 格草图铺上去 ⇒ **一格 = 2.7km**，
+   * 一栋"楼"有 2.7 公里宽、十几米高，是一张**薄饼**，叠在真楼旁边只能把画面搞脏。
+   * 这正是机主说的"这个 ai 2d 小区好丑"，也是 `showAi` 当初被默认关掉的原因。
+   *
+   * 铺 700m 时一格 ≈ 25m —— 和真实楼栋同一个量级，才**像楼**，也才真的"成片"。
+   * 示意就是示意：位置是编的（见 `syncAiLayers` 的标注），但**尺度不能是错的**。
+   */
+  const AI_SPAN_M = 700;
+
+  /** 已经画到地图上的 AI 示意图元数（HUD 要如实报；0 = 没画，不能说"已叠加"） */
+  const aiDrawn = ref(0);
+  /** 示意街区铺在哪（一个"小区尺度"的正方形，可以跟真楼的 bbox 不是同一块） */
+  const aiBboxRef = ref<BBox | null>(null);
+
+  /**
+   * 现在到底该不该画示意层。
+   *
+   * **唯一真源**：`stats.count`（= 上一次真的取回来的真楼栋数，`classify`/`dressBld` 里写的）
+   * —— 不另开一个计数器，否则"HUD 说的"和"画的"迟早漂移。
+   * 这样它天然满足"真数据优先"：真楼一到 40 栋，`aiOn` 自己变 false，
+   * 下面的 watcher 会把已经画上去的图层**摘掉**（不是留着不管）。
+   */
+  const aiOn = computed(() => props.showAi || (props.aiAuto && stats.count < BLD_SPARSE));
 
   const stats = reactive({
     mode: "初始化…",
@@ -424,6 +485,12 @@
   }
 
   /**
+   * 以某点为**中心**、边长 `m` 米的正方形 bbox —— 给"示意街区"当画布。
+   * 实现搬到了 `wsAiLayers.boxAround`（**纯函数**才能进 Node 自检；写在 .vue 里就跑不了单测）。
+   */
+  const boxAround = (lng: number, lat: number, m: number): BBox => aiBoxAround(lng, lat, m);
+
+  /**
    * 楼高来源分类（与 Rust/前端别处的口径一致：height → levels×3 → **按 OSM 类型估**）。
    *
    * ⚠️ 三档必须分得开（`DESIGN-3D-MODES.md` §八 的红线）：
@@ -495,13 +562,25 @@
     ctx.fillStyle = "#101820";
     ctx.fillRect(0, 0, w, h);
     const feats = fc?.features || [];
-    if (!feats.length) {
+    /* 🆕 2026-09-20：**降级路也要能"看到城市"**。
+       以前这里只画真楼 ⇒ 涪陵（真楼 0~29 栋）在低端机上就是一片空 + 一行
+       「这一带没有楼房数据」，和机主要的"成片"完全相反。
+       现在把同一份示意图元也画进来（同一条 `aiOn` 判据：真数据够就不画）。
+       ⚠️ 位置仍然是示意（线性映射），所以这一层用**暖色**画，和真楼的冰蓝分得开。 */
+    const aiFc = aiOn.value && aiBboxRef.value ? aiFeatures(props.aiItems || [], aiBboxRef.value, props.grid || 28) : [];
+    const aiPolys: Array<{ pts: number[][]; kind: string }> = [];
+    for (const f of aiFc) {
+      if (f.geometry.type !== "Polygon") continue;
+      const ring = f.geometry.coordinates[0];
+      if (ring?.length) aiPolys.push({ pts: ring as number[][], kind: String(f.properties.kind) });
+    }
+    if (!feats.length && !aiPolys.length) {
       ctx.fillStyle = "rgba(255,255,255,.7)";
       ctx.font = "12px system-ui";
       ctx.fillText("这一带没有楼房数据", 12, 22);
       return;
     }
-    // 包围盒
+    // 包围盒（真楼 + 示意图元一起算，否则示意层会被算到画布外）
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const rings: Array<{ pts: number[][]; col: string }> = [];
     for (const f of feats) {
@@ -522,6 +601,12 @@
         }
       }
     }
+    for (const a of aiPolys) {
+      for (const p of a.pts) {
+        minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+        minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
+      }
+    }
     if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return;
     const pad = 10;
     const k = Math.min((w - 2 * pad) / (maxX - minX), (h - 2 * pad) / (maxY - minY));
@@ -537,6 +622,32 @@
       ctx.fill();
       ctx.strokeStyle = "rgba(255,255,255,.28)";
       ctx.lineWidth = 0.7;
+      ctx.stroke();
+    }
+    /* 示意层（暖色，和真楼的冰蓝分得开）。俯视图里没有"高度"，
+       所以给每栋楼往右下**偏移一小块**当投影 —— 一眼能看出这是"有体量的楼"，
+       而不是一块平贴的色块（机主要的"成片楼房"在 2D 降级路上也要成立）。 */
+    for (const a of aiPolys) {
+      const hex = a.kind === "park" ? "#7ec882" : a.kind === "water" ? "#5a96d2" : "#d9a06b";
+      ctx.beginPath();
+      a.pts.forEach((p, i) => (i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1]))));
+      ctx.closePath();
+      if (a.kind === "park" || a.kind === "water") {
+        ctx.fillStyle = a.kind === "park" ? "rgba(126,200,130,.42)" : "rgba(90,150,210,.42)";
+        ctx.fill();
+        continue;
+      }
+      /* 投影：往右下挪 6% 的楼宽，紫黑半透明 */
+      const dx = Math.max(1.5, (Math.max(...a.pts.map((p) => p[0])) - Math.min(...a.pts.map((p) => p[0]))) * k * 0.12);
+      ctx.save();
+      ctx.translate(dx, dx * 0.7);
+      ctx.fillStyle = "rgba(40,20,0,.45)";
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = hex;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,226,170,.6)";
+      ctx.lineWidth = 0.6;
       ctx.stroke();
     }
   }
@@ -854,26 +965,61 @@
   /**
    * 把 AI 的产出同步到地图上（楼 → 挤出、路 → 线、公园/水系 → 面）。
    *
-   * 🔴 2026-09-19：**默认整层关掉**（`props.showAi` 默认 false）。
-   * 为什么（不是审美问题，是**尺度错**）：
-   * `aiFeatureCollection()` 把 28×28 的草图网格铺到**整个区县的 bbox** 上
-   * （渝中区 ≈ 10.7km 宽）⇒ 一个 1 格宽的"楼"在地图上**有 380 米宽、12 米高**，
-   * 是一张**薄饼**，不是楼。它压在真楼房旁边，只能把画面搞脏 ——
-   * 机主说的"这个 ai 2d 小区好丑"，这一层是主犯。
-   * 要让它好看，得先让 AI 的图元带**真实经纬度**（那是"角色/图元落库"那张卡），
-   * 或者给它一条独立的"示意模式"（见 `world_map/DESIGN-3D-MODES.md` ③）。
-   * 在那之前：**默认不画**，代码留着（`showAi` 传 true 即可复现）。
+   * ## 什么时候画（机主 2026-09-20 定）
+   * 由 `aiOn` 决定 —— **真数据优先**：真楼 ≥ 40 栋就整层摘掉，稀疏（含 0 栋）才画。
+   * 所以这个函数是**双向**的：开的时候建图层，关的时候**必须把图层删掉**。
+   * （以前这里只在 `!props.showAi` 时 `return` ⇒ 先开过后关会留下一层摘不掉的暖色楼。
+   *  假数据留在画面上不发声明，比不画更坏。）
+   *
+   * ## 铺在哪（重要）
+   * 用 `aiBboxRef`（**小区尺度的正方形**，边长 `AI_SPAN_M`），**不是**区县 bbox。
+   * 原因见 `AI_SPAN_M` 的注释：涪陵区 bbox 有 75km 宽，28 格铺上去一格就 2.7km，
+   * 那是薄饼不是楼。铺在驻地的 700m 方块里，一格 ≈ 25m，才和真楼同一个量级。
+   *
+   * ## 尺度是编的、位置也是编的 —— 所以 HUD 必须标"非事实"
+   * 颜色口径照旧：真楼冰蓝 / 示意暖色（`#d9a06b`），两条路一眼分得开。
    */
+  function removeAiLayers(m: {
+    getLayer(id: string): unknown;
+    removeLayer(id: string): void;
+    getSource(id: string): unknown;
+    removeSource(id: string): void;
+  }): void {
+    /* 顺序不能反：**先删图层再删源**（源还被图层引用时删不掉，且会抛错） */
+    for (const id of ["ai-road", "ai-bld", "ai-area"]) {
+      try {
+        if (m.getLayer(id)) m.removeLayer(id);
+      } catch {
+        /* 已经没了 */
+      }
+    }
+    try {
+      if (m.getSource("ai")) m.removeSource("ai");
+    } catch {
+      /* 已经没了 */
+    }
+    aiDrawn.value = 0;
+  }
+
   function syncAiLayers(): void {
-    if (!props.showAi) return;
     const m = map as unknown as {
       getSource(id: string): { setData(d: unknown): void } | undefined;
       addSource(id: string, spec: Record<string, unknown>): void;
       addLayer(spec: Record<string, unknown>, beforeId?: string): void;
       getLayer(id: string): unknown;
+      removeLayer(id: string): void;
+      removeSource(id: string): void;
     } | null;
     if (!m || !bboxRef.value) return;
-    const fc = aiFeatureCollection(props.aiItems || [], bboxRef.value, props.grid || 28);
+    /* 真数据够了 ⇒ 把示意层摘干净（"真数据优先"的落地动作） */
+    if (!aiOn.value) {
+      removeAiLayers(m);
+      return;
+    }
+    const bbox = aiBboxRef.value || bboxRef.value;
+    const fc = aiFeatureCollection(props.aiItems || [], bbox, props.grid || 28);
+    /* 如实记账：AI 还没吐出东西时 `aiDrawn` 就是 0，HUD 那句会写"待生成"而不是"已叠加" */
+    aiDrawn.value = fc.features.length;
     if (!fc.features.length) return;
     const src = m.getSource("ai");
     if (src) {
@@ -917,6 +1063,14 @@
     () => props.aiItems,
     () => syncAiLayers()
   );
+
+  /**
+   * 真楼数变了 ⇒ `aiOn` 可能翻转 ⇒ 自动叠上 / 摘掉示意层。
+   *
+   * 这条 watcher 是整刀的**因果**所在：示意层不是"用户打开的开关"，
+   * 而是"真数据稀疏"这个**被动发现的事实**的结果 —— 谁也别去手动同步它。
+   */
+  watch(aiOn, () => syncAiLayers());
 
   function syncPins(): void {
     const m = map;
@@ -1381,6 +1535,20 @@
       /* 注意：这里**不要**写 stats.note —— 下面"空结果"那段已经会写同一句，
          两处都写 HUD 里就会出现「… · …」重复（本轮实测就重复了）。 */
 
+      /* 🆕 示意街区的画布：**小区尺度的正方形**，铺在驻地（有人住的地方）。
+         为什么不用 `districtBbox`：那是整个区县（涪陵 75km 宽）——
+         28 格铺上去一格 2.7km，一栋"楼"2.7 公里宽，是薄饼不是楼。见 `AI_SPAN_M`。
+         位置优先级与取楼一致：**驻地 > bbox 中心**（bbox 中心常常落在山里）。 */
+      if (seat) {
+        aiBboxRef.value = boxAround(seat.lng, seat.lat, AI_SPAN_M);
+      } else if (districtBbox) {
+        aiBboxRef.value = boxAround(
+          (districtBbox[0] + districtBbox[2]) / 2,
+          (districtBbox[1] + districtBbox[3]) / 2,
+          AI_SPAN_M
+        );
+      }
+
       /* ① **先拿坐标，再带坐标取楼栋**（2026-09-19 事故）：
          不带坐标时后端用它自己的"最近一次定位"兜底，实测那个点是 29.752,107.278（另一座城）⇒ **0 栋**，
          而渝中 29.558,106.569 有 **285 栋** —— 页面于是显示"这一带没有楼房数据"（把"拿错坐标"说成了"没有数据"）。
@@ -1764,6 +1932,15 @@
   .ws-dml__hud .ws-dml__est {
     color: #ffcf8a;
     font-style: normal;
+  }
+  /* 「示意层已叠加」这一条：用**和暖色示意楼同一个色**（#d9a06b 系），
+     让"字"和"画面上那层楼"一眼对得上 —— 观者不用读完字就知道哪片是编的。
+     它是"非事实"的声明，所以给个描边底，别淹没在其它小字里。 */
+  .ws-dml__hud .is-ai {
+    color: #ffc98a;
+    border: 1px solid rgba(217, 160, 107, 0.55);
+    border-radius: 5px;
+    padding: 0 4px;
   }
   /* 长等待覆盖层：铺满容器、压住那张还空着的画布（空画布 + 无提示 = 看起来像白底/卡死）。
      加载卡自身来自 `WsLoading`（等高线三圈错峰扩开），这里只负责定位与层级。 */

@@ -71,8 +71,15 @@
       </div>
 
       <!-- 逐段线路（线路 / 换乘点 / 步行段都在这） -->
-      <ol class="tr__steps">
-        <li v-for="(s, i) in cur.steps || []" :key="i">
+      <!-- MG 切片 C：`:key="picked"` 是**故意的** ——
+           换个方案时让这个列表整个重建，那条"线路生长"动画就会重放一次。
+           不换 key 的话 Vue 会复用这些 li，动画只在第一次出现时跑，换方案就没反馈了。 -->
+      <ol :key="picked" class="tr__steps">
+        <li
+          v-for="(s, i) in cur.steps || []"
+          :key="i"
+          :style="{ '--tr-i': String(Math.min(i, 8)) }"
+        >
           <span class="tr__ico">{{ s.icon }}</span>
           <span class="tr__nm">{{ s.mode_name }}</span>
           <span class="tr__t">{{ fmtMin(s.duration_min) }}</span>
@@ -213,6 +220,9 @@
     border: 1px solid rgba(255,255,255,.1);
   }
   .tr__mode.on { background: rgba(53,211,154,.16); color: #35d39a; border-color: rgba(53,211,154,.5); }
+  /* MG 切片 C：按下去缩一点（只动 transform，切方式时手指有回执） */
+  .tr__mode { transition: transform .16s cubic-bezier(.2, 0, 0, 1); }
+  .tr__mode:active { transform: scale(.96); }
   .tr__go {
     height: 40px; border: 0; border-radius: 12px; cursor: pointer;
     background: #35d39a; color: #06231a; font-size: 13px; font-weight: 700;
@@ -258,4 +268,37 @@
     background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.85);
   }
   .tr__err { font-size: 11.5px; color: #ffb4b4; line-height: 1.5; }
+
+  /* ── MG 切片 C：线路**生长**出来 ─────────────────────────────────────────
+     逐段线路原来是一整块瞬间出现的。现在：
+      ① 每一段晚 55ms 出现（错峰）—— 读起来像线路一站一站铺过去；
+      ② 段与段之间那句「↓ 换乘」再晚 120ms，并且**从无到有地长**（scaleY 0 → 1）。
+     只动 opacity/transform；一趟最多 9 段（第 10 段起不再延后），总时长始终 < 0.9s。 */
+  .tr__steps li {
+    animation: tr-step-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--tr-i, 0) * 55ms);
+  }
+  @keyframes tr-step-in {
+    from { opacity: 0; transform: translateX(-6px); }
+    to { opacity: 1; transform: none; }
+  }
+  /* 换乘标记：等它上面那一段出来之后再"长"出来（transform-origin 在顶端，像从上一站接下去） */
+  .tr__xfer {
+    transform-origin: top center;
+    animation: tr-xfer-grow 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--tr-i, 0) * 55ms + 120ms);
+  }
+  @keyframes tr-xfer-grow {
+    from { opacity: 0; transform: scaleY(0); }
+    to { opacity: 0.85; transform: scaleY(1); }
+  }
+  /* 降级：低端机 / 系统关了动画 → 线路一次性出现（信息一点不少） */
+  .ws-root.ws-perf-low .tr__steps li,
+  .ws-root.ws-perf-low .tr__xfer,
+  .ws-root.ws-perf-low .tr__mode { animation: none; transition: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .tr__steps li,
+    .tr__xfer { animation: none; }
+    .tr__mode { transition: none; }
+  }
 </style>

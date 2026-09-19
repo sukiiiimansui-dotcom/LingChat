@@ -24,7 +24,7 @@
     </div>
 
     <!-- 每个角色：此刻在做什么、接下来做什么、在哪 -->
-    <div v-for="r in roles" :key="r.name" class="pl__role">
+    <div v-for="(r, i) in roles" :key="r.name" class="pl__role" :style="{ '--pl-i': String(Math.min(i, 7)) }">
       <div class="pl__head">
         <span class="pl__nm">{{ r.name }}</span>
         <span class="pl__kind">{{ r.now?.kindZh || "—" }}</span>
@@ -34,7 +34,12 @@
         <span class="pl__t">{{ r.now?.time || "" }}</span>
         <span class="pl__c">{{ r.now?.content || "" }}</span>
       </div>
-      <div v-if="r.progress != null" class="pl__bar"><i :style="{ width: Math.round(Number(r.progress) * 100) + '%' }" /></div>
+      <!-- MG 切片 C：占比条改用 `transform: scaleX()`。
+           原来动的是 `width`（布局属性）—— 每变一次，卡片里所有东西都要重新排版一次。
+           scaleX 只走合成器，视觉一模一样。 -->
+      <div v-if="r.progress != null" class="pl__bar">
+        <i :style="{ transform: `scaleX(${barOf(r.progress)})` }" />
+      </div>
       <div class="pl__next">
         接着 <b>{{ r.next?.name || "—" }}</b>
         <span v-if="r.next?.time"> · {{ r.next.time }}</span>
@@ -119,6 +124,13 @@
   const todos = computed<string[]>(() => (data.value?.todos || []).map((t) => fmtItem(t, ["text", "title"])));
   const days = computed<string[]>(() => (data.value?.importantDays || []).map((d) => fmtItem(d, ["date", "name", "title"])));
 
+  /** 把进度夹到 0~1（`scaleX` 只认比例；越界会让条子长出格子外面） */
+  function barOf(p: unknown): string {
+    const n = Number(p);
+    if (!Number.isFinite(n)) return "0";
+    return String(Math.min(1, Math.max(0, n)));
+  }
+
   /** 地图联动：跳真实路由（`/worldsim` 是世界模拟页的实际 path） */
   function goMap() {
     void router.push("/worldsim");
@@ -152,7 +164,13 @@
   .pl__t { font-size: 10.5px; color: rgba(255,255,255,.45); }
   .pl__c { font-size: 11px; color: rgba(255,255,255,.6); }
   .pl__bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); overflow: hidden; }
-  .pl__bar i { display: block; height: 100%; background: #35d39a; }
+  .pl__bar i {
+    display: block; height: 100%; background: #35d39a;
+    /* transform-origin 必须是 0 50%：默认在中心，条子会从中间往两边长（反的） */
+    transform-origin: 0 50%;
+    /* 「生长」用 0.32s 的缓出：数据是异步来的，直接从 0 跳到 60% 看不出"它涨了" */
+    transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
   .pl__next { font-size: 11px; color: rgba(255,255,255,.7); }
   .pl__go {
     margin-top: 2px; height: 30px; border: 1px solid rgba(53,211,154,.45); border-radius: 10px;
@@ -171,4 +189,24 @@
   .pl__cav { color: rgba(255,255,255,.5); font-size: 10.5px; }
   .pl__note { font-size: 10px; color: rgba(255,215,120,.72); line-height: 1.5; }
   .pl__err { font-size: 11.5px; color: #ffb4b4; line-height: 1.5; }
+
+  /* ── MG 切片 C：角色卡**依次**浮现（错峰 45ms）───────────────────────────
+     日程是异步来的：数据一到，几张卡一起"啪"地出现，很像页面刷新。
+     错峰之后读起来是"一个个角色被点亮"，同时给人一点时间看清顺序。
+     只动 opacity/transform；超过 7 张不再累加延迟。 */
+  .pl__role {
+    animation: pl-role-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--pl-i, 0) * 45ms);
+  }
+  @keyframes pl-role-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  /* 降级：低端机 / 系统关了动画 → 卡片直接出现（信息一点不少） */
+  .ws-root.ws-perf-low .pl__role { animation: none; }
+  .ws-root.ws-perf-low .pl__bar i { transition: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .pl__role { animation: none; }
+    .pl__bar i { transition: none; }
+  }
 </style>

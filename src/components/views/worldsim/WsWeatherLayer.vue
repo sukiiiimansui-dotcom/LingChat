@@ -29,12 +29,21 @@
 -->
 <template>
   <div class="ws-wx" aria-hidden="true" data-ws-wx>
-    <canvas ref="cv" class="ws-wx__cv" />
+    <!-- 🔴 低档：**一层纯色，不挂画布**（2026-09-20 实测）
+         为什么 `animate=false`（只画一帧）还不够：整屏 canvas 是一个**独立合成层**，
+         在软渲染（无 WebGL / 低端机）上，每一帧都要把它和底下的地图**再混一遍** ——
+         实测同一次会话里逐个 `display:none` 对照：藏掉这层 **15 → 21fps**（+6）。
+         而它画的东西（雨丝/雪花）只是气氛，"能不能玩"才是门槛。
+         纯色 div 只改**颜色**，没有逐帧回读、没有粒子、没有额外合成层 ——
+         天气的"感觉"（下雨发暗、下雪发白）还在，丢的只是雨滴在动。
+         高档走 `v-else` 分支，一字未改。 -->
+    <div v-if="flat" class="ws-wx__flat" :style="flatStyle" />
+    <canvas v-else ref="cv" class="ws-wx__cv" />
   </div>
 </template>
 
 <script setup lang="ts">
-  import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+  import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
   import { drawWeather, getPuff, weatherTint, type WsWeatherState } from "./wsWeather";
   import { timeTint, type WsTimeTint } from "./wsTime";
 
@@ -48,9 +57,47 @@
       low?: boolean;
       /** 是否驱动动画。默认 true；`false` 时只画一帧静态图（自检/演示页用） */
       animate?: boolean;
+      /**
+       * 低档：走**纯色层**（不建画布、不画粒子）。见模板里那段实测说明。
+       * 默认关 —— 只有 `.ws-perf-low` 那条路会打开它。
+       */
+      flat?: boolean;
     }>(),
-    { tint: null, low: false, animate: true }
+    { tint: null, low: false, animate: true, flat: false }
   );
+
+  /**
+   * 低档**或**显式要求纯色时走纯色层。
+   *
+   * 为什么把 `low` 也算进来：调用方（`WorldSim.vue`）只需要传一个已经算好的档位，
+   * 不必同时记得传两个开关 —— "低档就该用最省的画法"是这个组件自己的常识。
+   */
+  const flat = computed(() => props.flat || props.low);
+
+  /**
+   * 纯色层的样式：天气色 + 昼夜色，各一层（与画布里的顺序一致：昼夜压在天气之上）。
+   *
+   * ⚠️ 两个色块**都是纯色半透明**，不用 `mix-blend-mode` —— 混合模式会让浏览器
+   * 放弃"纯色快速合成"这条快路，反而把省下来的钱花回去（这正是我们要躲的东西）。
+   */
+  const flatStyle = computed(() => {
+    const levels: string[] = [];
+    const w = props.weather;
+    const wt = weatherTint({ kind: w.kind, intensity: w.intensity });
+    if (wt.a > 0) levels.push(`linear-gradient(${wt.css}, ${wt.css})`);
+    const t = props.tint;
+    if (t && t.a > 0) {
+      const css = timeTint(t.hour).css;
+      levels.push(`linear-gradient(${css}, ${css})`);
+    }
+    return {
+      backgroundImage: levels.join(", ") || "none",
+      /* 昼夜那层在画布里的强度是 0.55（TIME_LAYER_SCALE）；纯色层做不出"分层 alpha"，
+         所以这里只在**只有昼夜、没有天气色**时补一个整体透明度，天气色本身自带 alpha。
+         宁可略淡也不要把地图压黑 —— 低档下"看得见路"比"气氛准"重要。 */
+      opacity: props.weather.kind && wt.a > 0 ? 1 : 0.55,
+    };
+  });
 
   const cv = ref<HTMLCanvasElement | null>(null);
 
@@ -227,6 +274,21 @@
       if (!props.animate) paintOnce();
     }
   );
+
+  /**
+   * 档位在运行中从"纯色层"翻回"画布"时，`<canvas>` 会**重新挂上来** ——
+   * 可 `onMounted` 早就跑过了，不补这一下，画布就是一块死图（不动、也没接 ResizeObserver）。
+   * 反方向（画布 → 纯色）不用管：纯色层没有需要初始化的东西。
+   * 现实中这条极少触发（档位只降不升），但留着一个"看得见的哑巴"最费排查时间。
+   */
+  watch(flat, async (isFlat) => {
+    if (isFlat) return;
+    await nextTick();
+    resize();
+    lastKey = frameKey();
+    if (props.animate) schedule();
+    else paintOnce();
+  });
 </script>
 
 <style scoped>
@@ -241,5 +303,12 @@
   }
   .ws-wx__cv {
     display: block;
+  }
+  /* 低档的纯色层：铺满、不吃事件、**不要** `will-change`/`transform` ——
+     任何一条都会让浏览器把它升成独立合成层，那正是我们刚省掉的东西。 */
+  .ws-wx__flat {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
 </style>

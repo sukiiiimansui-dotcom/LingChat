@@ -30,9 +30,25 @@
              ⚠️ 图层（设施/交通/头像）的定位用的是 `WS_GRID` 网格 + 各自的数据，**不依赖这张图**，
              所以关掉它不影响它们的数据；但没有底图时它们会"浮在空处"，
              因此 `#pin` 插槽也一并隐藏（等 MapLibre 底图上来再一起显示）。 -->
-        <div class="ws-neigh__layer" :class="{ 'is-out': aiVisible }">
+        <!-- 🔴 2026-09-19 修掉"地图被自己人淡出"的事故：
+             这一层里装的是**小区级的地图本体**（MapLibre）。但下面那条 CSS
+             `worldsim.css: .ws-neigh__layer.is-out { opacity: 0 }` 会在 `aiVisible` 一为真时
+             把它**整层淡成全透明** —— 而 `aiVisible` 只要 AI 精绘吐出**第一条要素**就变真。
+             结果：机主进小区级，3D 地图刚要出来就被"换掉"成那张 2D 的 AI 卡片，
+             他看到的就是「**这个 ai 2d 小区好丑**」。
+             ⇒ 用地图库渲染时，**地图本体永远不许淡出**（它是底，不是"待替换的草图"）。
+             `USE_MAPLIBRE` 为 false 的老路（草图 → AI 替换）保持原样，行为不变。 -->
+        <div class="ws-neigh__layer" :class="{ 'is-out': aiVisible && !USE_MAPLIBRE }">
           <!-- 🆕 机主 2026-09-19：「后面用**地图库直接使用**」→ 小区级改由 MapLibre 渲染 -->
-          <WsDistrictMapLibre v-if="USE_MAPLIBRE" :area="area" :radius="600" :pitch="55" />
+          <WsDistrictMapLibre
+            v-if="USE_MAPLIBRE"
+            :area="area"
+            :adcode="adcode || ''"
+            :radius="600"
+            :pitch="55"
+            :markers="markers"
+            :ai-items="aiItemsForMap"
+          />
           <WsLoading
             v-else-if="!sketchUrl"
             variant="map"
@@ -47,8 +63,15 @@
              <svg> 承载，画布实例（DistrictCanvas）把新增的图元 append 进去。
              为什么要换：v-html 每帧都要把整份 SVG 字符串重新解析、整棵树重建，
              实测 186.81ms/帧（5.4fps）→ 改成只 append 增量后 16.67ms/帧（60fps）。
-             外面这层 div 的结构/类名与动画都没动，所以视觉不变。 -->
-        <div class="ws-neigh__layer ws-neigh__ai" :class="{ 'is-in': aiVisible }">
+             外面这层 div 的结构/类名与动画都没动，所以视觉不变。
+
+             🔴 2026-09-19：**地图库模式下这一层默认不显示**（`!USE_MAPLIBRE` 才淡入）。
+             为什么（不是嫌弃 AI，是**尺度错**）：AI 图元用的是"28×28 草图网格 → **整个区县 bbox**"
+             的示意映射，一栋"楼"落到地图上有**几百米宽、十来米高** —— 是一张薄饼。
+             它盖在真楼房上只会把画面弄脏，这就是"好丑"的另一半来源。
+             AI 的产出没有消失：`aiItems` 照样喂给地图组件（`showAi` 打开就能画），
+             只是不再**顶掉地图**。真要"示意模式"，见 `world_map/DESIGN-3D-MODES.md` 的 ③。 -->
+        <div class="ws-neigh__layer ws-neigh__ai" :class="{ 'is-in': aiVisible && !USE_MAPLIBRE }">
           <div ref="paintHost" class="ws-paint-host" />
         </div>
 
@@ -168,6 +191,8 @@
   import worldMapApi from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
   import WsDistrictMapLibre from "./WsDistrictMapLibre.vue";
+  import type { AiItem } from "./wsAiLayers";
+  import type { WsDistrictPin } from "./wsActors";
   import {
     districtRenderSvg,
     startDistrictStream,
@@ -189,6 +214,19 @@
       /** 区县中心坐标（可选）。传了才能拿到**按真实主朝向旋转**的草图（见 loadSketch 注释） */
       lat?: number;
       lng?: number;
+      /**
+       * 当前区县 adcode（如涪陵区 500102）—— **透传给小区级的地图库渲染**。
+       * 为什么要：小区级原来既不传坐标又不传区码，只能靠后端"最近一次定位"或 IP 定位，
+       * 结果机主人在涪陵、画面却跑到渝中解放碑（2026-09-19 事故）。
+       */
+      adcode?: string;
+      /**
+       * 地图上的人（P1b 第一刀）。**从页面透传**，不在这里取数 ——
+       * 这一层只负责"把外壳的东西交给渲染器"，数据归 `useWsActors`。
+       * （好累～ 之所以要透传而不是让组件自己去拿：组件是纯渲染器，自己取数会变成第二个数据源，
+       *  以后两边不一致是最难查的那种 bug。）
+       */
+      markers?: WsDistrictPin[];
     }>(),
     { mapStyle: "gaode" }
   );
@@ -223,16 +261,15 @@
     upgrading = true;
     try {
       // 不传坐标：后端用 LAST_LATLNG（最近定位点）兜底 —— 免得给北京的页面暖重庆的缓存
-      const r = await fetch(`${worldMapApi.apiBase}/api/buildings?r=400`);
-      if (r.ok) {
-        const d = (await r.json()) as { count?: number };
-        try {
-          localStorage.setItem(K_LAST_TRY, String(Date.now()));
-        } catch {
-          /* 写不进去也不影响本次 */
-        }
-        if ((d?.count ?? 0) > 0) await loadSketch(); // 缓存已命中 → 这次草图会带上真实朝向
+      /* ⚠️ 走封装解包（楼栋在 `geojson.features`）。原来直接 `fetch(...).json()` 读**顶层** features
+         ⇒ 恒 0 栋 ⇒ "缓存已命中"永远不成立、草图永远拿不到真实朝向（同一起事故的第二个受害点）。 */
+      const geo = await worldMapApi.buildings({ r: 400 });
+      try {
+        localStorage.setItem(K_LAST_TRY, String(Date.now()));
+      } catch {
+        /* 写不进去也不影响本次 */
       }
+      if ((geo?.features?.length ?? 0) > 0) await loadSketch(); // 缓存已命中 → 这次草图会带上真实朝向
     } catch {
       /* 取不到就保持原样（不闪、不报错刷屏）——下次冷却过后再试 */
     } finally {
@@ -394,6 +431,14 @@
    * 已经画好的节点一个都不碰（`worldmap/DistrictLive.vue` 用的是同一个思路）。
    */
   let canvas: DistrictCanvas | null = null;
+  /** AI 精绘的图元（网格坐标）—— 直接喂给地图图层；`aiTick` 用来触发变更（数组原地 push 不会触发 watch） */
+  const aiItems = ref<AiItem[]>([]);
+  const aiTick = ref(0);
+  /** 传给地图的"快照"：每次 tick 生成新数组，watch 才认得出（浅比较） */
+  const aiItemsForMap = computed<AiItem[]>(() => {
+    void aiTick.value;
+    return aiItems.value.slice();
+  });
   /** 画布建立时的 (配色, 网格边长)：任一变了都得整块重画（viewBox / 颜色都写死在节点上） */
   let canvasKey = "";
 
@@ -467,16 +512,32 @@
         adoptSize(ev.size);
         break;
       case "building":
-        if (ev.item) paint.addBuilding(ev.item);
+        if (ev.item) {
+          paint.addBuilding(ev.item);
+          aiItems.value.push({ kind: "building", item: ev.item });
+          aiTick.value++;
+        }
         break;
       case "road":
-        if (ev.item) paint.addRoad(ev.item);
+        if (ev.item) {
+          paint.addRoad(ev.item);
+          aiItems.value.push({ kind: "road", item: ev.item });
+          aiTick.value++;
+        }
         break;
       case "park":
-        if (ev.item) paint.addPark(ev.item);
+        if (ev.item) {
+          paint.addPark(ev.item);
+          aiItems.value.push({ kind: "park", item: ev.item });
+          aiTick.value++;
+        }
         break;
       case "water":
-        if (ev.item) paint.addWater(ev.item);
+        if (ev.item) {
+          paint.addWater(ev.item);
+          aiItems.value.push({ kind: "water", item: ev.item });
+          aiTick.value++;
+        }
         break;
       case "warn":
         if (ev.message) log(`⚠ ${ev.message}`);

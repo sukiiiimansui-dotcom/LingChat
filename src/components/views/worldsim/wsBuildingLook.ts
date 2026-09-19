@@ -137,7 +137,7 @@ export function renderHeight(props: Record<string, unknown> | undefined | null):
  */
 export function decorateBuildings(fc: {
   features?: Array<{ properties?: Record<string, unknown> }>;
-} | null): {
+} | null, ramp: Array<[number, string]> = HEIGHT_COLOR_RAMP): {
   features: Array<Record<string, unknown>>;
   count: { n: number; real: number; levels: number; kind: number };
 } {
@@ -150,7 +150,7 @@ export function decorateBuildings(fc: {
   const out: Array<Record<string, unknown>> = [];
   for (const f of feats) {
     count[renderHeight(f.properties).from]++;
-    for (const part of buildingParts(f)) out.push(part);
+    for (const part of buildingParts(f, ramp)) out.push(part);
   }
   return { features: out, count };
 }
@@ -178,9 +178,9 @@ export const HEIGHT_COLOR_RAMP: Array<[number, string]> = [
 ];
 
 /** `HEIGHT_COLOR_RAMP` → MapLibre 的 `interpolate/linear` 表达式（写一次，两条路共用） */
-export function heightColorExpression(): unknown[] {
+export function heightColorExpression(ramp: Array<[number, string]> = HEIGHT_COLOR_RAMP): unknown[] {
   const stops: unknown[] = [];
-  for (const [h, c] of HEIGHT_COLOR_RAMP) stops.push(h, c);
+  for (const [h, c] of ramp) stops.push(h, c);
   return ["interpolate", ["linear"], ["coalesce", ["get", "h3d"], 8], ...stops];
 }
 
@@ -221,9 +221,9 @@ export function shade(hex: string, k: number): string {
 }
 
 /** 高度 → 色阶取色（纯查表，和 GL 里那条 `interpolate` 用**同一张表**） */
-export function rampColorOf(h: number): string {
-  let c = HEIGHT_COLOR_RAMP[0]![1];
-  for (const [stop, col] of HEIGHT_COLOR_RAMP) if (h >= stop) c = col;
+export function rampColorOf(h: number, ramp: Array<[number, string]> = HEIGHT_COLOR_RAMP): string {
+  let c = ramp[0]![1];
+  for (const [stop, col] of ramp) if (h >= stop) c = col;
   return c;
 }
 
@@ -236,9 +236,9 @@ export function rampColorOf(h: number): string {
  * 🔴 种子必须来自 `osm_id`（**不是 `Math.random()`**）：同一栋楼每次渲染颜色必须一致，
  *    用随机数会让整片楼**每帧闪**（而且刷新一次变一个样，没法比对截图）。
  */
-export function buildingColor(h: number, seed: string): string {
+export function buildingColor(h: number, seed: string, ramp: Array<[number, string]> = HEIGHT_COLOR_RAMP): string {
   const k = 0.9 + (hash32(seed || "x") % 21) / 100; // 0.90 ~ 1.10
-  return shade(rampColorOf(h), k);
+  return shade(rampColorOf(h, ramp), k);
 }
 
 /** 环的**外环**（后端只产出 Polygon；拿不到就返回 null，不猜） */
@@ -332,10 +332,11 @@ function partFeature(
  * 屋顶/天线都是**同一个轮廓加工出来的**，所以不需要任何新数据。
  */
 export function buildingParts(
-  f: { id?: unknown; geometry?: unknown; properties?: Record<string, unknown> }
+  f: { id?: unknown; geometry?: unknown; properties?: Record<string, unknown> },
+  ramp: Array<[number, string]> = HEIGHT_COLOR_RAMP
 ): Array<Record<string, unknown>> {
   const { h, from } = renderHeight(f.properties);
-  const color = buildingColor(h, String((f.properties || {}).osm_id || f.id || ""));
+  const color = buildingColor(h, String((f.properties || {}).osm_id || f.id || ""), ramp);
   const base = Number((f.properties || {}).min_height) || 0;
   /* 主体：几何**原样**，只补上算好的字段（`h_base` 统一口径，paint 里不用再分支） */
   const out: Array<Record<string, unknown>> = [

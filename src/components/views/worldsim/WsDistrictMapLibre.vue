@@ -84,6 +84,17 @@
         等高线 {{ stats.contour > 0 ? stats.contour + " 段" : "不可用" }}
       </span>
       <span>{{ stats.fps }} fps</span>
+      <!-- 🎨 主题 A/B 开关（机主要"**暗色 ↔ 二次元**来回看"）。
+           放在 HUD 里而不是藏进 URL：机主是零基础，让他手打 `?wstheme=` 不现实。
+           点了会**记进 localStorage 并重载**（换主题要重建 sources/layers，热换容易踩到
+           "图层引用了还不存在的 source"；重载对"来回对比"这个用法完全够，而且零风险）。 -->
+      <button
+        class="ws-dml__theme"
+        :title="`当前：${theme.label}。点一下切到另一套并重载地图`"
+        @click="switchTheme(themeId === 'anime' ? 'night' : 'anime')"
+      >
+        🎨 {{ theme.label }}
+      </button>
       <!-- 「为什么慢、我们为此做了什么」—— 机主要的是**如实**，不是好看。
            这一条只在真的被压到低档时出现（软渲染/降级路），见 `fallback2d()`。 -->
       <span v-if="stats.perf" class="is-warn">{{ stats.perf }}</span>
@@ -111,10 +122,31 @@
      而档位必须跟着那条路走（见 `fallback2d()` 里 `perf.forceLow()` 那段）。 */
   import { useWsPerf } from "./wsPerf";
   import { aiFeatureCollection, aiFeatures, boxAround as aiBoxAround, type AiItem, type BBox } from "./wsAiLayers";
+  /* 「OSM 优先、Overture 补缺」的合并规则（纯逻辑，单独一份 ⇒ 能在 Node 里全量自检）。 */
+  import { mergeBuildingSources, shouldAskSecondSource } from "./wsBuildingSources";
   /* 「楼多高、什么颜色」的纯逻辑（`wsBuildingLook.ts`，独立文件 ⇒ 可单测、不跟渲染纠缠）。
      2026-09-19 机主：「这个 ai 2d 小区好丑，直接试一下 3d 路线我看看效果」——
      这一刀就是"3D 路线"的美术部分：真轮廓 + 有起伏的高度 + 有层次的光照。 */
   import { HEIGHT_COLOR_RAMP, decorateBuildings, heightColorExpression, renderHeight } from "./wsBuildingLook";
+  /* 🎨 「这张地图长什么样」的主题预设（2026-09-20 机主：「这个地图太暗了喵，还有就是我想给整体地图
+     改成二次元式的那种风格喵」）。**美术参数全在那个文件里**，这里只负责"照它摆图层"：
+       · `night` = 原来的暗色（**保留**，一个字没删，只是把卫星的压暗从 0.34 提到 0.56）；
+       · `anime` = 二次元（蔚蓝档案风）：亮蓝天空 + 亮灰底图 + 浅蓝色罩 + 平涂楼体 + 深藏青描边；
+       · A/B 开关：URL `?wstheme=night` / `?wstheme=anime`（也会记进 localStorage）。
+     ⚠️ 为什么亮度/颜色参数必须集中在一个**能被 Node 断言**的纯模块里：地图库的亮度公式是
+     仿射重映射（`out = min + (max-min)*rgb`）⇒ 提亮地面会**连带把楼比下去**，
+     所以"楼/地亮度比"必须能算、能测，不能靠肉眼在真机上赌。 */
+  import {
+    WS_MAP_THEME_KEY,
+    WS_MAP_THEME_DEFAULT,
+    parseWsMapThemeParam,
+    rampExpression,
+    themeForTier,
+    themeStyleParts,
+    wsMapTheme,
+    type WsMapTheme,
+    type WsMapThemeId,
+  } from "./wsMapTheme";
   /* 「代拍」：让页面自己 toDataURL 回传（agent 看不到 WebGL、机主又禁了 ADB 截屏 ⇒ 唯一通道） */
   import {
     canvasIsBlank,
@@ -201,6 +233,54 @@
   /* 性能档位（模块级单例）。**只在这一处用**：`fallback2d()` 里把档位压到低档 ——
      因为只有这里知道"最后真的走了哪条渲染路"，而档位必须跟那条路一致。 */
   const perf = useWsPerf();
+
+  /**
+   * 当前地图主题。优先级：**URL 参数 > localStorage > 默认（二次元）**。
+   *
+   * 为什么 URL 排第一：代拍通道就是"给机主一个 URL 让他点一下"（`?autoshot=1&wstheme=night`），
+   * 这条路上**不能**被上次存下的偏好盖掉，否则"我想看另一套"永远看不到。
+   * 为什么默认是二次元：机主这轮的原话是"想给**整体**地图改成二次元式的那种风格"。
+   * 为什么全程 try/catch：`localStorage` 在隐私模式/某些 WebView 里会直接抛 ——
+   * 一个美术偏好不该把整张地图搞崩。
+   */
+  function resolveThemeId(): WsMapThemeId {
+    const fromUrl = parseWsMapThemeParam(typeof location !== "undefined" ? location.search : "");
+    if (fromUrl) return fromUrl;
+    try {
+      const saved = localStorage.getItem(WS_MAP_THEME_KEY);
+      if (saved && (saved === "night" || saved === "anime")) return saved;
+    } catch {
+      /* 读不到就用默认值，不报错 */
+    }
+    return WS_MAP_THEME_DEFAULT;
+  }
+  const themeId = ref<WsMapThemeId>(resolveThemeId());
+  /** 当前主题对象（模板/HUD 也能读，机主在 HUD 上能看出现在是哪套） */
+  const theme = computed<WsMapTheme>(() => wsMapTheme(themeId.value));
+  /** 低端档时要丢什么（`perf.low` 是单一真源，见 `wsCaps.ts`） */
+  const themeTier = computed(() => themeForTier(theme.value, !!perf.low));
+
+  /**
+   * 运行时切主题（自用开关，机主要"暗色 ↔ 二次元"来回看）。
+   * ⚠️ 这条**不做**在线换 style —— 换主题要重建 sources/layers，中途换容易踩到
+   * "图层引用了还不存在的 source" 那类错误。这里只负责**记下来 + 重新载入页面**：
+   * 对"来回对比"这个用法够用，而且**零风险**。 */
+  function switchTheme(next: WsMapThemeId): void {
+    if (next === themeId.value) return;
+    themeId.value = next;
+    try {
+      localStorage.setItem(WS_MAP_THEME_KEY, next);
+    } catch {
+      /* 存不下也没关系，URL 参数照样能切 */
+    }
+    try {
+      const u = new URL(location.href);
+      u.searchParams.set("wstheme", next);
+      location.replace(u.toString());
+    } catch {
+      /* 退不到就退化成"刷新后生效" */
+    }
+  }
   // eslint 不需要 map 的类型细节；这里只留一个句柄用于销毁
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let map: any = null;
@@ -334,133 +414,32 @@
    * 🔴 Esri 路径是 `{z}/{y}/{x}`（y 在前），写成 `{z}/{x}/{y}` 不报错但地图会跑到错位置。
    */
   function makeStyle() {
+    /* 🎨 整份 style 的"底半部分"（`sky` + `sources` + 背景/底图/色罩/注记）现在由
+       `wsMapTheme.themeStyleParts()` 生成 —— 它是**纯函数**，所以
+       `ws_map_theme_selftest.mjs` 能在 Node 里把生成出来的 style 按
+       **从 vendored maplibre 包里现抠出来的 spec** 逐条校验
+       （根级属性白名单 / 图层类型枚举 / sky 的 7 个合法字段 / 各 paint 字段表）。
+
+       🔴 为什么值得这么做：2026-09-20 我往 `layers[0]` 塞过一个坏对象 ⇒
+       **整份 style 校验失败 ⇒ `load` 永不触发 ⇒ 全站退回 2D 降级**。
+       那种错只在**运行时**炸一次，而它本来是可以被断言掉的。
+       ⚠️ `sky` **不是图层类型**（图层类型只有 fill/line/symbol/circle/heatmap/
+       fill-extrusion/raster/hillshade/color-relief/background），只能走**根级** `sky`。 */
+    const parts = themeStyleParts(theme.value, !!perf.low);
     return {
       version: 8,
-      name: "ws-district",
-      /* 🌆 天际线 L0 · 大气透视：远处的楼自动褪色、往天色里"化开" —— 这是"深度感"
-          最大的来源，比任何后期滤镜都有效（见 world_map/DESIGN-SKYLINE.md 手段 #1）。
-
-         🔴 2026-09-19 更正字段名（**主会话原来写的是 `fog`，在这个构建里是空操作**）：
-         实测本 vendored 构建 = **MapLibre GL JS v6.10.0**，它的根级样式属性是
-         `sky` / `light` / `terrain` / `snow` / `projection` —— **没有 `fog`**
-         （`grep 'fog:' maplibre-gl-shared.mjs` = 0 次，而 `sky:{type:\`sky\`}` = 1 次）。
-         雾的参数（`fog-color` / `fog-ground-blend` / `horizon-fog-blend`）在 v5 起
-         **并进了 `sky`**。所以写 `fog:{...}` 不报错（根级属性不做校验，实测注入
-         `zzzBogusRootProp` 也零报错）—— 但**一点效果都没有**，属于"看着配了、其实是空的"。
-         ⚠️ 另外 `range` / `high-color` / `space-color` / `star-intensity` 是 **Mapbox** 的
-         sky 字段，MapLibre 不认。这里用的是 MapLibre 的真字段名。 */
-      sky: {
-        "sky-color": "#0a1119",
-        "horizon-color": "#1b2a3a",
-        "fog-color": "#0d1620",
-        "sky-horizon-blend": 0.6,
-        "horizon-fog-blend": 0.4,
-        "atmosphere-blend": 0.7,
-      },
-      sources: {
-        base: {
-          type: "raster",
-          tiles: [
-            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-          ],
-          tileSize: 256,
-          /* 🔴 2026-09-20 真机代拍实锤：Esri **Canvas 系列最高只到 z16**，
-             而我们在小区级默认 zoom 16.4 + DPR2 ⇒ MapLibre 会去请求 z17+ 的瓦片 ⇒
-             Esri 返回一整屏 **"Map data not yet available" 灰色占位图**（真机截图 `~/chk/live/050334-show-near.png`）。
-             ⇒ 限到 16，让 MapLibre **放大复用 z16 瓦片**（略糊，但远好过灰屏没内容）。 */
-          maxzoom: 16,
-          /* 🔴 `crossOrigin: "anonymous"` 不是可选项，是**代拍通道的命门**：
-             浏览器把没声明 CORS 的跨域图片画进 canvas 会**污染画布**，
-             之后 `canvas.toDataURL()` 直接抛 SecurityError ⇒ 自截图/代拍全废，
-             而画面上**一切正常**（只有取图那一步失败，特别难查）。
-             Esri 实测回 `Access-Control-Allow-Origin: *`，所以声明了就干净。 */
-          crossOrigin: "anonymous",
-          attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
-        },
-        /* 🛰 **高分层（z16 以上）**：机主 2026-09-20 反馈「**地图太糊了**（放太大直接变成灰蒙蒙的）」。
-           根因是上面那个 `maxzoom: 16` 的**副作用**：z17~18 变成"把 z16 的灰底放大 2~4 倍"。
-           实测（本轮，逐块下载比对）：
-             · `Canvas/World_Dark_Gray_Base` z17 = **2521B**，与 `World_Topo_Map` z16 的瓦片
-               **md5 完全相同** ⇒ 那 2521B 是 Esri 的**「Map data not yet available」占位图**
-               ⇒ **`World_Topo_Map` 在这片也没数据，"二选一"里它是死路**（省得再试一次）；
-             · `World_Imagery` z16/17/18 = 15556B / 13291B / 9993B，**内容逐级不同、真有细节**
-               （我把 z18 那块拉下来看过：屋顶、街巷、树、江岸都在）
-               ⇒ **高分层只能用卫星影像**。
-           观感上要"压成夜色"：白天照片直接铺上去会白得刺眼，而且比楼还亮 ⇒ 楼会"消失"。
-           所以用 `raster-brightness-max` 把它压进**暗部**（地面必须明显暗于楼体）。
-           两层在 z14.5~16 之间**用透明度交叉过渡**，不会"咔"一下换底。 */
-        hi: {
-          type: "raster",
-          tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-          tileSize: 256,
-          maxzoom: 19,
-          crossOrigin: "anonymous", // 同上：不声明就污染画布，代拍必废
-          attribution: "Sources: Esri, Maxar, Earthstar Geographics",
-        },
-        /* 🅱 注记层（街名/地名）。暗色底图的 `..._Base` 是**不带字**的 ——
-           只铺它，画面就是"一片深灰上有几个方块"，看不出这是哪条街（机主："不像地图"）。
-           Esri 的 Reference 服务是**透明 PNG**（实测小瓦片 872B），叠上去就有字了。
-           同一家的两套服务配同一套瓦片编号，不会错位。 */
-        ref: {
-          type: "raster",
-          tiles: [
-            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
-          ],
-          tileSize: 256,
-          /* 🔴 2026-09-20 真机代拍实锤：Esri **Canvas 系列最高只到 z16**，
-             而我们在小区级默认 zoom 16.4 + DPR2 ⇒ MapLibre 会去请求 z17+ 的瓦片 ⇒
-             Esri 返回一整屏 **"Map data not yet available" 灰色占位图**（真机截图 `~/chk/live/050334-show-near.png`）。
-             ⇒ 限到 16，让 MapLibre **放大复用 z16 瓦片**（略糊，但远好过灰屏没内容）。 */
-          maxzoom: 16,
-          crossOrigin: "anonymous", // 同上：不声明就会污染画布，代拍取不到图
-        },
-      },
-      /* ⚠️ 2026-09-20 血泪：我在这里插过一条 `{type: "sky"}` 图层 ⇒ **整个 style 校验失败**
-         （HUD 报 `layers[0]: missing required property`）⇒ `load` 永不触发 ⇒ 全站退回 2D 降级。
-         这个构建里 `sky` **不是图层类型**（MapLibre 把它当根级样式属性）。
-         ⇒ 想加地平线渐变请走根级 `sky: {…}`（先在小页面里验一次再进主组件），别往 layers 里塞。 */
-      layers: [
-        { id: "bg", type: "background", paint: { "background-color": "#0a1017" } },
-        /* 地面：**压暗 + 去饱和**。不压的话地面和矮楼一个亮度，整屏糊成一块深灰 ——
-           这是"看着很丑"的成因之一（楼必须明显亮于地，才有"立起来"的感觉）。 */
-        {
-          id: "base",
-          type: "raster",
-          source: "base",
-          paint: {
-            /* z14.5 起往 0 淡出，把"地面"交给下面那条高分层（交叉过渡，不"咔"一下换底） */
-            "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0.92, 16.2, 0],
-            "raster-saturation": -0.25,
-            "raster-contrast": 0.04,
-            "raster-brightness-max": 0.74,
-          },
-        },
-        /* 高分层：z14.5 起淡入。**压进暗部**是刻意的 ——
-           卫星影像本身是白天的亮照片，不压的话地面比楼还亮，3D 楼会"消失"在背景里。 */
-        {
-          id: "hi",
-          type: "raster",
-          source: "hi",
-          minzoom: 14.5,
-          paint: {
-            "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0, 16.2, 0.95],
-            "raster-saturation": -0.4,
-            "raster-contrast": 0.12,
-            "raster-brightness-min": 0.0,
-            "raster-brightness-max": 0.34,
-          },
-        },
-        /* 注记压在最上层（和地图 App 一个口径：街名不该被楼挡住）。
-           楼房的图层会插到它**下面**（`addLayer(l, "ref")`）—— 所以它必须在这里先建好。 */
-        { id: "ref", type: "raster", source: "ref", paint: { "raster-opacity": 0.9 } },
-      ],
+      name: `ws-district-${theme.value.id}`,
+      /* `sky` 可能没有（低端档会关掉它）—— 用展开而不是写 `sky: undefined`，
+         免得给 style 里塞一个值为 undefined 的键（校验器会当它存在）。 */
+      ...(parts.sky ? { sky: parts.sky } : {}),
+      sources: parts.sources,
+      /* ⚠️ 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
+         楼房的图层由 `addLayer(l, "ref")` 插到 **ref 之前** ⇒ 自动落在线罩**之上**。
+         `ref` 必须留在最后一条：它是楼房层的插入锚点（见 loadBuildingsForView）。 */
+      layers: parts.layers,
     };
   }
 
-  /**
-   * 从 GeoJSON 几何里算 bbox（MultiPolygon/Polygon 都吃）—— 纯函数，用来"整区铺满"。
-   * 返回 `[minLng, minLat, maxLng, maxLat]`；几何为空/不是面 ⇒ null（**不猜**）。
-   */
   function bboxOfGeometry(g: { type?: string; coordinates?: unknown } | null | undefined): [number, number, number, number] | null {
     if (!g) return null;
     let minX = Infinity;
@@ -525,7 +504,9 @@
     type: "FeatureCollection";
     features: unknown[];
   } {
-    const { features, count } = decorateBuildings(fc);
+    /* 色阶跟着主题走（暗色=深蓝→冰蓝；二次元=淡天蓝→近白）。
+       必须在**这里**（渲染前）算好：`color3d` 是写进要素属性的，图层的 paint 只读它。 */
+    const { features, count } = decorateBuildings(fc, theme.value.ramp);
     stats.count = count.n;
     stats.height = count.real;
     stats.levels = count.levels;
@@ -533,10 +514,12 @@
     return { type: "FeatureCollection", features };
   }
 
-  /** 渲染高度 → 颜色（2D 降级路用；与 3D 的色阶**同一张表**，免得两条路观感不一致） */
+  /** 渲染高度 → 颜色（2D 降级路用；与 3D 的色阶**同一张表**，免得两条路观感不一致）。
+   *  表来自当前主题 —— 二次元主题下连 2D 降级也是那套淡天蓝。 */
   function rampColor(h: number): string {
-    let c = HEIGHT_COLOR_RAMP[0]![1];
-    for (const [stop, col] of HEIGHT_COLOR_RAMP) {
+    const ramp = theme.value.ramp;
+    let c = ramp[0]![1];
+    for (const [stop, col] of ramp) {
       if (h >= stop) c = col;
     }
     return c;
@@ -805,17 +788,24 @@
    *     而且**雾要有 3D 地形才生效**（官方 `fog-color` 写着 "Requires 3D terrain"）。
    */
   function bldLayerSpecs(): Array<Record<string, unknown>> {
+    /* 🎨 主题参数（暗色 ↔ 二次元）与低端档 —— 都从单一真源取，不在这里写死任何颜色 */
+    const th = theme.value;
+    const tier = themeTier.value;
     /** 挤出体的公共 paint（三条层只差颜色/过滤，写一份免得漂移） */
     const common = {
       "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
       /* 底座统一读 `h_base`（拆件时每条都写了；老数据没有就退回 `min_height`） */
       "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["get", "min_height"], 0],
-      /* 远景褪色（#8）：远处楼淡一点，近处实。**只淡到 0.72**，再淡就开始"糊成一片" */
-      "fill-extrusion-opacity": ["interpolate", ["linear"], ["zoom"], 12.8, 0.72, 15, 0.86, 17, 0.97],
-      /* 竖向渐变：楼顶比楼底亮一点。MapLibre 的默认值就是 true，但我们**显式写死** ——
-         默认值会随版本改，而这一条直接决定"挤出的方块像不像楼"。 */
-      "fill-extrusion-vertical-gradient": true,
+      /* 远景褪色（#8）：远处楼淡一点，近处实（曲线由主题给，见 `wsMapTheme.extrudOpacity`） */
+      "fill-extrusion-opacity": th.extrudOpacity,
+      /* 竖向渐变：楼顶比楼底亮一点 —— **写实**要它（墙面有明暗、体块才"立"得起来）；
+         **二次元要关掉它**（平涂/cell-shading：楼是一块纯色板，有渐变就不"动画"了）。
+         MapLibre 默认就是 true，但我们**显式写死**：默认值会随版本改，而这一条直接决定观感。 */
+      "fill-extrusion-vertical-gradient": th.verticalGradient,
     };
+    /** 低端档：`outlineWidth === null` ⇒ **整条描边层不建**（少一层 = 少一遍要素遍历）。
+        暗色主题低端就是这条路；二次元低端只把线调细（因为那里描边是**唯一**的分隔手段）。 */
+    const showOutline = tier.outlineWidth !== null;
     return [
       {
         id: "bld-ext",
@@ -828,7 +818,7 @@
         minzoom: 12.8,
         /* 只画主体 —— 屋顶/天线是另外两条层（拆件后同一个源里有三种 `part`） */
         filter: ["==", ["get", "part"], "body"],
-        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], heightColorExpression()] },
+        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpression(th)] },
       },
       {
         /* 屋顶压顶：同一轮廓内缩 + 更深色 ⇒ 楼顶多一圈"女儿墙"的层次（#4）
@@ -839,7 +829,7 @@
         source: "bld",
         minzoom: 14.5, // 远景看不出这一层，不白画
         filter: ["==", ["get", "part"], "roof"],
-        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], "#1b2833"] },
+        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.roofFallback] },
       },
       {
         /* 天线：>60m 的楼顶一根细挤出（#6）—— 城市轮廓里最抓眼的一档，要素数极少 */
@@ -848,17 +838,23 @@
         source: "bld",
         minzoom: 14.5,
         filter: ["==", ["get", "part"], "antenna"],
-        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], "#cfe8f5"] },
+        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.antennaFallback] },
       },
-      {
-        id: "bld-line",
-        type: "line",
-        source: "bld",
-        minzoom: 12.8, // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
-        /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
-        filter: ["==", ["get", "part"], "body"],
-        paint: { "line-color": "rgba(190,235,255,0.22)", "line-width": 0.5 },
-      },
+      ...(showOutline
+        ? [
+            {
+              id: "bld-line",
+              type: "line",
+              source: "bld",
+              minzoom: 12.8, // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
+              /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
+              filter: ["==", ["get", "part"], "body"],
+              /* 二次元这层是"动画感"的主要来源（平涂 + 深藏青细线）；
+                 暗色这层只是淡淡一圈，低端档直接不建。 */
+              paint: { "line-color": th.outline.color, "line-width": tier.outlineWidth ?? th.outline.width },
+            },
+          ]
+        : []),
     ];
   }
 
@@ -1197,8 +1193,57 @@
     ]);
   }
 
-  /** 取楼用的地图最小接口（只声明用到的，避免 any） */
-  interface BldMapLike {
+  /**
+   * **第二数据源补缺**（Overture Maps Buildings，ODbL）—— 「换源」那一刀。
+   *
+   * ## 为什么只在稀疏时才问
+   * 渝中区 400m 就有 152 栋**带高度**的真楼；涪陵 400m 有 **0 栋**。
+   * 第二源的角色是**补缺**而不是替换（机主原话：「有真数据用真的」）⇒
+   * 够看的地方（≥ `BLD_SPARSE`）根本不发这个请求：既省一次 12MB/17s 的取数，
+   * 也不会拿一层**没有高度**的脚印把本来有高度的真楼淹掉。
+   *
+   * ## 拿不到就当没有
+   * 这个源是 Termux 上的 Python 服务（8792）。**真壳 APK 里没有 Python** ⇒ 必然失败。
+   * 所以这里一律 `catch` 掉、返回 null，调用方照旧只用 OSM：
+   * 少一层楼，但页面照常能玩（而且那时 AI 示意层会自动顶上，见 `aiOn`）。
+   *
+   * ## 缓存
+   * 后端按 bbox 落盘缓存（同一 bbox 只打一次 S3），前端再记一层 `Map`：
+   * 拖动时来回经过同一个位置不会重复打网络。
+   */
+  const ovCache = new Map<string, { features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }>; note: string }>();
+
+  async function overtureFill(
+    lat: number,
+    lng: number,
+    r: number,
+    osmCount: number
+  ): Promise<{ features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }>; note: string } | null> {
+    if (!shouldAskSecondSource(osmCount, BLD_SPARSE)) return null;
+    const key = `${lat.toFixed(3)},${lng.toFixed(3)},${Math.round(r)}`;
+    const hit = ovCache.get(key);
+    if (hit) return hit;
+    try {
+      /* 冷启动要现读 parquet（实测 13.5s 取数 + 建/载索引），给足 60s；
+         热缓存是毫秒级。超时就当没有，别拖住整屏。 */
+      const geo = await withTimeout(worldMapApi.overtureBuildings({ lat, lng, r }), 60000);
+      if (!alive) return null;
+      const feats = (geo?.features || []) as Array<{ geometry?: unknown; properties?: Record<string, unknown> }>;
+      const out = {
+        features: feats,
+        /* 署名是**硬要求**（ODbL）：不写来源就是违规使用，所以这句话跟着数据一起走 */
+        note: `Overture 补缺 ${feats.length} 栋（© Overture Maps, ODbL）`,
+      };
+      ovCache.set(key, out);
+      return out;
+    } catch {
+      /* 服务没起 / 真壳里没有 Python / 网络抖 —— 都不是错误，只是"没有第二源" */
+      ovCache.set(key, { features: [], note: "" });
+      return null;
+    }
+  }
+
+  /** 取楼用的地图最小接口（只声明用到的，避免 any） */  interface BldMapLike {
     getZoom(): number;
     getCenter(): { lng: number; lat: number };
     getBounds(): { getEast(): number; getWest(): number; getNorth(): number; getSouth(): number };
@@ -1306,19 +1351,48 @@
       stats.note = failed
         ? `楼房数据取不到（已试 ${tried.join("/")}m）`
         : `OSM 在这一带没有登记楼房（已试 ${tried.join("/")}m）`;
+      /* OSM 一栋都没有 = 最稀疏的情况 ⇒ 交给第二源补（拿不到就只留上面那句实话） */
+      const fill0 = await overtureFill(c.lat, c.lng, best?.r ?? r0, 0);
+      if (!alive || !fill0?.features.length) return;
+      applyBuildings(m, dressBld({ features: fill0.features }));
+      stats.note = `${stats.note} · ${fill0.note}`;
       return;
     }
-    const data = dressBld({ features: feats });
+    /* 🆕 第二源补缺：OSM 不够看时才问（够看的地方一次网络都不发） */
+    let features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }> = feats;
+    let fillNote = "";
+    if (shouldAskSecondSource(feats.length, BLD_SPARSE)) {
+      /* 先如实说"正在补"，别让人对着不动的画面猜（这一问冷启动要十几秒） */
+      stats.note = `真楼只有 ${feats.length} 栋，正在取 Overture 补缺…`;
+      const fill = await overtureFill(c.lat, c.lng, best!.r, feats.length);
+      if (!alive) return;
+      if (fill?.features.length) {
+        const mg = mergeBuildingSources(feats, fill.features);
+        features = mg.features as typeof features;
+        fillNote = `${fill.note}（去重 ${mg.dropped}）`;
+      } else {
+        fillNote = "Overture 补缺不可用（只用 OSM）";
+      }
+    }
+    applyBuildings(m, dressBld({ features }));
+    stats.view = "街区视野";
+    const sparse = best!.feats.length < BLD_ENOUGH ? `楼房稀疏：半径已放大到 ${best!.r}m（试过 ${tried.join("/")}m）` : "";
+    stats.note = [sparse, fillNote].filter(Boolean).join(" · ");
+  }
+
+  /**
+   * 把一份**已上妆**的楼栋数据落到图层上：首次建源 + 建层，之后只 `setData`。
+   * （两条路都要用：OSM 有一份数据的路、OSM 空但 Overture 有数据的路 —— 写两遍迟早漂移。）
+   */
+  function applyBuildings(m: BldMapLike, data: { type: "FeatureCollection"; features: unknown[] }): void {
     if (m.getSource("bld")) {
       m.getSource("bld")!.setData(data);
-    } else {
-      m.addSource("bld", { type: "geojson", data });
-      /* 插在注记层之前 ⇒ 街名压在楼上面（和地图 App 一个口径：楼不该把街名挡住） */
-      const before = m.getLayer("ref") ? "ref" : undefined;
-      for (const l of bldLayerSpecs()) m.addLayer(l, before);
+      return;
     }
-    stats.view = "街区视野";
-    stats.note = best!.feats.length < BLD_ENOUGH ? `楼房稀疏：半径已放大到 ${best!.r}m（试过 ${tried.join("/")}m）` : "";
+    m.addSource("bld", { type: "geojson", data });
+    /* 插在注记层之前 ⇒ 街名压在楼上面（和地图 App 一个口径：楼不该把街名挡住） */
+    const before = m.getLayer("ref") ? "ref" : undefined;
+    for (const l of bldLayerSpecs()) m.addLayer(l, before);
   }
 
   /* ── 浏览器手势兜底（CSS 之外的保险）─────────────────────────────────────
@@ -1926,6 +2000,31 @@
   }
   .ws-dml__hud .is-warn {
     color: #ffd28a;
+  }
+  /* 🎨 主题 A/B 开关。
+     🔴 `pointer-events: auto` **不能省**：整条 HUD 是 `pointer-events:none`（它只是层显示，
+     不该挡住地图的拖动/缩放）⇒ 不显式打开的话，这个按钮看得见、**点不动**（最难查的那种）。
+     其余刻意做得素：不加 `backdrop-filter`（HUD 那条模糊已经是 fps 杀手，见上面的长注释），
+     不加 transition —— 它不该成为新的每帧开销。 */
+  .ws-dml__hud .ws-dml__theme {
+    position: relative; /* ::after 的外扩可点区以它为参照 */
+    pointer-events: auto;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #eaf6ff;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 999px;
+    padding: 1px 8px;
+  }
+  /* 触控目标 ≥ 44×44（WCAG）—— 但 HUD 只有 11px 高，撑到 44 会把地图挡掉一大条。
+     折中：用透明外扩把**可点区域**做大，视觉尺寸不动（机主手指点得中，画面也不被占）。 */
+  .ws-dml__hud .ws-dml__theme::after {
+    content: "";
+    position: absolute;
+    inset: -12px -6px;
   }
   /* 「按类型估」的楼数：**估计值必须长得和真数据不一样**（暖色），
      否则读者会把猜的高度当成 OSM 写的（DESIGN-3D-MODES.md §八 的红线）。 */

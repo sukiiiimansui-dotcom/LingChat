@@ -58,7 +58,12 @@
       </div>
       <div class="wx__desc">{{ state.degraded ? "天气不可用" : state.desc || state.kindLabel }}</div>
       <div class="wx__grid">
-        <div v-for="g in grid" :key="g.k" class="wx__cell">
+        <div
+          v-for="(g, i) in grid"
+          :key="g.k"
+          class="wx__cell"
+          :style="{ '--wx-i': String(Math.min(i, 7)) }"
+        >
           <div class="wx__k">{{ g.k }}</div>
           <div class="wx__v">{{ g.v }}</div>
         </div>
@@ -87,6 +92,7 @@
   import { useRouter } from "vue-router";
   import worldMapApi from "@/api/services/worldMap";
   import { normalize, weatherLine, type WsWeatherState } from "@/components/views/worldsim/wsWeather";
+  import { useWsCountUp } from "@/composables/useWsCountUp";
   import { usePhoneGeo } from "./usePhoneGeo";
 
   /** 常用城市（点一下就切；后端用 wttr.in，中文名可用） */
@@ -127,9 +133,20 @@
   const cityLabel = computed(() => manualCity.value || locCity.value || "定位中…");
 
   const tempText = computed(() => {
-    const t = state.value?.tempC;
+    const t = tempShown.value;
     return typeof t === "number" && Number.isFinite(t) ? `${Math.round(t)}°C` : "—";
   });
+  /**
+   * MG 切片 C（2026-09-19）：温度**滚**上去，不要"啪"地跳。
+   * 数据是异步来的 —— 从"—"直接跳到 `23°C`，用户根本注意不到它变了；
+   * 从 0 滚到 23 就一眼看得出"天气拿到了"。
+   * 系统关了动画 / 低端机档位会自动变成直接落定（判断在 `useWsCountUp` 里）。
+   */
+  const tempC = computed(() => {
+    const t = state.value?.tempC;
+    return typeof t === "number" && Number.isFinite(t) ? Math.round(t) : null;
+  });
+  const tempShown = useWsCountUp(tempC);
   /** 数值一律"没有就给 —"，**不拿 0 冒充**（0°C / 0% 与"没数据"是两件事） */
   const nz = (v: unknown, unit = "") =>
     typeof v === "number" && Number.isFinite(v) ? `${Math.round(v)}${unit}` : "—";
@@ -233,7 +250,8 @@
   .wx__card.is-degraded { background: rgba(255, 255, 255, 0.06); }
   .wx__big { display: flex; align-items: center; gap: 8px; }
   .wx__ico { font-size: 26px; line-height: 1; }
-  .wx__temp { font-size: 30px; font-weight: 700; letter-spacing: -1px; }
+  /* tabular-nums：温度在滚动（MG 切片 C），等宽数字才不会把后面的 °C 挤来挤去 */
+  .wx__temp { font-size: 30px; font-weight: 700; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
   .wx__desc { font-size: 14px; font-weight: 600; }
   .wx__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 4px; }
   .wx__cell { padding: 4px; border-radius: 8px; background: rgba(0, 0, 0, 0.18); }
@@ -247,5 +265,25 @@
   .wx__go {
     margin-top: 6px; padding: 3px 10px; border: 1px solid rgba(255, 255, 255, 0.3);
     border-radius: 8px; background: transparent; color: #fff; cursor: pointer;
+  }
+
+  /* ── MG 切片 C：六格数据**依次**浮现（错峰 45ms）──────────────────────────
+     为什么错峰而不是整块一起淡入：这六格是"数据到了"的证明，
+     一格接一格地出现，读起来像仪表在逐项点亮；一起出现就只是一次刷新。
+     45ms 的间隔来自 MD3 的 stagger（相关元素 20~40ms），这里略宽一点更从容。
+     上限卡在 7（第 8 格起不再延后）—— 不然列表一长，最后一格要等半秒。 */
+  .wx__cell {
+    animation: wx-cell-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--wx-i, 0) * 45ms);
+  }
+  @keyframes wx-cell-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  /* 降级：低端机 → 不做错峰（六格一次性出现，一点信息不丢）；
+     系统关了动画 → 同样直接出现。两条都只动 opacity/transform，关掉不影响可读性。 */
+  .ws-root.ws-perf-low .wx__cell { animation: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .wx__cell { animation: none; }
   }
 </style>

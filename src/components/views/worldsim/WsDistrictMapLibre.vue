@@ -1128,6 +1128,18 @@
   ): void {
     stats.mode = mode;
     mapAvailable.value = false;
+    /* 🔴 **降级前必须换一块新画布**：`cv` 可能已经被 WebGL 占过（MapLibre 在它上面建了
+       webgl 上下文），而按 HTML 规范，`canvas.getContext("2d")` 在**已经有 webgl 上下文**
+       的画布上会返回 `null` ⇒ `draw2d()` 里 `if (!ctx) return;` 直接**静默不画**。
+       症状："已经降级了，HUD 也说了原因，但画布是**空白**的"，而且**零报错**。
+       （同一张画布不能有两种上下文，这是规范行为，不是 bug —— 但极容易踩。） */
+    const oldCv = cv.value;
+    if (oldCv && !oldCv.getContext("2d")) {
+      const fresh = document.createElement("canvas");
+      fresh.className = oldCv.className;
+      oldCv.replaceWith(fresh);
+      cv.value = fresh;
+    }
     stats.pins = domPins.value.length;
     if (why) stats.note = stats.note ? `${stats.note} · ${why}` : why;
     draw2d(fc);

@@ -86,7 +86,7 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      const BUILD = "ws3dshow-2026-09-20-v5";
+      const BUILD = "ws3dshow-2026-09-20-v6";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -138,9 +138,55 @@
         window.__w3d = { ok: false, why, errs: errs.slice(0, 5) };
       }
 
-      /* ── 样式：底图 + 楼房挤出 ─────────────────────────────────────────────
-         配方就是准备搬进 WsDistrictMapLibre 的那一份。 */
+      /* ── 🎨 主题（2026-09-20）────────────────────────────────────────────────
+         机主原话：「这个地图太暗了喵，还有就是我想给整体地图改成二次元式的那种风格喵」。
+
+         🔴 这一页**不自己写一套配色** —— 它从 `/wstheme.json` 读**同一份主题**。
+         为什么：这一页是"观感调参台"，产品配方在 `WsDistrictMapLibre.vue` 里。
+         两边各自维护一份颜色，就一定会漂（这一页原来就是手抄的）。
+         那份 JSON 由 `world_map/ws_map_theme_selftest.mjs` **从 `wsMapTheme.ts` 生成**，
+         而且自检每次都会断言"committed 的 JSON == 现在生成的"⇒ 想漂都漂不了。
+
+         A/B：`?wstheme=night` 回暗色、`?wstheme=anime` 二次元（不给就用默认=二次元）。
+         取不到 JSON 时**退回本页原来那套暗色配方**（页脚会如实写"主题未加载"）。 */
+      let THEME = null;
+      let THEME_ID = "anime";
+      try {
+        const q = new URLSearchParams(location.search).get("wstheme");
+        if (q === "night" || q === "anime") THEME_ID = q;
+      } catch { /* 参数坏了就用默认，不因为一个开关把页面搞崩 */ }
+
+      async function loadTheme() {
+        try {
+          const r = await fetch("/wstheme.json", { cache: "no-store" });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const j = await r.json();
+          const t = j?.themes?.[THEME_ID];
+          if (!t) throw new Error("快照里没有主题 " + THEME_ID);
+          THEME = t;
+          /* 版本戳带上主题名 —— 代拍回来的图一眼能看出"跑的是哪一套"（缓存坑踩过） */
+          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label; } catch {}
+        } catch (e) {
+          THEME = null;
+          try { document.getElementById("m-build").textContent = BUILD + " · 主题未加载(" + String(e).slice(0, 24) + ")"; } catch {}
+        }
+      }
+
+      /* ── 样式：底图 + 楼房挤出 ───────────────────────────────────────────── */
       function makeStyle() {
+        /* 有主题快照就照它建（底半部分与产品组件**逐字段同源**） */
+        if (THEME) {
+          const st = { version: 8, name: "ws-3d-show-" + THEME.id, sources: THEME.sources, layers: THEME.layers };
+          /* ⚠️ 用条件赋值而不是 `sky: undefined` —— 后者会被当成"写了这个键"，
+             样式校验会报错，而 `load` 永不触发、画布全透明（这页的文件头记着这条）。 */
+          if (THEME.sky) st.sky = THEME.sky;
+          return st;
+        }
+        return makeStyleFallback();
+      }
+
+      /** 取不到 `/wstheme.json` 时的兜底：本页原来那套暗色配方（一字不改，保证页面还能跑） */
+      function makeStyleFallback() {
         return {
           version: 8,
           name: "ws-3d-show",
@@ -214,28 +260,38 @@
        * 规矩：**样式里只写"一开始就存在的东西"**；随数据来的图层一律 `addLayer` 后加。
        */
       function bldLayerSpecs() {
+        /* 色阶/描边/平涂开关**全部跟着主题走**（和产品组件同源，见 `wsMapTheme.ts`）。
+           兜底值 = 本页原来那套暗色配方。 */
+        const ramp = THEME?.ramp || [
+          [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
+          [60, "#5f93b0"], [110, "#7fbcd4"], [200, "#b6e2f2"], [320, "#e8f7ff"],
+        ];
+        const outline = THEME?.outline || { color: "rgba(190,235,255,0.22)", width: 0.5 };
+        /* 平涂（二次元）= 关掉竖向渐变；写实（暗色）= 开着。 */
+        const vgrad = THEME ? THEME.verticalGradient : true;
+        const opacity = THEME?.extrudOpacity || 0.97;
+        const stops = [];
+        for (const [h, c] of ramp) stops.push(h, c);
         return [
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
             paint: {
               /* 按**渲染高度**上色：矮的沉下去、高的亮起来 ⇒ 一眼看出天际线的高低起伏。
                  （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。） */
-              "fill-extrusion-color": [
-                "interpolate", ["linear"], ["get", "h3d"],
-                3, "#23323e", 8, "#2d4356", 16, "#3a586f", 30, "#4a7290",
-                60, "#5f93b0", 110, "#7fbcd4", 200, "#b6e2f2", 320, "#e8f7ff",
-              ],
+              "fill-extrusion-color": ["interpolate", ["linear"], ["get", "h3d"], ...stops],
               "fill-extrusion-height": ["get", "h3d"],
               "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-              "fill-extrusion-opacity": 0.97,
-              /* 墙面竖向渐变：楼顶比楼底亮一点，体块才有"立起来"的感觉。 */
-              "fill-extrusion-vertical-gradient": true,
+              "fill-extrusion-opacity": opacity,
+              /* 墙面竖向渐变：楼顶比楼底亮一点，体块才有"立起来"的感觉；
+                 二次元的**平涂**要关掉它（楼是一块纯色板才"动画"）。 */
+              "fill-extrusion-vertical-gradient": vgrad,
             },
           },
-          /* 轮廓细线：低 pitch 时体块容易糊，钩一圈边就清楚了（太亮会织成一张网，0.22 刚好） */
           {
+            /* 轮廓线。暗色里它只是淡淡一圈；**二次元里它是主角** ——
+               BA 风的地面(0.919)和矮楼(0.87)亮度几乎一样，全靠这条深藏青细线把楼"勾"出来。 */
             id: "bld-line", type: "line", source: "bld",
-            paint: { "line-color": "rgba(190,235,255,0.22)", "line-width": 0.5 },
+            paint: { "line-color": outline.color, "line-width": outline.width },
           },
         ];
       }
@@ -345,6 +401,8 @@
         catch (e) { errs.push("模块加载失败 " + e); return fail("地图库加载失败"); }
         if (!maplibregl?.Map) return fail("地图库形状不对");
         if (!hasWebGL()) return fail("这台设备没有 WebGL");
+        /* 主题必须在**建图之前**拿到 —— style 是一次性传进去的（换主题要重建 sources/layers） */
+        await loadTheme();
 
         map = new maplibregl.Map({
           container: "map", style: makeStyle(),
@@ -390,10 +448,20 @@
            留这个按钮是因为"哪个更好看"**只能看真机图**决定 ——
            而卫星是白天的亮照片，压暗过头会太黑、压不够会比楼还亮（楼就"消失"了）。 */
         let satOn = true;
+        /* 🛰 「星」按钮只管**卫星高分层**。⚠️ 二次元主题**根本没有 hi 层**
+           （卫星=写实，与平涂冲突，见 `wsMapTheme.ts`）⇒ 这个按钮在二次元下应当
+           **如实禁用**，而不是"点了没反应"（点了没反应最容易被当成 bug 反复点）。 */
+        const hasHi = !!map.getLayer("hi");
         const applySat = () => {
           try { map.setLayoutProperty("hi", "visibility", satOn ? "visible" : "none"); } catch { /* 图层还没建好 */ }
           const b = $("b-sat");
-          if (b) b.classList.toggle("on", satOn);
+          if (b) {
+            b.classList.toggle("on", satOn && hasHi);
+            b.disabled = !hasHi;
+            b.title = hasHi
+              ? "切换 z16 以上的底：卫星影像 / 暗色底放大"
+              : "二次元主题没有卫星层（卫星=写实，和「平涂」冲突）";
+          }
         };
         $("b-sat").onclick = () => { satOn = !satOn; applySat(); };
         applySat();

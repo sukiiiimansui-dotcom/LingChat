@@ -1,0 +1,303 @@
+{
+ "_note": "由 world_map/ws_map_theme_selftest.mjs 从 wsMapTheme.ts 生成，别手改",
+ "themes": {
+  "night": {
+   "id": "night",
+   "label": "暗色（原来的）",
+   "hud": "暗色夜景",
+   "sky": {
+    "sky-color": "#0a1119",
+    "horizon-color": "#1b2a3a",
+    "fog-color": "#0d1620",
+    "sky-horizon-blend": 0.6,
+    "horizon-fog-blend": 0.4,
+    "atmosphere-blend": 0.7
+   },
+   "sources": {
+    "base": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 16,
+     "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    },
+    "ref": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 16,
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    },
+    "hi": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 19,
+     "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    }
+   },
+   "layers": [
+    {
+     "id": "bg",
+     "type": "background",
+     "paint": {
+      "background-color": "#0a1017"
+     }
+    },
+    {
+     "id": "base",
+     "type": "raster",
+     "source": "base",
+     "paint": {
+      "raster-opacity": [
+       "interpolate",
+       [
+        "linear"
+       ],
+       [
+        "zoom"
+       ],
+       14.5,
+       0.92,
+       16.2,
+       0
+      ],
+      "raster-saturation": -0.25,
+      "raster-contrast": 0.04,
+      "raster-brightness-max": 0.74
+     }
+    },
+    {
+     "id": "hi",
+     "type": "raster",
+     "source": "hi",
+     "minzoom": 14.5,
+     "paint": {
+      "raster-opacity": [
+       "interpolate",
+       [
+        "linear"
+       ],
+       [
+        "zoom"
+       ],
+       14.5,
+       0,
+       16.2,
+       0.95
+      ],
+      "raster-saturation": -0.22,
+      "raster-contrast": 0.1,
+      "raster-brightness-min": 0,
+      "raster-brightness-max": 0.56
+     }
+    },
+    {
+     "id": "ref",
+     "type": "raster",
+     "source": "ref",
+     "paint": {
+      "raster-opacity": 0.9
+     }
+    }
+   ],
+   "ramp": [
+    [
+     3,
+     "#3b566f"
+    ],
+    [
+     8,
+     "#456a89"
+    ],
+    [
+     16,
+     "#54809f"
+    ],
+    [
+     30,
+     "#6394b3"
+    ],
+    [
+     60,
+     "#7cb0c9"
+    ],
+    [
+     110,
+     "#9fd0e2"
+    ],
+    [
+     200,
+     "#c8e9f5"
+    ],
+    [
+     320,
+     "#eef9ff"
+    ]
+   ],
+   "roofFallback": "#1b2833",
+   "antennaFallback": "#cfe8f5",
+   "outline": {
+    "color": "rgba(190,235,255,0.22)",
+    "width": 0.5
+   },
+   "verticalGradient": true,
+   "extrudOpacity": [
+    "interpolate",
+    [
+     "linear"
+    ],
+    [
+     "zoom"
+    ],
+    12.8,
+    0.72,
+    15,
+    0.86,
+    17,
+    0.97
+   ],
+   "low": {
+    "outlineWidth": null
+   }
+  },
+  "anime": {
+   "id": "anime",
+   "label": "二次元（蔚蓝档案）",
+   "hud": "二次元 · 平涂",
+   "sky": {
+    "sky-color": "#7EC8F0",
+    "horizon-color": "#EAF6FF",
+    "fog-color": "#DCEFFB",
+    "sky-horizon-blend": 0.6,
+    "horizon-fog-blend": 0.5,
+    "atmosphere-blend": 0.8,
+    "fog-ground-blend": 0.6
+   },
+   "sources": {
+    "base": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 16,
+     "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    },
+    "ref": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 16,
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    }
+   },
+   "layers": [
+    {
+     "id": "bg",
+     "type": "background",
+     "paint": {
+      "background-color": "#EAF6FF"
+     }
+    },
+    {
+     "id": "base",
+     "type": "raster",
+     "source": "base",
+     "paint": {
+      "raster-opacity": 1,
+      "raster-saturation": 0.15,
+      "raster-contrast": 0.08,
+      "raster-brightness-max": 0.96
+     }
+    },
+    {
+     "id": "tint",
+     "type": "background",
+     "paint": {
+      "background-color": "#CFE6F7",
+      "background-opacity": 0.35
+     }
+    },
+    {
+     "id": "ref",
+     "type": "raster",
+     "source": "ref",
+     "paint": {
+      "raster-opacity": 0.85
+     }
+    }
+   ],
+   "ramp": [
+    [
+     3,
+     "#BFE3F7"
+    ],
+    [
+     12,
+     "#AEDBF4"
+    ],
+    [
+     25,
+     "#9DD2F0"
+    ],
+    [
+     45,
+     "#B9E2F8"
+    ],
+    [
+     70,
+     "#D3EEFB"
+    ],
+    [
+     110,
+     "#E8F6FF"
+    ],
+    [
+     200,
+     "#F4FBFF"
+    ],
+    [
+     320,
+     "#FFFFFF"
+    ]
+   ],
+   "roofFallback": "#8FC9EE",
+   "antennaFallback": "#FFFFFF",
+   "outline": {
+    "color": "#2C4A63",
+    "width": 1.2
+   },
+   "verticalGradient": false,
+   "extrudOpacity": [
+    "interpolate",
+    [
+     "linear"
+    ],
+    [
+     "zoom"
+    ],
+    12.8,
+    0.8,
+    15,
+    0.92,
+    17,
+    1
+   ],
+   "low": {
+    "outlineWidth": 0.6
+   }
+  }
+ }
+}

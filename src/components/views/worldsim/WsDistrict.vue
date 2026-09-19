@@ -191,7 +191,7 @@
   import worldMapApi from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
   import WsDistrictMapLibre from "./WsDistrictMapLibre.vue";
-  import type { AiItem } from "./wsAiLayers";
+  import { aiItemsFromLayout, type AiItem } from "./wsAiLayers";
   import type { WsDistrictPin } from "./wsActors";
   import {
     districtRenderSvg,
@@ -559,7 +559,16 @@
         break;
       case "done":
         // 最终布局才是权威：用它整份替换（流式过程中偶尔会丢片段）
-        if (ev.layout) paint.loadLayout(ev.layout);
+        if (ev.layout) {
+          paint.loadLayout(ev.layout);
+          /* 🔴 地图上的示意层也要换成这份权威布局（2026-09-20）。
+             以前只换了 `paint`（SVG 那条路），而**地图图层吃的是 `aiItems`** ——
+             两份数据从此分叉：SVG 是完整街区，地图上缺一块，且两边都不报错。
+             `loadLayout` 是**替换**语义，所以这里也整份替换（不是追加），
+             否则流里那些残缺项会留下来变成"两份重复的楼"。 */
+          aiItems.value = aiItemsFromLayout(ev.layout);
+          aiTick.value++;
+        }
         counts.value = paint.counts();
         aiDone.value = true;
         log(`完成：${counts.value.buildings} 栋建筑 / ${counts.value.roads} 条路`);

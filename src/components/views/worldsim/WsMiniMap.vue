@@ -283,8 +283,9 @@
     color: #fff;
     font-size: 1em;
     cursor: pointer;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    /* 低档关掉模糊（写死的 6px 会让 `.ws-perf-low` 管不到 —— 与小地图主样式同款口径） */
+    backdrop-filter: blur(var(--ws-blur-low, 6px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 6px));
   }
   /* 操作提示贴在圆的下沿：不挡内容，也让人知道这块能拖 */
   .ws-mini__hint {

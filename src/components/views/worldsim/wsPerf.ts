@@ -3,13 +3,13 @@
 // ── 为什么新开一个文件，而不是把逻辑塞进已有文件 ────────────────────────────
 //   · 判定/持久化/帧率采样全是**纯逻辑 + 一个模块级单例**，拆出来才能被 node 自检覆盖
 //     （见 ~/rikka/Dsh-SYuki/world_map/frontend_selftest_worldsim_p1.mjs 的【P5-5】段）；
-//   · 只依赖 `./wsGeo`（复用已有的 detectLowPerf）与 `vue`，**不 import 任何 `@/` 别名**，
+//   · 只依赖 `./wsCaps`（2026-09-19 收敛前是 `./wsGeo`）与 `vue`，**不 import 任何 `@/` 别名**，
 //     这样自检里 `bundle()` 不需要额外别名就能把它打成 mjs（少一个坑）。
 //
 // ── 与既有实现的关系（别重造）──────────────────────────────────────────────
-//   `wsGeo.ts` 里已经有一个 `detectLowPerf()`：只看核数 / 设备内存，**不落盘、不能覆盖、
-//   不看实测帧率**，而且它打出来的 `.ws-perf-low` 里那条 `.ws-anim { animation-duration }`
-//   其实是个死类名（仓库里根本没有 `.ws-anim` 这个类）。本文件把它升级成完整的一套：
+//   `wsGeo.ts` 里那个 `detectLowPerf()`（只看核数 / 设备内存）**已于 2026-09-19 收敛**：
+//   判定搬进 `wsCaps.detectDeviceLow()`，wsGeo 那份只剩一个零调用的转发壳。
+//   本文件在它之上补齐了完整的一套：
 //     ① 三信号判定（核数 / 设备内存 / **实测帧率**）→ `detectTier()`
 //     ② 落 localStorage（`wsm:v1:perf`：自动档结果 + 手动覆盖 + fps 开关）
 //     ③ 允许手动覆盖（事件流面板里的三档：自动 / 高 / 低）
@@ -20,9 +20,21 @@
 //     和另一个偏弱信号（核数 ≤6 / 内存 ≤6GB）凑够两条才降级（避免一次抖动就误降级）。
 //   · 拿不到任何信号 → high（宁可多开动画，也别把好机器误降级）。
 //   · **自动档只降不升**：一次坏采样不该被下一次好采样洗掉（用户可以在面板里手动切回高）。
+//
+// ── 🆕 2026-09-19 收敛（去屎山）────────────────────────────────────────────
+//   · "这台机器弱不弱"（核数/内存）已搬到 `wsCaps.detectDeviceLow()` —— **全仓唯一一份**；
+//     本文件过去自己又判一次、口径还不一样（≤6 核 / ≤6GB）⇒ 就是机主说的「降级乱降」。
+//   · 本文件算出的**最终档位**会写进 `wsCaps`（`setPerfTier`）——
+//     依赖方向是 **wsPerf → wsCaps 单向**，反过来会成环。
+//     这样"CSS 用的 `.ws-perf-low`"与"JS 用的气泡上限"永远来自同一个档位。
 
-import { computed, ref, type ComputedRef, type Ref } from "vue";
-import { detectLowPerf } from "./wsGeo";
+import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
+import {
+  detectDeviceLow,
+  readDeviceSignals,
+  setPerfTier,
+  type PerfTier,
+} from "./wsCaps";
 
 /* ══════════════════════════════════════════════════════════════════
  * 一、常量与类型
@@ -31,8 +43,15 @@ import { detectLowPerf } from "./wsGeo";
 /** 持久化键：`{"tier":"auto|high|low","fps":false,"auto":"high|low"}` */
 export const WS_PERF_KEY = "wsm:v1:perf";
 
-/** 性能档：只有两档（需求就是两档，多一档就多一份没人维护的分支） */
-export type PerfTier = "high" | "low";
+/**
+ * 性能档：只有两档（需求就是两档，多一档就多一份没人维护的分支）。
+ *
+ * 🆕 2026-09-19 收敛：**类型的定义搬到了 `wsCaps`**（能力矩阵那份），这里只做转发。
+ * 收敛前 `wsCaps.ts` 与 `wsPerf.ts` **各写了一份 `"high" | "low"`** ——
+ * 值域虽然一样，但两份定义就会各自漂（哪天加一档"中"，必然漏改一处）。
+ * 现在是「一份定义 + 一处转发」，所以 `import { type PerfTier } from "./wsPerf"` 的调用方**不用改**。
+ */
+export type { PerfTier };
 
 /** 用户可选的三档：auto = 用自动判定结果 */
 export type PerfTierPref = "auto" | PerfTier;
@@ -135,8 +154,10 @@ export function detectTier(env: PerfEnv = {}): PerfTier {
   const cores = Number(env.cores) || 0;
   const mem = Number(env.memGB) || 0;
   const fps = Number(env.fps) || 0;
-  if (cores > 0 && cores <= 4) return "low";
-  if (mem > 0 && mem <= 4) return "low";
+  // 设备硬底线（核数 / 内存）⇐ **只有 `wsCaps.detectDeviceLow` 一处说了算**。
+  // 这里过去自己写着 `cores<=4 / mem<=4`，而 `wsGeo.detectLowPerf` 写着 `mem<=3`
+  // ⇒ 4GB 手机拿到两个答案（就是"降级乱降"）。收敛后以本函数这份（真正生效的那份）为准。
+  if (detectDeviceLow({ hardwareConcurrency: cores, deviceMemory: mem })) return "low";
   if (fps > 0 && fps < FPS_FLOOR) return "low";
   let weak = 0;
   if (cores > 0 && cores <= 6) weak++;
@@ -147,13 +168,11 @@ export function detectTier(env: PerfEnv = {}): PerfTier {
 
 /** 读设备信号（拿不到就是 undefined，交给 detectTier 当「没有这个信号」） */
 export function readPerfEnv(): PerfEnv {
-  if (typeof navigator === "undefined") return {};
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const cores = Number(nav.hardwareConcurrency || 0);
-  const mem = Number(nav.deviceMemory || 0);
+  // 读 `navigator` 的那段收敛进 `wsCaps.readDeviceSignals()`（唯一一份），这里只做转发
+  const { cores, memGB } = readDeviceSignals();
   const env: PerfEnv = {};
   if (cores > 0) env.cores = cores;
-  if (mem > 0) env.memGB = mem;
+  if (memGB > 0) env.memGB = memGB;
   return env;
 }
 
@@ -207,6 +226,19 @@ const fpsNow = ref(0);
 /** 自动采样是否已经做过（一次会话只做一次；结果落盘） */
 let sampled = false;
 
+/**
+ * 最终档位（手动覆盖优先）。
+ *
+ * 🔴 为什么是**模块级**而不是写在 `useWsPerf()` 里：`wsCaps` 的同步不能依赖某个组件的生命周期 ——
+ * 写在 composable 里的话，调它的那个组件一卸载 watch 就没了，能力矩阵会**悄悄停在旧档位**
+ * （正是"降级乱降"最爱长的形状：状态看起来对，其实早就不更新了）。
+ * 模块级单例 + 模块级 watch ⇒ 与组件生死无关。
+ */
+const tierRef = computed<PerfTier>(() => resolveTier(prefs.value));
+
+// 单向同步：wsPerf（唯一算档位的人）→ wsCaps（唯一存能力矩阵的地方）
+watch(tierRef, (t) => setPerfTier(t), { immediate: true });
+
 /** rAF 表（**同时只允许一个**：重复调 start 不会叠加） */
 let rafId: number | null = null;
 let visibleBound = false;
@@ -253,7 +285,7 @@ export interface PerfApi {
  *    **不要**在别处再写一个 fps 循环。
  */
 export function useWsPerf(): PerfApi {
-  const tier = computed<PerfTier>(() => resolveTier(prefs.value));
+  const tier = tierRef; // 模块级单例（见上面的 `tierRef`，别在这里再 computed 一次）
   const low = computed(() => tier.value === "low");
 
   function setTier(t: PerfTierPref) {
@@ -343,7 +375,7 @@ export function useWsPerf(): PerfApi {
     if (prefs.value.fps) startMeter();
     if (sampled || prefs.value.tier !== "auto") return;
     sampled = true;
-    if (detectLowPerf()) noteAuto("low"); // 核数/内存这一路（复用 wsGeo 的既有判定）
+    if (detectDeviceLow()) noteAuto("low"); // 核数/内存这一路（`wsCaps` 的唯一判定）
     void sampleFps().then((fps) => {
       if (fps > 0) {
         fpsNow.value = fps;

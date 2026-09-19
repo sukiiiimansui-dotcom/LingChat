@@ -8,6 +8,11 @@
 // 依赖：只依赖后端 render_geo 的输出格式（`<g class="geo-region" data-adcode data-name>`）。
 // 那个格式是 Rust 侧 `render_geo.rs` 与 Python 侧 `svg_geo.py` **两边一致**的契约
 // （写在 render_geo.rs 开头的模块注释里：每个区划包在 geo-region 里，前端据此点击下钻）。
+//
+// 🆕 2026-09-19：本文件不再自己判"这台机器弱不弱"，改从 `./wsCaps`（能力矩阵唯一真源）取。
+//   所以下面多了**唯一的**一条 import —— 它不引入 vue、也不碰网络，本文件仍是纯逻辑。
+
+import { detectDeviceLow, detectReducedMotion } from "./wsCaps";
 
 /** 一个可点击的行政区划（从 geo_svg 文本里读出来的） */
 export interface GeoRegion {
@@ -198,30 +203,49 @@ export function matchRegions(list: GeoRegion[], query: string, limit = 12): GeoR
 }
 
 /**
- * 这台机器算不算低端（决定要不要加 `.ws-perf-low`）。
+ * 这台机器算不算低端。
  *
- * 说明：方案文档里提到「复用 LingChat 的 autoConfigurePerformance」，但**本仓库里没有**
- * 这个函数（全仓 grep 无命中，应该是官方更新版才有的东西），所以这里按同一思路做个轻量版：
- * 只看并发核数 / 设备内存这两个到处都有的信号，拿不到就当高端（宁可多开动画，也别误降级）。
+ * ## 🔴 2026-09-19 收敛（去屎山）：判定已搬到 `wsCaps.detectDeviceLow()` —— **全仓唯一一份**
+ * @deprecated 本函数**只做转发**，不要再往这里加任何判定逻辑。
+ *    · 新代码请直接 `import { detectDeviceLow } from "./wsCaps"`；
+ *    · **现在已经是零调用点**（2026-09-19 23:52 复核：`wsPerf.ts` / `useWorldSimGeo.ts`
+ *      都已改为直接读 `wsCaps`，`grep -rn "detectLowPerf" src/` 除本定义外只剩注释）；
+ *    · 保留它**只是**为了留一块"这里以前判过降级"的路标 —— **确认后即可整块删除**
+ *      （删前请再 grep 一次 `detectLowPerf` 与 `~/rikka/Dsh-SYuki/world_map/*.mjs`，两者都为 0 才安全）。
+ *
+ * 为什么当初会分裂成两处：这个函数是 2026-09-14 按「复用 LingChat 的 autoConfigurePerformance」
+ * 的思路写的轻量版，口径 **≤4 核 / ≤3GB**；2026-09-19 新写的 `wsPerf.detectTier()` 又自己判了一遍，
+ * 口径 **≤4 核 / ≤4GB** —— **一台 4GB 手机同时得到"弱"和"不弱"两个答案**，
+ * 这就是机主说的「降级乱降」。收敛取值见 `wsCaps.detectDeviceLow()` 的注释。
+ *
+ * ⚠️ 另外更正一条**过时注释**（原话留着当教训，别删）：
+ *   旧注释写「`autoConfigurePerformance` **全仓 grep 无命中**，应该是官方更新版才有的东西」——**这是错的**。
+ *   2026-09-19 复核：`src/api/services/cpu-perf.ts:192` 就有这个导出，
+ *   而且 `src/main.ts` 一直在 import 并调用它。当时的 grep 没有覆盖 `src/api/services/`。
+ *   ⇒ 教训：**"grep 无命中"要先说清 grep 的范围**，否则很容易把"我没找到"当成"不存在"。
  */
 export function detectLowPerf(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const cores = Number(nav.hardwareConcurrency || 0);
-  const mem = Number(nav.deviceMemory || 0);
-  if (cores > 0 && cores <= 4) return true;
-  if (mem > 0 && mem <= 3) return true;
-  return false;
+  return detectDeviceLow();
 }
 
-/** 系统是否要求「减少动态效果」 */
+/**
+ * 系统是否要求「减少动态效果」。
+ *
+ * @deprecated 2026-09-19：**唯一实现在 `wsCaps.detectReducedMotion()`**，本函数只做转发。
+ *   ⚠️ 零调用点（复核：`grep -rn "prefersReducedMotion" src/` 除定义/注释外无 importer）。
+ *   保留它是**故意的**（父代理 2026-09-19 批复④）：转发壳是"迁移期"最省事的形状 ——
+ *   外部调用点以后要迁就迁，不必再改这里；等全仓只剩 `wsCaps` 一份时可整块删。
+ *
+ * 全仓当时有 **5 份**同样的 `matchMedia("(prefers-reduced-motion: reduce)")` 判定：
+ *   · `wsCaps.detectReducedMotion()`  ← **唯一实现**（本函数与它等价）；
+ *   · 本函数（已改为转发）；
+ *   · `wsGeoMap.ts` / `useWsCountUp.ts` / `useWsMapLibre.ts` 各自本地实现 ——
+ *     **这三份仍在用，属于"待接线清单"**（父代理批复②：现在不许动，前两个可能被 MG 代理碰、
+ *     最后一个正在加 `fog`）。收敛它们时要**逐份**验证等价（同款逻辑，见下）：
+ *     `typeof window === "undefined" || !window.matchMedia` ⇒ false；否则 try 里取 `.matches`，抛错 ⇒ false。
+ */
 export function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || !window.matchMedia) return false;
-  try {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    return false;
-  }
+  return detectReducedMotion();
 }
 
 /** 系统当前是不是深色（跟随系统那一路就是靠它；LingChat 主题那一路由调用方显式传 dark） */

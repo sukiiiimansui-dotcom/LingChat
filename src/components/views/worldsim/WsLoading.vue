@@ -42,6 +42,18 @@
            场景差异交给**文案**（`text`/`sub`）说，不再各画一张图。
            附带好处：少 5 套 SVG 路径与关键帧，加载态本身更轻。 -->
       <div class="ws-ring" :class="{ 'is-quiet': tier === 'brief' }" role="img" :aria-label="srText">
+        <!-- MG 切片 A（2026-09-19）：两件纯装饰的东西，压在环的**下面**（DOM 在前 = 先画）。
+             ① 呼吸光晕：一圈很淡的主色软光，一亮一暗 —— 等待时最怕的"是不是卡死了"就靠它回答；
+             ② 等高线脉冲 ×3：同一个动画晚 1 秒起跑，看起来就是地形一圈圈长出来。
+             两者都是 aria-hidden：它们不传达任何信息，读屏用户不该听到它们。 -->
+        <i class="ws-ring__halo" aria-hidden="true" />
+        <i
+          v-for="p in 3"
+          :key="p"
+          class="ws-ring__pulse"
+          :style="{ '--ws-p': String(p - 1) }"
+          aria-hidden="true"
+        />
         <i class="ws-ring__arc" />
         <i class="ws-ring__arc ws-ring__arc--b" />
         <b class="ws-ring__dot" />

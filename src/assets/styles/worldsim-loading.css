@@ -573,3 +573,170 @@
 .ws-root.ws-perf-low .ws-ring__dot {
   animation: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * MG 动效 · 切片 A（2026-09-19）：加载态从「一个转圈」变成「一副会呼吸的等高线」
+ *
+ * 机主原话：「你能做一些 mg 动画来丰富美术吗」。加载态是他**盯得最久**的一屏
+ * （小区 AI 精绘实测 17 秒起，我见过几十秒的），所以观感收益最大的是这里。
+ *
+ * 只加两个动作，每个都能说出「为什么这么动」：
+ *
+ *   ① 呼吸光晕（`.ws-ring__halo`）—— 人眼对「整体一亮一暗」最敏感。
+ *      转圈只说明"在忙"，呼吸才说明"**还活着**"；等 17 秒时最怕的其实是"是不是卡死了"。
+ *      光晕往环外撑一圈，只动 opacity + 很小的 scale，画面里只有约 80px 见方，
+ *      这点开销在手机上可以直接忽略。
+ *
+ *   ② 等高线脉冲 ×3（`.ws-ring__pulse`）—— 这是「世界模拟」自己的比喻：地形是一圈圈
+ *      长出来的。三圈错峰 1 秒起跑：任意时刻总有一圈刚冒头、一圈在扩、一圈快散，
+ *      所以看起来是**不停地长**，而不是"啪"一下三个圈同时闪（那更像 bug）。
+ *      ⚠️ 停掉动画时它的初始透明度是 0 → 静止画面里**看不见**，不会留三个鬼影。
+ *
+ * ③ 进度织带（`.ws-loading__bar::before`，见下面那条规则）—— 见那边的说明。
+ *
+ * 纪律（与文件顶部四条同一口径）：
+ *   · 关键帧只动 transform / opacity；
+ *   · reduced-motion → 文件上方那条 `!important` 杀手规则会全停，这里只保证
+ *     「停下来的静止画面也是好看的」（见上）；
+ *   · ws-perf-low → 脉冲与织带停掉，**只留光晕的纯 opacity 呼吸**
+ *     （那是"还在动"的功能反馈，停了会让人以为卡死）。
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 呼吸光晕 ────────────────────────────────────────────────────────── */
+.ws-ring__halo {
+  position: absolute;
+  /* 负 inset 往外撑一圈。绝对定位元素不参与排版，所以**不会**把下面的文字挤走 */
+  inset: -34%;
+  border-radius: 50%;
+  /* 中心主色、边缘透明：径向渐变自己就是软的，不需要 blur
+     （blur 在大面积上很贵，这里刻意不用） */
+  background: radial-gradient(circle closest-side, var(--ring) 0%, transparent 72%);
+  /* ← 这个值就是「动画被停掉」时留下的静态画面：一圈很淡的光。
+       比原来"只有一个环"多一点底气，同时绝不会喧宾夺主。 */
+  opacity: 0.2;
+  animation: ws-load-halo 3.2s ease-in-out infinite;
+}
+@keyframes ws-load-halo {
+  0%,
+  100% {
+    transform: scale(0.86);
+    opacity: 0.16;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.42;
+  }
+}
+
+/* ── ② 等高线脉冲（同一个动画 + 三个不同的起跑延迟 = 错峰）────────────────── */
+.ws-ring__pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--ring);
+  opacity: 0; /* ← 停掉动画时 = 看不见 */
+  animation: ws-load-pulse 3s cubic-bezier(0.2, 0, 0, 1) infinite;
+  /* `--ws-p` 由模板按序号给（0 / 1 / 2）→ 每圈晚 1 秒起跑 */
+  animation-delay: calc(var(--ws-p, 0) * 1s);
+}
+@keyframes ws-load-pulse {
+  0% {
+    /* 从一开始就是"刚冒出来"：0.3 会让 1.5px 的细线变成 0.45px 的灰边（实测很难看） */
+    transform: scale(0.42);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.55; /* 淡入快一点 = "刚长出来" */
+  }
+  70% {
+    opacity: 0.16; /* 后半程慢慢淡，不要"啪"地消失 */
+  }
+  100% {
+    transform: scale(1.36);
+    opacity: 0;
+  }
+}
+
+/* 长任务档（>10 秒）：把动作**放慢**。
+ * 等 30 秒的人不需要被催 —— 从"很忙"变成"很稳"，这是长等待该有的情绪。 */
+.ws-loading--long .ws-ring__halo {
+  animation-duration: 4.4s;
+}
+.ws-loading--long .ws-ring__pulse {
+  animation-duration: 4.2s;
+  animation-delay: calc(var(--ws-p, 0) * 1.4s);
+}
+
+/* 横排小尺寸（挤在卡片/按钮旁边那种）：脉冲扩出去会撞到旁边的字，只留光晕 */
+.ws-loading--inline .ws-ring__pulse {
+  display: none;
+}
+
+/* 快到看不见的那一档（100ms~1s）：不呼吸、不脉冲，只是安静地亮着
+ * —— 这一档本来就转瞬即逝，给它加动效只会让系统显得很忙（与本文件上方同一口径）。 */
+.ws-loading--brief .ws-ring__halo,
+.ws-loading--brief .ws-ring__pulse,
+.ws-ring.is-quiet .ws-ring__halo,
+.ws-ring.is-quiet .ws-ring__pulse {
+  animation: none;
+}
+
+/* ── ③ 进度织带 ──────────────────────────────────────────────────────────
+ * 确定性进度条原来只有一条实心色块在变长。在它**底下**垫一层慢慢流过的斜纹，
+ * 进度条就从"一根尺子"变成"一条正在织出来的带子"（机主要的"进度织带"）。
+ *
+ * ⚠️ 斜纹必须画在**没有 transform 的外层** `.ws-loading__bar` 上，不能画在填充
+ *    `.ws-loading__bar > i` 里面：填充是靠 `transform: scaleX(prog)` 变宽的，
+ *    斜纹跟着一起被横向压缩 —— 进度 5% 时 0.7em 的花纹被压成 1px 一根的摩尔纹
+ *    （会闪、很脏）。画在外层就永远不变形。
+ *
+ * 无缝循环的两个数必须成对：花纹周期 0.7em ↔ 每轮正好位移 0.7em。
+ * 对不上就会看到"每到循环点跳一下"。 */
+.ws-loading__bar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  /* 200% 宽：往左流的时候右边不会提前露出空白 */
+  width: 200%;
+  z-index: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0 0.35em,
+    color-mix(in srgb, var(--ws-primary) 30%, transparent) 0.35em 0.7em
+  );
+  animation: ws-load-ribbon 5.6s linear infinite;
+}
+/* 填充要压在织带上面（两者都定位了，按 DOM 顺序本来也在上面；写明确一点防止以后被改坏） */
+.ws-loading__bar > i {
+  position: relative;
+  z-index: 1;
+}
+@keyframes ws-load-ribbon {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-0.7em);
+  }
+}
+
+/* ── 低端机档位：脉冲与织带全停，只把光晕换成**纯 opacity** 的呼吸 ──────────
+ * 为什么光晕要留下来：它是"还在动"的功能反馈（停了用户会以为卡死），
+ * 而且纯 opacity 只走合成，在低端机上可以忽略 —— 这与 worldsim.css 里
+ * 保留 `.ws-anim-breathe` 是同一条口径。
+ * ⚠️ 这条选择器比上面那条批量杀手规则 `.ws-root.ws-perf-low .ws-loading *`
+ *    多一个类（4 个类 > 3 个类）才压得住它；少写一个 `.ws-loading` 就失效。 */
+.ws-root.ws-perf-low .ws-loading .ws-ring__halo {
+  animation: ws-load-breathe 2.6s ease-in-out infinite;
+}
+@keyframes ws-load-breathe {
+  0%,
+  100% {
+    opacity: 0.14;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

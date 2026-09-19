@@ -124,7 +124,11 @@ export function renderHeight(props: Record<string, unknown> | undefined | null):
 }
 
 /**
- * 给整份 FeatureCollection 里每栋楼**补上渲染字段**（`h3d` / `h_from`）。
+ * 给整份 FeatureCollection 里每栋楼**补上渲染字段**（`h3d` / `h_from` / `color3d` / `part`），
+ * 并把够高的楼**拆出屋顶压顶与天线**。
+ *
+ * ⚠️ `count` 数的是**楼栋数**（不是要素数）：拆件之后要素会变多，
+ * 但 HUD 上的 `🏢 N` 必须还是"这里有 N 栋楼"，不然读数就没意义了。
  *
  * 为什么在 JS 里算好、而不是写在地图库的表达式里：
  * MapLibre 的 paint 表达式**报错是静默的**（写错一个字段名 ⇒ 图层直接不画，控制台偶尔才吭一声）。
@@ -134,16 +138,20 @@ export function renderHeight(props: Record<string, unknown> | undefined | null):
 export function decorateBuildings(fc: {
   features?: Array<{ properties?: Record<string, unknown> }>;
 } | null): {
-  features: Array<{ properties?: Record<string, unknown> }>;
+  features: Array<Record<string, unknown>>;
   count: { n: number; real: number; levels: number; kind: number };
 } {
-  const feats = (fc?.features || []) as Array<{ properties?: Record<string, unknown> }>;
+  const feats = (fc?.features || []) as Array<{
+    id?: unknown;
+    geometry?: unknown;
+    properties?: Record<string, unknown>;
+  }>;
   const count = { n: feats.length, real: 0, levels: 0, kind: 0 };
-  const out = feats.map((f) => {
-    const { h, from } = renderHeight(f.properties);
-    count[from]++;
-    return { ...f, properties: { ...(f.properties || {}), h3d: h, h_from: from } };
-  });
+  const out: Array<Record<string, unknown>> = [];
+  for (const f of feats) {
+    count[renderHeight(f.properties).from]++;
+    for (const part of buildingParts(f)) out.push(part);
+  }
   return { features: out, count };
 }
 
@@ -174,4 +182,186 @@ export function heightColorExpression(): unknown[] {
   const stops: unknown[] = [];
   for (const [h, c] of HEIGHT_COLOR_RAMP) stops.push(h, c);
   return ["interpolate", ["linear"], ["coalesce", ["get", "h3d"], 8], ...stops];
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 第二步：**"改造渲染"**（`world_map/DESIGN-BUILDING-REALISM.md` §三 的 #2/#4/#6/#8）
+ *
+ * 一句话：**不换数据**，用同一批 OSM 轮廓"画得更像一座真城市"。
+ * 思路是把"一栋楼"在**渲染前**拆成几个体块（body / roof / antenna）——
+ * 全部在 JS 里算好，图层的 paint 只读现成字段（`h3d` / `h_base` / `color3d` / `part`）。
+ *
+ * 为什么坚持"在 JS 里算好"：MapLibre 的 paint 表达式**报错是静默的**
+ * （字段名写错 ⇒ 图层直接不画，控制台偶尔才吭一声）。在 JS 里算，
+ * 不但能被单测覆盖，还能让 **HUD 的计数和画面上真正画的东西必然是同一份**。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 这栋楼被拆成哪种体块 */
+export type BldPart = "body" | "roof" | "antenna";
+
+/** 屋顶压顶只给"够高的楼"做（矮平房压顶反而脏，而且白翻一倍要素数） */
+export const ROOF_MIN_H = 15;
+/** 屋顶相对轮廓的**内缩比例**（0.85 = 向中心收 15%）——近似"女儿墙" */
+export const ROOF_INSET = 0.85;
+/** 屋顶那层压顶的厚度（米）——太厚就不像屋顶像加了一层 */
+export const ROOF_THICK_M = 1.3;
+/** 多高的楼才配一根"天线"（城市轮廓里最抓眼的一档） */
+export const ANTENNA_MIN_H = 60;
+/** 天线长度（米） */
+export const ANTENNA_M = 12;
+
+/** 十六进制色 → 按系数调亮/调暗（>1 亮、<1 暗），夹在 0~255 */
+export function shade(hex: string, k: number): string {
+  const n = parseInt(hex.replace("#", ""), 16);
+  const ch = (v: number): string =>
+    Math.max(0, Math.min(255, Math.round(v * k)))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
+}
+
+/** 高度 → 色阶取色（纯查表，和 GL 里那条 `interpolate` 用**同一张表**） */
+export function rampColorOf(h: number): string {
+  let c = HEIGHT_COLOR_RAMP[0]![1];
+  for (const [stop, col] of HEIGHT_COLOR_RAMP) if (h >= stop) c = col;
+  return c;
+}
+
+/**
+ * 一栋楼的**最终颜色** = 高度色阶 + **确定性**微扰。
+ *
+ * 为什么要微扰：一整片楼如果都取色阶上同一档，颜色会"齐刷刷一样"，
+ * 一眼就看得出是程序刷的。±10% 的明度差异足够让眼睛读出"一栋一栋"，又不会花。
+ *
+ * 🔴 种子必须来自 `osm_id`（**不是 `Math.random()`**）：同一栋楼每次渲染颜色必须一致，
+ *    用随机数会让整片楼**每帧闪**（而且刷新一次变一个样，没法比对截图）。
+ */
+export function buildingColor(h: number, seed: string): string {
+  const k = 0.9 + (hash32(seed || "x") % 21) / 100; // 0.90 ~ 1.10
+  return shade(rampColorOf(h), k);
+}
+
+/** 环的**外环**（后端只产出 Polygon；拿不到就返回 null，不猜） */
+function outerRing(geom: unknown): number[][] | null {
+  const g = geom as { type?: string; coordinates?: unknown } | null;
+  if (!g || g.type !== "Polygon" || !Array.isArray(g.coordinates)) return null;
+  const ring = (g.coordinates as number[][][])[0];
+  if (!Array.isArray(ring) || ring.length < 4) return null;
+  return ring;
+}
+
+/** 向质心缩 k 倍（k<1 内缩）。近似"女儿墙"用，**不做真多边形偏移**（那要处理凹角/自交，不值当） */
+export function insetRing(ring: number[][], k: number): number[][] {
+  const n = ring.length - 1; // GeoJSON 环首尾同点，质心只数前 n 个
+  if (n < 3) return ring;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += ring[i]![0]!;
+    cy += ring[i]![1]!;
+  }
+  cx /= n;
+  cy /= n;
+  const out = ring.map((p) => [cx + (p[0]! - cx) * k, cy + (p[1]! - cy) * k]);
+  /* 缩放后首尾可能因为浮点误差不再严格相等 ⇒ 显式闭合（不闭合的环，渲染器会当线处理） */
+  out[out.length - 1] = out[0]!.slice();
+  return out;
+}
+
+/** 环的经纬度包围盒（算"天线"的粗细用，跟楼的大小成比例） */
+function ringSpan(ring: number[][]): { w: number; h: number } {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const p of ring) {
+    const x = p[0]!;
+    const y = p[1]!;
+    if (x < x0) x0 = x;
+    if (y < y0) y0 = y;
+    if (x > x1) x1 = x;
+    if (y > y1) y1 = y;
+  }
+  return { w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+
+/** 楼顶正中的一个小方块（当天线底座用） */
+function antennaRing(ring: number[][]): number[][] {
+  const n = ring.length - 1;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += ring[i]![0]!;
+    cy += ring[i]![1]!;
+  }
+  cx /= n;
+  cy /= n;
+  const { w, h } = ringSpan(ring);
+  /* 粗细跟着楼走：最小取楼自身短边的 6%，但**至少** ~2.5m，免得密集区细成亚像素看不见 */
+  const r = Math.max(0.000025, Math.min(w, h) * 0.06);
+  return [
+    [cx - r, cy - r],
+    [cx + r, cy - r],
+    [cx + r, cy + r],
+    [cx - r, cy + r],
+    [cx - r, cy - r],
+  ];
+}
+
+/** 造一个"体块"要素（body/roof/antenna 共用一条通道） */
+function partFeature(
+  src: { id?: unknown; geometry?: unknown; properties?: Record<string, unknown> },
+  ring: number[][],
+  base: number,
+  top: number,
+  part: BldPart,
+  color: string
+): Record<string, unknown> {
+  return {
+    type: "Feature",
+    id: `${String(src.id || "")}#${part}`,
+    properties: { ...(src.properties || {}), part, h3d: top, h_base: base, color3d: color },
+    geometry: { type: "Polygon", coordinates: [ring] },
+  };
+}
+
+/**
+ * 楼属性 → 渲染高度（含拆件）。**纯函数**，`decorateBuildings` 内部用它。
+ *
+ * 返回**体块列表**：主体 + （够高才有的）屋顶压顶 + （很高才有的）天线。
+ * 屋顶/天线都是**同一个轮廓加工出来的**，所以不需要任何新数据。
+ */
+export function buildingParts(
+  f: { id?: unknown; geometry?: unknown; properties?: Record<string, unknown> }
+): Array<Record<string, unknown>> {
+  const { h, from } = renderHeight(f.properties);
+  const color = buildingColor(h, String((f.properties || {}).osm_id || f.id || ""));
+  const base = Number((f.properties || {}).min_height) || 0;
+  /* 主体：几何**原样**，只补上算好的字段（`h_base` 统一口径，paint 里不用再分支） */
+  const out: Array<Record<string, unknown>> = [
+    {
+      type: "Feature",
+      id: `${String(f.id || "")}#body`,
+      properties: {
+        ...(f.properties || {}),
+        part: "body",
+        h3d: h,
+        h_from: from,
+        h_base: base,
+        color3d: color,
+      },
+      geometry: f.geometry,
+    },
+  ];
+  const ring = outerRing(f.geometry);
+  if (!ring) return out;
+  if (h >= ROOF_MIN_H) {
+    /* 屋顶压顶：内缩 + 更深色 ⇒ 楼顶有一圈"女儿墙"的层次（DESIGN-BUILDING-REALISM #4） */
+    out.push(partFeature(f, insetRing(ring, ROOF_INSET), h, h + ROOF_THICK_M, "roof", shade(color, 0.62)));
+  }
+  if (h >= ANTENNA_MIN_H) {
+    /* 天线：城市轮廓里最抓眼的一档（#6）。只在很高的楼上做，要素数不会失控 */
+    out.push(partFeature(f, antennaRing(ring), h, h + ANTENNA_M, "antenna", shade(color, 1.25)));
+  }
+  return out;
 }

@@ -39,6 +39,15 @@ export const USE_RUST = isTauriRuntime();
 //   · 8790 = Python 侧车（原型，已停用，留作对照）
 const API_BASE = (import.meta.env?.VITE_WORLD_MAP_API as string) || "http://127.0.0.1:8791";
 
+/**
+ * **第二数据源（Overture，ODbL）的服务地址**。
+ *
+ * 它和 `API_BASE`（Rust 那个 8791）是**两个不同的进程**：这个是 Termux 上的
+ * Python 服务（`world_map/overture_api.py`，8792），负责按 bbox 读公开 S3 上的
+ * GeoParquet 并落盘缓存。分开是有意的 —— 它挂了不该影响 8791 的任何功能。
+ */
+const OVERTURE_BASE = (import.meta.env?.VITE_OVERTURE_API as string) || "http://127.0.0.1:8792";
+
 async function httpGet<T>(
   path: string,
   params?: Record<string, string | number | undefined>
@@ -53,6 +62,28 @@ async function httpGet<T>(
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`世界地图接口 ${path} 返回 ${res.status}`);
   return (await res.json()) as T;
+}
+
+/**
+ * **真实楼栋响应的两种形状统一解包**（2026-09-19 事故）：
+ * · HTTP 走 `/api/buildings` 时后端给的是**信封**：`{ ok, lat, lng, radius, key, cached, count,
+ *   geojson: { type, features }, stats, meta, source }` —— 楼栋在 **`geojson.features`**；
+ * · 真壳（Tauri 命令）那条路给的是**裸 FeatureCollection**。
+ * 踩过的坑：两个调用点都直接读顶层 `.features` ⇒ **恒为 0 栋**（后端明明返回了 179 栋、
+ * 页面却写"这一带没有楼房数据"）。这个函数就是为此存在，别再手写解析。
+ */
+export interface BuildingsGeo {
+  type: string;
+  features: unknown[];
+}
+
+export function unwrapBuildingsGeo(raw: unknown): BuildingsGeo | null {
+  const o = raw as { geojson?: { type?: string; features?: unknown[] }; type?: string; features?: unknown[] } | null;
+  if (!o || typeof o !== "object") return null;
+  const g = o.geojson;
+  if (g && Array.isArray(g.features)) return { type: g.type || "FeatureCollection", features: g.features };
+  if (Array.isArray(o.features)) return { type: o.type || "FeatureCollection", features: o.features };
+  return null;
 }
 
 // ── 类型 ──
@@ -328,6 +359,46 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 // 每个分支都用 `isTauriRuntime()` 实时判定（而不是读上面那个常量快照），
 // 免得判早了或判晚了一格导致整页失效。
 export const worldMapApi = {
+  /**
+   * 真实楼栋（`/api/buildings`）。**返回已解包的 FeatureCollection**（见 `unwrapBuildingsGeo`）。
+   * 不传坐标时后端用"最近一次定位"兜底（与组件原来的行为一致）。
+   */
+  buildings: async (opts: { lat?: number; lng?: number; r?: number } = {}): Promise<BuildingsGeo | null> => {
+    const raw = await httpGet<unknown>("/api/buildings", { lat: opts.lat, lng: opts.lng, r: opts.r });
+    return unwrapBuildingsGeo(raw);
+  },
+  /**
+   * **真实路网**（`/api/roads`）—— 机主 2026-09-20：「在地图上把道路和设施全部勾出来
+   * （方便将行人啥的挪出来）」。
+   *
+   * 返回**已解包的 FeatureCollection**（`LineString`，`properties.rank` 是归一化档次
+   * 0~5，见 Rust `osm::road_rank`）。刻意与 `buildings` **同一个壳**：
+   * 同一个 `unwrapBuildingsGeo` 就能解，错误处理也不用再来一套。
+   *
+   * ⚠️ 后端是**现问 Overpass**（冷查询 15~90 秒，实测涪陵 800m 用了 **14.7 秒**）⇒
+   * 调用方必须**自己带超时**，而且**别在拖动过程中反复取**（按中心+半径做去抖与缓存）。
+   * 半径上限 2000m（更大后端会直接拒掉）。
+   */
+  roads: async (opts: { lat?: number; lng?: number; r?: number } = {}): Promise<BuildingsGeo | null> => {
+    const raw = await httpGet<unknown>("/api/roads", { lat: opts.lat, lng: opts.lng, r: opts.r });
+    return unwrapBuildingsGeo(raw);
+  },
+  /**
+   * **第二数据源：Overture Maps Buildings（ODbL）** —— 只补 OSM 没有的楼。
+   *
+   * 为什么走 HTTP 而不是 invoke：这个源是 Termux 上的一个 **Python 服务**
+   * （`world_map/overture_api.py`，按 bbox 读公开 S3 上的 GeoParquet + 落盘缓存）。
+   * 真壳（APK）里**没有 Python** ⇒ 这个请求必然失败 ⇒ 调用方照旧只用 OSM。
+   * 这是**有意为之**的降级路径：拿不到就少一层楼，绝不让页面崩。
+   *
+   * ⚠️ 许可：Overture 是 **ODbL**，返回里带 `meta.attribution`，**前端必须显示**。
+   */
+  overtureBuildings: async (opts: { lat: number; lng: number; r: number }): Promise<BuildingsGeo | null> => {
+    const q = new URLSearchParams({ lat: String(opts.lat), lng: String(opts.lng), r: String(opts.r) });
+    const res = await fetch(`${OVERTURE_BASE}/api/overture/buildings?${q}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Overture 接口返回 ${res.status}`);
+    return unwrapBuildingsGeo(await res.json());
+  },
   blocks: async (ad?: string, style = "gaode", limit = 6): Promise<BlocksPayload> => {
     if (isTauriRuntime()) {
       return invoke<BlocksPayload>("world_map_blocks", { ad, style, limit });

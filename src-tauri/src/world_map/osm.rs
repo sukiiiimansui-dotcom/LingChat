@@ -712,6 +712,212 @@ pub fn buildings_geojson(osm: &Value) -> (Value, Value) {
     (fc, stats)
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// 道路：Overpass → GeoJSON（给 MapLibre 画线 + 给"行人沿路走"当路网）
+//
+// 为什么和楼房是**两条独立通路**（不复用 `buildings_query`）：
+//   · 楼是**面**（`out geom` 拿整条轮廓），路是**线**（只要折线，不需要闭合）；
+//   · 路的属性维度完全不同（`highway` 等级 / 单行 / 桥隧 / 车道数），
+//     混进楼房那套 `height_src` 口径里只会互相干扰；
+//   · 缓存前缀分开（`road_`），免得一次改查询把两边的缓存都毒掉。
+//
+// 谁用它：`DESIGN-AUTONOMY.md`（角色自主生活）需要"**可走的路网**" ——
+// 10 分钟没人说话就自己出门，得先知道"路在哪、往哪走"。
+// ════════════════════════════════════════════════════════════════════════════
+
+/// 道路缓存的键前缀（与 `BUILDINGS_KEY_PREFIX` 隔离，理由同上）
+pub const ROADS_KEY_PREFIX: &str = "road_";
+
+/// 我们要的路等级 → **渲染/寻路用的"档次"**（0 最粗 ~ 4 最细）。
+///
+/// 为什么要在后端就归一化：前端要按档次分线宽/亮度，寻路要按档次给**通行代价**
+/// （走主干道比钻小巷快）。这两件事都需要一张"等级表"，
+/// 放在 Rust 里算一次、随数据一起返回，前端就不用再维护第二份 `match`（迟早漂移）。
+///
+/// 取值依据：中国城市路网的常见分级（快速路/主干/次干/支路），
+/// 加上步行道（`footway`/`path`/`steps`）——角色是**走**的，步道必须算路。
+pub fn road_rank(highway: &str) -> u8 {
+    match highway {
+        "motorway" | "motorway_link" | "trunk" | "trunk_link" => 0,
+        "primary" | "primary_link" => 1,
+        "secondary" | "secondary_link" => 2,
+        "tertiary" | "tertiary_link" | "unclassified" => 3,
+        "residential" | "living_street" | "service" | "pedestrian" => 4,
+        "footway" | "path" | "steps" | "cycleway" | "track" => 5,
+        _ => 4, // 认不出来的当"支路"——比当主干道安全（画细一点不会喧宾夺主）
+    }
+}
+
+/// 取路的 Overpass QL。
+///
+/// ⚠️ 三个刻意的取舍：
+///   1. **只取 `way`**：道路在 OSM 里就是 way（关系是路线的集合，没有自己的几何）；
+///   2. **用正则一次列全**而不是 `way["highway"]` 全收 —— 后者会把
+///      `bus_stop` 的站台、`platform`、`construction` 甚至 `proposed`（**规划中、根本不存在**）
+///      都当成路画出来：屏幕上多出一堆"幽灵路"，而且**不报错**；
+///   3. `out geom`（要折线），不是 `out center`（那只有一个中心点，画不出路）。
+pub fn roads_query(lat: f64, lng: f64, radius_m: f64) -> String {
+    format!(
+        "[out:json][timeout:40];\
+         way[\"highway\"~\"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street|service|pedestrian|footway|path|steps|cycleway|track)$\"](around:{radius_m},{lat},{lng});\
+         out geom;"
+    )
+}
+
+/// 道路缓存的键（**带前缀**）
+pub fn roads_cache_key(lat: f64, lng: f64, radius_m: f64) -> String {
+    format!("{ROADS_KEY_PREFIX}{}", grid_key(lat, lng, radius_m))
+}
+
+/// 取道路数据（Overpass → 原始 JSON），缓存优先。语义与 [`fetch_buildings`] 完全一致。
+pub async fn fetch_roads(
+    client: &reqwest::Client,
+    dir: impl AsRef<Path>,
+    lat: f64,
+    lng: f64,
+    radius_m: f64,
+    force: bool,
+) -> Option<Value> {
+    let dir = dir.as_ref();
+    let key = roads_cache_key(lat, lng, radius_m);
+
+    if !force {
+        if let Some(v) = load_cached(dir, &key) {
+            return Some(v);
+        }
+    }
+
+    let q = roads_query(lat, lng, radius_m);
+    let (mut j, ep) = post_overpass(client, &q).await?;
+    j["_meta"] = json!({
+        "lat": lat, "lng": lng, "radius_m": radius_m,
+        "ts": now_secs(), "endpoint": ep, "kind": "roads",
+    });
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(txt) = serde_json::to_string(&j) {
+        let _ = std::fs::write(cache_path(dir, &key), txt);
+    }
+    Some(j)
+}
+
+/// Overpass 原始 JSON → `(GeoJSON FeatureCollection(LineString), 统计)`
+///
+/// 每个要素的 `properties`：
+/// `{ osm_id, kind, rank, name, oneway, bridge, tunnel, lanes, layer, surface }`
+/// —— `rank` 是**归一化过的档次**（见 [`road_rank`]），前端按它画粗细/亮度，不用再 match 一遍。
+///
+/// 统计里 `by_rank` / `named` / `oneway` 都要给：前端 HUD 要如实写"本视野 N 条路"，
+/// 而"N 条里有几条是主干、几条有名字"正是**数据质量**的答案（一眼看出这片 OSM 画得细不细）。
+pub fn roads_geojson(osm: &Value) -> (Value, Value) {
+    let empty: Vec<Value> = Vec::new();
+    let els = osm.get("elements").and_then(|e| e.as_array()).unwrap_or(&empty);
+
+    let mut feats: Vec<Value> = Vec::new();
+    let mut by_rank: HashMap<String, u64> = HashMap::new();
+    let (mut named, mut oneway, mut bridges, mut tunnels) = (0u64, 0u64, 0u64, 0u64);
+    let (mut skip_geom, mut skip_other, mut skip_short) = (0u64, 0u64, 0u64);
+
+    for e in els {
+        match e.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "way" => {}
+            _ => {
+                skip_other += 1;
+                continue;
+            }
+        }
+        let tags = match e.get("tags").and_then(|v| v.as_object()) {
+            Some(t) => t,
+            None => {
+                skip_other += 1;
+                continue;
+            }
+        };
+        let kind = tags.get("highway").and_then(|v| v.as_str()).unwrap_or("");
+        if kind.is_empty() {
+            skip_other += 1;
+            continue;
+        }
+        /* `out geom` 给的是 `geometry: [{lat, lon}, …]`。少于两点连不成线 ⇒ 跳过并**计数** */
+        let geom = match e.get("geometry").and_then(|v| v.as_array()) {
+            Some(g) if g.len() >= 2 => g,
+            _ => {
+                skip_geom += 1;
+                continue;
+            }
+        };
+        let coords: Vec<Value> = geom
+            .iter()
+            .filter_map(|p| {
+                let lat = p.get("lat")?.as_f64()?;
+                let lon = p.get("lon")?.as_f64()?;
+                if lat.is_finite() && lon.is_finite() {
+                    Some(json!([round7(lon), round7(lat)])) // GeoJSON 是 [lng, lat]，别写反
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if coords.len() < 2 {
+            skip_short += 1;
+            continue;
+        }
+
+        let rank = road_rank(kind);
+        *by_rank.entry(rank.to_string()).or_insert(0) += 1;
+        let name = tags.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if !name.is_empty() {
+            named += 1;
+        }
+        let ow = match tags.get("oneway").and_then(|v| v.as_str()) {
+            Some("yes") | Some("1") | Some("true") => {
+                oneway += 1;
+                true
+            }
+            _ => false,
+        };
+        let br = tag_str(tags, "bridge").map(|v| v != "no").unwrap_or(false);
+        let tn = tag_str(tags, "tunnel").map(|v| v != "no").unwrap_or(false);
+        if br {
+            bridges += 1;
+        }
+        if tn {
+            tunnels += 1;
+        }
+
+        feats.push(json!({
+            "type": "Feature",
+            "id": format!("way/{}", e.get("id").and_then(|v| v.as_i64()).unwrap_or(0)),
+            "properties": {
+                "osm_id": format!("way/{}", e.get("id").and_then(|v| v.as_i64()).unwrap_or(0)),
+                "kind": kind,
+                "rank": rank,
+                "name": if name.is_empty() { Value::Null } else { json!(name) },
+                "oneway": ow,
+                "bridge": br,
+                "tunnel": tn,
+                "lanes": tag_str(tags, "lanes").and_then(|v| v.parse::<f64>().ok()),
+                "layer": tag_str(tags, "layer").and_then(|v| v.parse::<f64>().ok()),
+                "surface": tag_str(tags, "surface"),
+            },
+            "geometry": { "type": "LineString", "coordinates": coords },
+        }));
+    }
+
+    let n = feats.len() as u64;
+    let fc = json!({ "type": "FeatureCollection", "features": feats });
+    let stats = json!({
+        "count": n,
+        "by_rank": by_rank,
+        "named": named,
+        "oneway": oneway,
+        "bridge": bridges,
+        "tunnel": tunnels,
+        // 没画出来的必须可见（同楼房那套纪律：少画了不能读成"这里没有"）
+        "skipped": { "geometry": skip_geom, "short": skip_short, "other": skip_other },
+    });
+    (fc, stats)
+}
+
 /// 按出现次数排序取前 n（同数保持「首次出现」顺序，与 Python 的稳定排序一致）
 fn top(counts: &HashMap<String, u32>, order: &[String], n: usize) -> Vec<Value> {
     let mut items: Vec<(&String, u32)> = order

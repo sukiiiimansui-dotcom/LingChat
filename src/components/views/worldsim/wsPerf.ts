@@ -30,7 +30,7 @@
 
 import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
 /* 为什么 `detectWebgl` 要排在这里：它**是值**（函数），不能混进下面 `type` 那一串 ——
-   上一轮就是在这里写成 `type PerfTier,, detectWebgl }` 的，**整个模块直接语法错**
+   上一轮就是在这里写成 `type PerfTier, detectWebgl }` 的，**整个模块直接语法错**
    （`Identifier expected.`），页面连加载都过不去。改这一行务必跑一次
    `node -e 'require("typescript").createSourceFile(...).parseDiagnostics'` 自检。 */
 import {
@@ -238,6 +238,43 @@ const fpsNow = ref(0);
 let sampled = false;
 
 /**
+ * 🔴 「**我们已经在走软渲染路了**」—— 非空即低档（值是原因，给 HUD 如实显示用）。
+ *
+ * 为什么需要这一路（2026-09-20 实测，这是本任务的关键）：
+ * 档位判定此前全是**预测**（猜这台机器弱不弱），而真正决定"重不重"的是
+ * **实际走了哪条渲染路**。这两件事会不一致 —— 无头/软渲染环境下
+ * `hasWebGL()` 探针可能返回真（SwiftShader 软件 WebGL），地图库 `new Map()` 也成功，
+ * 但 `load` 事件永远不触发 ⇒ 看门狗到点把它降到 **Canvas2D 软渲染**。
+ * 结果：**页面在跑最重的那条路，档位却还是"高档"**，雨/雪、小地图、头像、车辆
+ * 全部按满血跑（实测小区级 7fps）。
+ *
+ * 所以这里不猜了：谁说"我降级了"（`WsDistrictMapLibre.fallback2d()`），谁就把这个
+ * 置成低档 —— **因果**而不是**预测**。探针猜错也不会漏。
+ *
+ * ⚠️ 必须声明在 `tierRef` **之前**：下面那个 `watch(..., { immediate: true })` 会立刻
+ *    求值一次 `tierRef`，写到后面就是 TDZ（`Cannot access before initialization`）。
+ */
+const softPath = ref<string>("");
+
+/**
+ * 由**实际渲染路**强制压到低档（一次性、不可逆）。
+ *
+ * 用 `ref` + `computed` 而不是直接改 `prefs`：`prefs` 是**用户偏好**（要落 localStorage、
+ * 面板上要显示"自动/高/低"），把它改掉会让用户看到自己的设置被悄悄篡改。
+ * 而"这条路就是慢"是**事实**，不是偏好 —— 事实单独存一份。
+ */
+export function forceLowTier(reason: string): void {
+  if (!reason) return;
+  // 只记第一条原因：第一条才是"为什么走到这条路上"，后面的都是它的后果
+  if (!softPath.value) softPath.value = reason;
+}
+
+/** 现在为什么是低档（空串 = 不是被强制压的）。HUD 如实显示它 */
+export function lowTierReason(): string {
+  return softPath.value;
+}
+
+/**
  * 最终档位（手动覆盖优先）。
  *
  * 🔴 为什么是**模块级**而不是写在 `useWsPerf()` 里：`wsCaps` 的同步不能依赖某个组件的生命周期 ——
@@ -245,7 +282,7 @@ let sampled = false;
  * （正是"降级乱降"最爱长的形状：状态看起来对，其实早就不更新了）。
  * 模块级单例 + 模块级 watch ⇒ 与组件生死无关。
  */
-const tierRef = computed<PerfTier>(() => resolveTier(prefs.value));
+const tierRef = computed<PerfTier>(() => (softPath.value ? "low" : resolveTier(prefs.value)));
 
 // 单向同步：wsPerf（唯一算档位的人）→ wsCaps（唯一存能力矩阵的地方）
 watch(tierRef, (t) => setPerfTier(t), { immediate: true });
@@ -282,6 +319,10 @@ export interface PerfApi {
   setFps: (on: boolean) => void;
   /** 自动判定结果（只降不升），落盘 */
   noteAuto: (t: PerfTier) => void;
+  /** 由**实际渲染路**强制压到低档（谁说"我降级了"谁调它，见 `forceLowTier`） */
+  forceLow: (reason: string) => void;
+  /** 被强制压低的**原因**（空串 = 没被强制）。HUD 要如实显示 */
+  lowReason: ComputedRef<string>;
   /** 进小区图时调：按需启动 fps 表 + 补一次自动采样 */
   bootstrap: () => void;
   /** 离开页面时调：停表、摘监听 */
@@ -386,7 +427,15 @@ export function useWsPerf(): PerfApi {
     if (prefs.value.fps) startMeter();
     if (sampled || prefs.value.tier !== "auto") return;
     sampled = true;
+    /* 🔴 这一段必须**同步**判完，不能只靠下面那个异步采样：
+       `detectTier()` 里也有「无 WebGL ⇒ low / 帧率 <30 ⇒ low」两条，但它只在
+       `sampleFps()` 拿到 >0 的结果之后才被调用 —— 而**软渲染/无头环境恰恰是最可能
+       连帧率都采不准的地方**（主线程长期被占，2 秒窗口内可能连
+       `FPS_SAMPLE_MIN_FRAMES` 帧都不到 ⇒ 返回 0 ⇒ 整条判定被跳过，档位静默停在"高档"）。
+       实测教训：规则写对了、模块却是语法错 / 或压根没被调用 ⇒ 白改。
+       所以「设备弱」与「没有 WebGL」两条**都在这里同步落地**。 */
     if (detectDeviceLow()) noteAuto("low"); // 核数/内存这一路（`wsCaps` 的唯一判定）
+    if (!detectWebgl()) noteAuto("low"); // 没有 WebGL ⇒ 必然软渲染（`wsCaps` 的唯一探针）
     void sampleFps().then((fps) => {
       if (fps > 0) {
         fpsNow.value = fps;
@@ -400,7 +449,21 @@ export function useWsPerf(): PerfApi {
     unbindVisibility();
   }
 
-  return { tier, low, prefs, fps: fpsNow, setTier, setFps, noteAuto, bootstrap, teardown };
+  const lowReason = computed<string>(() => softPath.value);
+
+  return {
+    tier,
+    low,
+    prefs,
+    fps: fpsNow,
+    setTier,
+    setFps,
+    noteAuto,
+    forceLow: forceLowTier,
+    lowReason,
+    bootstrap,
+    teardown,
+  };
 }
 
 export type WsPerf = ReturnType<typeof useWsPerf>;

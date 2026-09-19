@@ -59,6 +59,13 @@ export interface WsMapRasterPaint {
 /** 一个瓦片服务 */
 export interface WsMapRasterSource {
   tiles: [string];
+  /**
+   * 版权署名。**不是可选的美化项**：Esri 的服务条款要求署名，删掉就是拿别人的数据不说出处。
+   * 🔴 我 2026-09-20 把 sources 从组件搬进本文件时**漏掉了它**（`themeStyleParts` 只搬了
+   * tiles/maxzoom）—— 这种"搬家丢字段"不会报错、也没人看得出来，是最容易悄悄发生的一类回归。
+   * 现在它跟 tiles 一起放在主题里，并且自检会断言每条栅格源都有署名。
+   */
+  attribution?: string;
   /** Esri Canvas 系列**最高只到 z16**，z17+ 是 2521B 的"Map data not yet available"占位图
    *  （实测：`measure-tile-luma.py` 打到 z17，四张全是 2521B、亮度 0.803）。
    *  ⇒ 一律限到 16，让地图库**放大复用** z16 的瓦片（略糊，但远好过整屏灰占位图）。 */
@@ -154,12 +161,14 @@ const NIGHT: WsMapTheme = {
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
       ],
       maxzoom: 16,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
     },
     hi: {
       tiles: [
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       ],
       maxzoom: 19,
+      attribution: "Sources: Esri, Maxar, Earthstar Geographics",
     },
     ref: {
       tiles: [
@@ -251,6 +260,7 @@ const ANIME: WsMapTheme = {
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
       ],
       maxzoom: 16,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
     },
     hi: null, // ← 二次元**没有高分层**（不用卫星）。少一层 = 少一份流量，低端档也轻松
     ref: {
@@ -511,6 +521,9 @@ export function themeStyleParts(
     base: { type: "raster", ...theme.sources.base, tileSize: 256, crossOrigin: "anonymous" },
     ref: { type: "raster", ...theme.sources.ref, tileSize: 256, crossOrigin: "anonymous" },
   };
+  /* ⚠️ 上面两条用 `...theme.sources.x` 展开 —— 它会**连 attribution 一起**带过来。
+     别改成"只挑 tiles/maxzoom 手抄"：我第一版就是手抄的，结果**把 Esri 的署名弄丢了**
+     （见 `WsMapRasterSource.attribution` 的说明）。自检里有一条专门断言署名在。 */
   const layers: Array<Record<string, unknown>> = [
     { id: "bg", type: "background", paint: { "background-color": theme.bg } },
     { id: "base", type: "raster", source: "base", paint: theme.raster.base },

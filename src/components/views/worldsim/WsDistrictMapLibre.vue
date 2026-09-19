@@ -278,7 +278,15 @@
       u.searchParams.set("wstheme", next);
       location.replace(u.toString());
     } catch {
-      /* 退不到就退化成"刷新后生效" */
+      /* 🔴 这里**必须**有个兜底动作：Tauri 的自定义协议（`tauri://…`）下 `location.replace`
+         可能被拦，而偏好已经存进 localStorage 了 ⇒ 其实只要**刷一下**就生效。
+         我第一版这里只留了句注释、没有真的 reload ⇒ 那就是"点了没反应"，
+         跟我在「星」按钮上批评的毛病一模一样（自检永远看不出来，只有人点得出来）。 */
+      try {
+        location.reload();
+      } catch {
+        /* 连 reload 都不行 ⇒ 下次打开生效（偏好已经存下，不会丢） */
+      }
     }
   }
   // eslint 不需要 map 的类型细节；这里只留一个句柄用于销毁

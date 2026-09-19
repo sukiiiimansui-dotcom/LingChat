@@ -49,33 +49,47 @@
       </div>
 
       <!-- 应用页：目前只接了「地图/导航」（T5-2）；其余点了会如实提示「还没接进来」 -->
-      <div v-if="app" class="wsphone__app-view">
-        <div class="wsphone__appbar">
-          <button class="wsphone__back" type="button" @click="app = ''">‹ 返回</button>
-          <span class="wsphone__appname">{{ appName }}</span>
-        </div>
-        <WsPhoneNav v-if="app === 'map'" />
-        <WsPhoneTaxi v-else-if="app === 'taxi'" />
-        <WsPhoneTransit v-else-if="app === 'transit'" />
-        <WsPhonePlan v-else-if="app === 'plan'" />
-        <WsPhoneChat v-else-if="app === 'chat'" />
-        <WsPhoneWeather v-else-if="app === 'weather'" />
-      </div>
+      <!--
+        MG 切片 B（2026-09-19）：「首页 ↔ 应用」的转场**带方向**。
 
-      <div v-else class="wsphone__grid">
-        <button
-          v-for="a in APPS"
-          :key="a.key"
-          class="wsphone__app"
-          type="button"
-          :title="a.hint"
-          @click="onApp(a.key)"
-        >
-          <span class="wsphone__ico">{{ a.icon }}</span>
-          <span class="wsphone__nm">{{ a.name }}</span>
-          <span class="wsphone__todo">{{ a.todo }}</span>
-        </button>
-      </div>
+        为什么要有方向：这两页的关系是**上下层**（首页是"桌面"，应用是"进去之后"），
+        不是"两个平级的页面"。方向动画就是把这层关系画出来 ——
+        · 进应用：旧页往左退、新页从右边滑进来（"往里走"）；
+        · 返回首页：整个镜像过来（"退出来"）。
+        用户不用读文字，光看方向就知道自己是进去了还是出来了。
+
+        `mode="out-in"`：先退旧的再进新的。两页同时占位的话，面板高度会被顶一下
+        （一页高、一页矮），那一下抖动比没有动画更糟。
+      -->
+      <Transition :name="navDir === 'in' ? 'wsnav-in' : 'wsnav-back'" mode="out-in">
+        <div v-if="app" class="wsphone__app-view">
+          <div class="wsphone__appbar">
+            <button class="wsphone__back" type="button" @click="goHome">‹ 返回</button>
+            <span class="wsphone__appname">{{ appName }}</span>
+          </div>
+          <WsPhoneNav v-if="app === 'map'" />
+          <WsPhoneTaxi v-else-if="app === 'taxi'" />
+          <WsPhoneTransit v-else-if="app === 'transit'" />
+          <WsPhonePlan v-else-if="app === 'plan'" />
+          <WsPhoneChat v-else-if="app === 'chat'" />
+          <WsPhoneWeather v-else-if="app === 'weather'" />
+        </div>
+
+        <div v-else class="wsphone__grid">
+          <button
+            v-for="a in APPS"
+            :key="a.key"
+            class="wsphone__app"
+            type="button"
+            :title="a.hint"
+            @click="onApp(a.key)"
+          >
+            <span class="wsphone__ico">{{ a.icon }}</span>
+            <span class="wsphone__nm">{{ a.name }}</span>
+            <span class="wsphone__todo">{{ a.todo }}</span>
+          </button>
+        </div>
+      </Transition>
 
       <div class="wsphone__foot">{{ t("worldsim.phone.footHint") }}</div>
     </div>
@@ -130,12 +144,30 @@
   }
   /** 已接的应用清单：T5-3~T5-8 落地时**加到这里**并把 WsPhoneNav 换成对应组件 */
   const READY = new Set(["map", "taxi", "transit", "plan", "chat", "weather"]);
+
+  /**
+   * 转场方向（MG 切片 B）：`in` = 进应用（往左走），`back` = 返回首页（往右走）。
+   *
+   * ⚠️ 为什么用一个变量记方向，而不是让 CSS 自己猜：
+   *    `<Transition>` 的 `name` 是**响应式读的**，`app` 一变、name 立刻就是新值 ——
+   *    离开和进入会同时用上新方向，方向感就丢了。所以方向必须在**改 `app` 之前**定好。
+   *    这不是绕路：真实产品里"往哪走"本来就是一次导航的意图，本来就该在动作发生时定下来。
+   */
+  const navDir = ref<"in" | "back">("in");
+
   function onApp(key: string) {
     if (READY.has(key)) {
+      navDir.value = "in"; // 先进去，再换页
       app.value = key;
       return;
     }
     emit("open-app", key); // 交给外层如实提示"还没接进来"
+  }
+
+  /** 返回首页：方向相反（同一个函数，两处入口：返回键 + 收起手机） */
+  function goHome() {
+    navDir.value = "back";
+    app.value = "";
   }
 
   function toggle(v: boolean) {
@@ -224,6 +256,13 @@
       inset 0 0 0 1px rgba(255, 255, 255, 0.09);
     color: #fff;
     overflow: hidden;
+    /* MG 切片 B（2026-09-19）：缩放的中心定在**悬浮按钮的圆心**上
+       （按钮 52×52、右边距 14 → 圆心在面板右下角的外侧 26px 处；
+        按钮底边与面板底边同在 96px，所以圆心比面板底边矮 26px）。
+       于是展开时手机像是"从按钮里长出来"的 —— 这正是 MD3 说的 Container Transform：
+       用户一眼看出"这块面板和那个按钮是同一个东西"。
+       ⚠️ 别改成 right bottom：那样是从角落硬撑开，和按钮没有关系。 */
+    transform-origin: calc(100% - 26px) calc(100% + 26px);
   }
   .wsphone__bar {
     display: flex;
@@ -300,6 +339,8 @@
     padding: 2px;
   }
   .wsphone__app {
+    position: relative;
+    overflow: hidden; /* 按下时荡开的那圈高光要靠它裁成圆角 */
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -312,14 +353,49 @@
     cursor: pointer;
     /* 触控目标 ≥44×44（可达性判据） */
     min-height: 66px;
-    transition: background 0.14s linear;
+    /* MG 切片 B：按下时整块**缩一点**（0.94），松手弹回 —— 这是最便宜也最有效的
+       "按到了"反馈。transform 只走合成，8 个图标一起按也不会掉帧。 */
+    transition:
+      background 0.14s linear,
+      transform 0.16s cubic-bezier(0.2, 0, 0, 1);
   }
   .wsphone__app:hover {
     background: rgba(53, 211, 154, 0.16);
   }
+  .wsphone__app:active {
+    transform: scale(0.94);
+  }
   .wsphone__ico {
     font-size: 20px;
     line-height: 1;
+    /* 图标反着来：外框压扁的同时图标**弹大一点**（一压一弹 = 有回弹的错觉） */
+    transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .wsphone__app:active .wsphone__ico {
+    transform: scale(1.14);
+  }
+  /* 按下时从图标处荡开的一圈高光。一次性（按一次放一次），不循环、不占常驻合成层。 */
+  .wsphone__app::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.42), transparent 68%);
+    opacity: 0;
+    pointer-events: none; /* 装饰不吃点击 */
+  }
+  .wsphone__app:active::after {
+    animation: wsp-tap 0.36s ease-out;
+  }
+  @keyframes wsp-tap {
+    from {
+      opacity: 0.85;
+      transform: scale(0.55);
+    }
+    to {
+      opacity: 0;
+      transform: scale(1.2);
+    }
   }
   .wsphone__nm {
     font-size: 11px;
@@ -338,25 +414,75 @@
   }
 
   /* 收放动画：只动 transform / opacity（GPU 合成），进入 decelerate、离开 accelerate */
+  /* MG 切片 B：展开曲线带**过冲**（0.34, 1.4, 0.64, 1 里的 1.4 > 1 就是过冲）——
+     手机"弹"出来一点点再落定，就是机主要的"惯性/回弹"。
+     回落只有 0.2s 且用加速曲线：关掉要干脆，不要拖泥带水。 */
   .wsphone-enter-active {
     transition:
-      transform 0.3s cubic-bezier(0, 0, 0, 1),
-      opacity 0.3s cubic-bezier(0, 0, 0, 1);
+      transform 0.34s cubic-bezier(0.34, 1.4, 0.64, 1),
+      opacity 0.22s cubic-bezier(0, 0, 0, 1);
   }
   .wsphone-leave-active {
     transition:
-      transform 0.22s cubic-bezier(0.3, 0, 1, 1),
-      opacity 0.22s cubic-bezier(0.3, 0, 1, 1);
+      transform 0.2s cubic-bezier(0.3, 0, 1, 1),
+      opacity 0.16s cubic-bezier(0.3, 0, 1, 1);
   }
   .wsphone-enter-from,
   .wsphone-leave-to {
     opacity: 0;
-    transform: translateY(14px) scale(0.96);
+    /* 从按钮那个角"长出来"：配合上面的 transform-origin，位移要更小才自然 */
+    transform: translateY(10px) scale(0.88);
+  }
+
+  /* ── MG 切片 B：首页 ↔ 应用 的方向感转场 ─────────────────────────────────
+     两套（in / back）互为镜像。时长照 MD3 移动端基准：
+     进入 decelerate（快起慢停）220~260ms，离开 accelerate（慢起快走）140~160ms。
+     只动 transform / opacity；`mode="out-in"` 保证同一时刻只有一页在流里。 */
+  .wsnav-in-enter-active,
+  .wsnav-back-enter-active {
+    transition:
+      opacity 0.22s cubic-bezier(0, 0, 0, 1),
+      transform 0.26s cubic-bezier(0, 0, 0, 1);
+  }
+  .wsnav-in-leave-active,
+  .wsnav-back-leave-active {
+    transition:
+      opacity 0.14s cubic-bezier(0.3, 0, 1, 1),
+      transform 0.16s cubic-bezier(0.3, 0, 1, 1);
+  }
+  /* 进应用：旧页往左退、新页从右边进来 */
+  .wsnav-in-enter-from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.985);
+  }
+  .wsnav-in-leave-to {
+    opacity: 0;
+    transform: translateX(-12px) scale(0.985);
+  }
+  /* 回首页：整个镜像过来 —— 方向本身就是语义 */
+  .wsnav-back-enter-from {
+    opacity: 0;
+    transform: translateX(-18px) scale(0.985);
+  }
+  .wsnav-back-leave-to {
+    opacity: 0;
+    transform: translateX(12px) scale(0.985);
   }
   @media (prefers-reduced-motion: reduce) {
     .wsphone-enter-active,
-    .wsphone-leave-active {
+    .wsphone-leave-active,
+    .wsnav-in-enter-active,
+    .wsnav-in-leave-active,
+    .wsnav-back-enter-active,
+    .wsnav-back-leave-active,
+    .wsphone__app,
+    .wsphone__ico {
       transition: none;
+    }
+    /* 按下时那圈荡开的高光是一次性装饰 —— 关掉不影响任何功能反馈
+       （按下仍然会缩，因为那是瞬时状态，不是动画） */
+    .wsphone__app:active::after {
+      animation: none;
     }
   }
 </style>

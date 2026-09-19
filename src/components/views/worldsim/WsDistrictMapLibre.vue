@@ -1134,10 +1134,20 @@
        症状："已经降级了，HUD 也说了原因，但画布是**空白**的"，而且**零报错**。
        （同一张画布不能有两种上下文，这是规范行为，不是 bug —— 但极容易踩。） */
     const oldCv = cv.value;
+    const hostEl = host.value;
     if (oldCv && !oldCv.getContext("2d")) {
       const fresh = document.createElement("canvas");
-      fresh.className = oldCv.className;
-      oldCv.replaceWith(fresh);
+      /* ⚠️ 要连**所有属性**一起搬（`class` 之外还有 Vue 的 scoped 标记 `data-v-xxxx`）——
+         漏了它，新画布就丢掉了 `position:absolute; width:100%; height:100%`，
+         会缩回浏览器默认的 300×150 跑到左上角：**又是一次"降级了但看着是坏的"**。 */
+      for (const a of Array.from(oldCv.attributes)) fresh.setAttribute(a.name, a.value);
+      if (oldCv.parentElement) {
+        oldCv.replaceWith(fresh);
+      } else if (hostEl) {
+        /* `map.remove()` 会把画布**从 DOM 里摘掉**（我们把它交给了地图库管），
+           这时 `replaceWith` 是空操作 ⇒ 必须自己插回去，否则又是"画在一块不在页面上的画布"。 */
+        hostEl.insertBefore(fresh, hostEl.firstChild);
+      }
       cv.value = fresh;
     }
     stats.pins = domPins.value.length;

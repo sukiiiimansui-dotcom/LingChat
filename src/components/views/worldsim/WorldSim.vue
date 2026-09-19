@@ -196,6 +196,8 @@
         <WsDistrict
           ref="districtRef"
           :area="areaLabel || '未知区域'"
+          :adcode="String(sim.leaf?.value?.adcode || '')"
+          :markers="districtPins"
           :map-style="style"
           @back="backTo(path.length - 1)"
           @done="onWorldEntered"
@@ -241,6 +243,7 @@
               :trip="t"
               :grid="WS_GRID"
               :zoom="districtScale"
+              :low="perfLow"
             />
             <!-- P5-2：事件气泡（bubble 通道）。铺在同一层里才会跟着地图平移缩放；
                  位置不在这里算（`WsEventBubble` 用 letterboxOf + 角色的 px/py 自己算）。
@@ -265,6 +268,7 @@
           :trip="shownTrip"
           :speedup="trips.speedup.value"
           :busy="tripBusy"
+          :low="perfLow"
           @speedup="onTripSpeedup"
           @cancel="onTripCancel"
         />
@@ -363,8 +367,13 @@
     <!-- ── T4-2：天气视觉层 ──────────────────────────────────────────────
          包含块同样是 `.ws-stage`（`position: relative`）→ 只盖地图舞台。
          `:tint` 是必须传的：昼夜色要**压在天气色之上**（老线的顺序，
-         「夜间压暗应覆盖天气提亮」），少传它雨夜就会是亮的。 -->
-    <WsWeatherLayer :weather="wxState" :tint="todTint" :low="perfLow" />
+         「夜间压暗应覆盖天气提亮」），少传它雨夜就会是亮的。
+         🔴 `:animate="!perfLow"`（2026-09-20 fps 兜底第一刀）：低档下这层**只画一帧**。
+         为什么直接停而不是"降频"：它是**整屏 canvas**（每帧 clearRect + 2 次全屏 fillRect
+         + 上百个粒子），在软渲染路上每帧都是实打实的像素填充；而雨雪只是气氛，
+         帧率是"能不能玩"的门槛 —— 门槛优先。天气色/昼夜色**仍然照画**（静态那一帧里），
+         所以低档下画面不是"没有天气"，只是雨滴不再动。 -->
+    <WsWeatherLayer :weather="wxState" :tint="todTint" :low="perfLow" :animate="!perfLow" />
 
     <!-- ── 显示设置抽屉（把原来散在顶栏/信息行的低频开关收进来）──────────────
          浮块预算：顶栏 ①、底部动作条 ②、地图本身 ③ —— 抽屉只在用户点「⋯」时出现，
@@ -550,6 +559,7 @@
   import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   import { useWsFocus } from "./wsFocus";
   import { rankOf as relRankOf, useWsRelation } from "./wsRelation";
+  import { resolveAffinity } from "./wsAffinityPlan";
   // P4-2 / P4-3：行程卡 + 地图上的交通工具（样式由组件自己 import worldsim-trip.css）
   import WsTripCard from "./WsTripCard.vue";
   import WsVehicleMark from "./WsVehicleMark.vue";
@@ -557,7 +567,7 @@
   import WsEventBubble from "./WsEventBubble.vue";
   import WsEventFeed from "./WsEventFeed.vue";
   import { wsToast, useWsToast } from "./wsToast";
-  import type { PlacedActor } from "./wsActors";
+  import { scatterGrid, type PlacedActor, type WsDistrictPin } from "./wsActors";
   import {
     DEFAULT_CELL_M,
     dropGridAt,
@@ -799,7 +809,16 @@
   /** 小区图的网格边长：与 WsDistrict 的 SKETCH_SIZE / 后端 sketch 一致 */
   const WS_GRID = 28;
   const wsPanel = useWsPanel();
-  const actors = useWsActors({ grid: ref(WS_GRID), areaLabel: sim.areaLabel, lowPerf: perfLow });
+  const actors = useWsActors({
+    grid: ref(WS_GRID),
+    areaLabel: sim.areaLabel,
+    lowPerf: perfLow,
+    /* 可玩性切片 A：把落盘的好感注进去 ⇒ 好感够高的角色"现在就来找你"（地图上看得见）。
+       注意 `relation` 在下面才 `useWsRelation()`，但这里是闭包、装配时才调用，不存在 TDZ 问题。
+       用 `resolveAffinity` 而不是精确匹配：角色库显示名（诺一钦灵）与日程名（钦灵）**常常不同**，
+       精确匹配会让整条因果**静默失效**（实测踩到）。 */
+    affinityOf: (name) => resolveAffinity(relation.store.rows, [name]),
+  });
   const { placed: placedActors } = actors;
   /** 面板当前对着的那个人（面板关着 / 对着自己时是 null） */
   const currentActor = computed<PlacedActor | null>(() => {
@@ -933,6 +952,47 @@
      这正是"地图一点可玩性没有"的根因之一（见 BORROW-LIST.md：我们缺的不是新系统，是把零件接起来）。
      这一步先打通最前面两环：**送礼 → 好感数值落盘 → 面板立刻可见**。
      （"日程跟着变 + 地图上看得见"是下一步，本卡还没做完。） */
+  /**
+   * 给小区级地图用的"钉子"（P1b 第一刀）。
+   *
+   * 好累～ 这里其实只是把 `actors.placed` 换个形状（网格坐标用**错开后的** px/py，
+   * 直接用 gx/gy 会让叠在一起的人又重合回去）。为什么不干脆把 placed 整个传下去？
+   * 因为渲染器只需要"谁在哪一格"，传整个对象会让两边的字段耦合越来越深。
+   */
+  const districtPins = computed<WsDistrictPin[]>(() => {
+    const real = (actors.placed.value || []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      gx: a.px,
+      gy: a.py,
+      isMe: a.isMe,
+      avatarUrl: a.avatarUrl,
+      posSource: a.posSource,
+    }));
+    /* 真实角色已经有了就直接用（真壳里是常态）—— 兜底只在"一个角色都没装配上"时生效，
+       否则同一张图上既有真位置的人、又有散点推的人，看起来像鬼影（这条口径抄自 WsAvatarLayer）。 */
+    if (real.some((p) => !p.isMe)) return real;
+    /* 兜底名单**不再单独发请求**：`useWsActors` 早就把 `/api/schedule` 取回来了，
+       里面的 `characters` 就是名单（`useWsRoster` 也是从同一处抽的）。
+       好累～ 这一手是为了少一个数据源：名单只有一份，位置按 `scatterGrid` 铺开（与头像层同口径）。 */
+    const chars = actors.schedule.value?.characters || [];
+    if (!chars.length) return real;
+    const total = chars.length;
+    const extra: WsDistrictPin[] = chars.map((c, i) => {
+      const s = scatterGrid(i, total, WS_GRID);
+      return {
+        id: `roster:${c.folder || c.name}`,
+        name: c.name,
+        gx: s.x,
+        gy: s.y,
+        isMe: false,
+        avatarUrl: "",
+        posSource: "scatter",
+      };
+    });
+    return [...real, ...extra];
+  });
+
   const relation = useWsRelation();
   /** 当前面板看着的角色 → 它的好感（模板直接读） */
   const currentAffinity = computed(() =>
@@ -1670,6 +1730,8 @@
     position: relative;
     height: 100%;
     min-height: 0;
+    /* 小区级这一屏是"地图为主"：手势不外溢成页面滚动（与外层的 touch-action 一起生效） */
+    overscroll-behavior: contain;
   }
   /* ── UI 改造：显示设置抽屉（底部弹出，玻璃 + 主色，无边框）──────────────
      语言对齐 LingChat：不用实边框、玻璃底、主色只用 --accent-color（冰蓝）、
@@ -1692,8 +1754,10 @@
     padding: 0.9em 1em calc(1em + env(safe-area-inset-bottom, 0px));
     border-radius: 20px 20px 0 0;
     background: var(--ws-panel-2, rgba(12, 18, 26, 0.92));
-    backdrop-filter: blur(16px) saturate(1.2);
-    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    /* 低档关掉 16px 模糊（抽屉是**整屏宽**的，软渲染下这块模糊最贵；
+       它只在用户主动打开时出现，但打开着的时候每帧都在付钱） */
+    backdrop-filter: blur(var(--ws-blur-low, 16px)) saturate(1.2);
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 16px)) saturate(1.2);
     box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.35);
     color: var(--ws-fg, #fff);
     animation: ws-drawer-in 0.28s cubic-bezier(0, 0, 0, 1) both;

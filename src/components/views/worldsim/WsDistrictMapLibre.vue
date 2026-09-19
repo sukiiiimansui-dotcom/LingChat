@@ -472,7 +472,9 @@
       const g = (f.geometry || {}) as { type?: string; coordinates?: unknown };
       const polys: number[][][][] =
         g.type === "Polygon" ? [g.coordinates as number[][][]] : g.type === "MultiPolygon" ? (g.coordinates as number[][][][]) : [];
-      /* 颜色按**渲染高度**取（与 3D 路同一张色阶表）—— 降级路也看得出高低 */
+      /* 颜色按**渲染高度**取（与 3D 路同一张色阶表）—— 降级路也看得出高低。
+         拆件（屋顶/天线）在 2D 俯视图里只会重影，所以**只画主体**。 */
+      if ((f.properties || {}).part && (f.properties || {}).part !== "body") continue;
       const col = rampColor(renderHeight(f.properties).h);
       for (const poly of polys) {
         const ring = poly[0];
@@ -645,9 +647,28 @@
    *
    * ⚠️ 这里**不能**用 `light` / `fill-extrusion-ambient-occlusion-*`：
    * 实测本 vendored 构建（v6.10.0）没有这两个字段 —— 加了不会报错，但**一点效果都没有**。
-   * 想要的"光照"，现在靠「高度色阶 + 竖向渐变 + `fog` 大气透视」三样凑（见 DESIGN-SKYLINE.md）。
+   * 想要的"光照"，现在靠「高度色阶 + 竖向渐变 + `sky` 大气透视」三样凑（见 DESIGN-SKYLINE.md）。
+   *
+   * 🏙 2026-09-20 第二步：「改造渲染」（`DESIGN-BUILDING-REALISM.md` §三 #2/#4/#6/#8，**零新数据**）：
+   *   · 颜色改吃 `color3d`（高度色阶 + **确定性**微扰 ⇒ 不再"一片齐刷刷"）；
+   *   · 新增**屋顶压顶**（内缩 0.85 + 更深色）与**天线**（>60m）两条挤出层，
+   *     体块由 `wsBuildingLook.buildingParts()` 在渲染前拆好 —— 图层这里只读字段；
+   *   · **远景褪色**按 zoom 调 `fill-extrusion-opacity`（#8）—— 注意**不是** `fog`：
+   *     `fog` 在这个构建里是空操作（根级属性根本没有它），雾的参数在 `sky` 里，
+   *     而且**雾要有 3D 地形才生效**（官方 `fog-color` 写着 "Requires 3D terrain"）。
    */
   function bldLayerSpecs(): Array<Record<string, unknown>> {
+    /** 挤出体的公共 paint（三条层只差颜色/过滤，写一份免得漂移） */
+    const common = {
+      "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
+      /* 底座统一读 `h_base`（拆件时每条都写了；老数据没有就退回 `min_height`） */
+      "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["get", "min_height"], 0],
+      /* 远景褪色（#8）：远处楼淡一点，近处实。**只淡到 0.72**，再淡就开始"糊成一片" */
+      "fill-extrusion-opacity": ["interpolate", ["linear"], ["zoom"], 12.8, 0.72, 15, 0.86, 17, 0.97],
+      /* 竖向渐变：楼顶比楼底亮一点。MapLibre 的默认值就是 true，但我们**显式写死** ——
+         默认值会随版本改，而这一条直接决定"挤出的方块像不像楼"。 */
+      "fill-extrusion-vertical-gradient": true,
+    };
     return [
       {
         id: "bld-ext",
@@ -658,21 +679,37 @@
            Bavaria 矢量瓦片 3D 经验），而整区视野下楼只有亚像素 ⇒ 这一档**整层不画**。
            取楼本来也要 zoom ≥ 13.5，两层阈值对齐（12.8 留一点余量，免得来回抖）。 */
         minzoom: 12.8,
-        paint: {
-          "fill-extrusion-color": heightColorExpression(),
-          "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
-          "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-          "fill-extrusion-opacity": 0.97,
-          /* 竖向渐变：楼顶比楼底亮一点。MapLibre 的默认值就是 true，但我们**显式写死** ——
-             默认值会随版本改，而这一条直接决定"挤出的方块像不像楼"。 */
-          "fill-extrusion-vertical-gradient": true,
-        },
+        /* 只画主体 —— 屋顶/天线是另外两条层（拆件后同一个源里有三种 `part`） */
+        filter: ["==", ["get", "part"], "body"],
+        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], heightColorExpression()] },
+      },
+      {
+        /* 屋顶压顶：同一轮廓内缩 + 更深色 ⇒ 楼顶多一圈"女儿墙"的层次（#4）
+           ⚠️ 只在 `h3d ≥ 15m` 的楼上生成（`wsBuildingLook.ROOF_MIN_H`）——
+           矮平房压顶只会显脏，还白翻一倍要素数。 */
+        id: "bld-roof",
+        type: "fill-extrusion",
+        source: "bld",
+        minzoom: 14.5, // 远景看不出这一层，不白画
+        filter: ["==", ["get", "part"], "roof"],
+        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], "#1b2833"] },
+      },
+      {
+        /* 天线：>60m 的楼顶一根细挤出（#6）—— 城市轮廓里最抓眼的一档，要素数极少 */
+        id: "bld-antenna",
+        type: "fill-extrusion",
+        source: "bld",
+        minzoom: 14.5,
+        filter: ["==", ["get", "part"], "antenna"],
+        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], "#cfe8f5"] },
       },
       {
         id: "bld-line",
         type: "line",
         source: "bld",
         minzoom: 12.8, // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
+        /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
+        filter: ["==", ["get", "part"], "body"],
         paint: { "line-color": "rgba(190,235,255,0.22)", "line-width": 0.5 },
       },
     ];

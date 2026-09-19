@@ -9,12 +9,13 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import { geoSvgText, MAP_SVG_DEFAULT_H, MAP_SVG_DEFAULT_W } from "@/api/services/worldMap";
 import {
-  detectLowPerf,
   parseGeoRegions,
   sanitizeGeoMarkup,
   systemPrefersDark,
   type GeoRegion,
 } from "@/components/views/worldsim/wsGeo";
+// 🆕 2026-09-19 收敛：兜底档位也走 `wsCaps`（能力矩阵唯一真源），不在这里再判一遍核数/内存。
+import { readCaps } from "@/components/views/worldsim/wsCaps";
 
 /* ══════════════════════════════════════════════════════════════════
  * 一、主题 / 皮肤
@@ -52,9 +53,10 @@ function writeLS(key: string, val: string) {
  *   · `ws-perf-low`                 —— 低端机降级：关毛玻璃/关阴影/关装饰性动画
  *
  * @param opts.lowPerf P5-5：外部（`wsPerf`）算好的性能档位。传进来时以它为准，
- *   本函数内部的 `detectLowPerf()` 只当兜底 —— **单一事实来源**：
+ *   没传时**读 `wsCaps`**（能力矩阵唯一真源，初值 = 设备档位）—— **单一事实来源**：
  *   `.ws-perf-low` 这个类与 JS 侧的气泡上限 / zoom 量化 / 错开精度必须来自同一个判定，
  *   否则会出现「CSS 说降级了、JS 还在满速跑」的分裂。
+ *   ⚠️ 历史上这里是 `ref(detectLowPerf())` —— 那就是"又判了一遍"，已收敛掉。
  */
 export function useWorldSimTheme(opts: { lowPerf?: Ref<boolean> } = {}) {
   const theme = ref<WorldSimTheme>(
@@ -63,7 +65,7 @@ export function useWorldSimTheme(opts: { lowPerf?: Ref<boolean> } = {}) {
   // 深色偏好：'' = 跟随系统；'dark' / 'light' = 用户显式指定
   const darkPref = ref<string>(readLS(K_DARK));
   const sysDark = ref(systemPrefersDark());
-  const ownLow = ref(detectLowPerf());
+  const ownLow = ref(readCaps().render.perf === "low");
   const lowPerf = opts.lowPerf || ownLow;
 
   // 跟随系统时要能实时响应系统切换（用户在通知栏切深色模式，页面不该等刷新）

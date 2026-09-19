@@ -29,8 +29,13 @@
 //     这样"CSS 用的 `.ws-perf-low`"与"JS 用的气泡上限"永远来自同一个档位。
 
 import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
+/* 为什么 `detectWebgl` 要排在这里：它**是值**（函数），不能混进下面 `type` 那一串 ——
+   上一轮就是在这里写成 `type PerfTier,, detectWebgl }` 的，**整个模块直接语法错**
+   （`Identifier expected.`），页面连加载都过不去。改这一行务必跑一次
+   `node -e 'require("typescript").createSourceFile(...).parseDiagnostics'` 自检。 */
 import {
   detectDeviceLow,
+  detectWebgl,
   readDeviceSignals,
   setPerfTier,
   type PerfTier,
@@ -158,6 +163,12 @@ export function detectTier(env: PerfEnv = {}): PerfTier {
   // 这里过去自己写着 `cores<=4 / mem<=4`，而 `wsGeo.detectLowPerf` 写着 `mem<=3`
   // ⇒ 4GB 手机拿到两个答案（就是"降级乱降"）。收敛后以本函数这份（真正生效的那份）为准。
   if (detectDeviceLow({ hardwareConcurrency: cores, deviceMemory: mem })) return "low";
+  /* 🔴 2026-09-20：**无 WebGL ⇒ 必然走 2D 软渲染**，那条路天生重（实测小区级只有 6~7fps，
+     而"内存/核数"完全够格）⇒ 直接判低档。
+     过去档位只看硬件，结果"软渲染还按满血 60fps 跑"（雨/小地图/头像/车辆全部逐帧），
+     这就是"低端降级路 6fps"的根因；也是机主说"降级乱降"的最后一环。
+     注意：`detectWebgl` 是 `wsCaps` 里的**唯一**实现（别在这里再探一次，否则两边会不一致）。 */
+  if (!detectWebgl()) return "low";
   if (fps > 0 && fps < FPS_FLOOR) return "low";
   let weak = 0;
   if (cores > 0 && cores <= 6) weak++;

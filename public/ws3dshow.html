@@ -65,6 +65,7 @@
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
       <span class="w" id="m-msg"></span>
+      <span id="m-build" style="opacity:.55"></span>
     </div>
     <div class="ops">
       <button id="b-far" title="远景（看整片）">远</button>
@@ -76,6 +77,16 @@
     <script type="module">
       /* 真机上看效果用的调参台。所有数字都在这里，改完刷一下页面就见效。 */
       const API = "http://127.0.0.1:8791";
+      /**
+       * 🔴 **版本戳**（2026-09-20 加的，血的教训）：
+       * 机主点了一次代拍，回来的三张**是修复之前那一版**拍的 —— 因为浏览器把
+       * `public/` 下的 `ws3dshow.html` 缓存住了（它**没有内容哈希**，不像 `assets/*.js`）。
+       * 于是我在这边看服务端文件是新的、就以为他跑的是新的，白等一轮。
+       * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
+       *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
+       */
+      const BUILD = "ws3dshow-2026-09-20-v3";
+      try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
          为什么是它：IP 定位（`/api/location?fast=1`）当前解析出来的就是渝中区，
@@ -361,7 +372,7 @@
             for (let k = 0; k < 3; k++) { mn = Math.min(mn, d[i + k]); mx = Math.max(mx, d[i + k]); }
           }
           if (aMax === 0) return "整张画布 alpha=0（一帧都没渲染过）";
-          if (mx - mn < 3) return `近乎单色（RGB 极差 ${mx - mn}）`;
+          if (mx - mn < 4) return `近乎单色（RGB 极差 ${mx - mn}，最大 alpha ${aMax}）⇒ 疑似空白/纯色`;
           return null;
         }
 
@@ -379,6 +390,70 @@
           return c.toDataURL("image/png");
         }
 
+        /**
+         * 在**渲染完成的那一刻**抓帧。
+         * 为什么：Android 上 WebGL 画布在 `idle` + 两帧 rAF + 700ms 之后，缓冲区
+         * 往往已经被清空/未提交 ⇒ `toDataURL` 拿到全透明（而尺寸完全正常，极难发现）。
+         * 做法：先 `triggerRepaint()`，然后在 `render` 回调里**立刻**抓；连抓两帧取"非空"的那张。
+         */
+        function captureOnRender() {
+          return new Promise((res) => {
+            let done = false;
+            const fin = (v) => { if (!done) { done = true; try { map.off("render", onR); } catch { /* 忽略 */ } res(v); } };
+            const onR = () => {
+              try {
+                const url = map.getCanvas().toDataURL("image/png");
+                fin(url);
+              } catch (e) { fin(null); }
+            };
+            try { map.on("render", onR); } catch { /* 没有 render 就直接退 */ }
+            try { map.triggerRepaint(); } catch { /* 忽略 */ }
+            setTimeout(() => fin(null), 5000);
+          });
+        }
+
+        /**
+         * 对**抓到的这张 PNG 本身**判空白（解码回来缩到 8×8 采样）。
+         *
+         * 为什么不用 `blankReason(canvas)` 那一版：它采样的是**活的画布**，
+         * 而"画布上有内容"和"`toDataURL` 导出的是什么"**可能不是同一帧** ——
+         * 机主 2026-09-20 那次就是活画布看着正常、导出的 PNG 全透明，自检漏判、
+         * 三张白图照发。判据要落在**真正要发出去的那串字节**上。
+         *
+         * 覆盖三种空白：全透明（alpha=0）／不透明纯色／近乎单色。
+         */
+        function blankOfPng(dataUrl) {
+          return new Promise((res) => {
+            if (!dataUrl || !dataUrl.startsWith("data:image/png")) return res("抓帧失败（没拿到 PNG）");
+            const img = new Image();
+            img.onerror = () => res("抓到的数据不是能解码的 PNG");
+            img.onload = () => {
+              try {
+                const s = 8, t = document.createElement("canvas");
+                t.width = s; t.height = s;
+                const g = t.getContext("2d");
+                if (!g) return res(null);
+                g.drawImage(img, 0, 0, s, s);
+                const d = g.getImageData(0, 0, s, s).data;
+                let mn = 255, mx = 0, aMax = 0, aMin = 255;
+                for (let i = 0; i < d.length; i += 4) {
+                  aMax = Math.max(aMax, d[i + 3]); aMin = Math.min(aMin, d[i + 3]);
+                  for (let k = 0; k < 3; k++) { mn = Math.min(mn, d[i + k]); mx = Math.max(mx, d[i + k]); }
+                }
+                if (aMax === 0) return res("整张 alpha=0（一帧都没渲染过）");
+                if (mx - mn < 4 && aMax - aMin < 4) {
+                  const hex = "#" + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
+                  return res(`近乎单色 ${hex}（RGB 极差 ${mx - mn}，alpha ${aMin}~${aMax}）`);
+                }
+                return res(null);
+              } catch (e) {
+                return res(`解码/采样失败：${e?.name || e}`);
+              }
+            };
+            img.src = dataUrl;
+          });
+        }
+
         async function post(dataUrl, name) {
           const blob = await (await fetch(dataUrl)).blob();
           const r = await fetch(`http://127.0.0.1:8789/shot?name=${encodeURIComponent(name)}`, {
@@ -390,11 +465,21 @@
         async function autoshot() {
           const snap = async (name) => {
             const cv = map.getCanvas();
-            const why = blankReason(cv);
+            /* ① **先抓帧**：在 `render` 的那一刻抓 —— Android 上 `idle`+两帧 rAF 之后
+               WebGL 缓冲区常常已经被清空/未提交，那时再 `toDataURL` 只会拿到全透明。
+               抓不到就退回直接 `toDataURL`（两条都失败 ⇒ 交给你下面当空白处理）。 */
+            let shot = await captureOnRender();
+            if (!shot) {
+              try { shot = cv.toDataURL("image/png"); } catch { shot = ""; }
+            }
+            /* ② **拿抓到的这张图本身**判空白 —— 不是去采样"活的画布"。
+               为什么（2026-09-20 机主那次白拍的教训）：活画布和 `toDataURL` 的结果
+               **可能不是同一帧** ⇒ 采样活画布说"有内容"、导出来却是全透明，自检直接漏判。 */
+            const why = await blankOfPng(shot);
             if (why) {
-              /* 绝**不**把空白当成功 —— 回传诊断图，让 agent 知道卡在哪 */
+              /* 绝**不**把空白当成功 —— 回传诊断图，让 agent 知道卡在哪、**是哪一版代码在跑** */
               await post(diagPng([
-                `空白：${why}`,
+                `构建=${BUILD} 空白=${why}`,
                 `样式已加载=${map.isStyleLoaded()} 地图loaded=${map.loaded()}`,
                 `画布=${cv.width}x${cv.height} zoom=${map.getZoom().toFixed(2)} pitch=${Math.round(map.getPitch())}`,
                 `图层=${(map.getStyle()?.layers || []).map((l) => l.id).join(",") || "(空!)"}`,
@@ -403,14 +488,9 @@
               $("m-msg").textContent = `代拍空白：${why}（已回传诊断图）`;
               return false;
             }
-            try {
-              const ok = await post(cv.toDataURL("image/png"), name);
-              $("m-msg").textContent = `代拍 ${name}：${ok ? "已回传" : "HTTP 失败"}`;
-              return ok;
-            } catch (e) {
-              $("m-msg").textContent = "代拍失败：" + (e?.name || e);
-              return false;
-            }
+            const ok = await post(shot, name);
+            $("m-msg").textContent = `代拍 ${name}：${ok ? "已回传" : "HTTP 失败"}`;
+            return ok;
           };
           await settle();
           let ok = await snap("show-near");

@@ -177,6 +177,16 @@
       showCancel?: boolean;
       /** 覆盖任意文案（i18n 接进来时用，缺的键自动落回内置中文） */
       strings?: Partial<WsTripCardStrings>;
+      /**
+       * 低档（`perf.low`）：插值降到 `LOW_HZ`（10Hz）而不是每帧。
+       *
+       * 为什么要给这个开关（2026-09-20）：`frame()` 是**每个 rAF 都写一次 DOM**
+       * （`el.style.transform`）——高档下这是对的（进度条要顺），
+       * 但在软渲染路上，主线程每帧都被画布填满，这个"顺手的一写"会把已经不够的帧再摊薄。
+       * 10Hz 的进度条人眼看着依然是连续的（进度条一秒只走 1% 都不到），
+       * 但**每帧的活儿少了一件**。
+       */
+      low?: boolean;
     }>(),
     {
       trip: null,
@@ -187,6 +197,7 @@
       floatingSide: "left",
       showCancel: true,
       strings: () => ({}),
+      low: false,
     }
   );
 
@@ -202,6 +213,12 @@
 
   /** 文本重算间隔（毫秒）：逐帧改文字在手机上纯属浪费 */
   const TEXT_MS = 240;
+  /**
+   * 低档下**写 DOM** 的最小间隔（毫秒）= 10Hz。
+   * 为什么是 10 而不是更小：进度条一秒最多走百分之几，10Hz 已经看不出台阶；
+   * 而"每帧一次 style 写"在软渲染路上是真的会摊薄帧率的。
+   */
+  const LOW_FRAME_MS = 100;
 
   const barEl = ref<HTMLElement | null>(null);
   /** 文字用的时间（节流后的 Date.now()）—— 进度条的**逐帧**插值不经过它 */
@@ -214,6 +231,8 @@
 
   let rafId = 0;
   let lastText = 0;
+  /** 上次真正写 DOM 的时刻（低档节流用，见 `frame()`） */
+  let lastFrame = 0;
 
   /* ── 展示派生量 ─────────────────────────────────────────────────────────── */
 
@@ -260,6 +279,12 @@
     const t = props.trip;
     if (!t) return;
     const nowMs = Date.now();
+    /* 低档：**同一个 rAF 还在，但干活降到 10Hz**。
+       为什么不干脆停掉 rAF：进度条会彻底冻住，"车还在走"这件事就看不见了。
+       为什么不降 rAF 频率：`frame()` 里 `rafId = requestAnimationFrame(frame)` 是自己续的，
+       真正的成本是**这次回调里做了什么**，不是回调频率 —— 所以节流的是"做的事"。 */
+    if (props.low && nowMs - lastFrame < LOW_FRAME_MS) return;
+    lastFrame = nowMs;
     const p = tripProgress(t, nowMs);
     const el = barEl.value;
     if (el) el.style.transform = `scaleX(${p.toFixed(4)})`;

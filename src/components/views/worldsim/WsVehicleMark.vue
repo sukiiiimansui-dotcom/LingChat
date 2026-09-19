@@ -88,7 +88,15 @@
       /** 能不能点（默认 false：不吃地图手势的事件） */
       clickable?: boolean;
       /** geo 空间的投影函数（小区草图没有地理投影；给了才画得出经纬度行程） */
-      project?: ((p: { lng: number; lat: number }) => { x: number; y: number } | null) | null;
+      project?: ((p: { lng: number; lat: number }) => { x: number; y: number }) | null;
+      /**
+       * 低档（`perf.low`）：自驱插值从 ~30Hz 降到 **10Hz**。
+       *
+       * 为什么（2026-09-20）：自驱那条 rAF 每次 tick 都会写 `livePos`（响应式）⇒
+       * 触发 Vue 重算 + 一次 DOM style 写入。软渲染路上主线程本来就满，
+       * 这一件"可有可无的顺滑"要往后让。车速不快，10Hz 的位移人眼基本看不出台阶。
+       */
+      low?: boolean;
     }>(),
     {
       pos: null,
@@ -168,6 +176,8 @@
    * 位置真相没变：还是 `tripProgress/tripPosition(trip, Date.now())`，不累加、不猜测。
    */
   const SELF_TICK_MS = 33;
+  /** 低档自驱间隔 = 10Hz（见 prop `low` 的说明） */
+  const SELF_TICK_MS_LOW = 100;
   const livePos = ref<WsTripPos | null>(null);
   let rafId = 0;
   let lastTick = 0;
@@ -184,7 +194,7 @@
       return;
     }
     rafId = window.requestAnimationFrame(frame);
-    if (ts - lastTick < SELF_TICK_MS) return;
+    if (ts - lastTick < (props.low ? SELF_TICK_MS_LOW : SELF_TICK_MS)) return;
     lastTick = ts;
     livePos.value = tripPosition(props.trip, Date.now());
   }

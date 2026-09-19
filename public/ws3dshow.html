@@ -68,6 +68,7 @@
       <span id="m-build" style="opacity:.55"></span>
     </div>
     <div class="ops">
+      <button id="b-sat" title="切换 z16 以上的底：卫星影像 / 暗色底放大">星</button>
       <button id="b-far" title="远景（看整片）">远</button>
       <button id="b-near" title="近景（看楼体）">近</button>
       <button id="b-spin" title="转个角度">转</button>
@@ -85,7 +86,7 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      const BUILD = "ws3dshow-2026-09-20-v4";
+      const BUILD = "ws3dshow-2026-09-20-v5";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -152,12 +153,26 @@
           sources: {
             /* Esri 免 key。⚠️ 路径是 {z}/{y}/{x}（y 在前）—— 写错**不报错**，地图会跑到别处。 */
             base: {
-              type: "raster", tileSize: 256, maxzoom: 19,
+              /* ⚠️ 暗色 Canvas 系列**最高只到 z16**（z17+ 是「Map data not yet available」占位图），
+                 所以限 16，让 MapLibre 放大复用；z16 以上由 `hi`（卫星）接手。 */
+              type: "raster", tileSize: 256, maxzoom: 16,
               tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
               attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
               /* 🔴 不写这行 ⇒ 跨域瓦片**污染画布** ⇒ toDataURL 抛 SecurityError ⇒ 代拍全废
                  （而画面上一切正常，只有取图那一步失败，极其难查）。Esri 实测回 ACAO:* 。 */
               crossOrigin: "anonymous",
+            },
+            /* 🛰 高分层（z16 以上）。机主 2026-09-20：「**地图太糊了**（放太大直接变成灰蒙蒙的）」
+               —— 根因是暗色 Canvas 系列**最高只到 z16**，z17~18 等于把 z16 放大 2~4 倍。
+               实测（逐块下载比对）：`Canvas/World_Dark_Gray_Base` z17 与 `World_Topo_Map` z16
+               的瓦片 **md5 完全相同**（都是 2521B 的「Map data not yet available」占位图）
+               ⇒ **Topo 在这片也是死路**；只有 `World_Imagery` z16/17/18 逐级有真细节
+               （15556/13291/9993B）。所以高分层用卫星影像，并**压进暗部**（白天亮照片
+               直接铺会白得刺眼、而且比楼还亮 ⇒ 3D 楼会消失在背景里）。 */
+            hi: {
+              type: "raster", tileSize: 256, maxzoom: 19, crossOrigin: "anonymous",
+              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+              attribution: "Sources: Esri, Maxar, Earthstar Geographics",
             },
             /* 注记层（街名/地名）：暗色底图 Base 是**不带字**的，只铺它看不出"这是哪条街"。 */
             ref: {
@@ -170,7 +185,12 @@
             /* 地面：压暗 + 去饱和，把"主角位"让给楼体（不压的话楼和地一个亮度，糊成一片） */
             {
               id: "base", type: "raster", source: "base",
-              paint: { "raster-opacity": 0.92, "raster-saturation": -0.25, "raster-contrast": 0.04, "raster-brightness-max": 0.74 },
+              /* z14.5 起往 0 淡出，把"地面"交给高分层（交叉过渡，不"咔"一下换底） */
+              paint: { "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0.92, 16.2, 0], "raster-saturation": -0.25, "raster-contrast": 0.04, "raster-brightness-max": 0.74 },
+            },
+            {
+              id: "hi", type: "raster", source: "hi", minzoom: 14.5,
+              paint: { "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0, 16.2, 0.95], "raster-saturation": -0.4, "raster-contrast": 0.12, "raster-brightness-min": 0.0, "raster-brightness-max": 0.34 },
             },
             /* 注记压在楼之上（和地图 App 一个口径：街名不该被楼挡住）。
                楼房图层由 `addBldLayers()` 在**数据到了之后**插到它前面。 */
@@ -366,6 +386,17 @@
         $("b-near").onclick = () => { map.easeTo({ zoom: 17.4, pitch: 62, duration: 600 }); };
         $("b-far").onclick = () => { map.easeTo({ zoom: 15.0, pitch: 50, duration: 600 }); };
         $("b-spin").onclick = () => { map.easeTo({ bearing: map.getBearing() - 45, duration: 600 }); };
+        /* 「星」：z16 以上到底用卫星影像还是把暗色底放大。
+           留这个按钮是因为"哪个更好看"**只能看真机图**决定 ——
+           而卫星是白天的亮照片，压暗过头会太黑、压不够会比楼还亮（楼就"消失"了）。 */
+        let satOn = true;
+        const applySat = () => {
+          try { map.setLayoutProperty("hi", "visibility", satOn ? "visible" : "none"); } catch { /* 图层还没建好 */ }
+          const b = $("b-sat");
+          if (b) b.classList.toggle("on", satOn);
+        };
+        $("b-sat").onclick = () => { satOn = !satOn; applySat(); };
+        applySat();
 
         /* ── 代拍：`?autoshot=1` 时页面**自己**拍三张回传 ────────────────────────
            为什么由页面拍：agent 侧看不到 WebGL，机主又禁了 ADB 截屏（会看到整屏隐私）。
@@ -533,7 +564,15 @@
           ok = (await snap("show-far")) || ok;
           map.easeTo({ zoom: 17.0, pitch: 62, bearing: -38, duration: 900 }); await settle();
           ok = (await snap("show-side")) || ok;
-          $("m-msg").textContent = ok ? "代拍完成：3 张已回传 ~/chk/live/" : $("m-msg").textContent;
+          /* 🔎 **同机位再拍一张"不用卫星"的**：机主 2026-09-20 的抱怨是"放大后糊+灰"，
+             而"卫星压暗 vs 暗色底放大"哪个更好看**只能看图判断**。
+             多拍这一张，机主点一次就能拿到 A/B 对比，不用来回两轮。 */
+          map.easeTo({ zoom: 17.0, pitch: 62, bearing: -38, duration: 0 });
+          satOn = false; applySat();
+          await settle();
+          ok = (await snap("show-side-nosat")) || ok;
+          satOn = true; applySat();
+          $("m-msg").textContent = ok ? "代拍完成：4 张已回传 ~/chk/live/" : $("m-msg").textContent;
           try { localStorage.removeItem("wsm:v1:autoshot"); } catch {}
         }
         try {

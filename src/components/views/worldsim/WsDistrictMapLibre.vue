@@ -316,6 +316,26 @@
           crossOrigin: "anonymous",
           attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
         },
+        /* 🛰 **高分层（z16 以上）**：机主 2026-09-20 反馈「**地图太糊了**（放太大直接变成灰蒙蒙的）」。
+           根因是上面那个 `maxzoom: 16` 的**副作用**：z17~18 变成"把 z16 的灰底放大 2~4 倍"。
+           实测（本轮，逐块下载比对）：
+             · `Canvas/World_Dark_Gray_Base` z17 = **2521B**，与 `World_Topo_Map` z16 的瓦片
+               **md5 完全相同** ⇒ 那 2521B 是 Esri 的**「Map data not yet available」占位图**
+               ⇒ **`World_Topo_Map` 在这片也没数据，"二选一"里它是死路**（省得再试一次）；
+             · `World_Imagery` z16/17/18 = 15556B / 13291B / 9993B，**内容逐级不同、真有细节**
+               （我把 z18 那块拉下来看过：屋顶、街巷、树、江岸都在）
+               ⇒ **高分层只能用卫星影像**。
+           观感上要"压成夜色"：白天照片直接铺上去会白得刺眼，而且比楼还亮 ⇒ 楼会"消失"。
+           所以用 `raster-brightness-max` 把它压进**暗部**（地面必须明显暗于楼体）。
+           两层在 z14.5~16 之间**用透明度交叉过渡**，不会"咔"一下换底。 */
+        hi: {
+          type: "raster",
+          tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+          tileSize: 256,
+          maxzoom: 19,
+          crossOrigin: "anonymous", // 同上：不声明就污染画布，代拍必废
+          attribution: "Sources: Esri, Maxar, Earthstar Geographics",
+        },
         /* 🅱 注记层（街名/地名）。暗色底图的 `..._Base` 是**不带字**的 ——
            只铺它，画面就是"一片深灰上有几个方块"，看不出这是哪条街（机主："不像地图"）。
            Esri 的 Reference 服务是**透明 PNG**（实测小瓦片 872B），叠上去就有字了。
@@ -347,10 +367,26 @@
           type: "raster",
           source: "base",
           paint: {
-            "raster-opacity": 0.92,
+            /* z14.5 起往 0 淡出，把"地面"交给下面那条高分层（交叉过渡，不"咔"一下换底） */
+            "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0.92, 16.2, 0],
             "raster-saturation": -0.25,
             "raster-contrast": 0.04,
             "raster-brightness-max": 0.74,
+          },
+        },
+        /* 高分层：z14.5 起淡入。**压进暗部**是刻意的 ——
+           卫星影像本身是白天的亮照片，不压的话地面比楼还亮，3D 楼会"消失"在背景里。 */
+        {
+          id: "hi",
+          type: "raster",
+          source: "hi",
+          minzoom: 14.5,
+          paint: {
+            "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0, 16.2, 0.95],
+            "raster-saturation": -0.4,
+            "raster-contrast": 0.12,
+            "raster-brightness-min": 0.0,
+            "raster-brightness-max": 0.34,
           },
         },
         /* 注记压在最上层（和地图 App 一个口径：街名不该被楼挡住）。

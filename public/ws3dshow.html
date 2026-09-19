@@ -85,7 +85,7 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      const BUILD = "ws3dshow-2026-09-20-v3";
+      const BUILD = "ws3dshow-2026-09-20-v4";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -235,7 +235,9 @@
         const dLat = Math.abs(b.getNorth() - b.getSouth()) / 2;
         const mx = dLng * 111320 * Math.cos((c.lat * Math.PI) / 180);
         const my = dLat * 110540;
-        return Math.max(350, Math.min(1200, Math.round(Math.hypot(mx, my) * 0.95 / 50) * 50));
+        /* 起点半径按视野算，**上限放到 2000**：稀疏地段（涪陵）只有放大半径才取得到楼，
+           而密集地段（渝中）在第一级就够 25 栋停下了，走不到上限 ⇒ 只帮稀疏区。 */
+        return Math.max(350, Math.min(2000, Math.round(Math.hypot(mx, my) * 0.95 / 50) * 50));
       }
 
       async function fetchBuildings(r) {
@@ -247,21 +249,48 @@
         return body.geojson;
       }
 
-      /** 取楼：数据太少就**自动放大一次**再取（涪陵那种地方 400m 是 0 栋，不放大学不到东西）。
-       *  上限 1200m：实测渝中区 1200m 会直接把 Overpass 拖挂（返回空），宁可取小一点。 */
+      /** 取楼：数据太少就**自动放大**再取，命中即停（涪陵那种地方 400m 是 0 栋，不放大学不到东西）。
+       *  ⚠️ 上限 2000m（2026-09-20 从 1200 放宽）：实测涪陵驻地 1000m→21 栋、1400m→29 栋，
+       *     再大（2500m）会整条查询失败；而密集区（渝中）**早就在第一级就够 25 栋停下**，
+       *     根本走不到这一级 ⇒ 放宽上限是**只帮稀疏区、不伤密集区**的改法。 */
+      const R_MAX = 2000;
       async function loadForView() {
         const r0 = radiusForView();
-        $("m-msg").textContent = "取楼中…";
-        let fc = await fetchBuildings(r0);
-        let r = r0;
-        if ((fc.features || []).length < 20 && r0 < 1200) {
-          const r2 = Math.min(1200, r0 * 2);
+        const ladder = [r0];
+        while (ladder[ladder.length - 1] < R_MAX) ladder.push(Math.min(R_MAX, ladder[ladder.length - 1] * 2));
+        let best = { fc: { features: [] }, r: 0 };
+        for (const r of ladder) {
+          $("m-msg").textContent = `取楼中… ${r}m`;
           try {
-            const fc2 = await fetchBuildings(r2);
-            if ((fc2.features || []).length > (fc.features || []).length) { fc = fc2; r = r2; }
-          } catch { /* 放大失败就用手上这份，不装作取到了 */ }
+            const fc = await fetchBuildings(r);
+            if ((fc.features || []).length > (best.fc.features || []).length) best = { fc, r };
+            if ((fc.features || []).length >= 25) break; // 够看了，别再花时间
+          } catch { /* 这一级失败就试下一级，不因为一次失败放弃整屏 */ }
         }
-        return { fc, r };
+        return best;
+      }
+
+      /**
+       * 等**楼真的到齐**再按快门。
+       *
+       * 🔴 2026-09-20 机主那三张真机图就是这么废掉的：底图、路名、江面都在，
+       * **一栋楼都没有** —— 因为快门在开图约 4 秒后就按了，
+       * 而 `/api/buildings` 是**现问 Overpass**的（冷查询二十几秒起，最慢见过 91.7s）。
+       * ⇒ 拍出来的永远是"楼还没到"的那一帧，而这个现象**看起来像"这一带没有楼"**，
+       *   会把"还没到"误判成"没有数据"，白跑一轮。
+       */
+      function waitForBuildings(maxMs) {
+        return new Promise((res) => {
+          const t0 = Date.now();
+          const iv = setInterval(() => {
+            const waited = Math.round((Date.now() - t0) / 1000);
+            $("m-msg").textContent = `等楼栋到齐… 已等 ${waited}s（现在 ${stats.n} 栋 / ${stats.r}m）`;
+            if (stats.n > 0 || Date.now() - t0 > maxMs) {
+              clearInterval(iv);
+              res(stats.n);
+            }
+          }, 500);
+        });
       }
 
       function applyBuildings(fc, r) {
@@ -492,6 +521,12 @@
             $("m-msg").textContent = `代拍 ${name}：${ok ? "已回传" : "HTTP 失败"}`;
             return ok;
           };
+          /* 🔴 **等楼到齐再按快门**（见 `waitForBuildings` 的说明）：
+             以前 4 秒后就拍，而 Overpass 冷查询二十几秒 ⇒ 三张图全是"楼还没到"，
+             看起来像"这一带没有楼"，白跑一轮。等不到（>100s）也照拍，
+             但诊断/HUD 里会写明"0 栋"，不会假装成功。 */
+          const n0 = await waitForBuildings(100000);
+          $("m-msg").textContent = n0 > 0 ? `楼已到齐：${n0} 栋（${stats.r}m）⇒ 开始拍` : "等了 100s 仍是 0 栋 ⇒ 照拍（如实记录）";
           await settle();
           let ok = await snap("show-near");
           map.easeTo({ zoom: 15.0, pitch: 48, duration: 900 }); await settle();

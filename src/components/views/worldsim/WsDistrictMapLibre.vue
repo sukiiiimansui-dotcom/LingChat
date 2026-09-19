@@ -84,6 +84,9 @@
         等高线 {{ stats.contour > 0 ? stats.contour + " 段" : "不可用" }}
       </span>
       <span>{{ stats.fps }} fps</span>
+      <!-- 「为什么慢、我们为此做了什么」—— 机主要的是**如实**，不是好看。
+           这一条只在真的被压到低档时出现（软渲染/降级路），见 `fallback2d()`。 -->
+      <span v-if="stats.perf" class="is-warn">{{ stats.perf }}</span>
       <span v-if="stats.note" class="is-warn">{{ stats.note }}</span>
     </div>
   </div>
@@ -94,6 +97,10 @@
   import worldMapApi, { geoJson } from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
   import type { WsDistrictPin } from "./wsActors";
+  /* 性能档位（模块级单例，与 `WorldSim.vue` 拿到的是**同一份**）。
+     为什么这个组件也要拿它：**降级决定发生在这里** —— 只有这里知道"最后到底走了哪条渲染路"，
+     而档位必须跟着那条路走（见 `fallback2d()` 里 `perf.forceLow()` 那段）。 */
+  import { useWsPerf } from "./wsPerf";
   import { aiFeatureCollection, type AiItem } from "./wsAiLayers";
   /* 「楼多高、什么颜色」的纯逻辑（`wsBuildingLook.ts`，独立文件 ⇒ 可单测、不跟渲染纠缠）。
      2026-09-19 机主：「这个 ai 2d 小区好丑，直接试一下 3d 路线我看看效果」——
@@ -169,6 +176,9 @@
 
   const host = ref<HTMLElement | null>(null);
   const cv = ref<HTMLCanvasElement | null>(null);
+  /* 性能档位（模块级单例）。**只在这一处用**：`fallback2d()` 里把档位压到低档 ——
+     因为只有这里知道"最后真的走了哪条渲染路"，而档位必须跟那条路一致。 */
+  const perf = useWsPerf();
   // eslint 不需要 map 的类型细节；这里只留一个句柄用于销毁
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let map: any = null;
@@ -205,6 +215,8 @@
     view: "",
     /** 画在屏幕上的"人"的数量（WebGL 走地图库 Marker、2D 降级走 DOM；两个都算） */
     pins: 0,
+    /** 低档的原因（被**实际渲染路**压下来的，见 `wsPerf.forceLowTier`）。空串 = 没被压 */
+    perf: "",
   });
 
   /* ── 长等待可视化：三段**真实**阶段 + 已等秒数（机主 2026-09-19）────────────
@@ -291,7 +303,11 @@
             "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
           ],
           tileSize: 256,
-          maxzoom: 19,
+          /* 🔴 2026-09-20 真机代拍实锤：Esri **Canvas 系列最高只到 z16**，
+             而我们在小区级默认 zoom 16.4 + DPR2 ⇒ MapLibre 会去请求 z17+ 的瓦片 ⇒
+             Esri 返回一整屏 **"Map data not yet available" 灰色占位图**（真机截图 `~/chk/live/050334-show-near.png`）。
+             ⇒ 限到 16，让 MapLibre **放大复用 z16 瓦片**（略糊，但远好过灰屏没内容）。 */
+          maxzoom: 16,
           /* 🔴 `crossOrigin: "anonymous"` 不是可选项，是**代拍通道的命门**：
              浏览器把没声明 CORS 的跨域图片画进 canvas 会**污染画布**，
              之后 `canvas.toDataURL()` 直接抛 SecurityError ⇒ 自截图/代拍全废，
@@ -310,10 +326,18 @@
             "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
           ],
           tileSize: 256,
-          maxzoom: 19,
+          /* 🔴 2026-09-20 真机代拍实锤：Esri **Canvas 系列最高只到 z16**，
+             而我们在小区级默认 zoom 16.4 + DPR2 ⇒ MapLibre 会去请求 z17+ 的瓦片 ⇒
+             Esri 返回一整屏 **"Map data not yet available" 灰色占位图**（真机截图 `~/chk/live/050334-show-near.png`）。
+             ⇒ 限到 16，让 MapLibre **放大复用 z16 瓦片**（略糊，但远好过灰屏没内容）。 */
+          maxzoom: 16,
           crossOrigin: "anonymous", // 同上：不声明就会污染画布，代拍取不到图
         },
       },
+      /* ⚠️ 2026-09-20 血泪：我在这里插过一条 `{type: "sky"}` 图层 ⇒ **整个 style 校验失败**
+         （HUD 报 `layers[0]: missing required property`）⇒ `load` 永不触发 ⇒ 全站退回 2D 降级。
+         这个构建里 `sky` **不是图层类型**（MapLibre 把它当根级样式属性）。
+         ⇒ 想加地平线渐变请走根级 `sky: {…}`（先在小页面里验一次再进主组件），别往 layers 里塞。 */
       layers: [
         { id: "bg", type: "background", paint: { "background-color": "#0a1017" } },
         /* 地面：**压暗 + 去饱和**。不压的话地面和矮楼一个亮度，整屏糊成一块深灰 ——
@@ -959,7 +983,16 @@
 
   /** 取楼半径的上下限（米）。下限：太小了连一个小区都盖不住；上限见下方"为什么要封顶" */
   const BLD_R_MIN = 350;
-  const BLD_R_MAX = 1400;
+  /**
+   * 上限 **2000m**（2026-09-20 从 1400 放宽）。
+   *
+   * 为什么：机主真机截图（涪陵）里 `🏢 0`，查下来是这一带的楼**本来就稀** ——
+   * 实测涪陵驻地 400m→**0 栋**、600m→3、900m→18、1000m→21、1400m→29、
+   * **2500m→整条查询失败**。1400m 只够拿到那 29 栋里的一部分。
+   * 放宽是**只帮稀疏区、不伤密集区**的改法：密集区（渝中 700m 就有 232 栋）
+   * 第一级就 ≥`BLD_ENOUGH` 停下，**根本走不到上限**；只有稀疏区才会爬到 2000。
+   */
+  const BLD_R_MAX = 2000;
   /** "够看"的楼栋数：一屏想看到"成片"，至少得有这么几栋（不到就换更大的半径再试一次） */
   const BLD_ENOUGH = 25;
 
@@ -993,11 +1026,12 @@
    *   ③ 全都试完还是空 ⇒ **如实写进 HUD**（试过哪些半径），绝不静默 ——
    *      静默正是"HUD 常显示 🏢 0 却没人知道为什么"的成因。
    *
-   * ⚠️ 为什么要封顶 1400m：**实测**（同一后端）
-   *   · 涪陵驻地 400m→0 栋、600m→3、900m→18、1200m→27、1500m→29、**2500m→取不到**；
+   * ⚠️ 为什么要封顶（现在是 2000m）：**实测**（同一后端）
+   *   · 涪陵驻地 400m→0 栋、600m→3、900m→18、1000m→21、1400m→29、**2500m→取不到**；
    *   · 渝中区驻地 400m→56、800m→232、**1200m→查询直接失败（Overpass 拖挂）**。
    *   ⇒ 半径越大越容易整条查询失败，而失败一次要等二十几秒。宁可"多爬两级"，
    *     也不要一次性甩一个 2500m 出去（那是**更慢而且更容易什么都没有**的选择）。
+   *   2000m 是"实测能返回的里面最大的那一档"（涪陵 2000m→29 栋），再大就到失败区了。
    *
    * 同一个"中心+半径"不重复取（`lastBldKey`），避免拖动时把 Overpass 打爆。
    */
@@ -1128,6 +1162,16 @@
   ): void {
     stats.mode = mode;
     mapAvailable.value = false;
+    /* 🔴🔴 **这条是本次 fps 修复的核心一行**（2026-09-20）：
+       走到这里 = 我们已经确定在用 **Canvas2D 软渲染**（不管是因为探针说没 WebGL、
+       地图库加载失败，还是地图库 `load` 一直不来被看门狗砍掉）。软渲染天生重 ——
+       实测小区级只有 7fps。
+       而**档位判定此前完全不知道这件事**：它只看核数/内存/WebGL 探针，于是
+       "页面在跑最重的路、档位还是高档"，雨/雪、小地图、头像、车辆全套满血跑。
+       ⇒ 谁降级，谁负责把档位压下去（**因果**，不是**预测**）。
+       用 `perf.low` 的地方会自动跟着变：`ws-perf-low` 类、天气层、车辆/行程卡全部生效。 */
+    perf.forceLow(mode);
+    stats.perf = `已因「${mode}」压到低档`;
     /* 🔴 **降级前必须换一块新画布**：`cv` 可能已经被 WebGL 占过（MapLibre 在它上面建了
        webgl 上下文），而按 HTML 规范，`canvas.getContext("2d")` 在**已经有 webgl 上下文**
        的画布上会返回 `null` ⇒ `draw2d()` 里 `if (!ctx) return;` 直接**静默不画**。
@@ -1577,8 +1621,9 @@
     font-size: 20px;
     line-height: 1;
     cursor: pointer;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    /* 同上：低档关掉模糊（3 个按钮 × 40px，代价比 HUD 小，但没理由留着） */
+    backdrop-filter: blur(var(--ws-blur-low, 8px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 8px));
   }
   .ws-dml__pins {
     position: absolute;
@@ -1621,8 +1666,18 @@
     padding: 3px 8px;
     border-radius: 8px;
     background: rgba(10, 16, 24, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    /* 🔴 低档必须能关掉这里的模糊（2026-09-20 实测）：
+       这条 HUD 横条**一直可见**、又宽，还每秒改一次文字（fps）⇒ 它的**背景每帧都在变**
+       ⇒ `backdrop-filter` 就得**每帧把背后的像素读回来重新模糊一遍**。
+       有 GPU 时这是免费的；**软渲染（无 WebGL / 低端机）时这是最贵的一件事**，
+       而它偏偏写在 CSS 里写死 8px ⇒ `.ws-perf-low` 根本管不到它。
+       实测归因（同一次会话里逐个 display:none 对照）：整条 `.ws-dml` 值 **17fps**
+       （藏掉它 22 → 39fps），而主线程的 Script/Layout/Style 加起来只有 ~5ms/秒
+       —— 说明瓶颈是**光栅化/合成**，不是 JS。改这一行比砍十个 rAF 有用。
+       口径照抄项目已有的 `--ws-blur-low`（**只在 `.ws-perf-low` 里定义 = 0px**，
+       高档拿不到它 ⇒ 回退到 8px，行为一字不变）。 */
+    backdrop-filter: blur(var(--ws-blur-low, 8px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 8px));
     color: #fff;
     font-size: 11px;
     line-height: 1.6;

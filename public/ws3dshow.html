@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>小区级 3D 楼房 · 观感调参台（真机看效果用）</title>
+    <!--
+      ws3dshow.html —— **观感调参台**，不是产品页。
+
+      ## 为什么单独开一页（2026-09-19）
+      机主原话：「这个 ai 2d 小区好丑，直接试一下 3d 路线我看看效果」。
+      本机无头浏览器**看不到 WebGL**（GPU 上下文首帧后必丢，6 种图形栈实测过），
+      所以"好不好看"这件事**只能在真机上调**。而真机上走 App 到小区级要点好几下、
+      还要等 AI 精绘 ⇒ 一轮迭代几分钟。
+      这一页把"调观感"需要的三件事压到一屏：**真底图 + 真楼房挤出 + 一组能点的档位**。
+
+      ## 它和产品代码的关系
+      这里调出来的配方（底图、高度取值、配色、光照）会**原样搬进**
+      `src/components/views/worldsim/WsDistrictMapLibre.vue`。所以这一页的表达式
+      故意写成可以直接复制粘贴的形状 —— 别在这里发明只此一处的新写法。
+
+      ## 三条踩过的坑（都在这一页里守住了）
+      ① 样式对象里**绝不能写 `glyphs: undefined`** → 样式校验失败 → `load` 永不触发，
+         而页面**零报错**（第一次就是这么被骗的）。
+      ② canvas 必须 `preserveDrawingBuffer: true`，否则截图拍到空白。
+      ③ Esri 瓦片路径是 `{z}/{y}/{x}`（**y 在前**）—— 写成 `{z}/{x}/{y}` 不报错但地图会跑到别处。
+    -->
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #070b11; }
+      body { font: 12px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #eaf6ff; }
+      #map { position: fixed; inset: 0; }
+      .hud {
+        position: fixed; left: 8px; bottom: 8px; z-index: 20;
+        display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 62vw;
+        padding: 5px 9px; border-radius: 10px;
+        background: rgba(7, 11, 17, 0.62);
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        font-size: 11px; line-height: 1.7;
+      }
+      .hud b { color: #79d9ff; font-weight: 600; }
+      .hud .w { color: #ffcf8a; }
+      .ops {
+        position: fixed; right: 8px; bottom: 8px; z-index: 20;
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      .ops button {
+        width: 46px; height: 42px; border: none; border-radius: 12px;
+        background: rgba(7, 11, 17, 0.66); color: #eaf6ff; font-size: 12px;
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      }
+      .ops button.on { background: #79d9ff; color: #06222e; font-weight: 700; }
+      #fb { position: fixed; inset: 0; display: none; place-items: center; padding: 24px; z-index: 30;
+            background: #070b11; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="hud">
+      <span><b id="m-n">0</b> 栋</span>
+      <span>真高 <b id="m-h">0</b></span>
+      <span>层数 <b id="m-l">0</b></span>
+      <span class="w">按类型估 <b id="m-e">0</b></span>
+      <span><b id="m-r">-</b> m</span>
+      <span><b id="m-z">-</b> 级</span>
+      <span><b id="m-fps">-</b> fps</span>
+      <span class="w" id="m-msg"></span>
+    </div>
+    <div class="ops">
+      <button id="b-far" title="远景（看整片）">远</button>
+      <button id="b-near" title="近景（看楼体）">近</button>
+      <button id="b-spin" title="转个角度">转</button>
+    </div>
+    <div id="fb"></div>
+
+    <script type="module">
+      /* 真机上看效果用的调参台。所有数字都在这里，改完刷一下页面就见效。 */
+      const API = "http://127.0.0.1:8791";
+
+      /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
+         为什么是它：IP 定位（`/api/location?fast=1`）当前解析出来的就是渝中区，
+         这一带 OSM 楼房密（实测 800m 内 232 栋）——"成片"要看得出效果就得在这种地方。 */
+      const SPOT = { lng: 106.56288, lat: 29.556742, name: "重庆·渝中区" };
+
+      const KIND_H = {
+        /* OSM 建筑类型 → 合理层高（米）。**这张表是"估算"，HUD 里单独计数，不混进真数据。**
+           依据：中国城区最常见的形态（6~7 层住宅 ≈ 18~21m、临街商业 4~5 层 ≈ 15m、
+           写字楼/酒店 20 层起 ≈ 60m）。宁可保守，也别把老城区画成曼哈顿。 */
+        house: 7, detached: 7, semidetached_house: 7, bungalow: 4, hut: 3, shed: 3, garage: 3, garages: 3, roof: 3, carport: 3,
+        residential: 18, dormitory: 15, apartments: 21, terrace: 9, commercial: 15, retail: 12,
+        office: 45, hotel: 40, tower: 90, hospital: 24, school: 12, university: 15, kindergarten: 9,
+        industrial: 10, warehouse: 9, factory: 10, church: 18, temple: 10, mosque: 15, museum: 18,
+        construction: 12, yes: 12,
+      };
+
+      /** 稳定的字符串哈希（同一条 id 永远同一个数）—— 用来给"估算高度"加一点确定性抖动。
+       *  为什么要抖：一整片 `building=yes` 如果全给 12m，就是一张**平顶地毯**，
+       *  看着比没有还假。±15% 的确定性抖动让人眼读到"这是一片高低不齐的楼"，
+       *  而且同一个楼每次刷新都一样（不是随机闪烁）。 */
+      function hash32(s) {
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+        return (h >>> 0);
+      }
+
+      /** 渲染用高度：真高 → 层数×3（后端已折好）→ 按 OSM 类型估。返回 [米, 来源] */
+      function renderHeight(p) {
+        const h = Number(p.height);
+        if (p.height_src === "height" && h > 0) return [h, "real"];
+        if (p.height_src === "levels" && h > 0) return [h, "levels"];
+        const base = KIND_H[String(p.kind || "yes").toLowerCase()] ?? KIND_H.yes;
+        const jitter = 0.85 + (hash32(String(p.osm_id || "")) % 31) / 100; // 0.85 ~ 1.15
+        return [Math.max(3, Math.round(base * jitter * 10) / 10), "kind"];
+      }
+
+      const $ = (id) => document.getElementById(id);
+      const errs = [];
+      let maplibregl = null;
+      let map = null;
+      let fcCache = null;
+      const stats = { n: 0, real: 0, levels: 0, kind: 0, r: 0 };
+
+      function fail(why) {
+        const el = $("fb"); el.style.display = "grid";
+        el.textContent = "3D 调参台起不来：" + why + "（本机无头看不到 WebGL 是已知的，真机才有）";
+        window.__w3d = { ok: false, why, errs: errs.slice(0, 5) };
+      }
+
+      /* ── 样式：底图 + 楼房挤出 ─────────────────────────────────────────────
+         配方就是准备搬进 WsDistrictMapLibre 的那一份。 */
+      function makeStyle() {
+        return {
+          version: 8,
+          name: "ws-3d-show",
+          /* 大气透视：远处的楼往天色里化开。本 vendored 构建（v6.10.0）**不支持** `light`
+             与 fill-extrusion-ambient-occlusion，所以"光照"只能靠"高度色阶 + 竖向渐变 + 雾"凑。 */
+          sky: {
+            "sky-color": "#0a1119", "horizon-color": "#1b2a3a", "fog-color": "#0d1620",
+            "sky-horizon-blend": 0.6, "horizon-fog-blend": 0.4, "atmosphere-blend": 0.7,
+          },
+          sources: {
+            /* Esri 免 key。⚠️ 路径是 {z}/{y}/{x}（y 在前）—— 写错**不报错**，地图会跑到别处。 */
+            base: {
+              type: "raster", tileSize: 256, maxzoom: 19,
+              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
+              attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+              /* 🔴 不写这行 ⇒ 跨域瓦片**污染画布** ⇒ toDataURL 抛 SecurityError ⇒ 代拍全废
+                 （而画面上一切正常，只有取图那一步失败，极其难查）。Esri 实测回 ACAO:* 。 */
+              crossOrigin: "anonymous",
+            },
+            /* 注记层（街名/地名）：暗色底图 Base 是**不带字**的，只铺它看不出"这是哪条街"。 */
+            ref: {
+              type: "raster", tileSize: 256, maxzoom: 19, crossOrigin: "anonymous",
+              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"],
+            },
+          },
+          layers: [
+            { id: "bg", type: "background", paint: { "background-color": "#0a1017" } },
+            /* 地面：压暗 + 去饱和，把"主角位"让给楼体（不压的话楼和地一个亮度，糊成一片） */
+            {
+              id: "base", type: "raster", source: "base",
+              paint: { "raster-opacity": 0.92, "raster-saturation": -0.25, "raster-contrast": 0.04, "raster-brightness-max": 0.74 },
+            },
+            /* 注记压在楼之上（和地图 App 一个口径：街名不该被楼挡住）。
+               楼房图层由 `addBldLayers()` 在**数据到了之后**插到它前面。 */
+            { id: "ref", type: "raster", source: "ref", paint: { "raster-opacity": 0.9 } },
+          ],
+        };
+      }
+
+      /**
+       * 楼房图层规格（**不能写进 `makeStyle()` 的 layers 里**！）。
+       *
+       * 🔴 2026-09-19 血案（代价 = 机主白点一次代拍）：
+       * 我一开始把 `bld-ext` / `bld-line` 直接写在样式的 `layers` 数组里，而它们引用的
+       * `bld` 源要等数据到了才 `addSource` ⇒ 样式校验直接失败：
+       *   `layers[2]: source "bld" not found`
+       * ⇒ `map.on("load")` **永远不触发** ⇒ 底图不画、楼不画、连瓦片都不请求，
+       *   画布**全透明**（`toDataURL` 出来 RGBA 全是 0），而**页面零报错**
+       *   （错误只在 `map.on("error")` 里，我们没显示）。
+       * 代拍回来的三张"纯白"就是它 —— 白 = 全透明 α=0，看图器铺白底。
+       *
+       * 规矩：**样式里只写"一开始就存在的东西"**；随数据来的图层一律 `addLayer` 后加。
+       */
+      function bldLayerSpecs() {
+        return [
+          {
+            id: "bld-ext", type: "fill-extrusion", source: "bld",
+            paint: {
+              /* 按**渲染高度**上色：矮的沉下去、高的亮起来 ⇒ 一眼看出天际线的高低起伏。
+                 （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。） */
+              "fill-extrusion-color": [
+                "interpolate", ["linear"], ["get", "h3d"],
+                3, "#23323e", 8, "#2d4356", 16, "#3a586f", 30, "#4a7290",
+                60, "#5f93b0", 110, "#7fbcd4", 200, "#b6e2f2", 320, "#e8f7ff",
+              ],
+              "fill-extrusion-height": ["get", "h3d"],
+              "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
+              "fill-extrusion-opacity": 0.97,
+              /* 墙面竖向渐变：楼顶比楼底亮一点，体块才有"立起来"的感觉。 */
+              "fill-extrusion-vertical-gradient": true,
+            },
+          },
+          /* 轮廓细线：低 pitch 时体块容易糊，钩一圈边就清楚了（太亮会织成一张网，0.22 刚好） */
+          {
+            id: "bld-line", type: "line", source: "bld",
+            paint: { "line-color": "rgba(190,235,255,0.22)", "line-width": 0.5 },
+          },
+        ];
+      }
+
+      function hasWebGL() {
+        try { const c = document.createElement("canvas"); return !!(c.getContext("webgl2") || c.getContext("webgl")); }
+        catch { return false; }
+      }
+
+      /** 视野 → 取楼半径：**按屏幕真正看得见的范围**要数据，而不是拍脑袋跟 zoom 挂钩。
+       *  为什么：zoom 15.2 在手机横屏上其实能看到 4km 宽，"取 400m"必然大半屏是空的
+       *  —— 这正是 HUD 常显示"🏢 0"的成因之一。 */
+      function radiusForView() {
+        const b = map.getBounds();
+        const c = map.getCenter();
+        const dLng = Math.abs(b.getEast() - b.getWest()) / 2;
+        const dLat = Math.abs(b.getNorth() - b.getSouth()) / 2;
+        const mx = dLng * 111320 * Math.cos((c.lat * Math.PI) / 180);
+        const my = dLat * 110540;
+        return Math.max(350, Math.min(1200, Math.round(Math.hypot(mx, my) * 0.95 / 50) * 50));
+      }
+
+      async function fetchBuildings(r) {
+        const c = map.getCenter();
+        const url = `${API}/api/buildings?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`;
+        const res = await fetch(url);
+        const body = await res.json();
+        if (!body.ok) throw new Error(body.error || "ok=false");
+        return body.geojson;
+      }
+
+      /** 取楼：数据太少就**自动放大一次**再取（涪陵那种地方 400m 是 0 栋，不放大学不到东西）。
+       *  上限 1200m：实测渝中区 1200m 会直接把 Overpass 拖挂（返回空），宁可取小一点。 */
+      async function loadForView() {
+        const r0 = radiusForView();
+        $("m-msg").textContent = "取楼中…";
+        let fc = await fetchBuildings(r0);
+        let r = r0;
+        if ((fc.features || []).length < 20 && r0 < 1200) {
+          const r2 = Math.min(1200, r0 * 2);
+          try {
+            const fc2 = await fetchBuildings(r2);
+            if ((fc2.features || []).length > (fc.features || []).length) { fc = fc2; r = r2; }
+          } catch { /* 放大失败就用手上这份，不装作取到了 */ }
+        }
+        return { fc, r };
+      }
+
+      function applyBuildings(fc, r) {
+        const feats = (fc.features || []).map((f) => {
+          const [h, src] = renderHeight(f.properties || {});
+          return { ...f, properties: { ...f.properties, h3d: h, h_from: src } };
+        });
+        stats.n = feats.length; stats.r = r;
+        stats.real = feats.filter((f) => f.properties.h_from === "real").length;
+        stats.levels = feats.filter((f) => f.properties.h_from === "levels").length;
+        stats.kind = feats.filter((f) => f.properties.h_from === "kind").length;
+        $("m-n").textContent = String(stats.n);
+        $("m-h").textContent = String(stats.real);
+        $("m-l").textContent = String(stats.levels);
+        $("m-e").textContent = String(stats.kind);
+        $("m-r").textContent = String(r);
+        $("m-msg").textContent = stats.n ? "" : "这一带 OSM 没登记楼房";
+        const data = { type: "FeatureCollection", features: feats };
+        fcCache = data;
+        if (map.getSource("bld")) map.getSource("bld").setData(data);
+        else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
+      }
+
+      function addBldLayers() {
+        /* 插在注记层之前 ⇒ 街名压在楼上面 */
+        const before = map.getLayer("ref") ? "ref" : undefined;
+        for (const l of bldLayerSpecs()) if (!map.getLayer(l.id)) map.addLayer(l, before);
+      }
+
+      void (async () => {
+        try { const mod = await import(/* @vite-ignore */ "/vendor/maplibre/maplibre-gl.mjs"); maplibregl = mod?.default || mod; }
+        catch (e) { errs.push("模块加载失败 " + e); return fail("地图库加载失败"); }
+        if (!maplibregl?.Map) return fail("地图库形状不对");
+        if (!hasWebGL()) return fail("这台设备没有 WebGL");
+
+        map = new maplibregl.Map({
+          container: "map", style: makeStyle(),
+          center: [SPOT.lng, SPOT.lat],
+          zoom: 16.4, pitch: 58, bearing: -18,
+          attributionControl: false, fadeDuration: 120,
+          preserveDrawingBuffer: true, // 截图用（无头/代拍都要它）
+        });
+        window.__w3d = { ok: true, map, stats, probe: () => probe(), spot: SPOT };
+        map.on("error", (e) => errs.push(String(e?.error?.message || e)));
+
+        let busy = false;
+        map.on("load", async () => {
+          await refresh();
+          window.__w3d.ready = true;
+        });
+        map.on("moveend", () => { if (window.__w3d.ready) void refresh(); });
+
+        async function refresh() {
+          if (busy) return; busy = true;
+          const z = map.getZoom();
+          $("m-z").textContent = z.toFixed(1);
+          try {
+            if (z < 12.5) { $("m-msg").textContent = "太远了不取楼（放大到街区）"; }
+            else { const { fc, r } = await loadForView(); applyBuildings(fc, r); }
+          } catch (e) { errs.push("buildings " + e); $("m-msg").textContent = "取楼失败：" + String(e).slice(0, 40); }
+          busy = false;
+        }
+
+        /* FPS（滚动 1 秒窗口，与项目其它地方同口径） */
+        let last = performance.now(), frames = 0, win = 0;
+        (function tick(now) {
+          const dt = now - last; last = now; frames++; win += dt;
+          if (win >= 1000) { $("m-fps").textContent = String(Math.round((frames * 1000) / win)); frames = 0; win = 0; }
+          requestAnimationFrame(tick);
+        })(performance.now());
+
+        /* 两个档位就是"一近一远"两张证据图的机位 */
+        $("b-near").onclick = () => { map.easeTo({ zoom: 17.4, pitch: 62, duration: 600 }); };
+        $("b-far").onclick = () => { map.easeTo({ zoom: 15.0, pitch: 50, duration: 600 }); };
+        $("b-spin").onclick = () => { map.easeTo({ bearing: map.getBearing() - 45, duration: 600 }); };
+
+        /* ── 代拍：`?autoshot=1` 时页面**自己**拍三张回传 ────────────────────────
+           为什么由页面拍：agent 侧看不到 WebGL，机主又禁了 ADB 截屏（会看到整屏隐私）。
+           收图服务：`~/chk/shotd.py`（127.0.0.1:8789），落盘 `~/chk/live/*.png`。
+           三张 = 一近（看楼体）/ 一远（看整片）/ 一侧（看高低起伏）。
+
+           🔴 2026-09-19：这一版加了**空白自检**。上一版拍了三张**纯白**图回去
+           （实际是 alpha=0 全透明：样式校验失败 ⇒ `load` 从没触发 ⇒ 一帧都没画，
+           而 `toDataURL` 和 POST **全部成功**）。⇒ 空白必须自己判出来，并回传**诊断图**。 */
+        async function settle() {
+          await new Promise((res) => {
+            let d = false;
+            const fin = () => { if (!d) { d = true; res(); } };
+            try { map.once("idle", fin); } catch { /* 没有 idle 就直接走 */ }
+            setTimeout(fin, 5000);
+          });
+          // WebGL 双缓冲：只等 idle 可能拿到还没提交的那一帧 ⇒ 再等两帧 rAF
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          await new Promise((r) => setTimeout(r, 700));
+        }
+
+        /** 画布空白判定（缩到 8×8 采样：全透明 / 近乎单色 = 没内容） */
+        function blankReason(cv) {
+          const s = 8, t = document.createElement("canvas");
+          t.width = s; t.height = s;
+          const g = t.getContext("2d");
+          if (!g) return null;
+          g.drawImage(cv, 0, 0, s, s);
+          const d = g.getImageData(0, 0, s, s).data;
+          let mn = 255, mx = 0, aMax = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            aMax = Math.max(aMax, d[i + 3]);
+            for (let k = 0; k < 3; k++) { mn = Math.min(mn, d[i + k]); mx = Math.max(mx, d[i + k]); }
+          }
+          if (aMax === 0) return "整张画布 alpha=0（一帧都没渲染过）";
+          if (mx - mn < 3) return `近乎单色（RGB 极差 ${mx - mn}）`;
+          return null;
+        }
+
+        /** 空白时把状态画成一张图回传 —— 让 agent 一眼看出卡在哪一步 */
+        function diagPng(lines) {
+          const w = 900, h = Math.max(200, 46 + lines.length * 30);
+          const c = document.createElement("canvas");
+          c.width = w; c.height = h;
+          const g = c.getContext("2d");
+          g.fillStyle = "#0b1017"; g.fillRect(0, 0, w, h);
+          g.fillStyle = "#79d9ff"; g.font = "bold 22px monospace";
+          g.fillText("代拍空白 · 诊断", 18, 34);
+          g.font = "17px monospace";
+          lines.forEach((s, i) => { g.fillStyle = i === 0 ? "#ffcf8a" : "#eaf6ff"; g.fillText(String(s).slice(0, 78), 18, 68 + i * 30); });
+          return c.toDataURL("image/png");
+        }
+
+        async function post(dataUrl, name) {
+          const blob = await (await fetch(dataUrl)).blob();
+          const r = await fetch(`http://127.0.0.1:8789/shot?name=${encodeURIComponent(name)}`, {
+            method: "POST", headers: { "content-type": "image/png" }, body: blob,
+          });
+          return r.ok;
+        }
+
+        async function autoshot() {
+          const snap = async (name) => {
+            const cv = map.getCanvas();
+            const why = blankReason(cv);
+            if (why) {
+              /* 绝**不**把空白当成功 —— 回传诊断图，让 agent 知道卡在哪 */
+              await post(diagPng([
+                `空白：${why}`,
+                `样式已加载=${map.isStyleLoaded()} 地图loaded=${map.loaded()}`,
+                `画布=${cv.width}x${cv.height} zoom=${map.getZoom().toFixed(2)} pitch=${Math.round(map.getPitch())}`,
+                `图层=${(map.getStyle()?.layers || []).map((l) => l.id).join(",") || "(空!)"}`,
+                `取楼=${stats.n} 栋 半径=${stats.r}m errs=${errs.slice(0, 1).join("") || "无"}`,
+              ]), name + "-DIAG");
+              $("m-msg").textContent = `代拍空白：${why}（已回传诊断图）`;
+              return false;
+            }
+            try {
+              const ok = await post(cv.toDataURL("image/png"), name);
+              $("m-msg").textContent = `代拍 ${name}：${ok ? "已回传" : "HTTP 失败"}`;
+              return ok;
+            } catch (e) {
+              $("m-msg").textContent = "代拍失败：" + (e?.name || e);
+              return false;
+            }
+          };
+          await settle();
+          let ok = await snap("show-near");
+          map.easeTo({ zoom: 15.0, pitch: 48, duration: 900 }); await settle();
+          ok = (await snap("show-far")) || ok;
+          map.easeTo({ zoom: 17.0, pitch: 62, bearing: -38, duration: 900 }); await settle();
+          ok = (await snap("show-side")) || ok;
+          $("m-msg").textContent = ok ? "代拍完成：3 张已回传 ~/chk/live/" : $("m-msg").textContent;
+          try { localStorage.removeItem("wsm:v1:autoshot"); } catch {}
+        }
+        try {
+          if (/[?&]autoshot=1\b/.test(location.search)) localStorage.setItem("wsm:v1:autoshot", String(Date.now()));
+          if (localStorage.getItem("wsm:v1:autoshot")) void autoshot();
+        } catch { /* 隐私模式读不到 localStorage 就不代拍，页面照常用 */ }
+      })();
+
+      function probe() {
+        const ls = (map?.getStyle()?.layers || []).map((l) => l.id);
+        return {
+          ok: !!map, zoom: +(map?.getZoom() || 0).toFixed(2), pitch: Math.round(map?.getPitch() || 0),
+          center: [+(map?.getCenter().lng || 0).toFixed(4), +(map?.getCenter().lat || 0).toFixed(4)],
+          layers: ls, ...stats, fps: Number($("m-fps").textContent) || null,
+          bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
+        };
+      }
+    </script>
+  </body>
+</html>

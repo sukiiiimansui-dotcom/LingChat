@@ -129,6 +129,29 @@ export interface WsMapTheme {
    * 取值一律写成完整的 CSS 颜色（含 alpha），免得表达式里再算透明度。
    */
   ai: { park: string; water: string };
+  /**
+   * **2D 降级路**（Canvas2D 自绘）用的调色板。
+   *
+   * 🔴 为什么必须有这一块（2026-09-20 主会话无头截图发现的割裂感）：
+   * 主题原先只写在 MapLibre 的 **style** 上，而**无 WebGL / 低端机走的是 Canvas2D 自绘**
+   * —— 那条路的底色是**写死的 `#101820` 深色**。于是一台低端机上会出现
+   * 「面包屑/面板/HUD 都是二次元浅蓝白，**中间地图却是黑的**」这种半截子观感。
+   * ⇒ 降级路必须读**同一份主题**，不许再自带一套颜色。
+   * `bg` 建议等于 3D 那条路的地面色（自检会断言两者够接近，免得两条路像两个世界）。
+   */
+  canvas: {
+    /** 画布底色（降级路的"地面"） */
+    bg: string;
+    /** 「这一带没有楼房数据」那行字 */
+    empty: string;
+    /** 真楼轮廓线与线宽（2D 是俯视图，比 3D 细一档才不糊） */
+    bldStroke: string;
+    bldStrokeW: number;
+    /** 示意图元的投影（往右下偏的那块）与轮廓 */
+    aiShadow: string;
+    aiStroke: string;
+    aiStrokeW: number;
+  };
   /** 竖向渐变：写实要 true（墙面有明暗）；**平涂要 false**（BA 的楼是一块纯色板） */
   verticalGradient: boolean;
   /** 挤出体不透明度按 zoom 的曲线（远景淡一点 = 大气透视） */
@@ -232,6 +255,16 @@ const NIGHT: WsMapTheme = {
   outline: { color: "rgba(190,235,255,0.22)", width: 0.5 },
   /* 沿用原来的 AI 示意层配色（这次不动暗色主题，免得把已有观感弄漂） */
   ai: { park: "rgba(126, 200, 130, 0.42)", water: "rgba(90, 150, 210, 0.42)" },
+  /* 2D 降级路：**照抄原来写死在 draw2d() 里的那几个值**，暗色主题行为一字不变 */
+  canvas: {
+    bg: "#101820",
+    empty: "rgba(255,255,255,.7)",
+    bldStroke: "rgba(255,255,255,.28)",
+    bldStrokeW: 0.7,
+    aiShadow: "rgba(40,20,0,.45)",
+    aiStroke: "rgba(255,226,170,.6)",
+    aiStrokeW: 0.6,
+  },
   verticalGradient: true,
   extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.72, 15, 0.86, 17, 0.97],
   low: { dropSky: true, outlineWidth: null, dropTint: true },
@@ -347,6 +380,18 @@ const ANIME: WsMapTheme = {
   /* AI 示意层：水体换成**明亮青蓝**（机主 ④"水体换色"），公园淡绿。
      ⚠️ 只有"示意水体"能这么染；**真实江面在灰度底图里，染不了**（见 `ai` 字段的说明）。 */
   ai: { park: "rgba(150, 214, 160, 0.45)", water: "rgba(79, 195, 234, 0.5)" },
+  /* 2D 降级路：底色取**和 3D 地面同一个色**（`#DCEFF7`，就是 `groundHex(anime)` 算出来的那个），
+     描边取和 3D 同族的深藏青 —— 这样低端机看到的和满血机是"同一座城"，
+     而不是"浅蓝界面 + 黑地图"。 */
+  canvas: {
+    bg: "#DCEFF7",
+    empty: "rgba(27,53,80,.75)",
+    bldStroke: "#1B3550",
+    bldStrokeW: 1.2,
+    aiShadow: "rgba(44,74,99,.22)",
+    aiStroke: "rgba(27,53,80,.5)",
+    aiStrokeW: 0.8,
+  },
   verticalGradient: false, // ← 平涂的关键：关掉竖向渐变，楼是一块纯色板
   extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.8, 15, 0.92, 17, 1],
   low: {

@@ -619,7 +619,7 @@
        所以给每栋楼往右下**偏移一小块**当投影 —— 一眼能看出这是"有体量的楼"，
        而不是一块平贴的色块（机主要的"成片楼房"在 2D 降级路上也要成立）。 */
     for (const a of aiPolys) {
-      const hex = a.kind === "park" ? "#7ec882" : a.kind === "water" ? "#5a96d2" : "#d9a06b";
+      const hex = a.kind === "park" ? theme.value.ai.park : a.kind === "water" ? theme.value.ai.water : "#d9a06b";
       ctx.beginPath();
       a.pts.forEach((p, i) => (i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1]))));
       ctx.closePath();
@@ -1038,7 +1038,9 @@
       source: "ai",
       filter: ["in", ["get", "kind"], ["literal", ["park", "water"]]],
       paint: {
-        "fill-color": ["match", ["get", "kind"], "park", "rgba(126, 200, 130, 0.42)", "rgba(90, 150, 210, 0.42)"],
+        /* 配色跟主题走（二次元的水是**明亮青蓝**）：原来这里是写死的 rgba，
+           换主题时它不会跟着变 ⇒ 两套风格打架。 */
+        "fill-color": ["match", ["get", "kind"], "park", theme.value.ai.park, theme.value.ai.water],
       },
     });
     m.addLayer({

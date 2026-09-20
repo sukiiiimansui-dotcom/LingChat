@@ -117,6 +117,18 @@ export interface WsMapTheme {
   antennaFallback: string;
   /** 楼体描边（`bld-line` 那条 `line` 图层） */
   outline: { color: string; width: number };
+  /**
+   * **AI 示意层**的配色（真数据稀疏时才会出现，见 `wsAiLayers`）。
+   *
+   * ⚠️ 为什么"水体换色"只能在这里做：小区级**没有水系数据集** ——
+   * 底图是 Esri 的**灰度**瓦片（`World_Light_Gray_Base` 里江面就是一片浅灰，
+   * 和陆地同色系，**没法只把水挑出来染**；灰度上做色相旋转是空操作）。
+   * 我们真正拥有几何的"水"，只有 AI 精绘产出的示意水体（`kind: "water"`）。
+   * ⇒ 想让**真实江面**也变青蓝，得先有水的矢量数据（Overpass/自有水系），那是另一张卡，
+   *   不是调个参数能解决的。**别把这条当成"水体已改好"。**
+   * 取值一律写成完整的 CSS 颜色（含 alpha），免得表达式里再算透明度。
+   */
+  ai: { park: string; water: string };
   /** 竖向渐变：写实要 true（墙面有明暗）；**平涂要 false**（BA 的楼是一块纯色板） */
   verticalGradient: boolean;
   /** 挤出体不透明度按 zoom 的曲线（远景淡一点 = 大气透视） */
@@ -218,6 +230,8 @@ const NIGHT: WsMapTheme = {
   roofFallback: "#1b2833",
   antennaFallback: "#cfe8f5",
   outline: { color: "rgba(190,235,255,0.22)", width: 0.5 },
+  /* 沿用原来的 AI 示意层配色（这次不动暗色主题，免得把已有观感弄漂） */
+  ai: { park: "rgba(126, 200, 130, 0.42)", water: "rgba(90, 150, 210, 0.42)" },
   verticalGradient: true,
   extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.72, 15, 0.86, 17, 0.97],
   low: { dropSky: true, outlineWidth: null, dropTint: true },
@@ -242,15 +256,17 @@ const ANIME: WsMapTheme = {
   hud: "二次元 · 平涂",
   separation: "outline",
   sky: {
-    "sky-color": "#7EC8F0", // 明亮天蓝
-    "horizon-color": "#EAF6FF", // 近白的地平线
-    "fog-color": "#DCEFFB", // 🔴 淡蓝白雾，**不是暗雾**：远景要"化开"成亮的
+    /* 🎨 2026-09-20 二轮（机主："① 颜色再鲜 ② 整体更亮"）：
+       天空换成**彩度更高**的蓝（亮度基本不变、纯度和蓝味都上去了）。 */
+    "sky-color": "#72C8F7", // 明亮天蓝（比上一版 #7EC8F0 更纯）
+    "horizon-color": "#E8F8FF", // 近白的地平线（略偏青，和地面同调）
+    "fog-color": "#D6EEFC", // 🔴 淡蓝白雾，**不是暗雾**：远景要"化开"成亮的
     "sky-horizon-blend": 0.6,
     "horizon-fog-blend": 0.5,
     "atmosphere-blend": 0.8,
     "fog-ground-blend": 0.6,
   },
-  bg: "#EAF6FF", // 近白兜底：`sky` 万一没生效，背景也不会是黑的
+  bg: "#E8F8FF", // 近白兜底：`sky` 万一没生效，背景也不会是黑的
   sources: {
     /* 「亮灰底图」而不是卫星：卫星照片再调都是**写实**，跟平涂天生打架。
        实测这套服务 z14/z16 是**真内容**（7265/5753B，亮度 0.937），z17 变 2521B 占位图
@@ -280,40 +296,57 @@ const ANIME: WsMapTheme = {
        为什么要压：不压的话地面跟最亮的楼（`#E8F6FF`）一样白，画面会"过曝"。
        色罩再叠上去 → 最终地面 **0.919**（见 `tint` 的注释）。 */
     base: {
+      /* 🎨 二轮：亮度**拉满到 1.0**（上一版 0.96 还压着一档）、对比再降一点（更平更干净）、
+         彩度 0.15 → 0.55。⚠️ 底图是灰度的，"加彩度"加不出颜色来（灰上加饱和还是灰）——
+         真正给地面**上色**的是下面那层 `tint`；这里加彩度是为了让瓦片里本来就有色的部分
+         （绿地/水面在灰度图里也带一点点色偏）更明显。 */
       "raster-opacity": 1,
-      "raster-saturation": 0.15, // 灰底没色可抽，微微加一点，让下面的浅蓝色罩显得干净
-      "raster-contrast": 0.08,
-      "raster-brightness-max": 0.96,
+      "raster-saturation": 0.55,
+      "raster-contrast": 0.06,
+      "raster-brightness-max": 1.0,
     },
     hi: null,
     ref: { "raster-opacity": 0.85 },
   },
-  /* 色罩：`background` 图层 + 浅蓝 + 0.35 不透明度。
-     注意底图是**灰度**的 ⇒ 在灰度上做色相旋转是空操作，**只有盖颜色才有效**。
-     算式（自检直接跑公式，不认嘴）：底图 0.937 →(对比度 0.08)→ 0.975 →(×0.96)→ 0.936，
-     再叠 35% 的 `#CFE6F7`（亮度 0.888）⇒ 地面 = 0.936×0.65 + 0.888×0.35 = **0.919**。 */
-  tint: { color: "#CFE6F7", opacity: 0.35 },
+  /* 色罩：`background` 图层 + **冷青** + 0.45 不透明度（上一版是 0.35 的 `#CFE6F7`）。
+     "去灰"靠的就是这一层：底图是灰的，**只有盖颜色才上得了色**
+     （在灰度上做色相旋转是空操作）。
+     🎨 二轮改动：颜色偏青（`#BCE7F8`）、不透明度 0.35→0.45 ⇒ 彩度明显上去、又仍然很亮。
+     算式（自检直接跑公式，不认嘴）：底图 0.937 →(对比度 0.06)→ 0.965 →(×1.0)→ 0.965，
+     再叠 45% 的 `#BCE7F8`（亮度 0.875）⇒ 地面 = 0.965×0.55 + 0.875×0.45 = **0.924**。 */
+  tint: { color: "#BCE7F8", opacity: 0.45 },
   /* 平涂三档：矮 → 中 → 高（高楼**更白更亮**，像 BA 里打了高光的塔楼）。
      注意这里**不是**明度递进拉开"楼比地亮"——BA 的地本来就亮（0.919），
      楼和地是靠**描边**分开的（`separation: "outline"`）。 */
+  /* 🎨 二轮：整体**更鲜 + 更亮**（机主 ①②）。做法是"每一档都往亮里推、同时把彩度拉起来"，
+     而不是"把暗的调更暗" —— 后者会让楼离地面更远，但也更脏、更不像 BA。
+     ⚠️ 这条色阶**不可能**满足"楼体最暗档 / 地面 > 1.35"：
+        地面 0.924 ⇒ 要过 1.35 就得有 0.924×1.35 = **1.248**，而白色的上限是 **1.0**。
+        ⇒ 二次元主题的分隔手段**声明为描边**（`separation: "outline"`，见下），
+          自检守的是"描边对地面 ≥3:1"而不是明度比。这是风格差异，不是漏做。 */
   ramp: [
-    [3, "#BFE3F7"], // 矮楼：淡天蓝
-    [12, "#AEDBF4"],
-    [25, "#9DD2F0"], // 中：BA 的主蓝
-    [45, "#B9E2F8"],
-    [70, "#D3EEFB"],
-    [110, "#E8F6FF"], // 高/塔楼：近白（高光）
-    [200, "#F4FBFF"],
+    [3, "#BCE4F9"], // 矮楼：淡天蓝
+    [12, "#AEDDF7"],
+    [25, "#A2D8F6"], // 中：BA 的主蓝
+    [45, "#BCE4F9"],
+    [70, "#D6EFFC"],
+    [110, "#EBF7FE"], // 高/塔楼：近白（高光）
+    [200, "#F6FCFF"],
     [320, "#FFFFFF"],
   ],
-  roofFallback: "#8FC9EE",
+  roofFallback: "#A8DBF5",
   /* 屋顶压顶在 BA 风里**不能压暗**（那套做法是写实的"女儿墙"）——
      改成**更浅**的一档，读起来就是"楼顶被光照到"，还是平涂。 */
   antennaFallback: "#FFFFFF",
-  /* 描边：深藏青 + 1.2px（任务书给的就是这个色，我按 WCAG 1.4.11「非文字图形 ≥ 3:1」算过：
-     对叠加后的浅蓝地面 **7.7:1**，非常够 —— 原先我手算成 2.83:1 是因为把
-     "伽马空间亮度"当成了 WCAG 亮度，**量错尺子**；自检里这条现在是自动算的）。 */
-  outline: { color: "#2C4A63", width: 1.2 },
+  /* 描边：**二轮加重**（机主 ③）—— 1.2px → **1.8px**、颜色更深（`#2C4A63` → `#1B3550`）。
+     为什么敢加重：BA 风里**这是楼与地唯一的分隔手段**（地面 0.924 本来就比矮楼亮，
+     明度差是负的）⇒ 描边越清楚，"楼立起来"的感觉越强。自检按 WCAG 1.4.11
+     （非文字图形 ≥ 3:1）算，实测对这层地面是 **10.6:1** —— 余量很大，
+     所以机主就算再说"再重一点"，直接调 `outline.width` 到 2.2 也不会糊成一片。 */
+  outline: { color: "#1B3550", width: 1.8 },
+  /* AI 示意层：水体换成**明亮青蓝**（机主 ④"水体换色"），公园淡绿。
+     ⚠️ 只有"示意水体"能这么染；**真实江面在灰度底图里，染不了**（见 `ai` 字段的说明）。 */
+  ai: { park: "rgba(150, 214, 160, 0.45)", water: "rgba(79, 195, 234, 0.5)" },
   verticalGradient: false, // ← 平涂的关键：关掉竖向渐变，楼是一块纯色板
   extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.8, 15, 0.92, 17, 1],
   low: {
@@ -463,6 +496,32 @@ export function groundLuma(theme: WsMapTheme, which: "base" | "hi" = "base"): nu
   if (!theme.tint) return under;
   const t = gammaLuma(theme.tint.color);
   return under * (1 - theme.tint.opacity) + t * theme.tint.opacity;
+}
+
+/**
+ * 合成后的**地面颜色**（十六进制）—— 底图（灰度，按 `raster-*` 变换后）+ 色罩叠出来的那个色。
+ *
+ * 为什么需要它：自检要算"描边对地面够不够显眼"，而描边是**画在这个颜色上**的。
+ * 我第一版自检里把地面色**写死成 `#CFE6F7`** —— 后来色罩改成 `#BCE7F8` 之后，
+ * 那条断言**还在拿旧颜色算**，报出来的比值是假的（"假绿"的一种：数字变了、判据没跟着变）。
+ * ⇒ 地面色必须**从主题算出来**，不许在测试里手抄。
+ */
+export function groundHex(theme: WsMapTheme, which: "base" | "hi" = "base"): string {
+  const src = which === "hi" ? theme.measuredLuma.hi : theme.measuredLuma.base;
+  const paint = which === "hi" ? theme.raster.hi : theme.raster.base;
+  if (src == null || paint == null) return theme.bg;
+  /* 底图是灰的 ⇒ 每个通道都等于这个亮度（伽马空间），和 `groundLuma` 同一把尺子 */
+  const u = rasterBrightness(src, paint);
+  const toHex = (v: number): string =>
+    Math.max(0, Math.min(255, Math.round(v * 255)))
+      .toString(16)
+      .padStart(2, "0");
+  if (!theme.tint) return `#${toHex(u)}${toHex(u)}${toHex(u)}`;
+  const th = String(theme.tint.color).replace("#", "");
+  const n = parseInt(th, 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => c / 255);
+  const k = theme.tint.opacity;
+  return `#${ch.map((c) => toHex(u * (1 - k) + c * k)).join("")}`;
 }
 
 /** 色阶里**最暗**那一档的亮度（楼体暗部）—— 只用六位十六进制档（`rgba()` 那些不算） */

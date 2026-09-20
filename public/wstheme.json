@@ -149,6 +149,10 @@
     "color": "rgba(190,235,255,0.22)",
     "width": 0.5
    },
+   "ai": {
+    "park": "rgba(126, 200, 130, 0.42)",
+    "water": "rgba(90, 150, 210, 0.42)"
+   },
    "verticalGradient": true,
    "extrudOpacity": [
     "interpolate",
@@ -174,9 +178,9 @@
    "label": "二次元（蔚蓝档案）",
    "hud": "二次元 · 平涂",
    "sky": {
-    "sky-color": "#7EC8F0",
-    "horizon-color": "#EAF6FF",
-    "fog-color": "#DCEFFB",
+    "sky-color": "#72C8F7",
+    "horizon-color": "#E8F8FF",
+    "fog-color": "#D6EEFC",
     "sky-horizon-blend": 0.6,
     "horizon-fog-blend": 0.5,
     "atmosphere-blend": 0.8,
@@ -208,7 +212,7 @@
      "id": "bg",
      "type": "background",
      "paint": {
-      "background-color": "#EAF6FF"
+      "background-color": "#E8F8FF"
      }
     },
     {
@@ -217,17 +221,17 @@
      "source": "base",
      "paint": {
       "raster-opacity": 1,
-      "raster-saturation": 0.15,
-      "raster-contrast": 0.08,
-      "raster-brightness-max": 0.96
+      "raster-saturation": 0.55,
+      "raster-contrast": 0.06,
+      "raster-brightness-max": 1
      }
     },
     {
      "id": "tint",
      "type": "background",
      "paint": {
-      "background-color": "#CFE6F7",
-      "background-opacity": 0.35
+      "background-color": "#BCE7F8",
+      "background-opacity": 0.45
      }
     },
     {
@@ -242,42 +246,46 @@
    "ramp": [
     [
      3,
-     "#BFE3F7"
+     "#BCE4F9"
     ],
     [
      12,
-     "#AEDBF4"
+     "#AEDDF7"
     ],
     [
      25,
-     "#9DD2F0"
+     "#A2D8F6"
     ],
     [
      45,
-     "#B9E2F8"
+     "#BCE4F9"
     ],
     [
      70,
-     "#D3EEFB"
+     "#D6EFFC"
     ],
     [
      110,
-     "#E8F6FF"
+     "#EBF7FE"
     ],
     [
      200,
-     "#F4FBFF"
+     "#F6FCFF"
     ],
     [
      320,
      "#FFFFFF"
     ]
    ],
-   "roofFallback": "#8FC9EE",
+   "roofFallback": "#A8DBF5",
    "antennaFallback": "#FFFFFF",
    "outline": {
-    "color": "#2C4A63",
-    "width": 1.2
+    "color": "#1B3550",
+    "width": 1.8
+   },
+   "ai": {
+    "park": "rgba(150, 214, 160, 0.45)",
+    "water": "rgba(79, 195, 234, 0.5)"
    },
    "verticalGradient": false,
    "extrudOpacity": [

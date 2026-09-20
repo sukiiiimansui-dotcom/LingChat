@@ -109,7 +109,11 @@
            每帧改一次会让整条卡片反复重排），只是现在画它的人换成了
            `worldsim-loading.css` 里的 `.ws-loading__bar`。
            下面的计数 / 已达上限 / 重画是**信息与操作**，不是加载指示器。 -->
-      <div v-if="aiRunning || aiDone || aiError" class="ws-prog ws-card">
+      <div
+        v-if="aiRunning || aiDone || aiError"
+        class="ws-prog ws-card"
+        :class="{ 'is-idle': !aiRunning }"
+      >
         <WsLoading
           variant="draw"
           size="sm"

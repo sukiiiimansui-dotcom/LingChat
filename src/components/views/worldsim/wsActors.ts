@@ -41,10 +41,36 @@ export interface MapActor {
   nowText: string;
 }
 
-/** 位置可信度：runtime（后端实时）> schedule（日程推出的设施点）> scatter（本地散开） */
-export type ActorPosSource = "runtime" | "schedule" | "scatter" | "me";
+/**
+ * 位置可信度：runtime（后端实时）> schedule（日程推出的设施点）> scatter（本地散开）。
+ *
+ * 🆕 2026-09-20 加 `road` / `facility`：位置是"**吸附到真实路网/设施之后**"的落点
+ * （`wsSnap.snapToRoad` / `snapToFacility`）。加这两档是为了**如实**：
+ * 吸附过的位置与"网格示意位置"精度完全不同，界面/日志必须能区分，
+ * 否则以后排查"这人怎么站到江里了"时根本不知道当时用没用吸附。
+ */
+export type ActorPosSource = "runtime" | "schedule" | "scatter" | "me" | "affinity" | "road" | "facility";
 
 /** 错开之后的一个人（多了屏幕位置与是否被选中） */
+/**
+ * 地图上的一个"钉子"（P1b：让角色重新出现在 MapLibre 主图上）。
+ *
+ * 好累～ 这个类型本来不需要存在：以前五个图层都挂在草图 `#pin` 上，直接吃 `PlacedActor` 就行。
+ * 草图下线之后主图整层不渲染，角色就"消失"了 —— 现在换成地图库的 Marker，
+ * 只需要这么几个字段（**不搬整个 PlacedActor**，免得两个渲染器越走越远）。
+ */
+export interface WsDistrictPin {
+  id: string;
+  name: string;
+  /** 网格坐标（= `PlacedActor.px/py`，已经错开过） */
+  gx: number;
+  gy: number;
+  isMe?: boolean;
+  avatarUrl?: string;
+  /** 位置来源（`affinity` = 因为好感特地跑来找你，标题里会写明） */
+  posSource?: string;
+}
+
 export interface PlacedActor extends MapActor {
   /** 错开后的格子坐标 */
   px: number;

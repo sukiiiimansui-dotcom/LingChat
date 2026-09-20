@@ -358,6 +358,14 @@
       schedule: t("worldsim.pos.schedule"),
       scatter: t("worldsim.pos.scatter"),
       me: t("worldsim.pos.me"),
+      affinity: t("worldsim.pos.affinity"),
+      /* 🆕 2026-09-20：位置是"吸附到真实路网/设施之后"的落点（`wsSnap`）。
+         这两档**必须**在这里也有中文名 —— `Record<ActorPosSource, string>` 是**穷尽**映射，
+         少一个键 tsc 直接报错（这是好事：加档位时不会漏掉展示它的地方）。
+         文案直接内联中文而没走 i18n：`pos.*` 那几条在 zh-CN 词条里，
+         而这次改动要尽量小、且**先保证 tsc 0 错**（词条后面统一补，见 CHANGELOG 的"未验"）。 */
+      road: "在路上（已吸附路网）",
+      facility: "在设施旁（已吸附设施）",
     };
     return map[(props.actor?.posSource || "scatter") as ActorPosSource] || "";
   });

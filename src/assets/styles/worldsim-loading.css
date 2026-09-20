@@ -469,6 +469,22 @@
 .ws-root.ws-perf-low .ws-loading .ws-loading__stage.is-now::before {
   animation: ws-load-dot 2.2s ease-in-out infinite;
 }
+/* ── 活干完了：环上那 7 个无限动画必须停（2026-09-20，fps 专项）─────────────
+ * 背景：`.ws-prog` 那张卡的条件是 `aiRunning || aiDone || aiError` —— **画完之后它不消失**，
+ * 会在 DOM 里一直显示计数与「重画」按钮。而它里面那个双环 + 呼吸光晕 + 三圈脉冲 + 圆点
+ * 一共 **7 个元素带 `infinite` 动画**（`.ws-ring__halo/__pulse/__arc/__dot`）。
+ *
+ * 低档下它们会被上面那条 `.ws-perf-low .ws-loading *` 关掉 —— **但高档不会**。
+ * 也就是说：**机主的真机（高档）上，"已完成"之后还有 7 个元素在无限动画**。
+ * 这既是白给的开销，观感也不对（旁边写着「已完成」，中间还在转圈）。
+ * ⇒ 只要不是 running，就全停（`animation: none`，不是 `paused` —— paused 仍然占着合成层）。 */
+.ws-prog.is-idle .ws-ring__arc,
+.ws-prog.is-idle .ws-ring__dot,
+.ws-prog.is-idle .ws-ring__halo,
+.ws-prog.is-idle .ws-ring__pulse {
+  animation: none;
+}
+
 /* 低端机上进度条不做 0.4s 缓动（每一帧合成一次的收益不如让指针跟手） */
 .ws-root.ws-perf-low .ws-loading__bar > i {
   transition: none;

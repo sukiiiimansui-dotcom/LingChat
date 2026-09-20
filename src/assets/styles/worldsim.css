@@ -194,6 +194,23 @@
   --ws-shadow: none;
   --ws-shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
+/* 🔴 `blur(0px)` **不是「没有模糊」**（2026-09-20，fps 专项）：
+   只要 `backdrop-filter` 的值不是 `none`，浏览器就会给这个元素建一层 **backdrop 层**，
+   每一帧都要**把底下的像素读回来重新合成**一次。低档下我们只把 `--ws-blur` 改成 `0px`
+   ⇒ 看起来"毛玻璃关了"，实际上**还在每帧做一次 backdrop 读回**。
+   而这几张卡片/控件全都**浮在地图画布上**，地图每帧都在重画 ⇒ 每帧都触发一次读回。
+
+   这条就是 fps 代理那份 A/B/A/B 证据的解释：**藏掉 `.ws-prog` ⇒ fps 23 ↔ 54/61**。
+   它当时排除了"无限动画"（低档 `.ws-loading *` 已经把动画全关了），剩下的就是这个。
+
+   ⇒ 低档必须**显式**写 `none`。三处声明 backdrop-filter 的地方一个都不能漏
+     （`.ws-card` / `.ws-btn` / `.ws-zoomctl`；`.ws-prog` 本身带 `.ws-card`，被第一条覆盖）。 */
+.ws-root.ws-perf-low .ws-card,
+.ws-root.ws-perf-low .ws-btn,
+.ws-root.ws-perf-low .ws-zoomctl {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 /* 无限循环的装饰动画：转圈经线 / 雷达 / 等高线 / 画笔 / 流光 / 骨架高光 / 省略号。
  * 关掉它们**只影响观感**：`.ws-note` 的色调、主题变量、毛玻璃退化后的底色一个都不动。
  *

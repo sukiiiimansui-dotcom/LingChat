@@ -149,6 +149,7 @@ export default {
     schedule: "按日程推算",
     scatter: "本地散开（暂无位置数据）",
     me: "你的位置",
+    affinity: "特地来找你（好感驱动）",
   },
 
   /** 角色面板（P2-3） */

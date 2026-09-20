@@ -27,6 +27,7 @@
     type="button"
     data-no-gesture
     :data-actor="actor.id"
+    :data-pos="actor.posSource || 'unknown'"
     :style="style"
     :title="title"
     :aria-label="label"

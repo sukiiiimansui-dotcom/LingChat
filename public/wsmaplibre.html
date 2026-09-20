@@ -154,9 +154,26 @@
         const style = {
           version: 8,
           name: "ws-p0",
-          sources: {},
+          /* 🔴 2026-09-19 机主报「地图只有白底、加载不出等高线」——根因是这里 `sources: {}`
+             ⇒ 样式里**一张瓦片都没有**，渲染出来只有背景色。现在接真底图。
+             可达性实测（本机网络，同一时刻）：Carto ✅ 0.57s / OSM 镜像 ✅ 2.2s /
+             tile.openstreetmap.org ❌ 超时 / opentopomap（**带等高线**）❌ 超时 / Esri 地形 ❌ 超时。
+             ⇒ 先用**实测能取到**的 Carto；等高线那几家等找到可通源再补（别写上去装能取到）。 */
+          sources: {
+            base: {
+              type: "raster",
+              tiles: [
+                "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+              ],
+              tileSize: 256,
+              maxzoom: 20,
+              attribution: "© OpenStreetMap contributors © CARTO",
+            },
+          },
           layers: [
             { id: "bg", type: "background", paint: { "background-color": "#0b1017" } },
+            /* 底图在背景之上、我们自己的数据层之下（数据层不能被底图盖住） */
+            { id: "base", type: "raster", source: "base", paint: { "raster-opacity": 0.9 } },
           ],
           /* ⚠️ **不要写 `glyphs: undefined`** —— MapLibre 的样式校验会直接报
              `glyphs: string expected, undefined found`，然后**样式永远加载不完**：

@@ -39,6 +39,11 @@ import {
   type PlacedActor,
 } from "@/components/views/worldsim/wsActors";
 import { spreadOptsOf } from "@/components/views/worldsim/wsPerf";
+import {
+  applyAffinityToRoles,
+  applyAffinityVisit,
+  type VisitRecord,
+} from "@/components/views/worldsim/wsAffinityPlan";
 
 /* ── 小工具 ────────────────────────────────────────────────────────────── */
 
@@ -135,6 +140,14 @@ export interface UseWsActorsOptions {
    * （降级参数本身是纯函数 `spreadOptsOf`，直接从 wsPerf 拿，没有副作用。）
    */
   lowPerf?: Ref<boolean> | (() => boolean);
+  /**
+   * 可玩性切片 A（因果闭环）：好感查询函数，**页面从 `wsRelation` 注入**。
+   *
+   * 够高（≥ `VISIT_MIN` = 70）时，这个角色**此刻真的会跑来找你**：位置挪到你旁边、
+   * 地点名写成"在你身边"、`posSource` 如实标成 `affinity`（不冒充后端日程）。
+   * 用注入而不是在这里 import：依赖方向干净，也方便自检/驱动器塞假数据。
+   */
+  affinityOf?: (name: string) => number;
 }
 
 /** 低性能档判定（两个形状都收：Ref 或 getter） */
@@ -145,6 +158,8 @@ function isLow(v: UseWsActorsOptions["lowPerf"]): boolean {
 
 export function useWsActors(opts: UseWsActorsOptions = {}) {
   const grid = opts.grid || ref(28);
+  /** 本轮"因为好感而来找你"的证据（谁 / 好感多少 / 从哪格到哪格），给 UI 用 */
+  const affinityVisits = ref<VisitRecord[]>([]);
   const gameStore = useGameStore();
 
   /** 地图上的人（未错开，gx/gy 是原始坐标） */
@@ -279,6 +294,12 @@ export function useWsActors(opts: UseWsActorsOptions = {}) {
         }
       }
       const sch = schedule.value;
+      /* 可玩性切片 A：日程**数据**里也留一条"今日改道"（只有够好感的角色），
+         让因果链每一环都能被读到；地图位置由下面的 applyAffinityVisit 负责。
+         ⚠️ 这不是"改写明天的日程"——那需要世界时间轴（BORROW-LIST §7 P1），尚未做。 */
+      if (opts.affinityOf && sch?.roles?.length) {
+        sch.roles = applyAffinityToRoles(sch.roles, opts.affinityOf).roles;
+      }
       const schByName = new Map<string, NonNullable<typeof sch>["roles"][number]>();
       for (const r of sch?.roles || []) {
         if (r?.name) schByName.set(r.name, r);
@@ -392,6 +413,20 @@ export function useWsActors(opts: UseWsActorsOptions = {}) {
         place: String(meRaw?.place || meRaw?.area || ""),
         nowText: "",
       });
+
+      /* 可玩性切片 A（地图可见的那一环）：好感够高 ⇒ 此刻真的跑来找你。
+         只改位置/地点名，并把 posSource 如实标成 "affinity"；玩家位置未知时纯函数保证不动作。 */
+      if (opts.affinityOf) {
+        /* 玩家坐标缺失（首次运行、还没定位）时，用**地图中心**——这正是玩家 marker
+           自己画的位置（见下面 `gx: meHas ? mx : grid.value / 2`）⇒ 与画面一致，不是编数据。
+           不这么兜底的话：定位没回来之前好感因果**完全不可见**（本轮实测踩到）。 */
+        const meGrid = meHas
+          ? { gx: mx, gy: my }
+          : { gx: grid.value / 2, gy: grid.value / 2 };
+        const visit = applyAffinityVisit(out, opts.affinityOf, meGrid, grid.value);
+        out.splice(0, out.length, ...visit.list);
+        affinityVisits.value = visit.visited;
+      }
 
       actors.value = out;
       return out;
@@ -527,6 +562,7 @@ export function useWsActors(opts: UseWsActorsOptions = {}) {
     loadError,
     runtime,
     schedule,
+    affinityVisits,
     nowText,
     weatherText,
     meAvatar,

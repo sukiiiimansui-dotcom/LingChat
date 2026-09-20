@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>世界模拟 · 代拍（把画面回传给 agent）</title>
+    <link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css" />
+    <style>
+      html,body{margin:0;height:100%;background:#0b1017;color:#fff;font-family:system-ui,sans-serif;overflow:hidden}
+      #map{position:absolute;inset:0}
+      #panel{position:fixed;left:8px;right:8px;top:8px;z-index:20;padding:8px 10px;border-radius:12px;
+        background:rgba(10,16,24,.78);backdrop-filter:blur(10px);font-size:12px;line-height:1.6;max-height:42vh;overflow:auto}
+      #panel b{color:#79d9ff}
+      .ok{color:#8ef0a8}.bad{color:#ff9a9a}.run{color:#ffd28a}
+      #dock{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;z-index:20;display:flex;gap:8px}
+      button{min-height:44px;padding:0 16px;border:none;border-radius:12px;background:rgba(10,16,24,.78);color:#fff;font-size:14px}
+      button.on{background:#79d9ff;color:#06222e;font-weight:600}
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="panel">
+      <div><b>代拍</b>：这个页面会把地图画面（canvas）导成 PNG 回传给 agent 的本地服务，
+        这样 agent 就能"看到"WebGL 的真实渲染结果（它自己的 Chromium 在这台机器上首帧后必丢 GPU 上下文）。</div>
+      <div id="log" style="margin-top:6px">准备中…</div>
+    </div>
+    <div id="dock">
+      <button id="test">测试回传（2 秒）</button>
+      <button id="go" class="on">开始代拍</button>
+    </div>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const log = (msg, cls = "") => {
+        const d = document.createElement("div");
+        d.className = cls;
+        d.textContent = msg;
+        $("log").appendChild(d);
+      };
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      /* 加载顺序：MapLibre（public/vendor，同源静态）→ 等高线纯函数（TS，由 vite dev 现编译） */
+      const maplibregl = await (async () => {
+        try {
+          const m = await import(/* @vite-ignore */ "/vendor/maplibre/maplibre-gl.mjs");
+          return m.default || m;
+        } catch (e) {
+          log("❌ MapLibre 加载失败：" + e, "bad");
+          return null;
+        }
+      })();
+      async function loadContour() {
+        const cands = ["/src/composables/wsContour.ts", location.protocol + "//" + location.hostname + ":5210/src/composables/wsContour.ts"];
+        for (const u of cands) {
+          try {
+            const m = await import(/* @vite-ignore */ u);
+            if (m?.contoursForView) return m;
+          } catch { /* 换下一条 */ }
+        }
+        return null;
+      }
+      const C = await loadContour();
+      log(C ? "✅ 等高线模块就绪" : "⚠️ 等高线模块取不到（这一项会跳过）", C ? "ok" : "bad");
+
+      const SEAT = [107.3949, 29.7037]; // 涪陵区驻地
+      const style = {
+        version: 8,
+        name: "ws-auto",
+        sources: {
+          base: {
+            type: "raster",
+            tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
+            tileSize: 256,
+            maxzoom: 19,
+            attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+          },
+        },
+        layers: [
+          { id: "bg", type: "background", paint: { "background-color": "#0b1017" } },
+          { id: "base", type: "raster", source: "base", paint: { "raster-opacity": 0.9 } },
+        ],
+      };
+      const map = new maplibregl.Map({
+        container: "map",
+        style,
+        center: SEAT,
+        zoom: 11,
+        pitch: 55,
+        bearing: 0,
+        attributionControl: false,
+        preserveDrawingBuffer: true, // 必须：否则 toDataURL 拿到空白（这个坑项目里踩过）
+      });
+      window.__map = map;
+
+      /* 区界（和小区级一样：整区铺满靠它） */
+      let districtFeat = null;
+      async function loadDistrict(ad) {
+        try {
+          const r = await fetch(`http://127.0.0.1:8791/api/geo_json?ad=${ad}`);
+          const gj = await r.json();
+          districtFeat = gj?.features?.[0] || null;
+          return !!districtFeat;
+        } catch { return false; }
+      }
+      /* 真楼房（和小区级同一条数据通路与同一套配色） */
+      async function loadBuildings(lat, lng, r) {
+        try {
+          const res = await fetch(`http://127.0.0.1:8791/api/buildings?lat=${lat}&lng=${lng}&r=${r}`);
+          const d = await res.json();
+          const fc = d?.geojson || d;
+          return fc?.features?.length ? fc : null;
+        } catch { return null; }
+      }
+      function addBuildings(fc) {
+        if (map.getSource("bld")) { map.getSource("bld").setData(fc); return; }
+        map.addSource("bld", { type: "geojson", data: fc });
+        map.addLayer({
+          id: "bld-ext", type: "fill-extrusion", source: "bld",
+          paint: {
+            "fill-extrusion-color": ["match", ["get", "height_src"], "height", "#79d9ff", "levels", "#4a90b8", "#3a4a5a"],
+            "fill-extrusion-height": ["*", 1, ["coalesce", ["get", "height"], 8]],
+            "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
+            "fill-extrusion-opacity": 0.95,
+          },
+        });
+      }
+      function addDistrict() {
+        if (!districtFeat || map.getSource("dist")) return;
+        map.addSource("dist", { type: "geojson", data: { type: "FeatureCollection", features: [districtFeat] } });
+        const below = map.getLayer("bld-ext") ? "bld-ext" : undefined;
+        map.addLayer({ id: "dist-fill", type: "fill", source: "dist", paint: { "fill-color": "#79d9ff", "fill-opacity": 0.06 } }, below);
+        map.addLayer({ id: "dist-line", type: "line", source: "dist", paint: { "line-color": "#79d9ff", "line-width": 1.4, "line-opacity": 0.9 } }, below);
+      }
+      async function addContours() {
+        if (!C) return "（无模块）";
+        try {
+          const r = await C.contoursForView({ lng: map.getCenter().lng, lat: map.getCenter().lat, mapZoom: map.getZoom() });
+          const data = C.contourFeatureCollection(r.feats);
+          if (map.getSource("ct")) map.getSource("ct").setData(data);
+          else {
+            map.addSource("ct", { type: "geojson", data });
+            map.addLayer({
+              id: "ct-line", type: "line", source: "ct",
+              paint: {
+                "line-color": ["case", ["==", ["%", ["get", "ele"], 100], 0], "#ffd28a", "rgba(121,217,255,0.55)"],
+                "line-width": ["case", ["==", ["%", ["get", "ele"], 100], 0], 1.2, 0.5],
+                "line-opacity": 0.8,
+              },
+            });
+          }
+          return `z${r.demZ} ${r.feats.length}段 ${r.ms}ms`;
+        } catch (e) {
+          return "失败：" + String(e?.message || e).slice(0, 40);
+        }
+      }
+
+      /* 把任意文字画成一张图发回来 —— 「3D 挂了」时这是唯一能让我看到原因的办法。
+         （2D canvas 不碰 WebGL，所以在任何环境下都能画。） */
+      async function diagShot(title, lines) {
+        try {
+          const cv = document.createElement("canvas");
+          cv.width = 900; cv.height = 420;
+          const g = cv.getContext("2d");
+          g.fillStyle = "#101820"; g.fillRect(0, 0, cv.width, cv.height);
+          g.fillStyle = "#ffd28a"; g.font = "bold 28px system-ui";
+          g.fillText(title, 20, 50);
+          g.fillStyle = "#dfe9f3"; g.font = "18px system-ui";
+          (lines || []).slice(0, 14).forEach((t, i) => g.fillText(String(t).slice(0, 110), 20, 95 + i * 24));
+          const url = cv.toDataURL("image/png");
+          const blob = await (await fetch(url)).blob();
+          const r = await fetch(`http://127.0.0.1:8789/shot?name=${encodeURIComponent("diag-" + title.slice(0, 12))}`, {
+            method: "POST", headers: { "content-type": "image/png" }, body: blob,
+          });
+          const j = await r.json();
+          log(`  📤 诊断图已回传（${j.file}）`, "ok");
+        } catch (e) {
+          log("  ❌ 连诊断图都发不出去：" + String(e?.message || e).slice(0, 80), "bad");
+        }
+      }
+
+      async function post(name) {
+        await sleep(600); // 等两帧渲染完（map.once('idle') 之后仍需一拍）
+        let url = "";
+        try {
+          url = map.getCanvas().toDataURL("image/png");
+        } catch (e) {
+          /* 最常见原因：画布被"跨域但没给 CORS 头"的瓦片污染 ⇒ toDataURL 抛 SecurityError */
+          log(`  ❌ ${name} 导图失败：${String(e?.message || e).slice(0, 70)}`, "bad");
+          await diagShot("toDataURL 失败", [`截图：${name}`, `错误：${e}`, "可能原因：跨域瓦片没有 CORS 头导致画布被污染"]);
+          return;
+        }
+        const blob = await (await fetch(url)).blob();
+        try {
+          const r = await fetch(`http://127.0.0.1:8789/shot?name=${encodeURIComponent(name)}`, {
+            method: "POST",
+            headers: { "content-type": "image/png" },
+            body: blob,
+          });
+          const j = await r.json();
+          log(`  ✅ ${name} → ${j.file}（${(j.bytes / 1024).toFixed(0)}KB）`, "ok");
+        } catch (e) {
+          log(`  ❌ ${name} 回传失败：${String(e?.message || e).slice(0, 60)}`, "bad");
+        }
+      }
+      const settle = () => new Promise((res) => map.once("idle", () => setTimeout(res, 400)));
+
+      async function run() {
+        $("go").disabled = true;
+        log("── 开始 ──", "run");
+        try {
+          await runInner();
+        } catch (e) {
+          log("❌ 异常中止：" + String(e?.message || e).slice(0, 90), "bad");
+          await diagShot("代拍异常中止", [String(e), "WebGL: " + String(!!document.createElement("canvas").getContext("webgl2")), "UA: " + navigator.userAgent.slice(0, 80)]);
+        } finally {
+          $("go").disabled = false;
+        }
+      }
+
+      async function runInner() {
+        await new Promise((r) => map.on("load", r));
+        log("地图已就绪");
+
+        const hasD = await loadDistrict("500102");
+        log(hasD ? "✅ 涪陵区边界已取到" : "⚠️ 区界取不到", hasD ? "ok" : "bad");
+        addDistrict();
+
+        const ct1 = await addContours();
+        log("等高线（全区）：" + ct1);
+
+        // ① 全区 · 俯视 / ② 全区 · 2.5D
+        map.jumpTo({ center: SEAT, zoom: 10.4, pitch: 0, bearing: 0 });
+        await settle();
+        await post("1-wide-pitch0");
+        map.jumpTo({ center: SEAT, zoom: 10.4, pitch: 55, bearing: 0 });
+        await settle();
+        await post("2-wide-pitch55");
+
+        // ③ 街道 · 2.5D + 真楼房
+        const fc = await loadBuildings(SEAT[1], SEAT[0], 1500);
+        log(fc ? `✅ 楼房 ${fc.features.length} 栋（1.5km）` : "⚠️ 这一带取不到楼房", fc ? "ok" : "bad");
+        if (fc) addBuildings(fc);
+        map.jumpTo({ center: SEAT, zoom: 14.5, pitch: 55, bearing: 0 });
+        await settle();
+        const ct2 = await addContours();
+        log("等高线（街区）：" + ct2);
+        await post("3-street-pitch55-buildings");
+
+        // ④ 再放大一级（看楼体细节）
+        map.jumpTo({ center: SEAT, zoom: 16, pitch: 60, bearing: 0 });
+        await settle();
+        await post("4-street-zoom16");
+
+        log("── 完成，请把面板截图或直接告诉 agent「拍好了」──", "run");
+      }
+      $("go").addEventListener("click", () => void run());
+      /* 通道自检：立刻发一张 1×1 的图 —— 2 秒就能知道"回传通不通"，
+         免得拍完 4 张才发现发不出去（今天就是这么白拍了一次）。 */
+      $("test").addEventListener("click", async () => {
+        try {
+          const cv = document.createElement("canvas");
+          cv.width = 4; cv.height = 4;
+          const g = cv.getContext("2d");
+          g.fillStyle = "#79d9ff"; g.fillRect(0, 0, 4, 4);
+          const blob = await (await fetch(cv.toDataURL("image/png"))).blob();
+          const r = await fetch("http://127.0.0.1:8789/shot?name=ping", {
+            method: "POST", headers: { "content-type": "image/png" }, body: blob,
+          });
+          const j = await r.json();
+          log(`✅ 回传通道正常（服务收到 ${j.file}，${j.bytes}B）`, "ok");
+        } catch (e) {
+          log("❌ 回传通道不通：" + String(e?.message || e).slice(0, 90) + "（服务没起？或跨源被拦？）", "bad");
+        }
+      });
+    </script>
+  </body>
+</html>

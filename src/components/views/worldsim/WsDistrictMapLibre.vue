@@ -79,6 +79,15 @@
       <span v-if="stats.pins" :title="'画面上的角色数（含你自己；WebGL 用地图库 Marker，降级用 DOM 钉子）'">
         👤 {{ stats.pins }}
       </span>
+      <!-- 🛣 路网：口径与画法一致（按 zoom 过滤档位），并把"主干几条/有名字几条"如实带上 -->
+      <span v-if="stats.roads" :title="'本视野看得见的路（' + (stats.roadNote || '') + '）；行人会吸附到这些路上'">
+        🛣 {{ stats.roads }}
+      </span>
+      <!-- 🏪 设施：**必须写"示意布局"**——这些点的经纬度是按 /api/facilities 的
+           28×30m 方格摊出来的，不是实测位置（实测位置要走另一条卡）。 -->
+      <span v-if="stats.facilities" :title="'设施（' + (stats.facNote || '') + '）—— 点位是**示意布局**，不是实测经纬度'">
+        🏪 {{ stats.facilities }}
+      </span>
       <span v-if="stats.view" :title="'放大到街区才会取楼栋（Overpass 半径有上限）'">{{ stats.view }}</span>
       <span v-if="stats.contour !== 0">
         等高线 {{ stats.contour > 0 ? stats.contour + " 段" : "不可用" }}
@@ -114,7 +123,7 @@
 
 <script setup lang="ts">
   import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-  import worldMapApi, { geoJson } from "@/api/services/worldMap";
+  import worldMapApi, { facilitiesAuto, geoJson } from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
   import type { WsDistrictPin } from "./wsActors";
   /* 性能档位（模块级单例，与 `WorldSim.vue` 拿到的是**同一份**）。
@@ -123,11 +132,18 @@
   import { useWsPerf } from "./wsPerf";
   import { aiFeatureCollection, aiFeatures, boxAround as aiBoxAround, type AiItem, type BBox } from "./wsAiLayers";
   /* 「OSM 优先、Overture 补缺」的合并规则（纯逻辑，单独一份 ⇒ 能在 Node 里全量自检）。 */
-  import { mergeBuildingSources, shouldAskSecondSource } from "./wsBuildingSources";
+  import { mergeBuildingSources, shouldAskSecondSource, type BldFeature } from "./wsBuildingSources";
   /* 「楼多高、什么颜色」的纯逻辑（`wsBuildingLook.ts`，独立文件 ⇒ 可单测、不跟渲染纠缠）。
      2026-09-19 机主：「这个 ai 2d 小区好丑，直接试一下 3d 路线我看看效果」——
      这一刀就是"3D 路线"的美术部分：真轮廓 + 有起伏的高度 + 有层次的光照。 */
-  import { HEIGHT_COLOR_RAMP, decorateBuildings, heightColorExpression, renderHeight } from "./wsBuildingLook";
+  import { HEIGHT_COLOR_RAMP, decorateBuildings, hash32, heightColorExpression, renderHeight } from "./wsBuildingLook";
+  /* 🛣 路网（机主 2026-09-20：「**在地图上把道路和设施全部勾出来**（方便将行人啥的挪出来）」）。
+     · `wsRoads`：分级画法（0 快速路 ~ 5 步道，各一档线宽/亮度 + 底色描边）+ HUD 计数口径；
+     · `wsSnap`：**吸附与寻路**的纯几何 —— `snapToRoad` 返回的是**线段上的投影点**（不是最近顶点，
+       否则角色会在两个顶点间一格一格跳）；`routeOnRoads` 是"角色自己出门"（`DESIGN-AUTONOMY`）的地基。
+     两个模块都在 Node 里全量自检过（`ws_roads_snap_selftest.mjs` 44 项）。 */
+  import { roadLayerSpecs, roadStatsLine, visibleRoadCount } from "./wsRoads";
+  import { roadSegments, snapToRoad, toLngLat, toXY, type RoadSeg } from "./wsSnap";
   /* 🎨 「这张地图长什么样」的主题预设（2026-09-20 机主：「这个地图太暗了喵，还有就是我想给整体地图
      改成二次元式的那种风格喵」）。**美术参数全在那个文件里**，这里只负责"照它摆图层"：
        · `night` = 原来的暗色（**保留**，一个字没删，只是把卫星的压暗从 0.34 提到 0.56）；
@@ -215,6 +231,14 @@
        */
       showAi?: boolean;
       /**
+       * 要不要把角色**吸附到真实路网**上（`wsSnap.snapToRoad`）。
+       *
+       * 默认 **false**：吸附会让角色"位置变了"，而这个变化依赖"这一带的路网取回来了没有" ——
+       * 路网取不到时人还在示意位置，取到了又跳一下。**先由调用方显式打开**，
+       * 等路网稳定性验过再考虑默认开。
+       */
+      snapPins?: boolean;
+      /**
        * 真数据稀疏时**自动**叠示意层（默认开）。
        *
        * 机主 2026-09-20 的原话就是验收标准：「**有真数据用真的，真数据不够时自动叠示意层 + 标注**」。
@@ -225,7 +249,7 @@
        */
       aiAuto?: boolean;
     }>(),
-    { area: "", radius: 600, pitch: 55, markers: () => [], grid: 28, aiItems: () => [], showAi: false, aiAuto: true }
+    { area: "", radius: 600, pitch: 55, markers: () => [], grid: 28, aiItems: () => [], showAi: false, aiAuto: true, snapPins: false }
   );
 
   const host = ref<HTMLElement | null>(null);
@@ -364,6 +388,14 @@
     view: "",
     /** 画在屏幕上的"人"的数量（WebGL 走地图库 Marker、2D 降级走 DOM；两个都算） */
     pins: 0,
+    /** 🛣 本视野**看得见**的路条数（口径与画法一致：按 zoom 过滤档位，见 `visibleRoadCount`） */
+    roads: 0,
+    /** 路网统计的一句话（主干几条 / 有几条有名字）—— 数据质量要看得见 */
+    roadNote: "",
+    /** 🏪 画在地图上的设施点（`/api/facilities` 的生活类 + 交通类） */
+    facilities: 0,
+    /** 设施统计的一句话（哪几类、共几个；缺的类如实说） */
+    facNote: "", 
     /** 低档的原因（被**实际渲染路**压下来的，见 `wsPerf.forceLowTier`）。空串 = 没被压 */
     perf: "",
   });
@@ -485,7 +517,7 @@
    * 那 166 栋的高度是**我们按 `building=*` 类型猜的**，HUD 里单独一列，
    * 绝不能混进"真高" —— 混在一起报一个数就是把估计值当真数据。
    */
-  function classify(fc: { features?: Array<{ properties?: Record<string, unknown> }> }) {
+  function classify(fc: { features?: BldFeature[] }) {
     let h = 0;
     let l = 0;
     let d = 0;
@@ -508,7 +540,7 @@
    * **只在这里算一次**，后面所有 `addSource/setData` 都用这份结果 ——
    * 画面用的高度和 HUD 报的数于是**必然是同一个数**（两边各算一次迟早漂移，漂移了没人会发现）。
    */
-  function dressBld(fc: { features?: Array<{ properties?: Record<string, unknown> }> } | null): {
+  function dressBld(fc: { features?: BldFeature[] } | null): {
     type: "FeatureCollection";
     features: unknown[];
   } {
@@ -537,7 +569,7 @@
    * Canvas2D 降级：把真实楼房画成**俯视图**。
    * 不引任何东西 —— 经纬度按包围盒线性映射到画布，y 轴翻转（纬度向上、画布向下）。
    */
-  function draw2d(fc: { features?: Array<{ geometry?: unknown; properties?: Record<string, unknown> }> } | null) {
+  function draw2d(fc: { features?: BldFeature[] } | null) {
     const c = cv.value;
     if (!c) return;
     // ⚠️ 别把局部变量叫 `host`：会遮蔽外层的 ref，TS 直接报"自引用"（TS7022/TS2448）
@@ -716,6 +748,13 @@
 
   /** 低于这个缩放就**不取楼栋**（整区尺度上楼房只是几个像素点，取回来也没用还费流量） */
   const BLD_MIN_ZOOM = 13.5;
+  /**
+   * 低于这个缩放**不取路网**。
+   * 为什么门槛比楼低（13.5 → 12）：路网是**地图的骨架**，整区视野下也要能看出
+   * "城市长什么样、人往哪走"；而楼在那个尺度上只是几个亚像素点。
+   * 再低（z<12）就只剩区县轮廓，路网一格都挤不下，取回来纯浪费 Overpass。
+   */
+  const ROAD_MIN_ZOOM = 12;
 
   /**
    * 「代拍」：页面上有 `?autoshot=1` 时，走到小区级就**自动拍三张**（近/远/侧）回传。
@@ -795,6 +834,17 @@
    *     `fog` 在这个构建里是空操作（根级属性根本没有它），雾的参数在 `sky` 里，
    *     而且**雾要有 3D 地形才生效**（官方 `fog-color` 写着 "Requires 3D terrain"）。
    */
+  /**
+   * 🛣 路网图层（分级：主干粗亮、支路细暗，描边压底色）。
+   *
+   * 为什么**必须**放在楼房**下面**：路是"地面上的东西"，
+   * 压在楼上会出现"路从楼顶穿过"的错觉（尤其倾斜视角）。
+   * 所以 `addLayer(l, "bld-ext")` —— 和等高线用同一个 beforeId。
+   */
+  function roadLayerSpecsForMap(): Array<Record<string, unknown>> {
+    return roadLayerSpecs();
+  }
+
   function bldLayerSpecs(): Array<Record<string, unknown>> {
     /* 🎨 主题参数（暗色 ↔ 二次元）与低端档 —— 都从单一真源取，不在这里写死任何颜色 */
     const th = theme.value;
@@ -914,7 +964,12 @@
     } else {
       el.textContent = (a.name || "我").slice(0, 1);
     }
-    el.title = `${a.name || "我"}${a.posSource === "affinity" ? "（特地来找你）" : ""}`;
+    /* 标题里如实带出"位置是怎么来的"：吸附到路上（`road`）和网格示意位置，
+       精度完全不是一回事 —— 以后排查"怎么站到江里了"就靠这一行。 */
+    el.title =
+      `${a.name || "我"}` +
+      (a.posSource === "affinity" ? "（特地来找你）" : "") +
+      (a.posSource === "road" ? "（在路上）" : a.posSource === "facility" ? "（在设施旁）" : "");
     return el;
   }
 
@@ -1078,14 +1133,34 @@
    */
   watch(aiOn, () => syncAiLayers());
 
+  /**
+   * 把"示意位置"吸附到**真实路网**上（`wsSnap.snapToRoad`）。
+   *
+   * 这一步是"把行人挪到路上"的**实际落点**：网格坐标是草图空间的示意值，
+   * 直接画到地图上会**落在楼里/江里**；吸附到最近的路段上（投影点，不是顶点）之后，
+   * 位置才与底图/路网自洽 —— `DESIGN-AUTONOMY.md` 的"角色自己出门"也才有意义。
+   *
+   * ⚠️ 超过 `SNAP_MAX_M` 就**不吸**（返回 null ⇒ 保持原位）：
+   * 路网在 2km 外时硬吸过去就是**瞬移**，比"位置不精确"糟糕得多。
+   */
+  const SNAP_MAX_M = 220;
+  function snapPin(pos: [number, number]): { pos: [number, number]; snapped: boolean; segName?: string | null } {
+    if (!props.snapPins || !roadSegs.length) return { pos, snapped: false };
+    const hit = snapToRoad(pos, roadSegs, SNAP_MAX_M);
+    if (!hit) return { pos, snapped: false };
+    return { pos: hit.point, snapped: true, segName: hit.seg.name ?? null };
+  }
+
   function syncPins(): void {
     const m = map;
     if (!m || !mlMod?.Marker || !bboxRef.value) return;
     const list = props.markers || [];
     const alive = new Set<string>();
     for (const a of list) {
-      const pos = gridToLngLat(a.gx, a.gy);
-      if (!pos) continue;
+      const raw = gridToLngLat(a.gx, a.gy);
+      if (!raw) continue;
+      const { pos, snapped } = snapPin(raw);
+
       alive.add(a.id);
       const hit = pins.find((x) => x.id === a.id);
       if (hit) {
@@ -1221,14 +1296,14 @@
    * 后端按 bbox 落盘缓存（同一 bbox 只打一次 S3），前端再记一层 `Map`：
    * 拖动时来回经过同一个位置不会重复打网络。
    */
-  const ovCache = new Map<string, { features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }>; note: string }>();
+  const ovCache = new Map<string, { features: BldFeature[]; note: string }>();
 
   async function overtureFill(
     lat: number,
     lng: number,
     r: number,
     osmCount: number
-  ): Promise<{ features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }>; note: string } | null> {
+  ): Promise<{ features: BldFeature[]; note: string } | null> {
     if (!shouldAskSecondSource(osmCount, BLD_SPARSE)) return null;
     const key = `${lat.toFixed(3)},${lng.toFixed(3)},${Math.round(r)}`;
     const hit = ovCache.get(key);
@@ -1238,7 +1313,7 @@
          热缓存是毫秒级。超时就当没有，别拖住整屏。 */
       const geo = await withTimeout(worldMapApi.overtureBuildings({ lat, lng, r }), 60000);
       if (!alive) return null;
-      const feats = (geo?.features || []) as Array<{ geometry?: unknown; properties?: Record<string, unknown> }>;
+      const feats = (geo?.features || []) as BldFeature[];
       const out = {
         features: feats,
         /* 署名是**硬要求**（ODbL）：不写来源就是违规使用，所以这句话跟着数据一起走 */
@@ -1299,6 +1374,174 @@
     return Math.max(BLD_R_MIN, Math.min(BLD_R_MAX, Math.round(r / 50) * 50));
   }
 
+  /* ── 🛣 路网：与楼房**同一套节奏**（视野算半径 / 去抖键 / 超时 / 如实上报）────
+     为什么单独一个函数而不是塞进 loadBuildingsForView：
+       · 两者的**触发条件不同** —— 楼在 z≥13.5 才取（亚像素没意义），
+         而路在**更远**就该画出来（z12 起，路网是"地图的骨架"）；
+       · 失败要能分别报（"楼取不到"和"路取不到"是两条不同的坏消息）。
+     ⚠️ 后端是**现问 Overpass**（涪陵 800m 冷查询实测 14.7s，缓存命中 95ms）⇒
+       必须有超时 + 按"中心+半径"去抖，别在拖动时反复打。 */
+  let lastRoadKey = "";
+  /** 路网段（吸附/寻路用）——拿到数据后就一直留着，别每次重新拆 */
+  let roadSegs: RoadSeg[] = [];
+
+  async function loadRoadsForView(m: BldMapLike): Promise<void> {
+    if (!alive) return;
+    const z = m.getZoom();
+    if (z < ROAD_MIN_ZOOM) {
+      stats.view = stats.view || "全区视野";
+      return;
+    }
+    const c = m.getCenter();
+    const r = radiusForView(m);
+    const key = `${c.lng.toFixed(3)},${c.lat.toFixed(3)},${r}`;
+    if (key === lastRoadKey) return;
+    lastRoadKey = key;
+    try {
+      const geo = await withTimeout(worldMapApi.roads({ lat: c.lat, lng: c.lng, r }), 25000);
+      if (!alive) return;
+      const fc = geo as { type?: string; features?: unknown[] } | null;
+      const feats = (fc?.features || []) as BldFeature[];
+      if (!feats.length) {
+        /* 空结果**必须说出来**（同楼房的纪律：静默 = 让人以为"这里没路"） */
+        stats.roads = 0;
+        stats.note = stats.note ? `${stats.note} · 这一带没有路网数据（${r}m）` : `这一带没有路网数据（${r}m）`;
+        return;
+      }
+      const data = { type: "FeatureCollection", features: feats };
+      if (m.getLayer("road-line-0")) {
+        (m.getSource("roads") as { setData(d: unknown): void } | undefined)?.setData(data);
+      } else {
+        m.addSource("roads", { type: "geojson", data });
+        /* 插在**楼房之下**：路是地面上的东西，压在楼上会像"从楼顶穿过" */
+        const before = m.getLayer("bld-ext") ? "bld-ext" : m.getLayer("ref") ? "ref" : undefined;
+        for (const l of roadLayerSpecsForMap()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
+      }
+      roadSegs = roadSegments(data as never);
+      stats.roads = visibleRoadCount(data as never, z);
+      /* `worldMapApi.roads()` 只解包 `geojson`（与 buildings 同一个壳），
+         统计在**原始信封**里 ⇒ 这里显式放宽类型读一次；拿不到就给 null（HUD 会少一行统计，
+         但**不会**编一个数字出来）。 */
+      stats.roadNote = roadStatsLine((geo as { stats?: Record<string, unknown> } | null)?.stats ?? null);
+    } catch {
+      stats.note = stats.note ? `${stats.note} · 路网取不到` : "路网取不到（后端没响应或超时）";
+    }
+  }
+
+  /* ── 🏪 设施（`/api/facilities`）→ MapLibre 圆点 ────────────────────────────
+     机主 2026-09-20：「在地图上把**道路和设施**全部勾出来（方便将行人啥的挪出来）」。
+     以前设施由旧的 DOM 层画（`WsFacilityLayer`），而那层在
+     `districtUnderlayVisible=false` 的 `v-if` 里 ⇒ **小区级根本看不到**。
+     这里把它迁到地图上（同一条渲染通路，缩放/倾斜/遮挡全都自洽）。
+
+     🔴 坐标口径（这是最容易搞错的一步）：`/api/facilities` 给的是
+     `gx/gy`（28×28 网格）+ **`cell_meters`（实测 30m）** ⇒ 它描述的是
+     **28×30 = 840m 的一块街区**，不是整个区县。
+     所以映射是「**以地图中心为原点的 840m 方格**」——
+     要是像 AI 示意层那样铺到**区县 bbox**（几十公里）上，一格就是好几公里，
+     又变成"一栋楼几百米宽"那类**尺度错**（那个坑已经踩过一次）。
+     ⚠️ 由此**设施点是"示意布局"不是实测位置**，HUD 必须这么写（见 `facNote`）。
+
+     ⚠️ 名称标注做不了：`symbol` 图层的 `text-field` **必须有 `glyphs`（字体服务）**，
+     而我们的样式是**故意不带 glyphs** 的（引字体＝多一个外部依赖 + 多一次跨域）。
+     所以名字走 HUD 的 `title`（悬停可看），地图上只画**分类配色**的圆点。 */
+  const FAC_COLOR_FALLBACK = "#9fb4c8";
+
+  /** 网格 → 经纬度（以 `center` 为原点的局部平面；网格 y 向下、纬度向北 ⇒ 要翻） */
+  function facLngLat(gx: number, gy: number, center: [number, number], cellM: number, grid: number): [number, number] {
+    const [cx, cy] = toXY(center, center[1]);
+    const x = (gx + 0.5 - grid / 2) * cellM;
+    const y = (grid / 2 - (gy + 0.5)) * cellM;
+    return toLngLat([cx + x, cy + y], center[1]);
+  }
+
+  async function loadFacilities(m: BldMapLike): Promise<void> {
+    if (!alive) return;
+    const c = m.getCenter();
+    const center: [number, number] = [c.lng, c.lat];
+    try {
+      const raw = await withTimeout(
+        facilitiesAuto({
+          area: props.area,
+          size: 28,
+          /* 种子**必须稳定**（后端注释里写死的约定）：传 `hash32(area)` ⇒ 刷新后设施位置不变。
+             用随机种子的话每次刷新设施都搬家，玩家会以为地图坏了。 */
+          seed: hash32(props.area || "ws"),
+          level: "district",
+        }),
+        15000
+      );
+      if (!alive) return;
+      const items = [...(raw?.facilities || []), ...(raw?.transport || [])] as unknown as Array<Record<string, unknown>>;
+      const grid = Math.max(2, Number(raw?.grid) || 28);
+      const cellM = Number(raw?.cell_meters) || 30;
+      const feats = items
+        .map((it) => {
+          const gx = Number(it.gx);
+          const gy = Number(it.gy);
+          if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
+          const col = Array.isArray(it.color) && it.color.length >= 3
+            ? `rgb(${Number(it.color[0])},${Number(it.color[1])},${Number(it.color[2])})`
+            : FAC_COLOR_FALLBACK;
+          return {
+            type: "Feature" as const,
+            properties: {
+              id: String(it.id || ""),
+              name: String(it.name || ""),
+              type: String(it.type || ""),
+              typeZh: String(it.type_zh || ""),
+              icon: String(it.icon || ""),
+              group: String(it.group || "life"),
+              color: col,
+            },
+            geometry: { type: "Point" as const, coordinates: facLngLat(gx, gy, center, cellM, grid) },
+          };
+        })
+        .filter(Boolean);
+      if (!feats.length) {
+        stats.facNote = "设施：后端没有返回点位（如实说明，不编）";
+        return;
+      }
+      const data = { type: "FeatureCollection", features: feats };
+      if (m.getLayer("fac-dot")) {
+        (m.getSource("fac") as { setData(d: unknown): void } | undefined)?.setData(data);
+      } else {
+        m.addSource("fac", { type: "geojson", data });
+        /* 插在注记层之前（设施点不该盖住街名） */
+        const before = m.getLayer("ref") ? "ref" : undefined;
+        m.addLayer(
+          {
+            id: "fac-dot",
+            type: "circle",
+            source: "fac",
+            /* 低 zoom 只留"主干类"（生活必需 + 交通节点）—— 整区视野下 43 个点会糊成一片 */
+            minzoom: 13.2,
+            filter: ["in", ["get", "group"], ["literal", ["life", "transport"]]],
+            paint: {
+              "circle-color": ["get", "color"],
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 13.2, 3, 15, 5, 17, 7],
+              "circle-stroke-color": "#0b1017",
+              "circle-stroke-width": 1.2,
+              "circle-opacity": 0.95,
+            },
+          },
+          before
+        );
+      }
+      const byType: Record<string, number> = {};
+      for (const f of feats) {
+        const t = String((f as { properties: Record<string, unknown> }).properties.typeZh || "其他");
+        byType[t] = (byType[t] || 0) + 1;
+      }
+      stats.facilities = feats.length;
+      const top = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 6);
+      /* ⚠️ 必须写"示意布局"：这些点的经纬度是**按 840m 方格摊出来的**，不是实测位置 */
+      stats.facNote = `${feats.length} 个（示意布局 ${grid}×${cellM}m 方格）：${top.map(([k, v]) => `${k}${v}`).join(" ")}`;
+    } catch {
+      stats.facNote = "设施取不到（后端没响应或超时）";
+    }
+  }
+
   /**
    * 「像高德那样」的第二半：**放大到街区再取楼**，而且**取少了会自动放大再试**。
    *
@@ -1337,14 +1580,14 @@
     }
     const tried: number[] = [];
     /** 一路记着"目前最好的一份"：后面某一级失败/更少时，不至于把手上的楼丢掉 */
-    let best: { feats: Array<{ properties?: Record<string, unknown> }>; r: number } | null = null;
+    let best: { feats: BldFeature[]; r: number } | null = null;
     let failed = false;
     for (const r of ladder) {
       tried.push(r);
       try {
         const geo = await withTimeout(worldMapApi.buildings({ lat: c.lat, lng: c.lng, r }), 25000);
         if (!alive) return;
-        const feats = (geo?.features || []) as Array<{ properties?: Record<string, unknown> }>;
+        const feats = (geo?.features || []) as BldFeature[];
         if (feats.length > (best?.feats.length ?? 0)) best = { feats, r };
         if (feats.length >= BLD_ENOUGH) break; // 够看了，别再花时间
       } catch {
@@ -1369,7 +1612,7 @@
       return;
     }
     /* 🆕 第二源补缺：OSM 不够看时才问（够看的地方一次网络都不发） */
-    let features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }> = feats;
+    let features: BldFeature[] = feats;
     let fillNote = "";
     if (shouldAskSecondSource(feats.length, BLD_SPARSE)) {
       /* 先如实说"正在补"，别让人对着不动的画面猜（这一问冷启动要十几秒） */
@@ -1468,7 +1711,7 @@
    */
   function fallback2d(
     mode: string,
-    fc: { features?: Array<{ geometry?: unknown; properties?: Record<string, unknown> }> } | null,
+    fc: { features?: BldFeature[] } | null,
     why = ""
   ): void {
     stats.mode = mode;
@@ -1566,7 +1809,10 @@
        原来"无 WebGL 就直接 return" ⇒ 低端机只能看到一行提示；现在改成
        **Canvas2D 降级**：用同一批真实楼房画俯视图（形状/朝向/高度来源都在），
        这样"没有 WebGL 的设备"也能看到小区 —— 顺带让无头环境（本机 WebGL 不可用）**可验证**。 */
-    type BldgFeat = { geometry?: unknown; properties?: Record<string, unknown> };
+    /* 用共享的 `BldFeature`：原来这里自己写了一份 `{geometry?: unknown}`，
+       而 `geometry: unknown` 喂不进合并函数（它要 `{type?, coordinates?}`）——
+       两份形状描述迟早漂移，所以只留一份。 */
+    type BldgFeat = BldFeature;
     let fc: { features?: BldgFeat[]; error?: string } | null = null;
     let fetchFailed = false;
     /* ⚠️ 这两个**必须声明在 try 之外**：下面 `m.on("load")` 里要用 —— 写在 try 里就成了块作用域
@@ -1689,7 +1935,7 @@
     }
     if (!alive) return;
     phase.value = "build";
-    if (fc?.features?.length) classify(fc as { features?: Array<{ properties?: Record<string, unknown> }> });
+    if (fc?.features?.length) classify(fc as { features?: BldFeature[] });
     if (!fc || fc.error || !fc.features?.length) {
       /* 如实区分三种情况：请求失败 / 后端报错 / 真的这一带没有楼（别再把失败说成"没有数据"） */
       const base = fetchFailed
@@ -1828,6 +2074,8 @@
              `moveend` 根本不会来 ⇒ 屏幕上永远没有楼、HUD 永远 `🏢 0`。
              用户看到的是"这功能坏了"，而不是"还差一次移动"。 */
           void loadBuildingsForView(m as unknown as BldMapLike);
+          void loadRoadsForView(m as unknown as BldMapLike); // 路网与楼并行取（互不阻塞）
+          void loadFacilities(m as unknown as BldMapLike); // 设施一次就够（不随视野重取）
         } catch {
           /* 收不了相机就保持默认视野 */
         }
@@ -1877,6 +2125,7 @@
       bldTimer = window.setTimeout(() => {
         bldTimer = 0;
         void loadBuildingsForView(m as unknown as BldMapLike);
+        void loadRoadsForView(m as unknown as BldMapLike);
       }, 600);
     });
 

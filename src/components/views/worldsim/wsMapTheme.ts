@@ -130,6 +130,28 @@ export interface WsMapTheme {
    */
   ai: { park: string; water: string };
   /**
+   * 栅格底图在**高 zoom** 下淡出。
+   *
+   * 🔴 为什么需要它（机主 2026-09-20：「**地面太糊，优化下**」）：
+   * 二次元用的亮灰底图**最高只到 z16**，而小区级默认 zoom 16.4、放大到 17~18 ⇒
+   * MapLibre 只能把 z16 的瓦片**放大 2~4 倍** ⇒ **必然糊**，这是数据上限，调清晰度没用。
+   * ⇒ 正解是"高 zoom 干脆不用照片"：淡出到 0，露出**纯色地面**（`bg` + `tint` 合成出来
+   * 的那个浅青色，和 3D 那条路的地面色**逐位相同**）+ **我们自己的路网线** + 楼体
+   * ⇒ **任何缩放下都是锐利的矢量**，而且更像 BA 的干净平涂。
+   * 低 zoom（省/市/区县）保持现状：那里底图的道路/地名是有信息量的。
+   * `null` = 全程不淡出（暗色主题用它：卫星影像 z19 有真细节，淡掉反而更差）。
+   */
+  baseFade: { from: number; to: number } | null;
+  /**
+   * **路网配色**（`wsRoads.roadLayerSpecs` 取用）。
+   *
+   * 为什么路网也归主题管：底图淡出之后，**路网就是地面上唯一的结构**。
+   * 而 `wsRoads` 原来的配色是按**暗底**设计的（近黑描边 `#0b1017` + 暖白路芯）——
+   * 铺在浅色二次元地面上就是"白线画白纸"（路芯和地面一样亮，看不见），
+   * 而近黑描边会变成一条条黑杠。⇒ 这套颜色必须跟着主题走。
+   */
+  road: { casing: string; casingOpacity: number; rankColors: Record<number, string> };
+  /**
    * **2D 降级路**（Canvas2D 自绘）用的调色板。
    *
    * 🔴 为什么必须有这一块（2026-09-20 主会话无头截图发现的割裂感）：
@@ -255,6 +277,17 @@ const NIGHT: WsMapTheme = {
   outline: { color: "rgba(190,235,255,0.22)", width: 0.5 },
   /* 沿用原来的 AI 示意层配色（这次不动暗色主题，免得把已有观感弄漂） */
   ai: { park: "rgba(126, 200, 130, 0.42)", water: "rgba(90, 150, 210, 0.42)" },
+  /* 暗色**不淡出**：卫星影像 z19 有真细节，淡掉反而更差 */
+  baseFade: null,
+  /* 路网配色：照抄 `wsRoads.ROAD_RANK_STYLE` 原来的值（暗底那一套），行为一字不变 */
+  road: {
+    casing: "#0b1017",
+    casingOpacity: 0.75,
+    rankColors: {
+      0: "#e8dcc0", 1: "#dfd2b4", 2: "#c8c0ae",
+      3: "#a9b3bd", 4: "#8fa0b0", 5: "#79d9ff",
+    },
+  },
   /* 2D 降级路：**照抄原来写死在 draw2d() 里的那几个值**，暗色主题行为一字不变 */
   canvas: {
     bg: "#101820",
@@ -294,10 +327,16 @@ const ANIME: WsMapTheme = {
     "sky-color": "#72C8F7", // 明亮天蓝（比上一版 #7EC8F0 更纯）
     "horizon-color": "#E8F8FF", // 近白的地平线（略偏青，和地面同调）
     "fog-color": "#D6EEFC", // 🔴 淡蓝白雾，**不是暗雾**：远景要"化开"成亮的
+    /* 🎨 二轮+（机主："要能看见天空（基沃托斯的天空）"）：
+       把**地平线那圈白雾带**调明显 —— `horizon-fog-blend` 抬到 0.65 让近白的雾色
+       往天上多铺一点，`fog-ground-blend` 抬到 0.75 让雾和地面交界更"化开"。
+       ⚠️ **没验**：MapLibre 文档写着 `fog-color` 需要 **3D 地形**（"Requires 3D terrain"），
+          而我们**没接 terrain** ⇒ 这圈雾带到底画不画得出来，**没有真机图不敢说**。
+          真正一定生效的是 `sky-color`/`horizon-color` 那条天空渐变（天空层本身）。 */
     "sky-horizon-blend": 0.6,
-    "horizon-fog-blend": 0.5,
-    "atmosphere-blend": 0.8,
-    "fog-ground-blend": 0.6,
+    "horizon-fog-blend": 0.65,
+    "atmosphere-blend": 0.85,
+    "fog-ground-blend": 0.75,
   },
   bg: "#E8F8FF", // 近白兜底：`sky` 万一没生效，背景也不会是黑的
   sources: {
@@ -380,6 +419,21 @@ const ANIME: WsMapTheme = {
   /* AI 示意层：水体换成**明亮青蓝**（机主 ④"水体换色"），公园淡绿。
      ⚠️ 只有"示意水体"能这么染；**真实江面在灰度底图里，染不了**（见 `ai` 字段的说明）。 */
   ai: { park: "rgba(150, 214, 160, 0.45)", water: "rgba(79, 195, 234, 0.5)" },
+  /* 🔴 治「地面太糊」：**z13.6 起淡出、z14.8 起完全不用照片**（小区级默认 16.4 ⇒ 全在淡出之后）。
+     淡出后露出的是 `bg` + `tint` 合成出来的浅青地面 —— 它的亮度（0.922）
+     和"有瓦片时"（0.924）**只差 0.002** ⇒ 过渡不会"咔"一下变个色（这是刻意的：我当初把
+     `tint` 调成 0.45 就是为了让两种情况落在一起）。自检里有一条钉这个 Δ。 */
+  baseFade: { from: 13.6, to: 14.8 },
+  /* 路网：浅底那一套 —— **路芯近白 + 蓝灰描边**（BA/地图 App 的常见做法：
+     靠描边把路"勾"出来，而不是靠路芯比地面亮）。描边 `#8FBBD4` 比地面暗一档 ⇒ 看得见。 */
+  road: {
+    casing: "#8FBBD4",
+    casingOpacity: 0.9,
+    rankColors: {
+      0: "#FFFFFF", 1: "#FBFDFF", 2: "#F4FAFE",
+      3: "#EBF5FC", 4: "#E3F1FA", 5: "#7FD4F0",
+    },
+  },
   /* 2D 降级路：底色取**和 3D 地面同一个色**（`#DCEFF7`，就是 `groundHex(anime)` 算出来的那个），
      描边取和 3D 同族的深藏青 —— 这样低端机看到的和满血机是"同一座城"，
      而不是"浅蓝界面 + 黑地图"。 */
@@ -630,7 +684,27 @@ export function themeStyleParts(
      （见 `WsMapRasterSource.attribution` 的说明）。自检里有一条专门断言署名在。 */
   const layers: Array<Record<string, unknown>> = [
     { id: "bg", type: "background", paint: { "background-color": theme.bg } },
-    { id: "base", type: "raster", source: "base", paint: theme.raster.base },
+    {
+      id: "base",
+      type: "raster",
+      source: "base",
+      /* 🔴 高 zoom 淡出（治「地面太糊」）：二次元的亮灰底图最高只到 z16，
+         小区级放大到 17~18 就是"把 z16 放大 4 倍" ⇒ 必糊。
+         淡出后露出 `bg` + `tint` 合成出来的纯色地面（和"有瓦片时"只差 0.002 亮度）
+         + 我们自己的路网 + 楼体 ⇒ 全是矢量，任何缩放都锐利。
+         ⚠️ `baseFade` 只覆盖 `raster-opacity` 这一个字段，**不动**主题里写的
+            saturation/contrast/brightness（那些在淡出区间里照样按 zoom 生效）。 */
+      paint: theme.baseFade
+        ? {
+            ...theme.raster.base,
+            "raster-opacity": [
+              "interpolate", ["linear"], ["zoom"],
+              theme.baseFade.from, 1,
+              theme.baseFade.to, 0,
+            ],
+          }
+        : theme.raster.base,
+    },
   ];
   /* 高分层：二次元主题没有它（`sources.hi === null`）。
      ⚠️ 没有图层却留着 source 是"死重量"，所以**源和图层一起加、一起不加**。 */

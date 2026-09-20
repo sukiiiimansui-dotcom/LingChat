@@ -53,13 +53,35 @@ export function roadStyleOf(rank: unknown): RoadRankStyle {
 }
 
 /**
+ * 路网调色板。**由主题提供**（`wsMapTheme.WsMapTheme.road`）。
+ *
+ * 🔴 为什么不能写死（2026-09-20）：这套颜色原来是按**暗底**调的
+ * （近黑描边 `#0b1017` + 暖白路芯）。而二次元主题在高 zoom 下会**把栅格底图淡出到 0**
+ * （治"地面太糊"），此时**路网就是地面上唯一的结构** ——
+ * 暖白路芯铺在浅青地面上 = "白线画白纸"（路和地面一样亮，看不见），
+ * 近黑描边则变成一条条黑杠。⇒ 颜色必须跟主题走。
+ */
+export interface RoadPalette {
+  casing: string;
+  casingOpacity: number;
+  rankColors: Record<number, string>;
+}
+
+/** 兜底调色板 = 原来写死的那套暗底配色（不传 palette 时行为**一字不变**，老自检照过） */
+export const ROAD_PALETTE_DARK: RoadPalette = {
+  casing: "#0b1017",
+  casingOpacity: 0.75,
+  rankColors: { 0: "#e8dcc0", 1: "#dfd2b4", 2: "#c8c0ae", 3: "#a9b3bd", 4: "#8fa0b0", 5: "#79d9ff" },
+};
+
+/**
  * 一档一条线图层（`line`），加一条**底色描边**压在下面。
  *
  * 为什么描边要单独一层：MapLibre 的 `line` 没有"描边"属性，
- * 行业里的常规做法就是同一份数据画两遍 —— 先画粗的深色当边，再画细的亮色当芯。
- * 少了它，亮色线压在暗底图上会"浮"，看着像贴纸。
+ * 行业里的常规做法就是同一份数据画两遍 —— 先画粗的当边，再画细的当芯。
+ * 少了它，路芯压在底图上会"浮"，看着像贴纸。
  */
-export function roadLayerSpecs(): Array<Record<string, unknown>> {
+export function roadLayerSpecs(palette: RoadPalette = ROAD_PALETTE_DARK): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const key of Object.keys(ROAD_RANK_STYLE).map(Number).sort((a, b) => a - b)) {
     const s = ROAD_RANK_STYLE[key]!;
@@ -70,7 +92,7 @@ export function roadLayerSpecs(): Array<Record<string, unknown>> {
       minzoom: s.minzoom,
       filter: ["==", ["get", "rank"], key],
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#0b1017", "line-width": s.w + 1.6, "line-opacity": 0.75 },
+      paint: { "line-color": palette.casing, "line-width": s.w + 1.6, "line-opacity": palette.casingOpacity },
     });
   }
   for (const key of Object.keys(ROAD_RANK_STYLE).map(Number).sort((a, b) => a - b)) {
@@ -83,7 +105,7 @@ export function roadLayerSpecs(): Array<Record<string, unknown>> {
       filter: ["==", ["get", "rank"], key],
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": s.color,
+        "line-color": palette.rankColors[key] ?? s.color,
         /* 桥隧稍微亮一点：立交/跨江桥在地图上就该比地面路显眼（也是"可走"的强提示） */
         "line-opacity": ["case", ["get", "bridge"], 0.95, ["get", "tunnel"], 0.5, 0.8],
         "line-width": s.w,

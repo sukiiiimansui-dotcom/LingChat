@@ -249,7 +249,11 @@
        */
       aiAuto?: boolean;
     }>(),
-    { area: "", radius: 600, pitch: 55, markers: () => [], grid: 28, aiItems: () => [], showAi: false, aiAuto: true, snapPins: false }
+    /* 🎨 2026-09-20 机主：「**2.5D 倾斜范围扩大至可看见天空（蔚蓝档案基沃托斯的天空）**」。
+       55° 是"俯视看楼"的角度 —— 相机压得太低，天际线以上全在屏幕外，**根本看不到天空**。
+       降到 38°：楼体的 2.5D 透视还在（看得出体量），但地平线和天空进了画面。
+       ⚠️ 这只是**默认值**；机主仍可以用手势压到 85°（见下面 `maxPitch`）。 */
+    { area: "", radius: 600, pitch: 38, markers: () => [], grid: 28, aiItems: () => [], showAi: false, aiAuto: true, snapPins: false }
   );
 
   const host = ref<HTMLElement | null>(null);
@@ -809,11 +813,13 @@
     await settleForShot(m, 800);
     if (!alive) return;
     let ok = await snap("app-dist-near");
-    m.easeTo({ zoom: 15, pitch: 46, duration: 900 });
+    /* 🎨 「远」这张现在专门用来看**地平线与天空**（pitch 26° ≈ 接近平视）。
+       机主要"看得见天空（基沃托斯的天空）"⇒ 三张证据图里必须有一张是抬着头的。 */
+    m.easeTo({ zoom: 14.6, pitch: 26, duration: 900 });
     await settleForShot(m, 1200);
     if (!alive) return;
     ok = (await snap("app-dist-far")) || ok;
-    m.easeTo({ zoom: 17.2, pitch: 62, bearing: -30, duration: 900 });
+    m.easeTo({ zoom: 17.4, pitch: 50, bearing: -30, duration: 900 });
     await settleForShot(m, 1200);
     if (!alive) return;
     ok = (await snap("app-dist-close")) || ok;
@@ -851,7 +857,11 @@
    * 所以 `addLayer(l, "bld-ext")` —— 和等高线用同一个 beforeId。
    */
   function roadLayerSpecsForMap(): Array<Record<string, unknown>> {
-    return roadLayerSpecs();
+    /* 🎨 路网配色**跟主题走**（不传就退回原来那套暗底配色）。
+       为什么必须传：二次元在 z14.8 之后**把栅格底图淡出到 0**（治"地面太糊"），
+       此时路网是地面上**唯一的结构** —— 用暗底那套（近黑描边 + 暖白路芯）
+       铺在浅青地面上就是"白线画白纸"。 */
+    return roadLayerSpecs(theme.value.road);
   }
 
   function bldLayerSpecs(): Array<Record<string, unknown>> {
@@ -1996,6 +2006,10 @@
       zoom: 16.4,
       pitch: props.pitch,
       bearing: 0,
+      /* 🔴 `maxPitch` 必须显式放开：MapLibre 的默认上限是 **60°** ——
+         不改的话机主"想往下压看天"最多压到 60，永远抬不起头。
+         85° 是 MapLibre 允许的上限（90 会把相机压到与地面平行、数值上容易出问题）。 */
+      maxPitch: 85,
       attributionControl: false,
       // 无头截图需要；真机无影响
       preserveDrawingBuffer: true,

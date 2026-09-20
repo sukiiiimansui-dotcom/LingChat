@@ -86,7 +86,7 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      const BUILD = "ws3dshow-2026-09-20-v7";
+      const BUILD = "ws3dshow-2026-09-20-v8";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -407,7 +407,10 @@
         map = new maplibregl.Map({
           container: "map", style: makeStyle(),
           center: [SPOT.lng, SPOT.lat],
-          zoom: 16.4, pitch: 58, bearing: -18,
+          /* 🎨 2026-09-20 机主要"**看得见天空（基沃托斯的天空）**"：
+             58° 是俯视看楼的角度，天际线以上全在画面外 ⇒ 降到 38° 把地平线和天空收进来。
+             `maxPitch: 85` 必须显式写：MapLibre 默认上限只有 **60°**，不放开就抬不起头。 */
+          zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 85,
           attributionControl: false, fadeDuration: 120,
           preserveDrawingBuffer: true, // 截图用（无头/代拍都要它）
         });
@@ -441,8 +444,9 @@
         })(performance.now());
 
         /* 两个档位就是"一近一远"两张证据图的机位 */
-        $("b-near").onclick = () => { map.easeTo({ zoom: 17.4, pitch: 62, duration: 600 }); };
-        $("b-far").onclick = () => { map.easeTo({ zoom: 15.0, pitch: 50, duration: 600 }); };
+        $("b-near").onclick = () => { map.easeTo({ zoom: 17.4, pitch: 50, duration: 600 }); };
+        /* 「远」= 看天空/地平线的机位（和代拍第二张同角度，手点/代拍可比对） */
+        $("b-far").onclick = () => { map.easeTo({ zoom: 14.6, pitch: 26, duration: 600 }); };
         $("b-spin").onclick = () => { map.easeTo({ bearing: map.getBearing() - 45, duration: 600 }); };
         /* 「星」：z16 以上到底用卫星影像还是把暗色底放大。
            留这个按钮是因为"哪个更好看"**只能看真机图**决定 ——

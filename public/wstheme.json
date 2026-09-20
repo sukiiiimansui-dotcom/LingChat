@@ -153,6 +153,18 @@
     "park": "rgba(126, 200, 130, 0.42)",
     "water": "rgba(90, 150, 210, 0.42)"
    },
+   "road": {
+    "casing": "#0b1017",
+    "casingOpacity": 0.75,
+    "rankColors": {
+     "0": "#e8dcc0",
+     "1": "#dfd2b4",
+     "2": "#c8c0ae",
+     "3": "#a9b3bd",
+     "4": "#8fa0b0",
+     "5": "#79d9ff"
+    }
+   },
    "canvas": {
     "bg": "#101820",
     "empty": "rgba(255,255,255,.7)",
@@ -162,6 +174,7 @@
     "aiStroke": "rgba(255,226,170,.6)",
     "aiStrokeW": 0.6
    },
+   "baseFade": null,
    "verticalGradient": true,
    "extrudOpacity": [
     "interpolate",
@@ -191,9 +204,9 @@
     "horizon-color": "#E8F8FF",
     "fog-color": "#D6EEFC",
     "sky-horizon-blend": 0.6,
-    "horizon-fog-blend": 0.5,
-    "atmosphere-blend": 0.8,
-    "fog-ground-blend": 0.6
+    "horizon-fog-blend": 0.65,
+    "atmosphere-blend": 0.85,
+    "fog-ground-blend": 0.75
    },
    "sources": {
     "base": {
@@ -229,7 +242,19 @@
      "type": "raster",
      "source": "base",
      "paint": {
-      "raster-opacity": 1,
+      "raster-opacity": [
+       "interpolate",
+       [
+        "linear"
+       ],
+       [
+        "zoom"
+       ],
+       13.6,
+       1,
+       14.8,
+       0
+      ],
       "raster-saturation": 0.55,
       "raster-contrast": 0.06,
       "raster-brightness-max": 1
@@ -296,6 +321,18 @@
     "park": "rgba(150, 214, 160, 0.45)",
     "water": "rgba(79, 195, 234, 0.5)"
    },
+   "road": {
+    "casing": "#8FBBD4",
+    "casingOpacity": 0.9,
+    "rankColors": {
+     "0": "#FFFFFF",
+     "1": "#FBFDFF",
+     "2": "#F4FAFE",
+     "3": "#EBF5FC",
+     "4": "#E3F1FA",
+     "5": "#7FD4F0"
+    }
+   },
    "canvas": {
     "bg": "#DCEFF7",
     "empty": "rgba(27,53,80,.75)",
@@ -304,6 +341,10 @@
     "aiShadow": "rgba(44,74,99,.22)",
     "aiStroke": "rgba(27,53,80,.5)",
     "aiStrokeW": 0.8
+   },
+   "baseFade": {
+    "from": 13.6,
+    "to": 14.8
    },
    "verticalGradient": false,
    "extrudOpacity": [

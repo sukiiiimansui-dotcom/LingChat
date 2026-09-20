@@ -573,6 +573,45 @@
         });
         window.__wsml.engine = engine;
         engine.mount();
+
+        /* ── 底图（2026-09-19 机主报「地图只有白底、加载不出等高线」）────────────────
+           根因：这个引擎的样式里 `sources: {}` —— **一张瓦片都没有**，只有一层背景色，
+           所以在有 GPU 的浏览器上渲染出来也是一片纯色。这里在 mount 之后补一层真底图。
+           可达性实测（本机网络同一时刻）：Carto ✅ 0.57s / OSM 镜像 ✅ 2.2s /
+           `tile.openstreetmap.org` ❌ / opentopomap（带等高线）❌ / Esri 地形 ❌ 全部超时
+           ⇒ 只挂**实测能取到**的 Carto；等高线等找到可通源再补，不写上去装能取到。
+           时机：`addSource` 必须在样式就绪之后（早了会抛 Style is not done loading）。 */
+        const addBasemap = () => {
+          const mp = engine.map;
+          if (!mp || typeof mp.addSource !== "function" || mp.getSource?.("base")) return false;
+          try {
+            mp.addSource("base", {
+              type: "raster",
+              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
+              tileSize: 256,
+              maxzoom: 20,
+              attribution: "© OpenStreetMap contributors © CARTO",
+            });
+            const ids = ((mp.getStyle && mp.getStyle() && mp.getStyle().layers) || []).map((l) => l.id);
+            const first = ids.filter((id) => id !== "ws-ml-bg")[0];
+            mp.addLayer(
+              { id: "base", type: "raster", source: "base", paint: { "raster-opacity": 0.9 } },
+              first
+            );
+            S.log.push("basemap: on (esri dark gray)");
+            console.info("[wsmlstage] basemap: on (carto dark)");
+            return true;
+          } catch (err) {
+            S.log.push("basemap: fail " + String(err && err.message ? err.message : err).slice(0, 60));
+            console.warn("[wsmlstage] basemap: fail", err);
+            return false;
+          }
+        };
+        if (!addBasemap()) {
+          if (engine.map && engine.map.once) engine.map.once("load", addBasemap);
+          setTimeout(addBasemap, 1200); // 兜底：样式已就绪、`once("load")` 赶不上的情况
+          setTimeout(addBasemap, 3500);
+        }
         S.log.push(snap("mount()"));
         void diag(); // 无条件留证：网络层 / 模块层 / **实收版本** 三条都记下来
 

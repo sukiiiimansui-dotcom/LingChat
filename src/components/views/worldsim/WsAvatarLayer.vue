@@ -101,6 +101,8 @@
   import { scatterGrid, spreadCrowdMemo, type PlacedActor } from "./wsActors";
   import { spreadOptsOf } from "./wsPerf";
   import { useWsRoster } from "./wsRoster";
+  import { applyAffinityVisit, resolveAffinity } from "./wsAffinityPlan";
+  import { useWsRelation } from "./wsRelation";
 
   const props = withDefaults(
     defineProps<{
@@ -176,6 +178,13 @@
    * 真壳里 `enabled: false`（名单走 `characterGetAll`），一次请求都不发。
    * 详见 `wsRoster.ts` 的文件头（含"该修哪一处"的交回说明）。
    */
+  /* 可玩性切片 A：好感 ≥70 ⇒ 现在真的跑来找你。
+     ⚠️ 必须在这里做（而不是只在 `useWsActors` 里）：小区级换成 MapLibre 后主图头像层整层不渲染，
+     真正画出来的是本组件这份名单；且渲染读的是 `px/py`（错开后的坐标）——
+     只改 `gx/gy` 是**不会动**的（实测：位置一模一样 93/94/94px 才发现）。 */
+  const relation = useWsRelation();
+  const affOf = (name: string) => resolveAffinity(relation.store.rows, [name]);
+
   const roster = useWsRoster({
     enabled: !tauri,
     existing: computed(() => (props.placed || []).filter((a) => !a.isMe).length),
@@ -202,7 +211,7 @@
     // `worldsim.actor.me` 兜底成「我」—— 但**首字母占位**只认 `name`，会画出一个 `?`
     // （实测截图里就是那个问号）。这里补一次与 i18n 同义的兜底名，纯粹为了占位好看。
     const named = list.map((a) => (a.isMe && !String(a.name || "").trim() ? { ...a, name: "我" } : a));
-    if (!chars.length) return named;
+    if (!chars.length) return withAffinityVisit(named);
     const extra = roster.toActors(gridRef.value, scatterGrid);
     if (!extra.length) return named;
     // 兜底的人也要过一遍错开（同坐标的人不能叠在一起）——复用同一套纯函数
@@ -220,8 +229,25 @@
       crowd: spread[i]?.crowd ?? 1,
     }));
     // 玩家永远在最后（压在最上面，与 useWsActors.placed 的顺序约定一致）
-    return [...placedExtra, ...named];
+    return withAffinityVisit([...placedExtra, ...named]);
   });
+  /**
+   * 把"好感够高 ⇒ 现在就来"应用到**这份名单**上，并把结果同步到渲染用的 `px/py`
+   * （渲染读的是 px/py；只改 gx/gy 不会动 —— 这是本轮实测踩到的坑）。
+   */
+  function withAffinityVisit(list: PlacedActor[]): PlacedActor[] {
+    const me = list.find((a) => a.isMe) || null;
+    if (!me || !list.some((a) => !a.isMe)) return list;
+    const mePos = { gx: Number(me.px ?? me.gx), gy: Number(me.py ?? me.gy) };
+    const res = applyAffinityVisit(list, affOf, mePos, gridRef.value);
+    if (!res.visited.length) return list;
+    const movedNames = new Set(res.visited.map((v) => v.name));
+    return res.list.map((a) => {
+      if (!movedNames.has(a.name)) return a;
+      return { ...a, px: a.gx, py: a.gy, crowd: 1 };
+    });
+  }
+
   /* ── T4-3：头像计划（真壳命令 vs 浏览器降级）────────────────────────────
    *
    * 判据全在纯函数 `avatarPlanOf` 里（可单测），这里只负责把三样东西喂给它：

@@ -572,6 +572,13 @@
   function draw2d(fc: { features?: BldFeature[] } | null) {
     const c = cv.value;
     if (!c) return;
+    /* 🎨 2D 降级路的调色板**从主题取**（2026-09-20 主会话截图发现：主题只写在 MapLibre 的
+       style 上，而低端机走的是这条 Canvas2D 自绘路 ⇒ 底色是写死的深色，
+       结果一台低端机上是"浅蓝界面 + 黑地图"的半截子观感）。
+       这一刀把 `bg / empty / 描边 / 示意层投影` 全部改成读 `theme.canvas`。
+       ⚠️ 这块画布**没有自己的 CSS 底色**（`.ws-dml__cv` 只有 position/inset），
+          所以下面那次 fillRect 就是"地面"本身，改它才有效。 */
+    const pal = theme.value.canvas;
     // ⚠️ 别把局部变量叫 `host`：会遮蔽外层的 ref，TS 直接报"自引用"（TS7022/TS2448）
     const el = host.value;
     const w = Math.max(64, el?.clientWidth || 320);
@@ -582,7 +589,7 @@
     const ctx = c.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#101820";
+    ctx.fillStyle = pal.bg;
     ctx.fillRect(0, 0, w, h);
     const feats = fc?.features || [];
     /* 🆕 2026-09-20：**降级路也要能"看到城市"**。
@@ -598,7 +605,7 @@
       if (ring?.length) aiPolys.push({ pts: ring as number[][], kind: String(f.properties.kind) });
     }
     if (!feats.length && !aiPolys.length) {
-      ctx.fillStyle = "rgba(255,255,255,.7)";
+      ctx.fillStyle = pal.empty;
       ctx.font = "12px system-ui";
       ctx.fillText("这一带没有楼房数据", 12, 22);
       return;
@@ -643,8 +650,9 @@
       ctx.closePath();
       ctx.fillStyle = r.col;
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,.28)";
-      ctx.lineWidth = 0.7;
+      /* 描边跟主题走：二次元是**深藏青**（浅底上才看得见），暗色是淡白细线 */
+      ctx.strokeStyle = pal.bldStroke;
+      ctx.lineWidth = pal.bldStrokeW;
       ctx.stroke();
     }
     /* 示意层（暖色，和真楼的冰蓝分得开）。俯视图里没有"高度"，
@@ -656,7 +664,8 @@
       a.pts.forEach((p, i) => (i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1]))));
       ctx.closePath();
       if (a.kind === "park" || a.kind === "water") {
-        ctx.fillStyle = a.kind === "park" ? "rgba(126,200,130,.42)" : "rgba(90,150,210,.42)";
+        /* 和上面 3D 的 `ai-area` 用**同一对颜色**（`theme.ai`），别再写第二套 rgba */
+        ctx.fillStyle = a.kind === "park" ? theme.value.ai.park : theme.value.ai.water;
         ctx.fill();
         continue;
       }
@@ -664,13 +673,13 @@
       const dx = Math.max(1.5, (Math.max(...a.pts.map((p) => p[0])) - Math.min(...a.pts.map((p) => p[0]))) * k * 0.12);
       ctx.save();
       ctx.translate(dx, dx * 0.7);
-      ctx.fillStyle = "rgba(40,20,0,.45)";
+      ctx.fillStyle = pal.aiShadow;
       ctx.fill();
       ctx.restore();
       ctx.fillStyle = hex;
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,226,170,.6)";
-      ctx.lineWidth = 0.6;
+      ctx.strokeStyle = pal.aiStroke;
+      ctx.lineWidth = pal.aiStrokeW;
       ctx.stroke();
     }
   }

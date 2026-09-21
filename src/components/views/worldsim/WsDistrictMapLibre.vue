@@ -1152,6 +1152,42 @@
   const DPR_CAP_2D = 1.5;
 
   /**
+   * 等容器**真的有布局尺寸**再建图（上限 `ms`，超时也继续 —— 不能因为量不到就不建图）。
+   * 见建图那段的说明：量到 0×0 ⇒ canvas 停在 MapLibre 默认的 **300×150**（= 一块纯色）。
+   */
+  async function waitForBox(el: HTMLElement | null, ms = 3000): Promise<void> {
+    if (!el) return;
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      if (el.clientWidth > 0 && el.clientHeight > 0) return;
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
+  }
+
+  /** 建图后补 resize：rAF 一次 + 延迟几次；再挂一个观察**容器**的 ResizeObserver（卸载时全清） */
+  const resizeTimers: number[] = [];
+  let resizeRo: ResizeObserver | null = null;
+  function kickResize(m: { resize?: () => void }): void {
+    const kick = (): void => {
+      try {
+        if (alive) m.resize?.();
+      } catch {
+        /* 地图没了就算了 */
+      }
+    };
+    requestAnimationFrame(kick);
+    for (const t of [250, 1000, 2500]) resizeTimers.push(window.setTimeout(kick, t));
+    try {
+      if (typeof ResizeObserver !== "undefined" && host.value) {
+        resizeRo = new ResizeObserver(kick);
+        resizeRo.observe(host.value);
+      }
+    } catch {
+      /* 没有 ResizeObserver 就靠上面那几次延迟（不影响建图） */
+    }
+  }
+
+  /**
    * 读「2D 降级路画布的 DPR 封顶」：`?wsdpr=<数字>` > 默认 1.5（夹在 1~3，脏值不认）。
    * 与 `?wsnight=off` 同一套纪律：**URL 优先**（"我想看另一档"不能被默认值盖掉），读不到不抛。
    */
@@ -2716,6 +2752,14 @@
       return;
     }
 
+    /* 🔴🔴 2026-09-21（真 P0，机主面板截图定案）：**建图那一刻容器如果还没有布局尺寸**
+       （0×0：还在加载态/刚插入 DOM/父级还没排版），MapLibre 会把 canvas buffer 定成**默认 300×150**，
+       而 CSS 又把它拉满整屏 ⇒ 屏幕上是一块**纯色的空画布**（alpha=0，一帧都没画过）。
+       机主那张面板证据：`画布 300×150 像素 / 布局 1253×429 / dpr=3`、`地图库零错误`、`首帧已出`。
+       ⇒ 所以：① 建图前**等容器真有尺寸**（有上限，量不到也照建，绝不卡死）；
+                ② 建图后**主动补几次 resize**（加载态收起/转屏/分屏都会改尺寸）。 */
+    await waitForBox(host.value);
+
     // ③ 建图（注意：样式里**不能写 `glyphs: undefined`** —— 会让样式校验失败且零报错）
     const m = new maplibregl.Map({
       container: host.value as HTMLElement,
@@ -2772,6 +2816,8 @@
     m.on("render", () => {
       sawRender = true;
     });
+    /* 建图后补 resize（含观察容器尺寸变化）—— 见上面那段"真 P0"的说明 */
+    kickResize(m);
     watchdog = window.setTimeout(() => {
       /* 已经画完就不用管了（看门狗不是"超时即失败"，是"到点还没好才算失败"） */
       if (!alive || phase.value === "done") return;
@@ -2910,6 +2956,14 @@
     watchdog = 0;
     if (recoverTimer) window.clearTimeout(recoverTimer);
     recoverTimer = 0;
+    for (const t of resizeTimers) window.clearTimeout(t);
+    resizeTimers.length = 0;
+    try {
+      resizeRo?.disconnect();
+    } catch {
+      /* 断开失败无所谓 */
+    }
+    resizeRo = null;
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     try {

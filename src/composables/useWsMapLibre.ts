@@ -611,6 +611,36 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
     }
   }
 
+  /**
+   * 等容器**真的有布局尺寸**再建图（上限 `ms`，超时也继续 —— 不能因为量不到尺寸就不建图）。
+   *
+   * 为什么必须有：MapLibre 建图时会量一次容器尺寸并据此设 canvas buffer；
+   * 量到 0×0 就退回**默认 300×150**，之后除非有人 `resize()`，否则**永远**是那个尺寸。
+   * （2026-09-21 机主的面板证据：`画布 300×150 像素 / 布局 1253×429 / dpr=3`、alpha=0 ⇒ 一帧都没画。）
+   */
+  async function waitForBox(el: HTMLElement | null, ms = 3000): Promise<void> {
+    if (!el) return;
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      if (el.clientWidth > 0 && el.clientHeight > 0) return;
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
+  }
+
+  /** 建图后补 resize：rAF 一次 + 延迟几次（覆盖加载态收起/转屏/分屏）。计时器在 destroy 里清 */
+  let resizeTimers: number[] = [];
+  function kickResize(): void {
+    const kick = (): void => {
+      try {
+        map?.resize();
+      } catch {
+        /* 地图没了就算了 */
+      }
+    };
+    requestAnimationFrame(kick);
+    for (const t of [250, 1000, 2500]) resizeTimers.push(window.setTimeout(kick, t));
+  }
+
   function ensureContainer(host: HTMLElement): HTMLElement {
     if (container) return container;
     // `.ws-geo` 本来就是定位上下文；没有就补一个（并在销毁时还原，别改别人的样式）
@@ -877,6 +907,8 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
       /* 已经销毁 */
     }
     map = null;
+    for (const t of resizeTimers) window.clearTimeout(t);
+    resizeTimers = [];
     container?.remove();
     container = null;
     setContainerVisible(false);
@@ -937,6 +969,13 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
         info.value.journal.push(`basemap: 预检异常 —— ${String((e as Error)?.message || e).slice(0, 60)}`);
       }
 
+      /* 🔴🔴 2026-09-21 机主截图定案的真根因：**画布 buffer 停在 MapLibre 默认的 300×150、alpha=0**
+         （布局却是 1253×429 @dpr3）—— 建图那一刻容器**还没有布局尺寸**（0×0），
+         而这里原来只在 `ResizeObserver(host)` 里 `resize()`：host 的尺寸**本来就没变** ⇒ 一次都不触发
+         ⇒ 画布永远 300×150 ⇒ CSS 拉满整屏 = **一块纯色**。机主看到的"像图片/落后"就是这个。
+         ⇒ 两件事：① **等容器真有尺寸**再建图（有上限，量不到也照建，不卡死）；
+                   ② 建图后**主动补 resize**（延迟几次，覆盖"加载态收起 / 方向切换 / 分屏"）。 */
+      await waitForBox(el);
       const m = new mod.Map({
         container: el,
         style: styleFor(themeNow(), { basemap: baseOk }),
@@ -991,6 +1030,9 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
       } catch {
         /* 拿不到 canvas：忽略 */
       }
+      /* 建图后**立刻**补一次 + 延迟几次（加载态收起、转屏、分屏都会改尺寸）——
+         `map.resize()` 不写这一句，画布就一直是建图那一刻的尺寸（就是机主那张 300×150）。 */
+      kickResize();
       if (typeof ResizeObserver !== "undefined") {
         ro = new ResizeObserver(() => {
           try {
@@ -999,6 +1041,9 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
             /* 忽略 */
           }
         });
+        /* ⚠️ 观察**容器**（`el`）而不是只观察 `host`：容器的尺寸变化才是画布该跟着变的那一刻。
+           `host` 也留着（它变尺寸时容器多半也跟着变，两条都收着更稳）。 */
+        ro.observe(el);
         ro.observe(host);
       }
 

@@ -302,4 +302,10 @@
   .ws-root.ws-perf-low .ws-mini__inner {
     will-change: auto;
   }
+  /* 低档兜底：见下面 `backdrop-filter` 处关于「blur(0px) 是假关」的说明 */
+  .ws-root.ws-perf-low .ws-mini__reset {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
 </style>

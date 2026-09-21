@@ -2332,4 +2332,11 @@
     /* 加载卡是**纯展示**：别让它吃掉手势/点击（加载完就卸载了，但这层不该成为拦路虎） */
     pointer-events: none;
   }
+  /* 低档兜底：见下面 `backdrop-filter` 处关于「blur(0px) 是假关」的说明 */
+  .ws-root.ws-perf-low .ws-dml__hud,
+  .ws-root.ws-perf-low .ws-dml__zoom button {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
 </style>

@@ -237,7 +237,10 @@ export function useWorldSim(opts: UseWorldSimOptions) {
       case "gps":
         return "系统定位";
       case "ip":
-        return "IP 估测（城市级）";
+        /* 🔴 2026-09-21 机主实测「定位拿到但**落到北京**」= IP 兜底命中了 VPN/运营商出口。
+           原来的文案只写"城市级"，看起来像"定位只精确到城市"，**没说明这是猜的、也没说不一定是你所在地**
+           ⇒ 加一句"可能是 VPN/网络出口"。诚实优先于简洁（这条文案会出现在顶栏、暗色标签和验证面板里）。 */
+        return "IP 估测（城市级，可能是 VPN/网络出口）";
       case "manual":
         return "手动选择";
       case "restored":

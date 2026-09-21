@@ -49,6 +49,8 @@
             :markers="markers"
             :night="night"
             :ai-items="aiItemsForMap"
+            :loc-source="locSource"
+            :world-time="worldTime"
           />
           <WsLoading
             v-else-if="!sketchUrl"
@@ -234,8 +236,18 @@
       markers?: WsDistrictPin[];
       /** 天黑程度 0..1（`wsTime.nightLevel`）—— **一路透传给地图库**，它据此派生夜色（楼/地/天）。 */
       night?: number;
+      /**
+       * 定位来源（`useWorldSim.locSource`：gps / ip / manual / restored）—— **透传给验证面板**。
+       *
+       * 为什么必须一路带到小区级：机主实测「**定位拿到但落到北京**」，
+       * 而当时屏幕上**没有任何一处**说明这个位置是 IP 兜底猜的（多半还是 VPN 出口）
+       * ⇒ 看着就像"定位坏了"。来源要么写出来，要么就会被误读。
+       */
+      locSource?: string;
+      /** 世界时间（如 `23:41`）—— 验证面板要"世界时间 + 夜色档"一起看，**透传**即可，别在这里算第二份 */
+      worldTime?: string;
     }>(),
-    { mapStyle: "gaode", night: 0 }
+    { mapStyle: "gaode", night: 0, locSource: "", worldTime: "" }
   );
 
   const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();

@@ -166,6 +166,9 @@
   } from "./wsMapTheme";
   /* 「代拍」：让页面自己 toDataURL 回传（agent 看不到 WebGL、机主又禁了 ADB 截屏 ⇒ 唯一通道） */
   import {
+    appSelfShotArmed,
+    appSelfShotDisarm,
+    appSelfShotMaybeArmFromUrl,
     canvasIsBlank,
     diagnosticPng,
     postShot,
@@ -174,6 +177,11 @@
     selfShotMaybeArmFromUrl,
     settleForShot,
   } from "./wsSelfShot";
+  /* 🧪 「**App 自拍**」（`?selfshot=1`）：主 App 页走完"进小区级 → 等稳 → 抓帧回传"。
+     为什么要它：闸门跑的是无头浏览器（**无 WebGL ⇒ 2D 降级路**）⇒ 闸门全绿也看不到
+     WebGL 那条路的故障；而代拍页要机主手动打开。它把"点代拍页"降成"**刷新一次**"。
+     分工与纪律见 `wsAppSelfShot.ts` 的文件头。 */
+  import { type AppShotCtx, type ShotMapLike, runAppSelfShot } from "./wsAppSelfShot";
   /* 真等高线（Terrarium DEM → marching squares，纯函数自检 37/37）。
      放在这里而不是只在自用页：小区级是 zoom≈15 的俯视/倾斜视角，**20m 间隔的等高线在这里最好看也最有用**
      （山城尤其明显），而且它和我们已接的 Esri 暗色底图、真楼房挤出是三层叠加。 */
@@ -975,6 +983,10 @@
    */
   const ROAD_MIN_ZOOM = 12;
 
+  /* 版本戳：App 自拍回传的诊断图/JSON 里带上它，agent 一眼看出"**是哪一版代码在跑**"
+     （2026-09-21 那次诊断图不带版本戳，差点把两轮不同的包当同一轮在比）。改这一页的行为就顺手 +1。 */
+  const APP_SELF_SHOT_BUILD = "app-selfshot-2026-09-21-v1";
+
   /**
    * 「代拍」：页面上有 `?autoshot=1` 时，走到小区级就**自动拍三张**（近/远/侧）回传。
    *
@@ -1031,6 +1043,46 @@
     ok = (await snap("app-dist-close")) || ok;
     if (ok && !stats.note.includes("空白")) stats.note = "代拍：已回传 3 张（近/远/侧）";
     selfShotDisarm();
+  }
+
+  /**
+   * 🧪 **App 自拍**（`?selfshot=1`）：主 App 页走完"进小区级 → 等稳 → 抓帧回传"。
+   *
+   * 与上面 `runSelfShot`（代拍页那条通道）**不共用机位**：这一条拍的就是**机主正在看的这一屏**
+   * ——真主题、真图层、真降级逻辑，一个字都不改，所以它同时是"验收证据"和"故障现场"。
+   *
+   * 触发点两处（都只加一次调用，**不改任何既有语义**）：
+   *   · 地图库 `load` 之后（WebGL 路）；
+   *   · `fallback2d()` 末尾（降级路）—— **降级了更要拍**：那些"整屏纯色"的事故就发生在这条路上。
+   *
+   * 等稳的判据（`sawFirstFrame && dataReady`）：首帧 + 数据到齐，或者**超时照拍**
+   * （超时也要给证据，只是会在诊断图/HUD 里如实写 `数据到齐=false`）。
+   */
+  function maybeAppSelfShot(kind: "webgl" | "fallback2d", fallbackWhy = ""): void {
+    /* 没开就是一次 boolean 判断（零开销）—— 与代拍同一个纪律 */
+    if (!appSelfShotArmed()) return;
+    appSelfShotDisarm(); // 立刻落闸：这一轮就是这一轮，页面里其它挂载点不要重复发起
+    const ctx: AppShotCtx = {
+      kind,
+      fallbackWhy,
+      /* 画布**现取**：降级路会换掉画布元素（见 `fallback2d` 那段），存下来的引用会拍到旧画布 */
+      getCanvas: () => cv.value,
+      getMap: () => (kind === "webgl" ? (map as unknown as ShotMapLike | null) : null),
+      sawFirstFrame: () => (kind === "webgl" ? sawRender : true),
+      /* "数据到齐" = 有东西可看（楼/路/设施/人）—— 全区视野下楼栋本来就不取，所以是**或**不是**与** */
+      dataReady: () => stats.count + stats.roads + stats.facilities + stats.pins > 0,
+      dataNote: () =>
+        `🏢${stats.count} 🛣${stats.roads} 🏪${stats.facilities} 👤${stats.pins} · ${stats.note || "无提示"}`,
+      /* 真机 Overpass 冷查询实测 20~100s；无头/自动化给短一点（免得把闸门拖成假失败） */
+      waitMs: isAutomation() ? 15000 : 45000,
+      /* 等数据的这几十秒里机主可能切走 ⇒ 组件卸载就**什么都不发**（发了就是假证据） */
+      aborted: () => !alive,
+      note: (s) => {
+        stats.note = stats.note ? `${stats.note} · ${s}` : s;
+      },
+      build: APP_SELF_SHOT_BUILD,
+    };
+    void runAppSelfShot(ctx);
   }
 
   /**
@@ -1984,6 +2036,9 @@
     draw2d(fc);
     phase.value = "done";
     stopTimer();
+    /* 🧪 App 自拍：**降级路更要拍** —— "整屏纯色"那类事故就发生在这条路上（闸门只跑这条路，
+       所以这条路正是"agent 以为验过了"的那条）。`why` 原样带进诊断图，别让图上写着"2D"却没有原因。 */
+    maybeAppSelfShot("fallback2d", why || "未说明原因");
   }
 
   /**
@@ -2018,6 +2073,9 @@
     /* `?autoshot=1` = 开代拍（页面自己截图回传）。写在最前面：
        后面任何一步 return（降级路）都不影响"开关已经开了"这件事。 */
     selfShotMaybeArmFromUrl();
+    /* `?selfshot=1` = 开 **App 自拍**（主 App 页刷新一次就拍，不用点代拍页）。
+       同样写在最前面：降级路也要拍 —— 那条路正是闸门"以为验过了"的路。 */
+    appSelfShotMaybeArmFromUrl();
     /* 🔴 守卫必须挂在 **canvas** 上，不能挂整个 host：
        挂 host 时，手指哪怕只抖 1px，`touchmove` 的 preventDefault 就会让浏览器**取消这次触摸**
        ⇒ 后面根本不派发 click ⇒ 容器里的「＋ / － / 全区」**全部点不动**
@@ -2369,6 +2427,8 @@
       stopTimer();
       /* 代拍：`?autoshot=1` 开了开关才跑，没开就是一次 boolean 判断（零开销） */
       if (selfShotArmed()) void runSelfShot(m as unknown as Parameters<typeof runSelfShot>[0]);
+      /* 🧪 App 自拍（`?selfshot=1`）：这是 **WebGL 路**的触发点（降级路的在 `fallback2d` 末尾） */
+      maybeAppSelfShot("webgl");
     });
 
     /* 视野变化 → 按需取楼（"放大到街区再取"的触发点；去抖 600ms，避免拖动时把 Overpass 打爆） */

@@ -156,6 +156,7 @@
     WS_MAP_THEME_KEY,
     WS_MAP_THEME_DEFAULT,
     parseWsMapThemeParam,
+    nightVariant,
     rampExpression,
     themeForTier,
     themeStyleParts,
@@ -215,6 +216,11 @@
       /** 网格边长（默认 28，与草图 `WS_GRID` 一致） */
       grid?: number;
       /**
+       * 天黑程度 0..1（`wsTime.nightLevel(hour)`，由 `WorldSim` 一路传下来）。
+       * 默认 0 = 白天 ⇒ 配色与改动前**逐字一致**（老调用点不用改）。
+       */
+      night?: number;
+      /**
        * **AI 精绘的产出**（楼/路/公园/水系，网格坐标）。以前它只画在那块"浮在地图上的 SVG"里，
        * 机主看到的就是"一张白卡片盖在黑暗地图上"；现在把它翻译成地图图层 ⇒ 楼能挤出 3D。
        */
@@ -253,7 +259,7 @@
        55° 是"俯视看楼"的角度 —— 相机压得太低，天际线以上全在屏幕外，**根本看不到天空**。
        降到 38°：楼体的 2.5D 透视还在（看得出体量），但地平线和天空进了画面。
        ⚠️ 这只是**默认值**；机主仍可以用手势压到 85°（见下面 `maxPitch`）。 */
-    { area: "", radius: 600, pitch: 38, markers: () => [], grid: 28, aiItems: () => [], showAi: false, aiAuto: true, snapPins: false }
+    { area: "", radius: 600, pitch: 38, markers: () => [], grid: 28, night: 0, aiItems: () => [], showAi: false, aiAuto: true, snapPins: false }
   );
 
   const host = ref<HTMLElement | null>(null);
@@ -284,9 +290,60 @@
   }
   const themeId = ref<WsMapThemeId>(resolveThemeId());
   /** 当前主题对象（模板/HUD 也能读，机主在 HUD 上能看出现在是哪套） */
-  const theme = computed<WsMapTheme>(() => wsMapTheme(themeId.value));
+  /* 🌙 夜色（`DESIGN-NIGHT.md` 第 1 件）：主题 → **派生**出夜里那一版。
+     为什么接在这一行：`theme` 是下面所有配色的**唯一来源**（`themeStyleParts`、楼体色阶
+     `rampExpression`、描边、`sky`）⇒ 在这一处换掉，整张图（楼/地/天/色罩）一起入夜，
+     不会出现"楼暗了地没暗"的割裂。`night = 0` 时 `nightVariant` **原样返回**，
+     所以白天与改动前逐字一致（自检守着这条）。 */
+  /** 昼夜缓变的时长（`DESIGN-NIGHT.md` 第 1 件要求 800~1500ms）。低档传 0 ⇒ 不写 transition。 */
+  const NIGHT_FADE_MS = 1200;
+  /** 天黑程度 0..1，夹一下（调用方给什么脏值都不会把配色算坏） */
+  const nightLvl = computed(() => Math.max(0, Math.min(1, Number(props.night) || 0)));
+  const theme = computed<WsMapTheme>(() => nightVariant(wsMapTheme(themeId.value), nightLvl.value, !!perf.low.value));
   /** 低端档时要丢什么（`perf.low` 是单一真源，见 `wsCaps.ts`） */
   const themeTier = computed(() => themeForTier(theme.value, !!perf.low));
+
+  /**
+   * 🌙 **昼夜缓变**：天黑程度变了 → 把几条 paint 属性**就地**改成夜里那版。
+   *
+   * 为什么不是重建 style：重建会把瓦片、图层、标点全部推倒重来（闪一下 + 重新取瓦片），
+   * 而 MapLibre 的 `fill-extrusion-color` / `background-color` / `line-color` **都支持过渡**
+   * （`transition: true`，见 `DESIGN-NIGHT.md` 已查实的事实③）⇒
+   * `setPaintProperty(id, prop, value, { duration })` 一句就够，**不要自己写插值**。
+   *
+   * ⚠️ 低档 `duration = 0`（`DESIGN-NIGHT.md` 要求"低档只留纯暗色"）：过渡要每帧重绘，
+   *    在软渲染路上正好是我们花了两轮才省下来的东西。
+   * ⚠️ 每一步先 `getLayer()` 探 + 整段 try：**地图库在图层不存在时会抛错**，
+   *    而这条路是"锦上添花"，绝不能因为一个图层没建就把地图搞崩（守住闸门①不崩）。
+   */
+  watch(nightLvl, () => {
+    const m = map as {
+      getLayer?: (id: string) => unknown;
+      setPaintProperty?: (id: string, prop: string, val: unknown, opts?: { duration: number }) => void;
+      setSky?: (sky: Record<string, unknown>) => void;
+    } | null;
+    if (!m || !alive || !m.getLayer || !m.setPaintProperty) return;
+    const t = theme.value;
+    const duration = perf.low.value ? 0 : NIGHT_FADE_MS;
+    try {
+      if (m.getLayer("bg")) m.setPaintProperty("bg", "background-color", t.bg, { duration });
+      if (m.getLayer("tint") && t.tint) {
+        m.setPaintProperty("tint", "background-color", t.tint.color, { duration });
+        m.setPaintProperty("tint", "background-opacity", t.tint.opacity, { duration });
+      }
+      /* 楼体色阶：整条 `interpolate` 表达式换掉。地图库对数据驱动属性会**交叉淡入**
+         （这正是"不要自己写插值"的意思）。 */
+      if (m.getLayer("bld-ext")) m.setPaintProperty("bld-ext", "fill-extrusion-color", rampExpression(t), { duration });
+      if (m.getLayer("bld-line")) m.setPaintProperty("bld-line", "line-color", t.outline.color, { duration });
+      /* 天空是**根级**属性（不是图层）⇒ 走 setSky。只有确认有这个方法才调
+         （老版本没有它；`sky` 一旦被当成图层塞进 layers[] 会让整份 style 校验失败）。 */
+      if (t.sky && typeof m.setSky === "function") m.setSky(t.sky);
+    } catch (e) {
+      /* 如实写进 HUD，别静默 —— 静默的失败下次还会再来一遍 */
+      const msg = String((e as { message?: string })?.message || e).slice(0, 60);
+      stats.note = stats.note ? `${stats.note} · 夜色过渡：${msg}` : `夜色过渡失败：${msg}`;
+    }
+  });
 
   /**
    * 运行时切主题（自用开关，机主要"暗色 ↔ 二次元"来回看）。
@@ -469,7 +526,7 @@
        那种错只在**运行时**炸一次，而它本来是可以被断言掉的。
        ⚠️ `sky` **不是图层类型**（图层类型只有 fill/line/symbol/circle/heatmap/
        fill-extrusion/raster/hillshade/color-relief/background），只能走**根级** `sky`。 */
-    const parts = themeStyleParts(theme.value, !!perf.low);
+    const parts = themeStyleParts(theme.value, !!perf.low, perf.low.value ? 0 : NIGHT_FADE_MS);
     return {
       version: 8,
       name: `ws-district-${theme.value.id}`,
@@ -870,6 +927,12 @@
     const tier = themeTier.value;
     /** 挤出体的公共 paint（三条层只差颜色/过滤，写一份免得漂移） */
     const common = {
+      /* 主题/时间切换要**平滑**而不是「啪」一下：本构建的 paint 属性带 `transition: true`（spec 实测），
+         写上 `*-transition` 就由 MapLibre 自己做时长插值 —— **别自己写 rAF 插值动画**（那是重复劳动且更贵）。
+         三层（bld-ext / bld-roof / bld-antenna）共用这个对象 ⇒ 改一处覆盖三层。
+         900ms 是手感取值：太短像瞬变、太长像卡住。 */
+      "fill-extrusion-color-transition": { duration: 900, delay: 0 },
+      "fill-extrusion-opacity-transition": { duration: 900, delay: 0 },
       "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
       /* 底座统一读 `h_base`（拆件时每条都写了；老数据没有就退回 `min_height`） */
       "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["get", "min_height"], 0],

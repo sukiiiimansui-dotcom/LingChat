@@ -47,6 +47,7 @@
             :radius="600"
             :pitch="55"
             :markers="markers"
+            :night="night"
             :ai-items="aiItemsForMap"
           />
           <WsLoading
@@ -231,8 +232,10 @@
        *  以后两边不一致是最难查的那种 bug。）
        */
       markers?: WsDistrictPin[];
+      /** 天黑程度 0..1（`wsTime.nightLevel`）—— **一路透传给地图库**，它据此派生夜色（楼/地/天）。 */
+      night?: number;
     }>(),
-    { mapStyle: "gaode" }
+    { mapStyle: "gaode", night: 0 }
   );
 
   const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();

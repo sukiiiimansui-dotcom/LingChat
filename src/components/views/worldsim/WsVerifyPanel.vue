@@ -134,6 +134,10 @@
         <dd>🏢{{ snap.counts.buildings }} 🛣{{ snap.counts.roads }} 🏪{{ snap.counts.facilities }} 👤{{ snap.counts.pins }}</dd>
         <dt>定位来源</dt>
         <dd :class="{ 'wsv__bad': snap.locSource === 'ip' }">{{ locText }}</dd>
+        <dt>动效状态</dt>
+        <dd>
+          {{ snap.motion ? `加载态=${snap.motion.phase} · 设施节点=${snap.motion.facilityNodes}${snap.motion.facilityFadeDone === null ? "" : snap.motion.facilityFadeDone ? "（淡入已播完）" : "（淡入中）"} · 事件条=${snap.motion.eventRows} · 天气粒子=${snap.motion.weatherCanvas ? "在跑" : "无"}` : "（拿不到）" }}
+        </dd>
         <dt>HUD 原话</dt>
         <dd class="wsv__hud">{{ snap.hud || "（空）" }}</dd>
       </dl>

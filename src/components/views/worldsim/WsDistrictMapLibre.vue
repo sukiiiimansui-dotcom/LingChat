@@ -1472,6 +1472,41 @@
     });
   }
 
+  /**
+   * 「**动效状态**」：**当场 DOM 观察**（不猜、不写死）。
+   *
+   * 机主 2026-09-21 的疑问是"看不到 MG 动画" —— 而"没触发"和"坏了"是两件事：
+   * 加载动画播完就收、事件条只在**新事件**来时入场、设施淡入只在小区级且只播一次。
+   * ⇒ 把这些事实摆出来，人自己就能分清。
+   */
+  function motionFacts(): NonNullable<VerifySnapshot["motion"]> {
+    const q = (sel: string): Element[] => {
+      try {
+        return Array.from(document.querySelectorAll(sel));
+      } catch {
+        return [];
+      }
+    };
+    const facNodes = q(".ws-fac__mark");
+    let fadeDone: boolean | null = null;
+    if (facNodes.length) {
+      try {
+        const st = getComputedStyle(facNodes[0] as Element);
+        fadeDone = Math.abs(Number(st.opacity) - 1) < 0.05 && (st.transform === "none" || st.transform === "matrix(1, 0, 0, 1, 0, 0)");
+      } catch {
+        fadeDone = null;
+      }
+    }
+    return {
+      phase: String(phase.value),
+      facilityNodes: facNodes.length,
+      facilityFadeDone: fadeDone,
+      eventRows: q(".ws-ef__list > *").length,
+      weatherCanvas: q(".ws-wx__cv").length > 0,
+      low: !!perf.low.value,
+    };
+  }
+
   /** 面板要显示的那份（`VerifySnapshot`；图层 + 关键 paint 从上面那份里取，**不重算**） */
   function panelSnapshot(): VerifySnapshot {
     const rep = verifySnapshot(false) as {
@@ -1530,6 +1565,7 @@
       locSource: props.locSource || "",
       keyPaints: rep.keyPaints || {},
       worldTime: `${props.worldTime || "（拿不到）"} · 天黑 ${nightLvl.value}${nightOn.value ? "" : "（夜色关）"}`,
+      motion: motionFacts(),
       hud: hudEl.value?.innerText || "",
     };
   }

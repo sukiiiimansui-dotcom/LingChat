@@ -31,6 +31,8 @@ export interface VerifyCtx {
   errors: string[];
   /** 画布：像素尺寸 + 布局尺寸 + dpr */
   canvas: { w: number; h: number; cw: number; ch: number; dpr: number } | null;
+  /** 2D 降级路的 DPR 封顶（`?wsdpr=` 可覆盖；WebGL 路不适用 ⇒ null） */
+  dprCap2d: number | null;
   /** 活画布判空的结果（`canvasIsBlank`） */
   canvasBlank: { blank: boolean; note: string } | null;
   /** 计数（**与 HUD 同源**：同一个 `stats` 对象，不许另开计数器） */
@@ -181,7 +183,15 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
   push("定位来源标注", loc ? (loc === "ip" ? false : true) : null, locName);
 
   /* ⑫ 性能档（低档会少画东西，是"如实降级"不是故障，所以只报事实不判失败） */
-  push("性能档", null, c.capsLow ? "**低档**（软渲染/降级时被压下来的：少画描边等）" : "正常档");
+  push(
+    "性能档 / 2D 画布 DPR",
+    null,
+    (c.capsLow ? "**低档**（软渲染/降级时被压下来的：少画描边、关毛玻璃、动画减半）" : "正常档") +
+      (c.kind === "fallback2d"
+        ? `；2D 画布 DPR 封顶=${c.dprCap2d ?? "?"}（真机 dpr=${c.canvas?.dpr ?? "?"}）` +
+          ` ⇒ 约 ${c.canvas ? Math.round((c.canvas.w * c.canvas.h) / 1000) : "?"} 千像素/次重绘`
+        : "")
+  );
 
   return R;
 }

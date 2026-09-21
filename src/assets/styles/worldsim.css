@@ -926,6 +926,36 @@
   font-size: 0.88em;
 }
 
+/* 「事件条」的入场（MG 动效剩余项 ④：**滑入 → 收束**）—— 2026-09-20
+ *
+ * 为什么不是随手一条 fade-up：机主要的是「世界在动」的那种感觉。
+ * 一条新事件要**从外面滑进来**（有来路），落位时**收一下**（有重量）——
+ * 所以三段关键帧：滑入（快）→ 微过冲（弹）→ 收束回原位。
+ *
+ * 纪律（`UI-DESIGN-SPEC.md` 的 MG 动效条款：只允许 `transform` / `opacity`）：
+ *   · 只碰 `transform` / `opacity` —— **不许**动 width/height/margin/top：
+ *     这条列表就浮在**每帧都在重画的地图**上面，触发一次重排就是一次掉帧；
+ *   · `prefers-reduced-motion: reduce` 由本文件那条全局规则压成 0.001ms（自动只留终态）；
+ *   · 低档（`.ws-root.ws-perf-low`）**整条动画摘掉**，见 `WsEventFeed.vue` 的 scoped 规则。
+ *
+ * ⚠️ 这条 keyframes 是**全局**的（`WsEventFeed.vue` 的 `<style scoped>` 引用它，
+ *    名字不带哈希 ⇒ 就是引用这里这一份）。改它 = 改所有引用者，别只改一半。
+ */
+@keyframes ws-mg-in-bar {
+  0% {
+    transform: translateX(22px) scale(1.015);
+    opacity: 0;
+  }
+  60% {
+    transform: translateX(-4px) scale(1.015);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0) scale(1);
+    opacity: 1;
+  }
+}
+
 /* 面板滑入 / 遮罩淡入（抽屉动画；prefers-reduced-motion 那条规则会自动把它压掉） */
 @keyframes ws-slide-in {
   from {

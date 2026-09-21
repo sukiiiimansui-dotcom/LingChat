@@ -380,7 +380,26 @@
     padding: 0.35em 0.45em;
     border-radius: var(--ws-radius-sm);
     background: var(--ws-panel-2);
-    animation: ws-fade-up 0.24s ease both;
+    /* 「滑入 → 收束」（MG 动效剩余项 ④）。
+       为什么换成 `ws-mg-in-bar` 而不是原来的 `ws-fade-up`：原来只是**往上淡入**，
+       读起来像"列表刷新了一下"；机主要的是**世界在动** —— 新事件要有**来路**
+       （从右侧滑进来）和**重量**（落位时收一下）。关键帧是本文件外的全局定义
+       （`src/assets/styles/worldsim.css`），文档也写在那儿，改之前先读。
+       ⚠️ 触发时机**只靠 key**：`v-for` 的 key 是新事件的 ⇒ 只有**新节点**跑这条动画，
+       已经在列表里的旧条目不会被重排、更不会"集体闪一下"（这是刻意的，
+       也是"别每次 tick 重排"那条要求在**这一处**的落地）。
+       `both` 是必须的：动画开始前（首帧前）元素必须已经处于 0% 的 `opacity: 0`，
+       否则新条目会**先闪一下原样**再开始滑 —— 那正是"看着很脏"的来源。 */
+    animation: ws-mg-in-bar 0.42s cubic-bezier(0.22, 0.68, 0.32, 1) both;
+  }
+  /* 低档：MG 入场上动效**整条摘掉**（`DESIGN-NIGHT.md` 对低档的口径是"只留必要的"）。
+     为什么敢摘：它只是一次性入场，摘掉后条目**直接以终态出现**，信息一条不少；
+     而这条列表正好浮在每帧重画的地图上面，少一次合成就是省一次。
+     ⚠️ 这是**祖先链**选择器（`.ws-root.ws-perf-low` 打在 WorldSim 的页面根上，
+     不在本组件的模板里）—— scoped 的作用域属性只加在链尾的 `.ws-ef__item` 上，
+     所以跨组件照样命中；反过来，别把它写成 `.ws-ef.is-low`（本组件拿不到档位）。 */
+  .ws-root.ws-perf-low .ws-ef__item {
+    animation: none;
   }
   /* 类别徽章：底色取主题变量（三套主题 + 深浅都跟着走）。
    先给一档兜底底色，再用 color-mix 叠一层 —— 老 WebView 上没有 color-mix 也不会透明。 */

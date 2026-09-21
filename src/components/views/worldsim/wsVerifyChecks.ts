@@ -179,15 +179,25 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     c.canvasBlank ? c.canvasBlank.blank ? `**空白**：${c.canvasBlank.note}` : "有内容" : "拿不到画布"
   );
 
-  /* ⑧ 尺寸 / dpr（截图比例那类事故的护栏；±2px 容忍取整） */
+  /* ⑧ 尺寸 / dpr —— 🔴 **这条是 2026-09-21 抓到真根因的那一条**：
+     画布 300×150（MapLibre 的**默认值**）而布局是 1253×429 ⇒ 建图时容器没有布局尺寸，
+     canvas buffer 从没被 `resize()` 过 ⇒ CSS 拉满整屏 = **一块纯色**（机主说的"像图片/落后"）。
+     所以判词要**直接点名"没 resize"**，不能只说"尺寸不符"。 */
   if (c.canvas) {
     const want = Math.round(c.canvas.cw * c.canvas.dpr);
     const ok = Math.abs(c.canvas.w - want) <= 2;
+    const isDefault = c.canvas.w === 300 && c.canvas.h === 150;
     push(
       "画布像素 = 布局 × dpr",
       ok,
       `${c.canvas.w}×${c.canvas.h} 像素 / ${c.canvas.cw}×${c.canvas.ch} 布局 / dpr=${c.canvas.dpr}` +
-        (ok ? "" : `（期望宽 ${want}）`)
+        (ok
+          ? ""
+          : isDefault
+            ? `（期望宽 ${want}）—— **300×150 是地图库的默认值**：建图时容器还没有布局尺寸，` +
+              "且之后**没有调用 map.resize()** ⇒ 画布从没按容器尺寸重建过" +
+              "（已修：建图前等尺寸 + 建图后补 resize；若你看到这条红，说明跑的还是旧包）"
+            : `（期望宽 ${want}）`)
     );
   } else {
     push("画布像素 = 布局 × dpr", null, "拿不到画布");

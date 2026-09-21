@@ -297,8 +297,59 @@
      所以白天与改动前逐字一致（自检守着这条）。 */
   /** 昼夜缓变的时长（`DESIGN-NIGHT.md` 第 1 件要求 800~1500ms）。低档传 0 ⇒ 不写 transition。 */
   const NIGHT_FADE_MS = 1200;
-  /** 天黑程度 0..1，夹一下（调用方给什么脏值都不会把配色算坏） */
-  const nightLvl = computed(() => Math.max(0, Math.min(1, Number(props.night) || 0)));
+
+  /** localStorage 键（与 `wsm:v1:mapTheme` 同一命名空间） */
+  const WS_NIGHT_KEY = "wsm:v1:night";
+  /**
+   * 夜色**默认开不开**（逃生阀的闸）。
+   *
+   * 🔴 为什么留这个常量（2026-09-21 深夜，一段有争议的排障）：
+   *   机主报「近/远两张截图**逐字节相同**、整屏一片浅蓝」，怀疑是夜色把画面抹平了。
+   *   查下来**不成立**（三条证据）：
+   *     ① 那两张是 **21:54:58** 拍的，而夜色代码的 mtime 是 21:56、commit 是 **22:01**、
+   *        进包是 **22:04** ⇒ 拍那张图时**夜色还不存在**；
+   *     ② 同款空白 **09-19 23:27** 就出现过（`~/chk/live/_stale-before-stylefix/232756-*.png`，
+   *        132,368B，与这次的 132,431B 同形态）——那时既没有二次元主题也没有夜色；
+   *     ③ 夜色**开着**的时候画面是有内容的：`~/chk/live/223849-show-near.png`（22:38）
+   *        2.87MB、颜色 std≈4.8，楼和底图都在。
+   *   ⇒ 那是**代拍/无头 WebGL 的老毛病**（项目早就写过「无头首帧后可能丢上下文，
+   *     截图空白但指标正常」），不是这轮引入的回归。
+   *
+   * 所以默认**保持 auto（跟着世界时间走）** —— 关掉它等于白丢机主要的「按世界时间入夜」，
+   * 而且**止血不了**（空白在夜色之前就有）。真要一键回到"永远白天"，把这里改成 `false`
+   * 或走 `?wsnight=off`（机主也能自己用 URL 切）。
+   */
+  const WS_NIGHT_DEFAULT = true;
+
+  /**
+   * 读「夜色开不开」：**URL > localStorage > 默认**（与 `resolveThemeId` 同一优先级口径，
+   * 理由也一样：代拍通道是"给机主一个 URL 让他点一下"，不能被上次存的偏好盖掉）。
+   * 认不出来的值一律回默认，**不抛** —— 一个观感开关不该把地图搞崩。
+   */
+  function resolveNightOn(): boolean {
+    try {
+      const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+      const v = String(q.get("wsnight") || "").trim().toLowerCase();
+      if (v === "off" || v === "0" || v === "no") return false;
+      if (v === "on" || v === "1" || v === "yes") return true;
+      const saved = localStorage.getItem(WS_NIGHT_KEY);
+      if (saved === "off") return false;
+      if (saved === "on") return true;
+    } catch {
+      /* 隐私模式 / 无 localStorage ⇒ 按默认，不报错 */
+    }
+    return WS_NIGHT_DEFAULT;
+  }
+  const nightOn = ref(resolveNightOn());
+
+  /**
+   * 天黑程度 0..1，夹一下（调用方给什么脏值都不会把配色算坏）。
+   * 关掉开关时**恒为 0** ⇒ `nightVariant(theme, 0)` 原样返回 ⇒ 与"没有夜色那版"逐字一致
+   * （这就是逃生阀的全部机制：不进白天分支的代码一行都不动）。
+   */
+  const nightLvl = computed(() =>
+    nightOn.value ? Math.max(0, Math.min(1, Number(props.night) || 0)) : 0
+  );
   const theme = computed<WsMapTheme>(() => nightVariant(wsMapTheme(themeId.value), nightLvl.value, !!perf.low.value));
   /** 低端档时要丢什么（`perf.low` 是单一真源，见 `wsCaps.ts`） */
   const themeTier = computed(() => themeForTier(theme.value, !!perf.low));

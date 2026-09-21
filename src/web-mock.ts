@@ -23,6 +23,9 @@
  * · 这些假数据**绝不能**被当成真实行为来验证业务逻辑
  */
 
+/* 🧪 App 自拍的开关：**只借这个纯函数**（键名/正则都在那边，别在这里再写一份字面量 —— 会漂移） */
+import { appSelfShotMaybeArmFromUrl } from "@/components/views/worldsim/wsSelfShot";
+
 declare global {
   interface Window {
     // ⚠️ 这里**不能**重新声明 `__TAURI_INTERNALS__` 的类型 ——
@@ -240,6 +243,28 @@ function installMock(): void {
     const search = location.search || "";
     const hash = location.hash || "";
     history.replaceState(null, "", "/" + search + hash);
+  }
+
+  /**
+   * 🧪 **App 自拍**的开关（`?selfshot=1`）必须在这里"落地"——**在应用启动那一刻**。
+   *
+   * 为什么不能只靠小区级组件自己读 URL：小区级藏在 App 里（进世界 → 走到小区要点好几下），
+   * 而 URL 上的 query 在**一次路由跳转后就没了**。在这里把它写进 `localStorage`（sticky），
+   * 机主就只需要"**在任意一页带着 `?selfshot=1` 刷新一次**"，之后走到小区级会自动拍
+   * （触发点在 `WsDistrictMapLibre.vue`，两条渲染路都挂了）。
+   *
+   * ⚠️ 这是**自用层**（本文件只在纯浏览器预览入口 `webdev.html` 里加载，真壳 `index.html` 没有它），
+   *    所以"给页面加一个调试开关"不会进 PR、也不影响真壳。
+   */
+  try {
+    if (appSelfShotMaybeArmFromUrl(location.search || "")) {
+      console.info(
+        "%c[web-mock] App 自拍已开启（?selfshot=1）→ 走到小区级会自动抓一帧回传 127.0.0.1:8789",
+        "color:#79d9ff"
+      );
+    }
+  } catch {
+    /* 隐私模式读不到 localStorage ⇒ 不自拍，页面照常用 */
   }
 
   console.info(

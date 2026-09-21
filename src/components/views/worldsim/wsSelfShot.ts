@@ -31,6 +31,18 @@ export const SHOTD = "http://127.0.0.1:8789/shot";
  */
 export const AUTOSHOT_KEY = "wsm:v1:autoshot";
 
+/**
+ * 「**App 自拍**」的开关（`?selfshot=1`）—— 2026-09-21 加的**主 App 页**自拍通道。
+ *
+ * 和代拍页的区别（一句话）：代拍页是"**agent 给一个 URL，机主点开、拍完关掉**"；
+ * App 自拍是"**机主在自己本来就在看的那个页面（`webdev.html` 那条路由）上刷新一次**"，
+ * 走到小区级就自动拍 —— 把"点代拍页"这一步降成"刷新"。
+ *
+ * 为什么单独一个 key（不复用 `AUTOSHOT_KEY`）：两条通道要能**分别**开关，
+ * 否则机主开着代拍页的开关时，App 页也会莫名其妙往服务器灌图。
+ */
+export const APPSHOT_KEY = "wsm:v1:selfshot";
+
 /** 代拍开启了吗？（读失败一律当"没开" —— 隐私模式里 localStorage 会抛） */
 export function selfShotArmed(): boolean {
   try {
@@ -75,6 +87,84 @@ export async function postShot(dataUrl: string, name: string): Promise<boolean> 
       body: blob,
     });
     return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把一份 JSON **也**发到同一个收图服务（`~/chk/shotd.py`，落盘 `~/chk/live/*.json`）。
+ *
+ * 用途：光有图**说不清"样式到底加载成了什么样"**（图层有没有、paint 是什么值、
+ * 地图库报没报错）—— 那些只有页面自己知道。图 + JSON 一起回来，agent 才不用猜。
+ * 与图片同样的纪律：**失败不抛**（诊断设施不该把页面搞崩）。
+ */
+export async function postJson(obj: unknown, name: string): Promise<boolean> {
+  try {
+    if (!name.endsWith(".json")) name += ".json";
+    const r = await fetch(`${SHOTD}?name=${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(obj, null, 2),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+
+/**
+ * 时间戳（`MMDD-HHMMSS`，本机时区）—— 自拍的名字里要带它。
+ * 为什么不用 `toISOString()`：文件名里出现 `:` 和 `T`/`Z` 又长又要转义，而 agent
+ * 拿到文件第一眼想看的是"这是刚拍的还是十分钟前的"。
+ */
+export function shotStamp(d: Date = new Date()): string {
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/** App 自拍图的名字：`app-selfshot-<时间戳>` */
+export function appShotName(d: Date = new Date()): string {
+  return `app-selfshot-${shotStamp(d)}`;
+}
+
+/** 样式自检 JSON 的名字：`style-<时间戳>.json` */
+export function styleReportName(d: Date = new Date()): string {
+  return `style-${shotStamp(d)}.json`;
+}
+
+/** 「App 自拍」开着吗？（与代拍同一套纪律：读失败一律当"没开"） */
+export function appSelfShotArmed(): boolean {
+  try {
+    return !!localStorage.getItem(APPSHOT_KEY);
+  } catch {
+    return false;
+  }
+}
+
+/** 拍完就关（`?selfshot=1` 的 URL 还在 ⇒ 下次刷新会重新开，这就是"刷新即拍"） */
+export function appSelfShotDisarm(): void {
+  try {
+    localStorage.removeItem(APPSHOT_KEY);
+  } catch {
+    /* 读不到就无所谓 */
+  }
+}
+
+/**
+ * URL 里带了 `?selfshot=1` 就**顺手开启** App 自拍，并返回是否开了。
+ *
+ * 为什么和代拍一样把开关落进 localStorage：小区级藏在 App 里（进世界 → 走到小区要点好几下），
+ * URL 参数在一次路由跳转后就没了；而 localStorage 是**跨页面、跨跳转**的
+ * ⇒ 机主只要在**任意一页**带着 `?selfshot=1` 刷新一次，之后走到小区级就会自动拍。
+ */
+export function appSelfShotMaybeArmFromUrl(search?: string): boolean {
+  try {
+    const s = search ?? (typeof location !== "undefined" ? location.search : "");
+    if (!/[?&]selfshot=1\b/.test(s)) return false;
+    localStorage.setItem(APPSHOT_KEY, String(Date.now()));
+    return true;
   } catch {
     return false;
   }
@@ -133,25 +223,68 @@ export function canvasIsBlank(cv: HTMLCanvasElement): { blank: boolean; note: st
     const ctx = t.getContext("2d");
     if (!ctx) return { blank: false, note: "拿不到 2D 上下文，跳过空白判定" };
     ctx.drawImage(cv, 0, 0, s, s);
-    const d = ctx.getImageData(0, 0, s, s).data;
-    let mn = 255;
-    let mx = 0;
-    let aMax = 0;
-    for (let i = 0; i < d.length; i += 4) {
-      if (d[i + 3]! > aMax) aMax = d[i + 3]!;
-      for (let k = 0; k < 3; k++) {
-        const v = d[i + k]!;
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
-      }
-    }
-    if (aMax === 0) return { blank: true, note: "整张画布 alpha=0（一帧都没渲染过）" };
-    if (mx - mn < 3) return { blank: true, note: `近乎单色（RGB 极差只有 ${mx - mn}）` };
-    return { blank: false, note: "" };
+    return blankFromSamples(ctx.getImageData(0, 0, s, s).data);
   } catch (e) {
     /* 抛 SecurityError = 画布被跨域瓦片污染（`crossOrigin` 没生效） */
     return { blank: false, note: `画布读取失败：${String((e as Error)?.name || e)}（多半是跨域污染）` };
   }
+}
+
+/**
+ * 空白判定的**唯一实现**（`canvasIsBlank` / `blankOfDataUrl` 都走这里，别各写一套）。
+ *
+ * 输入是一小片**解码后的 RGBA 字节**（8×8 就够：看的是"有没有内容"，不是细节）。
+ * 判据两条，覆盖两种真的见过的空白：
+ *   · `alpha` 全 0 —— 一帧都没渲染过（样式校验失败 ⇒ `load` 从未触发，实测过）；
+ *   · RGB 极差 < 3（`alpha` 非 0）—— 不透明纯色（"整屏纯色"那次事故就是这条）。
+ */
+export function blankFromSamples(d: ArrayLike<number>): { blank: boolean; note: string } {
+  let mn = 255;
+  let mx = 0;
+  let aMax = 0;
+  for (let i = 0; i + 3 < d.length; i += 4) {
+    if (d[i + 3]! > aMax) aMax = d[i + 3]!;
+    for (let k = 0; k < 3; k++) {
+      const v = d[i + k]!;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+  }
+  if (aMax === 0) return { blank: true, note: "整张画布 alpha=0（一帧都没渲染过）" };
+  if (mx - mn < 3) return { blank: true, note: `近乎单色（RGB 极差只有 ${mx - mn}）` };
+  return { blank: false, note: "" };
+}
+
+/**
+ * 对**要发出去的那串字节**（`data:image/png;base64,...`）判空白 —— 解码回来再缩到 8×8 采样。
+ *
+ * 🔴 为什么不能只采样"活的画布"（`canvasIsBlank`）：**"画布上有内容"和"`toDataURL` 导出的是什么"
+ * 可能不是同一帧** —— 2026-09-20 机主那次就是活的画布看着正常、导出的 PNG 全透明，
+ * 自检漏判、三张白图照发（白点一次）。判据必须落在**真正要发出去的字节**上。
+ */
+export async function blankOfDataUrl(dataUrl: string): Promise<{ blank: boolean; note: string }> {
+  if (!dataUrl || !dataUrl.startsWith("data:image/png")) {
+    return { blank: true, note: "抓帧失败（没拿到 PNG）" };
+  }
+  return new Promise((res) => {
+    const img = new Image();
+    img.onerror = () => res({ blank: true, note: "抓到的数据不是能解码的 PNG" });
+    img.onload = () => {
+      try {
+        const s = 8;
+        const t = document.createElement("canvas");
+        t.width = s;
+        t.height = s;
+        const g = t.getContext("2d");
+        if (!g) return res({ blank: false, note: "拿不到 2D 上下文，跳过空白判定" });
+        g.drawImage(img, 0, 0, s, s);
+        res(blankFromSamples(g.getImageData(0, 0, s, s).data));
+      } catch (e) {
+        res({ blank: false, note: `解码/采样失败：${String((e as Error)?.name || e)}` });
+      }
+    };
+    img.src = dataUrl;
+  });
 }
 
 /**
@@ -160,7 +293,7 @@ export function canvasIsBlank(cv: HTMLCanvasElement): { blank: boolean; note: st
  * 为什么值得：白图什么都说明不了，而"诊断图"能让 agent 一眼看出卡在哪一步
  * （样式没加载？瓦片没到？取楼失败？）。机主只要点一次页面，信息量就够定位了。
  */
-export function diagnosticPng(lines: readonly string[]): string {
+export function diagnosticPng(lines: readonly string[], title = "代拍空白 · 诊断"): string {
   const w = 900;
   const h = Math.max(200, 46 + lines.length * 30);
   const c = document.createElement("canvas");
@@ -172,7 +305,7 @@ export function diagnosticPng(lines: readonly string[]): string {
   g.fillRect(0, 0, w, h);
   g.fillStyle = "#79d9ff";
   g.font = "bold 22px monospace";
-  g.fillText("代拍空白 · 诊断", 18, 34);
+  g.fillText(String(title).slice(0, 42), 18, 34);
   g.font = "17px monospace";
   lines.forEach((s, i) => {
     g.fillStyle = i === 0 ? "#ffcf8a" : "#eaf6ff";

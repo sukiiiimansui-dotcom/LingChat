@@ -30,10 +30,12 @@
     "后端返回 0 个" 与 "请求失败" 是两种不同的状态，`wsFacilities.ts::emptyState()` 分开表述。
   -->
   <div class="ws-fac" :class="{ 'is-off': !visible }" :data-shown="shown.length" data-testid="ws-fac">
-    <div ref="host" class="ws-fac__box" data-testid="ws-fac-box">
+    <!-- `:key="showSeq"` —— 每"出现"一次（数据到手 / 重新打开显示）就重建这批节点，
+         让下面那条错峰淡入**重播**（见 script 里 `showSeq` 的说明）。 -->
+    <div :key="showSeq" ref="host" class="ws-fac__box" data-testid="ws-fac-box">
       <!-- 标记：一个设施 = 一枚（按类型给图标 + 配色，占地尺寸按格数还原） -->
       <span
-        v-for="m in marks"
+        v-for="(m, i) in marks"
         :key="m.p.id"
         class="ws-fac__mark"
         :class="{ 'is-big': m.label }"
@@ -49,6 +51,8 @@
           '--ws-fac-inv': `${(1 / (zoom > 0 ? zoom : 1)).toFixed(4)}`,
           '--ws-fac-c': meta(m.p.type).color,
           '--ws-fac-fill': meta(m.p.type).fill,
+          // 错峰淡入的**第几拍**（在 JS 里夹好上限，样式表直接乘间隔 —— 免得 CSS min() 在老 WebView 上算不出）
+          '--ws-fac-d': delayOf(i),
         }"
         :title="`${meta(m.p.type).zh} · ${m.p.name}`"
       >
@@ -182,6 +186,35 @@
   const visible = ref(true);
   const collapsed = ref(false);
   const filter = reactive<FacFilter>(defaultFilter());
+
+  /**
+   * 「出现」的代数（MG 动效剩余项 ⑤：设施图层**错峰淡入**）。
+   *
+   * 为什么需要一个计数器而不是只挂一条 CSS 动画：动画只在**节点被创建**时跑一次，
+   * 而这一层有两种"出现" —— ① 数据到手（挂载）；② 用户把「显示设施」重新打开。
+   * 第二种如果只靠 CSS，节点是一直在场的（`:class="{ 'is-off': !visible }"` 只是藏起来）
+   * ⇒ **关了再开不会重播**，观感上就是"这个开关没有反馈"。
+   * 所以把它当 `:key` 挂在标记容器上：每"出现"一次就换一次 key ⇒ 节点重建 ⇒ 错峰重播。
+   * 代价：重建几十个 `<span>`（不含数据请求、不含地图重绘），换的是一次明确的开场。
+   */
+  const showSeq = ref(0);
+  watch(
+    () => visible.value,
+    (v) => {
+      if (v) showSeq.value += 1;
+    }
+  );
+
+  /**
+   * 错峰间隔（`UI-DESIGN-SPEC.md`：stagger **20~40ms**）。取 26ms。
+   * 上限 12 档：设施多的社区（几十个点）不能让最后一个等到一秒以后 ——
+   * 那样读起来不是"错峰"而是"卡住了"。所以**超过 12 个之后同批落定**。
+   */
+  const STAGGER_MS = 26;
+  const STAGGER_CAP = 12;
+  function delayOf(i: number): string {
+    return `${Math.min(i, STAGGER_CAP) * STAGGER_MS}ms`;
+  }
 
   const payload = ref<FacPayload | null>(null);
   const types = ref<FacTypesPayload | null>(null);
@@ -369,6 +402,19 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     overflow: visible;
     line-height: 1;
+    /* 「出现时错峰淡入」（MG 动效剩余项 ⑤；间隔见 script 的 STAGGER_MS/CAP）。
+       ⚠️ 关键帧里**必须把基准 transform 一起写上**（`translate(-50%,-50%)` + 反缩放），
+       否则动画期间元素会丢掉"锚在中心"和"屏幕尺寸恒定"这两条，
+       表现是**一出现时整片点向左上角窜一下**再弹回来（这条是推导出来的：动画期间
+       是 keyframes 的 transform 在生效，不是上面那条声明）。 */
+    animation: ws-fac-in 0.36s cubic-bezier(0.22, 0.68, 0.32, 1) both;
+    animation-delay: var(--ws-fac-d, 0ms);
+  }
+  /* 低档：错峰淡入整条摘掉（几十个点同时做透明度合成，正是低档最该省的东西）。
+     信息一条不少：点直接以终态出现。`.ws-root.ws-perf-low` 是**祖先链**上的类
+     （打在 WorldSim 的页面根），scoped 的作用域属性只加在链尾 ⇒ 跨组件照样命中。 */
+  .ws-root.ws-perf-low .ws-fac__mark {
+    animation: none;
   }
   .ws-fac__ico {
     font-style: normal;
@@ -538,9 +584,30 @@
     opacity: 0.7;
     word-break: break-all;
   }
+  /* 设施标记的入场（错峰淡入，MG 动效剩余项 ⑤）。
+     ⚠️ 只动 `opacity` + `transform`；`transform` **必须整条复述**基准值
+     （`translate(-50%,-50%)` 定位锚点 + `scale(var(--ws-fac-inv))` 反缩放）——
+     动画期间生效的是 keyframes 里的 transform，漏掉任何一段，标记就会在入场时
+     "窜位"或"忽大忽小"。 */
+  @keyframes ws-fac-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(var(--ws-fac-inv, 1)) scale(0.55);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(var(--ws-fac-inv, 1)) scale(1);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .ws-facp__cat {
       transition: none;
+    }
+    /* 全局那条 reduced-motion 规则把**时长**压成 0.001ms，但**延时还在** ——
+       带着 `both` 填充，标记会先以 opacity:0 停最多 12 拍（约 0.3s）才出现，
+       读起来就是"点了开关没反应，过一会儿才蹦出来"。所以这里把延时也归零。 */
+    .ws-fac__mark {
+      animation-delay: 0ms;
     }
   }
 </style>

@@ -17,6 +17,17 @@
  * 本文件是**纯函数**，能在 Node 里全量自检（见 `ws_selfshot_selftest.mjs`）。
  */
 
+/**
+ * 「现在到底走的哪条渲染路」—— **五级共用同一个类型**（2026-09-21 机主：
+ * 「要求别降级了，直接全面迭代（最新）」「整个世界模拟都必须最新」）。
+ *   · `init`   还没分路（**不许猜**）
+ *   · `webgl`  MapLibre 出帧了（正常路）
+ *   · `waiting` 地图库还在加载（**没有降级**；页面保持加载态，后台每 5s 复查）
+ *   · `failed`  始终没出帧 ⇒ **如实报错**（未降级、未画 2D），给「重试地图」
+ *   · `fallback2d` 真的走了 2D 自绘（只应在 `?wsfallback=1` 或自动化兜底时出现）
+ */
+export type WsRenderPath = "init" | "webgl" | "waiting" | "failed" | "fallback2d";
+
 /** 图层的最小形状（只要 id/type；其余字段不读，免得把整份 style 抄进 JSON） */
 export interface StyleLayerLite {
   id?: string;
@@ -68,6 +79,10 @@ export interface StyleReportInput {
   canvas: { w: number; h: number; dpr: number; cssW?: number; cssH?: number } | null;
   /** 走没走 2D 降级路，以及原因 */
   fallback: { used: boolean; why: string };
+  /** 降级的**类别**（`temp` = 只是慢、可恢复；`perm` = 报错/拿不到 WebGL） */
+  fallbackKind?: "none" | "temp" | "perm";
+  /** 曾经降级、后来恢复回 WebGL 了吗 */
+  recovered?: boolean;
   /** 地图库**真的出过一帧**没有（`m.on("render")`） */
   sawRender: boolean;
   /** HUD 上现在写着什么（机主看到的那一行） */
@@ -151,8 +166,10 @@ export function buildStyleReport(i: StyleReportInput): Record<string, unknown> {
           cssH: j(i.canvas.cssH ?? null),
         }
       : null,
-    /* ⑥ 走的哪条路（及原因）/ 首帧 */
+    /* ⑥ 走的哪条路（及原因）/ 首帧 / 降级类别与是否恢复 */
     fallback2d: { used: !!i.fallback?.used, why: String(i.fallback?.why || "") },
+    fallbackKind: j(i.fallbackKind ?? "none"),
+    recovered: !!i.recovered,
     sawRender: !!i.sawRender,
     /* ⑦ HUD 原话 + stats（机主看到的就是这一行，逐字带回来） */
     hud: String(i.hud || ""),

@@ -57,7 +57,13 @@
          场景（主题·夜色·世界时间·档位·DPR）/ 计数（与 HUD 同源）/ 定位来源 / 自检 / 自拍按钮。
          `?wsverify=1` 一进来就摊开；平时只留一个 🔬（**零开销**：收起时不取快照、不跑自检）。
          ⚠️ 它**只读**：不写样式、不改相机、不动任何业务状态（唯一的动作是机主点「现在拍一张」）。 -->
-    <WsVerifyPanel :open="verifyOpen" :snapshot="panelSnapshot" :on-shoot="shootNow" @toggle="verifyOpen = $event" />
+    <WsVerifyPanel
+      :open="verifyOpen"
+      :snapshot="panelSnapshot"
+      :on-shoot="shootNow"
+      :on-retry-map="retryMap"
+      @toggle="verifyOpen = $event"
+    />
 
     <!-- 2D 降级路的"人"（WebGL 路用地图库 Marker，不在这里画） -->
     <div v-if="!mapAvailable" class="ws-dml__pins">
@@ -319,8 +325,38 @@
    * `fallbackWhy` 是**降级原因原文**（看门狗期限 / `map.on('error')` 文本），面板与样式 JSON 共用。
    * 面板展开是**一次快照**（不逐帧算），所以这几个 ref 的更新开销可以忽略。
    */
-  const renderKind = ref<"init" | "webgl" | "fallback2d">("init");
+  const renderKind = ref<"init" | "webgl" | "waiting" | "failed" | "fallback2d">("init");
+  /**
+   * 🔴 2026-09-21 机主硬要求：「**要求别降级了，直接全面迭代（最新）**」+「App 整个地图感觉像落后好多」。
+   *
+   * ⇒ **默认不再自动降到 2D 自绘路**（那条路又卡、又像静态图、又没有手势 ——
+   *   而机主的机器**有** WebGL，代拍页 `ws3dshow.html` 实测顺滑）。
+   * 手动逃生阀 `?wsfallback=1`（真机确实没有 WebGL 时才用）保留，默认关。
+   * ⚠️ 例外：**自动化/无头**（`navigator.webdriver`）保留 2D 兜底 ——「能玩」闸门跑的就是那条路，
+   * 关掉它等于把闸门变成假失败（它量不到任何东西）。
+   */
+  const ALLOW_2D = (() => {
+    try {
+      if (/[?&]wsfallback=1\b/.test(location.search)) return true;
+    } catch {
+      /* 无 location ⇒ 看下面的 automation 判定 */
+    }
+    return isAutomation();
+  })();
   const fallbackWhy = ref("");
+  /**
+   * 降级的**类别**（P0：把"永久判决"改成"可恢复"）：
+   * `none` 没降级 / `temp` 只是慢（实例还在后台跑，出帧自动切回）/ `perm` 报错或拿不到实例。
+   */
+  const fallbackKind = ref<"none" | "temp" | "perm">("none");
+  /** 曾经降级、后来恢复回 WebGL 了吗（面板要写出来：不然人以为一直在 2D） */
+  const recovered = ref(false);
+  /** 临时类的"后台等它出帧"计时器（卸载要清） */
+  let recoverTimer = 0;
+  /** 后台最多等多久（**只是等**，不影响 2D 可用；到点仍不恢复就如实写"HUD 里说等待超时"） */
+  const RECOVER_MS = 180000;
+  /** 已等待的秒数（看门狗那一刻的实际期限；面板/HUD 都要如实显示"等了多久"） */
+  const renderLimitSecs = ref(0);
   /** `?wsverify=1` ⇒ 一进来就把验证面板摊开（机主要的"全部验证功能在 App 页可全部看到"） */
   const verifyOpen = ref(
     (() => {
@@ -539,7 +575,12 @@
    */
   const WATCHDOG_MS = computed(() => {
     if (isAutomation()) return 8000; // 闸门靠这条：到点如实降级，别把闸门拖成假失败
-    return perf.low.value ? 12000 : 24000; // 真机：低端短一档，其余给足冷启动时间
+    /* 🔴 2026-09-21（P0）：真机期限**大幅放宽**（低端 30s / 其余 60s）。
+       原来 12s/24s 的代价机主已经付过了：冷启动 + 首批瓦片本来就要十几秒到几十秒，
+       到点被砍进 2D 路 ⇒ 又卡又没手势。而"等久了"在真机上只有好处（多等 = 少误判）；
+       自动化保持 **8s 不变**（闸门靠这条：它要的是"到点如实降级"，等久了会把闸门拖成假失败）。
+       ⚠️ 而且现在**判错也不致命**了：临时类降级是可恢复的（见 `watchdogFire` / `promoteToWebgl`）。 */
+    return perf.low.value ? 30000 : 60000; // 真机：低端短一档，其余给足冷启动时间
   });
 
   /**
@@ -553,17 +594,56 @@
    */
   function watchdogFire(m: { remove(): void } | null, fc: { features?: BldFeature[] } | null, limitMs: number): void {
     if (!alive || phase.value === "done") return;
+    const secs = Math.round(limitMs / 1000);
+    /* 🔴 2026-09-21（P0 核心）：**"慢"不等于"坏"**。
+       这里以前是**无条件** `m.remove()` + `map = null` —— 等于把"冷启动慢"判成**永久**降级：
+       机器明明有 WebGL（代拍页 `ws3dshow.html` 实测顺滑，机主证过），却再也回不去那条路，
+       于是又卡（2D 自绘填充率）、又像静态图、又没手势。**三个症状同一个根**。
+       ⇒ 现在分两类：
+         · **永久类**（`perm`）：地图库**报了错**（style/addLayer 那类，只能靠 `error` 事件捞），
+           或者**压根没有实例**（无 WebGL / 地图库加载失败）⇒ 该降级，且把错误原文带进面板；
+         · **临时类**（`temp`）：**没报错**，只是没在期限内出帧 ⇒ **不销毁地图**，
+           把它留在 DOM 底下（`visibility:hidden`）继续渲染，2D 画在**另一块**画布上盖着它；
+           一旦它出帧 ⇒ `promoteToWebgl()` **原地切回**（零重建、零换画布）。 */
+    const hasErr = mapErrs.length > 0;
+    const kind: "temp" | "perm" = !m || hasErr ? "perm" : "temp";
+    const whyBase = `地图库 ${secs} 秒内没画出第一帧（load 未触发）`;
+    /* 🆕 机主 2026-09-21：「**要求别降级了**」。没显式开逃生阀时**不画 2D**：
+       留在页面上如实说明"还在等"，后台每 5 秒复查，出的帧一到、`load` 一来就照常往下走。
+       真等不到了（见 `startRecoverPoll` 的期限）就切 `failed` —— **如实报错，不画假的 2D 图**。 */
+    if (!ALLOW_2D) {
+      renderKind.value = "waiting";
+      fallbackKind.value = kind;
+      renderLimitSecs.value = secs;
+      stats.mode = `地图库还在加载…（已等 ${secs}s，后台继续等，**未降级**）`;
+      stats.note = `${
+        hasErr
+          ? `地图库报了 ${mapErrs.length} 条错（原文见验证面板 ②）`
+          : "地图库没报错，只是还没出帧"
+      }｜${whyBase}｜页面保持加载态，出帧即继续；等满 ${Math.round(RECOVER_MS / 1000)}s 仍无 ⇒ 面板如实报错`;
+      startRecoverPoll();
+      return;
+    }
+    if (kind === "temp") {
+      fallback2d(
+        "2D 降级（地图库还在加载 · 会自动切回）",
+        fc,
+        `${whyBase}｜地图库没报错 ⇒ 判为**临时**：实例留在后台继续渲染，一出帧就切回 WebGL`,
+        "temp"
+      );
+      return;
+    }
     try {
       m?.remove();
     } catch {
       /* 已经没了就算了 */
     }
     map = null;
-    const secs = Math.round(limitMs / 1000);
     fallback2d(
       "2D 降级（地图库没起来）",
       fc,
-      `地图库 ${secs} 秒内没画出第一帧（load 未触发）`
+      `${whyBase}${hasErr ? `｜地图库还报了 ${mapErrs.length} 条错（原文见验证面板 ②）` : ""}`,
+      "perm"
     );
   }
   /** 区界 bbox（setup 作用域也要用：Marker 同步要用它把网格换算成经纬度） */
@@ -835,7 +915,13 @@
        都要把这么多像素写一遍；封到 1.5 ⇒ 810×1800 = **少 44% 的像素**，观感几乎无差别
        （这块画布画的是平面俯视图，不是要抠细节的写实图）。
        逃生阀：`?wsdpr=2`（低端机想对照/想更清楚时用，与 `?wsnight=off` 同一套口径）。 */
-    const dpr = Math.min(dprCap2d(), window.devicePixelRatio || 1);
+    let dpr = Math.min(dprCap2d(), window.devicePixelRatio || 1);
+    /* 再按**总像素**封一道（机主/主会话要的"降级路画布尺寸封顶"）：
+       大屏（平板/横屏）上 `w×h` 本来就大，DPR 1.5 也能堆到几百万像素。
+       1.4M 像素 ≈ 1440×960 的 2D 自绘量：够看清街区轮廓，又不会让每次自绘去写几百万像素。 */
+    const MAX_PX_2D = 1_400_000;
+    const px = w * h * dpr * dpr;
+    if (px > MAX_PX_2D) dpr = Math.max(1, dpr * Math.sqrt(MAX_PX_2D / px));
     c.width = Math.round(w * dpr);
     c.height = Math.round(h * dpr);
     const ctx = c.getContext("2d");
@@ -1080,6 +1166,115 @@
   }
 
   /**
+   * 临时类降级后：**每 4 秒问一次"地图库出帧了吗"**，出来就切回 WebGL。
+   *
+   * 为什么值得（P0）：机主的机器**有** WebGL（代拍页顺滑），App 之所以掉进 2D 只是**慢**。
+   * 以前"慢"被当成"坏"——永久判决、而且地图实例当场被销毁 ⇒ 再也回不去。
+   * 现在实例留着跑（藏在 2D 画布下面），这里只负责"等它好了把它请回前台"。
+   */
+  function startRecoverPoll(): void {
+    if (recoverTimer) return;
+    const t0 = Date.now();
+    const tick = (): void => {
+      recoverTimer = 0;
+      if (!alive) return;
+      const m = map as { isStyleLoaded?: () => boolean; loaded?: () => boolean } | null;
+      const ready = !!m && !!(m.isStyleLoaded?.() && (sawRender || m.loaded?.()));
+      if (ready) {
+        promoteToWebgl(Math.round((Date.now() - t0) / 1000));
+        return;
+      }
+      if (Date.now() - t0 > RECOVER_MS) {
+        const waited = Math.round(RECOVER_MS / 1000);
+        if (renderKind.value === "waiting") {
+          /* 等满了还没来 ⇒ **如实报错**（不降级、不画假图）。面板 + HUD 一起说清：
+             为什么、等了多久、错误原文在哪、还有哪两条路可走（重试 / 手动逃生阀）。 */
+          renderKind.value = "failed";
+          stats.mode = `地图库没起来（已等 ${waited}s，**未降级**）`;
+          stats.note = `地图库 ${waited}s 内始终没出帧（${mapErrs.length} 条错误，原文见验证面板）｜可按面板「🔄 重试地图」重建，或加 \`?wsfallback=1\` 用 2D 自绘兜底`;
+        } else {
+          stats.note = stats.note
+            ? `${stats.note} · 后台等了 ${waited}s 仍未出帧`
+            : `后台等了 ${waited}s 仍未出帧`;
+        }
+        return;
+      }
+      recoverTimer = window.setTimeout(tick, 5000);
+    };
+    recoverTimer = window.setTimeout(tick, 5000);
+  }
+
+  /**
+   * **切回 WebGL**（临时类降级恢复）：把盖在上面的 2D 画布摘掉、把地图那块显示回来。
+   * 不做任何重建 —— 地图实例、相机、图层、数据全都在（它们从没被销毁过）。
+   */
+  function promoteToWebgl(waitedSec = 0): boolean {
+    const m = map as { getCanvas?: () => HTMLCanvasElement } | null;
+    const mapCv = m?.getCanvas?.();
+    if (!mapCv) return false;
+    const twoD = cv.value;
+    try {
+      mapCv.style.visibility = "";
+      mapCv.style.pointerEvents = "";
+    } catch {
+      /* 样式写不上也继续（至少把它显示回来这一步是对的） */
+    }
+    if (twoD && twoD !== mapCv) {
+      try {
+        twoD.remove();
+      } catch {
+        /* 摘不掉就留着（藏在下面也无害） */
+      }
+    }
+    cv.value = mapCv;
+    mapAvailable.value = true;
+    renderKind.value = "webgl";
+    fallbackKind.value = "none";
+    recovered.value = true;
+    /* 档位还回去：降级时被 `forceLow` 压过低档，不解除的话"恢复了却还是少描边/关模糊" */
+    try {
+      perf.clearForce();
+    } catch {
+      /* 老版本没有这个口子就算了（低档继续，不影响恢复本身） */
+    }
+    stats.perf = "";
+    stats.mode = `街区视野（街道级）· 地图库已恢复${waitedSec ? `（后台等了 ${waitedSec}s）` : ""}`;
+    stats.note = stats.note
+      ? `${stats.note} · ✅ 地图库出帧了 ⇒ 已自动切回 WebGL（手势可用）`
+      : "✅ 地图库出帧了 ⇒ 已自动切回 WebGL（手势可用）";
+    try {
+      syncPins();
+      syncAiLayers();
+    } catch {
+      /* 同步失败不影响"画面已经切回 WebGL"这件事 */
+    }
+    return true;
+  }
+
+  /**
+   * 面板上的「**重试地图**」：机主手动按一下，做两件事 ——
+   *   ① 实例还在 ⇒ **立刻**按恢复判据试一次（很多时候它其实已经好了，只是没人去看）；
+   *   ② 实例已经没了（永久类）⇒ 只能重载这一页再试（**会回到主菜单**，如实说出来）。
+   */
+  async function retryMap(): Promise<string> {
+    const m = map as { isStyleLoaded?: () => boolean; loaded?: () => boolean } | null;
+    if (m) {
+      const ok = !!(m.isStyleLoaded?.() && (sawRender || m.loaded?.()));
+      if (ok) return promoteToWebgl() ? "✅ 地图库其实已经出帧了 ⇒ 已切回 WebGL（手势可用）" : "拿不到地图画布，切不回去";
+      return `地图库实例还在，但**仍未出帧**（样式已加载=${String(m.isStyleLoaded?.())}，出过帧=${sawRender}）—— 继续等它会自动切回`;
+    }
+    if (renderKind.value === "fallback2d") {
+      try {
+        location.reload();
+        return "已请求重新加载这一页（会回到主菜单，再进一次小区级）";
+      } catch {
+        return "这张地图实例已经销毁，得重新进一次小区级（重载也被拦了）";
+      }
+    }
+    return "现在就是 WebGL 路，不用重试";
+  }
+
+  /**
    * 「代拍」：页面上有 `?autoshot=1` 时，走到小区级就**自动拍三张**（近/远/侧）回传。
    *
    * 为什么由页面自己拍：agent 侧看不到 WebGL，机主又禁了 ADB 截屏（会看到整屏隐私）。
@@ -1219,6 +1414,9 @@
       wsnight: { on: nightOn.value, level: nightLvl.value, lowTier: !!perf.low.value },
       canvas,
       fallback: { used: renderKind.value === "fallback2d", why: fallbackWhy.value },
+      /* P0：**临时还是永久** + 有没有恢复过 —— 图和 JSON 都要带回去（agent 才知道该不该让人重试） */
+      fallbackKind: renderKind.value === "fallback2d" ? fallbackKind.value : "none",
+      recovered: recovered.value,
       sawRender: renderKind.value === "webgl" ? sawRender : renderKind.value === "fallback2d",
       hud: hudEl.value?.innerText || "",
       stats: { ...stats },
@@ -1259,8 +1457,12 @@
     }
     const cvv = cv.value;
     return {
-      kind: renderKind.value === "init" ? "webgl" : renderKind.value,
+      kind: renderKind.value,
+      build: APP_SELF_SHOT_BUILD,
+      href: typeof location !== "undefined" ? location.href : "",
       fallbackWhy: fallbackWhy.value,
+      fallbackKind: renderKind.value === "fallback2d" ? fallbackKind.value : "none",
+      recovered: recovered.value,
       isStyleLoaded: rep.isStyleLoaded,
       sawRender: rep.sawRender,
       layers,
@@ -2218,7 +2420,8 @@
   function fallback2d(
     mode: string,
     fc: { features?: BldFeature[] } | null,
-    why = ""
+    why = "",
+    kind: "temp" | "perm" = "perm"
   ): void {
     stats.mode = mode;
     mapAvailable.value = false;
@@ -2241,13 +2444,32 @@
        （同一张画布不能有两种上下文，这是规范行为，不是 bug —— 但极容易踩。） */
     const oldCv = cv.value;
     const hostEl = host.value;
+    /* 🔴 P0：**临时类降级不换画布、也不销毁地图** —— 直接在原来那块上面**盖**一块新的 2D 画布。
+       为什么这样就绕开了"一个 canvas 不能同时有 webgl 和 2d 上下文"这条规范限制：
+       **2D 画的是另一块 canvas**，WebGL 那块原封不动留在 DOM 里（只是藏起来），
+       MapLibre 继续拿它渲染 ⇒ 它一出帧，把上面这块摘掉、把下面那块显示回来 = **切回 WebGL**
+       （零重建、零换画布、相机与图层全都在）。这正是上一轮写在注释里"列入未做"的那件事。 */
+    const keepAlive = kind === "temp" && !!map && !!oldCv;
+    fallbackKind.value = kind;
+    if (keepAlive) {
+      try {
+        (oldCv as HTMLCanvasElement).style.visibility = "hidden";
+        (oldCv as HTMLCanvasElement).style.pointerEvents = "none";
+      } catch {
+        /* 样式写不上也不影响"盖一块新的"这件事 */
+      }
+    }
     if (oldCv && !oldCv.getContext("2d")) {
       const fresh = document.createElement("canvas");
       /* ⚠️ 要连**所有属性**一起搬（`class` 之外还有 Vue 的 scoped 标记 `data-v-xxxx`）——
          漏了它，新画布就丢掉了 `position:absolute; width:100%; height:100%`，
          会缩回浏览器默认的 300×150 跑到左上角：**又是一次"降级了但看着是坏的"**。 */
       for (const a of Array.from(oldCv.attributes)) fresh.setAttribute(a.name, a.value);
-      if (oldCv.parentElement) {
+      if (keepAlive && oldCv.parentElement) {
+        /* 盖在**上面**（`afterend`）：下面那块 WebGL 画布继续存在、继续渲染，只是看不见 */
+        oldCv.parentElement.insertBefore(fresh, oldCv.nextSibling);
+        fresh.classList.add("ws-dml__cv--2d");
+      } else if (oldCv.parentElement) {
         oldCv.replaceWith(fresh);
       } else if (hostEl) {
         /* `map.remove()` 会把画布**从 DOM 里摘掉**（我们把它交给了地图库管），
@@ -2261,6 +2483,8 @@
     draw2d(fc);
     phase.value = "done";
     stopTimer();
+    /* 临时类：**后台继续等它出帧**，出来了就切回 WebGL（每 4 秒看一次，见 `startRecoverPoll`） */
+    if (keepAlive) startRecoverPoll();
     /* 🧪 App 自拍：**降级路更要拍** —— "整屏纯色"那类事故就发生在这条路上（闸门只跑这条路，
        所以这条路正是"agent 以为验过了"的那条）。`why` 原样带进诊断图，别让图上写着"2D"却没有原因。 */
     maybeAppSelfShot("fallback2d", why || "未说明原因");
@@ -2684,6 +2908,8 @@
     if (bldTimer) window.clearTimeout(bldTimer);
     if (watchdog) window.clearTimeout(watchdog);
     watchdog = 0;
+    if (recoverTimer) window.clearTimeout(recoverTimer);
+    recoverTimer = 0;
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     try {

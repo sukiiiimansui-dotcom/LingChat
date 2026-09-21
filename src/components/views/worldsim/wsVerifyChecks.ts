@@ -12,13 +12,27 @@
  * JSON 是给 agent 的，这里是给**机主**看的 —— 同一件事，两种读者，不许各算一套。
  * 所以本文件是**纯函数**（没有 import 任何渲染代码），Node 自检也能直接跑。
  */
-import type { StyleLayerLite } from "./wsStyleReport";
+import type { StyleLayerLite, WsRenderPath } from "./wsStyleReport";
 
 export interface VerifyCtx {
-  /** 当前渲染路 */
-  kind: "webgl" | "fallback2d";
+  /** 当前渲染路（五级同一个类型，见 `wsStyleReport.WsRenderPath`） */
+  kind: WsRenderPath;
+  /** 版本戳（复制出去的诊断文本里要有"是哪一版代码在跑"） */
+  build?: string;
+  /** 页面地址（含 query：`?wstheme=` / `?wsnight=` / `?wsfallback=` 都在上面） */
+  href?: string;
   /** 降级原因**原文**（空串 = 没降级） */
   fallbackWhy: string;
+  /**
+   * 降级的**类别**：
+   *   · `temp` = **临时类**（没报错，只是慢；地图实例还在后台跑，出帧就自动切回 WebGL）；
+   *   · `perm` = **永久类**（地图库报了 style/addLayer 类错误，或压根拿不到 WebGL/实例）；
+   *   · `none` = 没降级。
+   * 为什么要分：机主的三个症状都源于"**慢**被当成了**坏**"（机器有 WebGL，却永久走 2D）。
+   */
+  fallbackKind: "none" | "temp" | "perm";
+  /** 曾经降级、后来**恢复回 WebGL** 了吗（恢复过就要写出来，否则人以为一直在 2D） */
+  recovered: boolean;
   /** `map.isStyleLoaded()`（没有地图实例就是 null） */
   isStyleLoaded: boolean | null;
   /** 地图库真的出过一帧没有 */
@@ -81,14 +95,41 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
   };
 
   /* ① 渲染路 —— **本次要修的那件事**就在这一条上 */
-  if (c.kind === "webgl") {
-    push("渲染路 = WebGL（MapLibre）", true, `样式已加载=${String(c.isStyleLoaded)} 首帧=${c.sawRender}`);
-  } else {
+  if (c.kind === "waiting") {
+    push(
+      "渲染路 = WebGL（MapLibre）",
+      null,
+      `地图库**还在加载**（**没有降级**：页面保持加载态，后台每 5s 复查，出帧就继续）。` +
+        `① 原因原文：${c.fallbackWhy || "未记录"}；样式已加载=${String(c.isStyleLoaded)} 出过帧=${c.sawRender}`
+    );
+  } else if (c.kind === "failed") {
     push(
       "渲染路 = WebGL（MapLibre）",
       false,
-      `**走的是 2D 自绘降级路**（原因原文：${c.fallbackWhy || "未记录"}）；` +
-        `降级时没有地图实例 ⇒ **拖动/缩放/旋转手势全部不可用**，画面像一张静态图`
+      `地图库**始终没出帧** ⇒ **如实报错，未降级、未画 2D**。① 原因原文：${c.fallbackWhy || "未记录"}；` +
+        `② 地图库错误 ${c.errors.length} 条（原文见下）；③ 可按「🔄 重试地图」重建，` +
+        `或加 \`?wsfallback=1\` 显式用 2D 自绘兜底（默认关）`
+    );
+  } else if (c.kind === "webgl") {
+    push(
+      "渲染路 = WebGL（MapLibre）",
+      true,
+      `样式已加载=${String(c.isStyleLoaded)} 首帧=${c.sawRender}` +
+        (c.recovered ? "；**曾降级到 2D，地表出帧后已自动切回 WebGL**（档位也还回去了）" : "")
+    );
+  } else {
+    /* 三段必须写全（机主就是被"没说清"误导的）：①为什么降级 ②临时还是永久 ③手势不可用 */
+    const cat =
+      c.fallbackKind === "temp"
+        ? "**临时类**（地图库没报错，只是慢；实例还在后台跑着，**一出帧就自动切回 WebGL**）"
+        : c.fallbackKind === "perm"
+          ? "**永久类**（地图库报错或拿不到 WebGL / 实例）"
+          : "**类别未知**（没记录到）";
+    push(
+      "渲染路 = WebGL（MapLibre）",
+      false,
+      `**走的是 2D 自绘降级路**。① 原因原文：${c.fallbackWhy || "未记录"}；② ${cat}；` +
+        `③ 降级时主容器上只有自绘画布 ⇒ **拖动/缩放/旋转手势全部不可用**，画面像一张静态图`
     );
   }
 

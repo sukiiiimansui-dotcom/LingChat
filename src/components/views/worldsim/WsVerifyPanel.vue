@@ -34,10 +34,56 @@
         <button class="wsv__x" type="button" title="收起" @click="toggle">✕</button>
       </header>
 
-      <!-- 降级横幅：机主就是被这条误导过（"像图片""划不动"）⇒ 必须写在最上面 -->
-      <p v-if="snap.kind !== 'webgl'" class="wsv__warn">
-        ⚠️ 现在走的是 <b>2D 自绘降级路</b>：<b>拖动 / 缩放 / 旋转手势全部不可用</b>（没有地图实例），
-        所以看着像一张静态图。为什么降级见下面「自检」第 ①/② 条与「地图库错误」。
+      <!-- 🆕 机主 2026-09-21：「**要求别降级了**」⇒ 默认路是"等"和"如实报错"，不是"偷偷画 2D" -->
+      <div v-if="snap.kind === 'waiting'" class="wsv__warn">
+        <p>⏳ <b>地图库还在加载</b>（<b>没有降级</b>，也没有画 2D 假图）。页面保持加载态，后台每 5 秒复查，出帧即继续。</p>
+        <p>① 原因原文：<b>{{ snap.fallbackWhy || "未记录" }}</b></p>
+        <p>② 现状：样式已加载={{ String(snap.isStyleLoaded) }} · 出过帧={{ String(snap.sawRender) }} · 地图库错误 {{ snap.errors.length }} 条</p>
+      </div>
+      <div v-else-if="snap.kind === 'failed'" class="wsv__warn">
+        <p>❌ <b>地图库始终没出帧</b>（<b>未降级、未画 2D</b> —— 机主要求"别降级了"）。</p>
+        <p>① 原因原文：<b>{{ snap.fallbackWhy || "未记录" }}</b></p>
+        <p>② 地图库错误 {{ snap.errors.length }} 条（<b>原文见下</b>）；这也是唯一能修的东西。</p>
+        <p>③ 两条路：按「🔄 重试地图」重建；或加 <code>?wsfallback=1</code> 显式用 2D 自绘兜底（默认关）。</p>
+        <p class="wsv__row">
+          <button class="wsv__btn" type="button" :disabled="retrying" @click="retry">
+            {{ retrying ? "重试中…" : "🔄 重试地图" }}
+          </button>
+        </p>
+        <p v-if="retryMsg" class="wsv__none">{{ retryMsg }}</p>
+      </div>
+
+      <!-- 降级横幅：机主就是被这条误导过（"像图片""划不动""很卡"）⇒ 必须写在最上面，
+           而且**三段都要写全**：①为什么降级 ②临时还是永久 ③手势不可用（主会话 2026-09-21 的硬要求） -->
+      <div v-if="snap.kind !== 'webgl'" class="wsv__warn">
+        <p>
+          ⚠️ 现在走的是 <b>2D 自绘降级路</b>。① 原因：<b>{{ snap.fallbackWhy || "未记录" }}</b>
+        </p>
+        <p>
+          ② 类别：
+          <b v-if="snap.fallbackKind === 'temp'">临时类</b>
+          <b v-else-if="snap.fallbackKind === 'perm'">永久类</b>
+          <b v-else>未知</b>
+          <template v-if="snap.fallbackKind === 'temp'">
+            —— 地图库**没报错**，只是慢。实例还在后台渲染，**一出帧就自动切回 WebGL**（届时手势恢复），
+            不用你做任何事；实在想催一下就按下面「重试地图」。
+          </template>
+          <template v-else-if="snap.fallbackKind === 'perm'">
+            —— 地图库**报了错**（原文见下「地图库错误」）或拿不到 WebGL / 实例，
+            这类不会自己好；修掉那个错之前，按「重试地图」也只能重载这一页。
+          </template>
+        </p>
+        <p>③ <b>拖动 / 缩放 / 旋转手势全部不可用</b>（主容器上只有自绘画布），所以看着像一张静态图。</p>
+        <p class="wsv__row">
+          <button class="wsv__btn" type="button" :disabled="retrying" @click="retry">
+            {{ retrying ? "重试中…" : "🔄 重试地图" }}
+          </button>
+          <span class="wsv__sub">先按恢复判据试一次；实例没了才重载页面</span>
+        </p>
+        <p v-if="retryMsg" class="wsv__none">{{ retryMsg }}</p>
+      </div>
+      <p v-else-if="snap.recovered" class="wsv__warn wsv__warn--ok">
+        ✅ <b>曾降级到 2D，地图库出帧后已自动切回 WebGL</b>（手势已可用，低档也已解除）。
       </p>
 
       <!-- ① 自检（浏览器里真跑的） -->
@@ -49,6 +95,14 @@
           <span class="wsv__dt">{{ r.detail }}</span>
         </li>
       </ul>
+
+      <!-- ①.5 一键复制（机主排障用：**不用截图**，按一下再粘给 agent 就是全部原文） -->
+      <h4>复制诊断 <em>降级原因 + 地图库错误原文 + 关键指标</em></h4>
+      <p class="wsv__row">
+        <button class="wsv__btn" type="button" @click="copyDiag">{{ copied ? "✅ 已复制" : "📋 复制诊断文本" }}</button>
+        <span class="wsv__sub">复制不了就在下面框里全选（长按）复制</span>
+      </p>
+      <textarea ref="diagEl" class="wsv__ta" readonly rows="4" :value="diagText"></textarea>
 
       <!-- ② 地图库错误（原文） -->
       <h4>地图库错误 <em>map.on('error') 原文</em></h4>
@@ -117,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-  import { ref } from "vue";
+  import { computed, ref } from "vue";
   import {
     TERMINAL_CHECKS,
     runVerifyChecks,
@@ -133,6 +187,8 @@
       snapshot: () => VerifySnapshot;
       /** 点「现在拍一张」时调（返回一句给机主看的结果；空串 = 没结果） */
       onShoot?: () => Promise<string>;
+      /** 点「重试地图」时调（P0：临时类降级可以让用户手动催一下；返回一句人话） */
+      onRetryMap?: () => Promise<string>;
     }>(),
     { open: false }
   );
@@ -143,6 +199,78 @@
   const checks = ref<VerifyResult[]>(runVerifyChecks(snap.value));
   const shooting = ref(false);
   const shotMsg = ref("");
+  const retrying = ref(false);
+  const retryMsg = ref("");
+  const copied = ref(false);
+  const diagEl = ref<HTMLTextAreaElement | null>(null);
+
+  /**
+   * 排障用的**一段纯文本**（机主按一下就能复制走，不必截图）：
+   * 降级三段（为什么/类别/手势）+ 地图库错误**原文** + 关键指标 + HUD 原话。
+   * 与 `style-*.json` 同源（同一份快照），只是给人读的形状。
+   */
+  const diagText = computed(() => {
+    const s = snap.value;
+    const cat =
+      s.fallbackKind === "temp" ? "临时类（只是慢，会自己恢复）" : s.fallbackKind === "perm" ? "永久类（报错/拿不到 WebGL）" : "未降级/未知";
+    return [
+      `【App 小区级诊断】${s.build || ""}`,
+      `地址=${s.href || ""}`,
+      `渲染路=${s.kind === "webgl" ? "WebGL（MapLibre）" : "2D 降级"}${s.recovered ? "（曾降级，已自动切回 WebGL）" : ""}`,
+      `降级原因原文=${s.fallbackWhy || "（无）"}`,
+      `降级类别=${cat}；手势可用=${s.kind === "webgl" ? "是" : "**否**"}`,
+      `isStyleLoaded=${String(s.isStyleLoaded)} sawRender=${s.sawRender} 图层=${s.layers.length} 条`,
+      `画布=${s.canvas ? `${s.canvas.w}x${s.canvas.h}px / ${s.canvas.cw}x${s.canvas.ch}布局 / dpr=${s.canvas.dpr}` : "（拿不到）"}`,
+      `2D画布DPR封顶=${s.dprCap2d ?? "不适用"} 性能档=${s.capsLow ? "低档" : "正常"}`,
+      `主题=${s.wstheme} 夜色=${s.wsnight.on ? "on" : "off"} level=${s.wsnight.level} 世界时间=${s.worldTime}`,
+      `计数=🏢${s.counts.buildings} 🛣${s.counts.roads} 🏪${s.counts.facilities} 👤${s.counts.pins}`,
+      `定位来源=${s.locSource || "未知"}`,
+      `地图库错误(${s.errors.length})：`,
+      ...(s.errors.length ? s.errors.map((e, i) => `  ${i + 1}. ${e}`) : ["  （无）"]),
+      `HUD=${s.hud || "（空）"}`,
+    ].join("\n");
+  });
+
+  /** 复制到剪贴板：优先 `navigator.clipboard`，不行就**选中 textarea 再 execCommand**（老内核可用） */
+  async function copyDiag(): Promise<void> {
+    const text = diagText.value;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        copied.value = true;
+        setTimeout(() => (copied.value = false), 2500);
+        return;
+      }
+    } catch {
+      /* 没权限/不是安全上下文 ⇒ 走下面的兜底 */
+    }
+    try {
+      const el = diagEl.value;
+      if (el) {
+        el.focus();
+        el.select();
+        document.execCommand("copy");
+        copied.value = true;
+        setTimeout(() => (copied.value = false), 2500);
+      }
+    } catch {
+      /* 两条都不行 ⇒ 让人自己长按选中（框就在上面，这是**如实**的兜底） */
+    }
+  }
+
+  async function retry(): Promise<void> {
+    if (!props.onRetryMap) return;
+    retrying.value = true;
+    retryMsg.value = "";
+    try {
+      retryMsg.value = await props.onRetryMap();
+    } catch (e) {
+      retryMsg.value = `重试出错：${String((e as Error)?.message || e)}`;
+    } finally {
+      retrying.value = false;
+      rerun();
+    }
+  }
   const termChecks = TERMINAL_CHECKS;
   /** 没过/判不了的条数（收起时挂在 🔬 上，让人知道"里面有事"） */
   const warnCount = ref(0);
@@ -220,8 +348,10 @@
     background: rgba(7, 11, 17, 0.66);
     color: #eaf6ff;
     font-size: 15px;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    /* 与项目既有口径一致（`.ws-dml__hud` 也这么写）：低档下 `--ws-blur-low` 会被设成 0px
+       ⇒ 调试面板自己**不许**成为"降级路上最贵的那一层"。 */
+    backdrop-filter: blur(var(--ws-blur-low, 10px));
+    -webkit-backdrop-filter: blur(var(--ws-blur-low, 10px));
   }
   /* 收起时挂个数字：里面有几条没过/判不了（不然没人知道要去看） */
   .wsv__dot {
@@ -247,7 +377,8 @@
     background: rgba(7, 11, 17, 0.93);
     border: 1px solid rgba(121, 217, 255, 0.28);
     color: #eaf6ff;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    /* 大阴影也是一次合成成本；低档下直接不要（面板是诊断工具，不需要好看） */
+    box-shadow: var(--ws-shadow-panel, 0 10px 30px rgba(0, 0, 0, 0.45));
   }
   .wsv__hd {
     display: flex;
@@ -268,6 +399,23 @@
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.08);
     color: #eaf6ff;
+  }
+  .wsv__warn--ok {
+    background: rgba(126, 231, 135, 0.14) !important;
+    border-color: rgba(126, 231, 135, 0.45) !important;
+    color: #c8f7cd !important;
+  }
+  .wsv__warn p { margin: 2px 0; }
+  .wsv__ta {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 8px;
+    border: 1px solid rgba(121, 217, 255, 0.25);
+    background: rgba(0, 0, 0, 0.35);
+    color: #cfe6ff;
+    font: 10.5px/1.5 ui-monospace, monospace;
+    padding: 6px 7px;
+    resize: vertical;
   }
   .wsv__warn {
     margin: 6px 0;

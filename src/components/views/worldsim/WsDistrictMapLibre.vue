@@ -1181,6 +1181,77 @@
   function pushResizeLog(row: string): void {
     resizeLog.value = [...resizeLog.value.slice(-4), row];
   }
+  /**
+   * 🔴 **真地图那块画布**（`map.getCanvas()`）—— 2026-09-21 起，**所有**画布读数都用它。
+   *
+   * 为什么：机主的"resize 尝试记录"里同一次 `map.resize()` 一会儿量到 300×150、
+   * 一会儿量到 **3759×1287** ⇒ 强烈指向**页面上不止一块 canvas**，而原来我一直量 `cv.value`
+   * （模板那块 ref）—— 若 MapLibre 实际用的是它自己建的那块，那我量的就是**另一块**（默认 300×150），
+   * 屏幕上那块"浅色矩形"也就有了着落。⇒ 先量对对象，再谈修。
+   */
+  function realMapCanvas(): HTMLCanvasElement | null {
+    try {
+      const mc = (map as { getCanvas?: () => HTMLCanvasElement } | null)?.getCanvas?.();
+      return mc || null;
+    } catch {
+      return null;
+    }
+  }
+  /** 当前该被当作"这张地图的画布"的那块：WebGL 路 = `map.getCanvas()`；降级路 = 2D 覆盖层 */
+  function activeCanvas(): HTMLCanvasElement | null {
+    const mc = realMapCanvas();
+    if (renderKind.value === "webgl" || renderKind.value === "waiting" || renderKind.value === "init") return mc || cv.value;
+    return cv.value;
+  }
+  /** 页面上**所有** canvas 的事实（面板要"几块、哪块是谁"的确定答案） */
+  function canvasFacts(): NonNullable<VerifySnapshot["canvases"]> {
+    const mc = realMapCanvas();
+    try {
+      return Array.from(document.querySelectorAll("canvas")).map((el, i) => {
+        const c2 = el as HTMLCanvasElement;
+        const st = getComputedStyle(c2);
+        const par = c2.parentElement;
+        return {
+          i,
+          w: c2.width,
+          h: c2.height,
+          cls: String(c2.className || "").slice(0, 30),
+          parent: par ? `${par.tagName.toLowerCase()}.${String(par.className || "").split(" ")[0] || ""}`.slice(0, 30) : "无父",
+          z: String(st.zIndex),
+          display: String(st.display),
+          visibility: String(st.visibility),
+          isMapCanvas: !!mc && c2 === mc,
+          isRef: c2 === cv.value,
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+  /**
+   * 若发现有**非 map.getCanvas() 的画布盖在地图上**（同一父级、可见），把它藏掉 ——
+   * 那块多半是历史遗留（换过画布/降级过又切回来），盖在真地图上 ⇒ 屏幕上就是它（一片纯色）。
+   * 只做一次、只动"盖在真画布之上"的那块，并且写进 resize 日志（**可回溯**）。
+   */
+  function hideStrayCanvases(): void {
+    const mc = realMapCanvas();
+    if (!mc) return;
+    const stray = canvasFacts().filter((v) => !v.isMapCanvas && v.visibility !== "hidden" && v.display !== "none");
+    if (!stray.length) return;
+    try {
+      const all = Array.from(document.querySelectorAll("canvas")) as HTMLCanvasElement[];
+      for (const v of stray) {
+        const el = all[v.i];
+        if (!el || el === mc) continue;
+        if (el.parentElement !== mc.parentElement) continue; // 只动"同一层里压着真地图"的那块
+        el.style.display = "none";
+        pushResizeLog(`隐藏遗留画布 #${v.i}（${v.w}x${v.h} class=${v.cls}）—— 它盖在真地图上（真=${mc.width}x${mc.height}）`);
+      }
+    } catch {
+      /* 藏不掉不影响别的 */
+    }
+  }
+
   /** 现在画布该有多大（容器 CSS 尺寸 × dpr）—— 判据与面板一致 */
   function wantCanvasSize(cv2: HTMLCanvasElement): string {
     const el = host.value;
@@ -1194,7 +1265,7 @@
    */
   function doResize(m: { resize?: () => void }, why: string): void {
     const el = host.value;
-    const cv2 = cv.value;
+    const cv2 = activeCanvas();
     const box = el ? `${el.clientWidth}x${el.clientHeight}` : "无容器";
     const before = cv2 ? `${cv2.width}x${cv2.height}` : "无画布";
     if (!el || !cv2) {
@@ -1239,6 +1310,8 @@
       if (Date.now() < pollEnd) resizeTimers.push(window.setTimeout(poll, 500));
     };
     resizeTimers.push(window.setTimeout(poll, 500));
+    /* 顺手清掉"盖在真地图上的遗留画布"（机主那块浅色矩形最可能的来源） */
+    resizeTimers.push(window.setTimeout(() => alive && hideStrayCanvases(), 800));
     try {
       if (typeof ResizeObserver !== "undefined" && host.value) {
         resizeRo = new ResizeObserver(() => doResize(m, "ResizeObserver(容器)"));
@@ -1489,7 +1562,8 @@
       kind,
       fallbackWhy: why,
       /* 画布**现取**：降级路会换掉画布元素（见 `fallback2d` 那段），存下来的引用会拍到旧画布 */
-      getCanvas: () => cv.value,
+      /* 📸 拍到**真地图那块**（WebGL 路 = `map.getCanvas()`；降级路 = 2D 覆盖层） */
+      getCanvas: () => activeCanvas(),
       getMap: () => (kind === "webgl" ? (map as unknown as ShotMapLike | null) : null),
       sawFirstFrame: () => (kind === "webgl" ? sawRender : true),
       /* "数据到齐" = 有东西可看（楼/路/设施/人）—— 全区视野下楼栋本来就不取，所以是**或**不是**与** */
@@ -1618,7 +1692,6 @@
     } catch {
       expected = [];
     }
-    const cvv = cv.value;
     return {
       kind: renderKind.value,
       build: APP_SELF_SHOT_BUILD,
@@ -1642,7 +1715,10 @@
         : null,
       /* 2D 路的 DPR 封顶（机主要的"降级路便宜了多少"的数字；WebGL 路不适用 ⇒ null） */
       dprCap2d: renderKind.value === "fallback2d" ? dprCap2d() : null,
-      canvasBlank: cvv ? canvasIsBlank(cvv) : null,
+      canvasBlank: (() => {
+        const c2 = activeCanvas();
+        return c2 ? canvasIsBlank(c2) : null;
+      })(),
       counts: { buildings: stats.count, roads: stats.roads, facilities: stats.facilities, pins: stats.pins },
       roadSpecs: (() => {
         try {
@@ -1659,6 +1735,7 @@
       worldTime: `${props.worldTime || "（拿不到）"} · 天黑 ${nightLvl.value}${nightOn.value ? "" : "（夜色关）"}`,
       motion: motionFacts(),
       resizeLog: resizeLog.value,
+      canvases: canvasFacts(),
       hud: hudEl.value?.innerText || "",
     };
   }

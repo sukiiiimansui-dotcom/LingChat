@@ -45,6 +45,23 @@ export interface VerifyCtx {
    * 为什么值得：真机上"画布仍是 300×150"时，只有这份日志能分清"没调到"和"调了没生效"。
    */
   resizeLog?: string[];
+  /**
+   * 页面上**所有** canvas 的事实（2026-09-21 机主实测抓到的关键线索：
+   * `轮询兜底` 量到 300×150、而 `窗口/转屏` 那次量到 **3759×1287** ⇒ **很可能不止一块画布**，
+   * 而"画布"那一行量错了对象）。⇒ 面板必须给出"**几块、哪块是谁**"的确定答案。
+   */
+  canvases?: Array<{
+    i: number;
+    w: number;
+    h: number;
+    cls: string;
+    parent: string;
+    z: string;
+    display: string;
+    visibility: string;
+    isMapCanvas: boolean;
+    isRef: boolean;
+  }>;
   /** `map.isStyleLoaded()`（没有地图实例就是 null） */
   isStyleLoaded: boolean | null;
   /** 地图库真的出过一帧没有 */
@@ -212,6 +229,24 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     c.canvasBlank ? !c.canvasBlank.blank : null,
     c.canvasBlank ? c.canvasBlank.blank ? `**空白**：${c.canvasBlank.note}` : "有内容" : "拿不到画布"
   );
+
+  /* ⑦.2 canvas 清单：**只报事实**（这是"画布为什么是 300×150"的直接答案） */
+  if (c.canvases && c.canvases.length) {
+    const rows = c.canvases.map(
+      (v) =>
+        `#${v.i} ${v.w}×${v.h} class=${v.cls || "(无)"} 父=${v.parent} z=${v.z} display=${v.display} vis=${v.visibility}` +
+        `${v.isMapCanvas ? " ← **map.getCanvas()**" : ""}${v.isRef ? " ← cv.value" : ""}`
+    );
+    const mapOnes = c.canvases.filter((v) => v.isMapCanvas).length;
+    push(
+      `页面上的 canvas（${c.canvases.length} 块）`,
+      mapOnes === 1 && c.canvases.length === 1 ? true : null,
+      rows.join(" ｜ ") +
+        (c.canvases.length > 1
+          ? ` ⇒ **有 ${c.canvases.length} 块画布**：非 map.getCanvas() 的那些若盖在上面，屏幕上就是它们（不是地图）`
+          : "")
+    );
+  }
 
   /* ⑦.5 resize 自证（有日志就报出来 —— 它是"为什么还没 resize 成功"的唯一直接证据） */
   if (c.resizeLog && c.resizeLog.length) {

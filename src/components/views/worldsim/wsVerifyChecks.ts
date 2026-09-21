@@ -61,6 +61,23 @@ export interface VerifyCtx {
   wsnight: { on: boolean; level: number };
   /** 定位来源（`useWorldSim.locSource`）：gps / ip / manual / restored / "" */
   locSource: string;
+  /**
+   * 「**动效状态**」（机主 2026-09-21：看不到 MG 动画时，要能分清"**没触发**"还是"**坏了**"）。
+   * 全部来自**当场 DOM 观察**（有就有、没有就没有），不猜。
+   */
+  motion?: {
+    /** 加载态（`phase`）：loading 时页面上那个"正在展开世界"的动画在跑 */
+    phase: string;
+    /** 设施节点数（`.ws-fac__mark`）与淡入是否播完（首个节点的 opacity ≈ 1 且无 transform） */
+    facilityNodes: number;
+    facilityFadeDone: boolean | null;
+    /** 事件条数（`.ws-ef__list > *`；事件条入场动画只在**新事件**来时播） */
+    eventRows: number;
+    /** 天气粒子画布在不在（`.ws-wx__cv`；它在跑就是持续动画） */
+    weatherCanvas: boolean;
+    /** 低档（低档会关掉装饰动画；**正常档**时动画是"该动"的） */
+    low: boolean;
+  };
 }
 
 /** `ok`：true 过 / false 没过 / null **判不了**（"不知道"也是一种结论，不许写成通过） */
@@ -232,6 +249,20 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
             ? "上次位置"
             : "**来源未知**（没记录到）";
   push("定位来源标注", loc ? (loc === "ip" ? false : true) : null, locName);
+
+  /* ⑪.5 动效状态：**只报事实**（"有没有触发"是用法问题，"坏没坏"才是 bug） */
+  if (c.motion) {
+    const m = c.motion;
+    push(
+      "动效状态（MG 动画）",
+      null,
+      `加载态=${m.phase}${m.phase === "done" ? "（加载动画已收，属正常）" : "（正在播）"} · ` +
+        `设施节点=${m.facilityNodes}${
+          m.facilityFadeDone === null ? "" : m.facilityFadeDone ? "（淡入已播完）" : "（淡入中/未播）"
+        } · 事件条=${m.eventRows}${m.eventRows === 0 ? "（没有事件 ⇒ 入场动画自然看不到）" : ""} · ` +
+        `天气粒子=${m.weatherCanvas ? "在跑" : "无"} · 档位=${m.low ? "低档（装饰动画关）" : "正常档（该动）"}`
+    );
+  }
 
   /* ⑫ 性能档（低档会少画东西，是"如实降级"不是故障，所以只报事实不判失败） */
   push(

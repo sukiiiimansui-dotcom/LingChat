@@ -269,6 +269,18 @@ export function forceLowTier(reason: string): void {
   if (!softPath.value) softPath.value = reason;
 }
 
+/**
+ * 解除"被强制压到低档"（2026-09-21，P0：**降级可恢复**）。
+ *
+ * 为什么需要：`forceLowTier()` 是"谁降级谁负责压档位"，但**降级可能是临时的**
+ * （冷启动慢 ⇒ 看门狗到点 ⇒ 降级；地图其实还在后台跑，一会儿就出帧了）。
+ * 恢复回 WebGL 之后如果档位还卡在低档，画面就白恢复了 —— 少描边、关毛玻璃那些还在。
+ * ⇒ 恢复时把这条强制解除（**只解"强制"那一层**：用户自己选的档位偏好不动）。
+ */
+export function clearLowTier(): void {
+  softPath.value = "";
+}
+
 /** 现在为什么是低档（空串 = 不是被强制压的）。HUD 如实显示它 */
 export function lowTierReason(): string {
   return softPath.value;
@@ -323,6 +335,8 @@ export interface PerfApi {
   forceLow: (reason: string) => void;
   /** 被强制压低的**原因**（空串 = 没被强制）。HUD 要如实显示 */
   lowReason: ComputedRef<string>;
+  /** 解除强制低档（降级恢复时调，见 `clearLowTier`） */
+  clearForce: () => void;
   /** 进小区图时调：按需启动 fps 表 + 补一次自动采样 */
   bootstrap: () => void;
   /** 离开页面时调：停表、摘监听 */
@@ -460,6 +474,7 @@ export function useWsPerf(): PerfApi {
     setFps,
     noteAuto,
     forceLow: forceLowTier,
+    clearForce: clearLowTier,
     lowReason,
     bootstrap,
     teardown,

@@ -33,6 +33,18 @@ export interface VerifyCtx {
   fallbackKind: "none" | "temp" | "perm";
   /** 曾经降级、后来**恢复回 WebGL** 了吗（恢复过就要写出来，否则人以为一直在 2D） */
   recovered: boolean;
+  /**
+   * 现在处在**哪一级**（`全国 / 省 / 市 / 区县 / 小区级`）。
+   * 机主的要求是"**每个级别**都要能开面板"⇒ 面板必须说清"你看的是哪一级的那条路"。
+   */
+  level?: string;
+  /** `sawRender` 的**口径说明**（阶段舞台没有 render 事件监听 ⇒ 只能用"要素已画"当代理，要说明白） */
+  sawRenderNote?: string;
+  /**
+   * **resize 自证日志**（最近 5 条：谁触发的 / 容器 rect / 画布前后尺寸 / 实例号）。
+   * 为什么值得：真机上"画布仍是 300×150"时，只有这份日志能分清"没调到"和"调了没生效"。
+   */
+  resizeLog?: string[];
   /** `map.isStyleLoaded()`（没有地图实例就是 null） */
   isStyleLoaded: boolean | null;
   /** 地图库真的出过一帧没有 */
@@ -49,10 +61,11 @@ export interface VerifyCtx {
   dprCap2d: number | null;
   /** 活画布判空的结果（`canvasIsBlank`） */
   canvasBlank: { blank: boolean; note: string } | null;
-  /** 计数（**与 HUD 同源**：同一个 `stats` 对象，不许另开计数器） */
-  counts: { buildings: number; roads: number; facilities: number; pins: number };
-  /** 主题给的路网图层规格条数（`roadLayerSpecs(theme.road).length`） */
-  roadSpecs: number;
+  /** 计数（**与 HUD 同源**：同一个 `stats` 对象，不许另开计数器）。
+      阶段舞台（全国~区县）没有这套计数 ⇒ 传 `undefined`，那一行会如实写"本级没有计数口径" */
+  counts?: { buildings: number; roads: number; facilities: number; pins: number };
+  /** 主题给的路网图层规格条数（小区级才用得到）⇒ 没有就 `undefined` */
+  roadSpecs?: number;
   /** 性能低档 */
   capsLow: boolean;
   /** 主题 id（`anime` / `night`）—— 面板要显示"我看到的是哪一版配色" */
@@ -158,7 +171,11 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
   );
 
   /* ③ 首帧 / ④ 样式加载 */
-  push("出过首帧（m.on('render')）", c.sawRender, c.sawRender ? "出过" : "**一帧都没出**（画布上什么都可能没有）");
+  push(
+    "出过首帧（m.on('render')）",
+    c.sawRender,
+    (c.sawRender ? "出过" : "**一帧都没出**（画布上什么都可能没有）") + (c.sawRenderNote ? ` · 口径：${c.sawRenderNote}` : "")
+  );
   push(
     "样式已加载（isStyleLoaded）",
     c.isStyleLoaded,
@@ -196,6 +213,11 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     c.canvasBlank ? c.canvasBlank.blank ? `**空白**：${c.canvasBlank.note}` : "有内容" : "拿不到画布"
   );
 
+  /* ⑦.5 resize 自证（有日志就报出来 —— 它是"为什么还没 resize 成功"的唯一直接证据） */
+  if (c.resizeLog && c.resizeLog.length) {
+    push("resize 尝试记录（最近 5 次）", null, c.resizeLog.join(" ｜ "));
+  }
+
   /* ⑧ 尺寸 / dpr —— 🔴 **这条是 2026-09-21 抓到真根因的那一条**：
      画布 300×150（MapLibre 的**默认值**）而布局是 1253×429 ⇒ 建图时容器没有布局尺寸，
      canvas buffer 从没被 `resize()` 过 ⇒ CSS 拉满整屏 = **一块纯色**（机主说的"像图片/落后"）。
@@ -214,27 +236,33 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
             ? `（期望宽 ${want}）—— **300×150 是地图库的默认值**：建图时容器还没有布局尺寸，` +
               "且之后**没有调用 map.resize()** ⇒ 画布从没按容器尺寸重建过" +
               "（已修：建图前等尺寸 + 建图后补 resize；若你看到这条红，说明跑的还是旧包）"
-            : `（期望宽 ${want}）`)
+            : `（**实际宽 ${c.canvas.w} / 期望宽 ${want}，差 ${want - c.canvas.w}px**；高 实际 ${c.canvas.h} / 期望 ${Math.round(c.canvas.ch * c.canvas.dpr)}）`)
     );
   } else {
     push("画布像素 = 布局 × dpr", null, "拿不到画布");
   }
 
   /* ⑨ 数据计数（**与 HUD 同源**；0 是合法结果，但要写清"可能是真没有"） */
-  const sum = c.counts.buildings + c.counts.roads + c.counts.facilities + c.counts.pins;
-  push(
-    "地图上有东西（🏢/🛣/🏪/👤）",
-    sum > 0,
-    `🏢${c.counts.buildings} 🛣${c.counts.roads} 🏪${c.counts.facilities} 👤${c.counts.pins}` +
-      (sum > 0 ? "" : " —— **四项全 0**：可能这一带真没有数据，也可能还没取回来（HUD 的 note 里有原因）")
-  );
+  if (c.counts) {
+    const sum = c.counts.buildings + c.counts.roads + c.counts.facilities + c.counts.pins;
+    push(
+      "地图上有东西（🏢/🛣/🏪/👤）",
+      sum > 0,
+      `🏢${c.counts.buildings} 🛣${c.counts.roads} 🏪${c.counts.facilities} 👤${c.counts.pins}` +
+        (sum > 0 ? "" : " —— **四项全 0**：可能这一带真没有数据，也可能还没取回来（HUD 的 note 里有原因）")
+    );
+  } else {
+    push("地图上有东西（🏢/🛣/🏪/👤）", null, "**本级没有这套计数口径**（全国~区县是最新一级，计数只在小区级 HUD 里）");
+  }
 
   /* ⑩ 路网规格（主题给的规格条数；0 = 主题侧空手，路一定画不出来） */
-  push(
-    "主题给出了路网规格",
-    c.roadSpecs > 0,
-    c.roadSpecs > 0 ? `${c.roadSpecs} 条规格` : "**0 条**：路网配色/线宽规格是空的（画不出来）"
-  );
+  if (typeof c.roadSpecs === "number") {
+    push(
+      "主题给出了路网规格",
+      c.roadSpecs > 0,
+      c.roadSpecs > 0 ? `${c.roadSpecs} 条规格` : "**0 条**：路网配色/线宽规格是空的（画不出来）"
+    );
+  }
 
   /* ⑪ 定位来源：**必须写明**，IP 兜底时要说清"可能是 VPN/出口位置" */
   const loc = c.locSource || "";

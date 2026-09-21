@@ -62,6 +62,7 @@
       :snapshot="panelSnapshot"
       :on-shoot="shootNow"
       :on-retry-map="retryMap"
+      :on-force-resize="forceResizeCanvas"
       @toggle="verifyOpen = $event"
     />
 
@@ -1164,27 +1165,118 @@
     }
   }
 
-  /** 建图后补 resize：rAF 一次 + 延迟几次；再挂一个观察**容器**的 ResizeObserver（卸载时全清） */
   const resizeTimers: number[] = [];
   let resizeRo: ResizeObserver | null = null;
+  /** 这一次建图的实例序号（面板里对得上"resize 打在哪个实例上"） */
+  let mapSeq = 0;
+  /**
+   * 🔴 **resize 自证日志**（2026-09-21，机主实测"画布仍是 300×150"之后加的）。
+   *
+   * 为什么非要它：上一版我只是"该调的时机都调一遍"，结果真机上**画布还是 300×150**，
+   * 而**没有任何证据能说明是哪一步没生效**（时机？对象？实例？）—— 只能靠猜。
+   * 现在每一次 resize 尝试都留一行：**时间 + 为什么调 + 容器 rect + 调前/调后 canvas + 实例号**，
+   * 面板显示最近 5 条 ⇒ 一眼看出"是压根没调到"还是"调了但没生效"。
+   */
+  const resizeLog = ref<string[]>([]);
+  function pushResizeLog(row: string): void {
+    resizeLog.value = [...resizeLog.value.slice(-4), row];
+  }
+  /** 现在画布该有多大（容器 CSS 尺寸 × dpr）—— 判据与面板一致 */
+  function wantCanvasSize(cv2: HTMLCanvasElement): string {
+    const el = host.value;
+    const dpr = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
+    if (!el) return "?";
+    return `${Math.round(el.clientWidth * dpr)}x${Math.round(el.clientHeight * dpr)}`;
+  }
+  /**
+   * 调一次 resize 并**记日志**（容器尺寸 + 前后 canvas 尺寸）。
+   * `why` 写清是谁触发的（首次 / 延迟 1000ms / ResizeObserver / 轮询兜底 / 强制按钮）。
+   */
+  function doResize(m: { resize?: () => void }, why: string): void {
+    const el = host.value;
+    const cv2 = cv.value;
+    const box = el ? `${el.clientWidth}x${el.clientHeight}` : "无容器";
+    const before = cv2 ? `${cv2.width}x${cv2.height}` : "无画布";
+    if (!el || !cv2) {
+      pushResizeLog(`${why}｜容器=${box}｜画布=${before}｜**没有容器或画布，跳过**`);
+      return;
+    }
+    try {
+      m.resize?.();
+    } catch (e) {
+      pushResizeLog(`${why}｜容器=${box}｜${before}→抛错 ${String((e as Error)?.message || e).slice(0, 24)}`);
+      return;
+    }
+    const after = `${cv2.width}x${cv2.height}`;
+    const want = wantCanvasSize(cv2);
+    const ok = after === want;
+    pushResizeLog(
+      `${why}（实例#${mapSeq}）｜容器=${box}｜画布 ${before}→${after}｜期望 ${want}｜${ok ? "✅ 一致" : "❌ 仍不一致"}`
+    );
+  }
+  /** 建图后补 resize：rAF 一次 + 延迟几次 + 观察**容器** + **5 秒内每 500ms 兜底轮询**（尺寸不一致就再调） */
   function kickResize(m: { resize?: () => void }): void {
-    const kick = (): void => {
-      try {
-        if (alive) m.resize?.();
-      } catch {
-        /* 地图没了就算了 */
+    mapSeq++;
+    doResize(m, "建图后立刻");
+    for (const t of [250, 1000, 2500]) {
+      resizeTimers.push(
+        window.setTimeout(() => {
+          if (alive) doResize(m, `延迟 ${t}ms`);
+        }, t)
+      );
+    }
+    /* 兜底轮询：不管前几次是不是"调早了"，只要尺寸还对不上就继续调（最多 5s） */
+    const pollEnd = Date.now() + 5000;
+    const poll = (): void => {
+      if (!alive) return;
+      const cv2 = cv.value;
+      const el = host.value;
+      if (cv2 && el && `${cv2.width}x${cv2.height}` !== wantCanvasSize(cv2)) {
+        doResize(m, "轮询兜底");
+        if (Date.now() < pollEnd) resizeTimers.push(window.setTimeout(poll, 500));
+        return;
       }
+      if (Date.now() < pollEnd) resizeTimers.push(window.setTimeout(poll, 500));
     };
-    requestAnimationFrame(kick);
-    for (const t of [250, 1000, 2500]) resizeTimers.push(window.setTimeout(kick, t));
+    resizeTimers.push(window.setTimeout(poll, 500));
     try {
       if (typeof ResizeObserver !== "undefined" && host.value) {
-        resizeRo = new ResizeObserver(kick);
+        resizeRo = new ResizeObserver(() => doResize(m, "ResizeObserver(容器)"));
         resizeRo.observe(host.value);
+        /* ⚠️ 也观察**画布自己**：容器没变而画布 CSS 尺寸变了的情况（父级用别的方式撑开）也收得住 */
+        if (cv.value) resizeRo.observe(cv.value);
       }
     } catch {
-      /* 没有 ResizeObserver 就靠上面那几次延迟（不影响建图） */
+      /* 没有 ResizeObserver 就靠上面的轮询（不影响建图） */
     }
+    /* 视口变化/转屏：设备方向一变，`dpr` 与布局尺寸都会变（**必须**再量一次） */
+    try {
+      window.addEventListener("resize", onWinResize);
+      window.addEventListener("orientationchange", onWinResize);
+    } catch {
+      /* 挂不上就算了（轮询与观察器还在） */
+    }
+  }
+  /** 视口/方向变化 → 延迟一点再量（浏览器改布局是异步的） */
+  function onWinResize(): void {
+    if (!alive || !map) return;
+    window.setTimeout(() => doResize(map as { resize?: () => void }, "窗口/转屏"), 300);
+  }
+  /**
+   * 面板上的「🔄 强制重算画布」：**手动**调一次并回报前后尺寸。
+   * 这是最快的判定手段 —— 机主点一下就知道"resize 能不能治好"，也能区分
+   * "逻辑没跑到"（日志里没有记录）和"resize 本身无效"（记录了但尺寸不变）。
+   */
+  function forceResizeCanvas(): string {
+    const m = map as { resize?: () => void } | null;
+    const cv2 = cv.value;
+    if (!m || !cv2) return "这一级没有地图实例（或没有画布），没法重算";
+    const before = `${cv2.width}x${cv2.height}`;
+    doResize(m, "面板强制按钮");
+    const after = `${cv2.width}x${cv2.height}`;
+    return after === before
+      ? `点了但画布没变（仍 ${after}）—— 说明 resize() 对当前实例无效，得查容器/实例；日志见面板`
+      : `画布 ${before} → ${after}${after === wantCanvasSize(cv2) ? "（✅ 已与容器一致）" : "（仍未一致）"}`;
   }
 
   /**
@@ -1566,6 +1658,7 @@
       keyPaints: rep.keyPaints || {},
       worldTime: `${props.worldTime || "（拿不到）"} · 天黑 ${nightLvl.value}${nightOn.value ? "" : "（夜色关）"}`,
       motion: motionFacts(),
+      resizeLog: resizeLog.value,
       hud: hudEl.value?.innerText || "",
     };
   }
@@ -2994,6 +3087,12 @@
     recoverTimer = 0;
     for (const t of resizeTimers) window.clearTimeout(t);
     resizeTimers.length = 0;
+    try {
+      window.removeEventListener("resize", onWinResize);
+      window.removeEventListener("orientationchange", onWinResize);
+    } catch {
+      /* 摘不掉无所谓（页面已经在卸载） */
+    }
     try {
       resizeRo?.disconnect();
     } catch {

@@ -52,6 +52,13 @@
       <button type="button" title="看整个区（整区铺满；这一档不取楼栋）" @click="fitDistrict()" @pointerup="fitDistrict()">全区</button>
     </div>
 
+    <!-- 🔬 验证面板（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
+         长在**出问题的那一页**上：渲染路 / 降级原因原文 / 地图库错误原文 / 图层与 key paint /
+         场景（主题·夜色·世界时间·档位·DPR）/ 计数（与 HUD 同源）/ 定位来源 / 自检 / 自拍按钮。
+         `?wsverify=1` 一进来就摊开；平时只留一个 🔬（**零开销**：收起时不取快照、不跑自检）。
+         ⚠️ 它**只读**：不写样式、不改相机、不动任何业务状态（唯一的动作是机主点「现在拍一张」）。 -->
+    <WsVerifyPanel :open="verifyOpen" :snapshot="panelSnapshot" :on-shoot="shootNow" @toggle="verifyOpen = $event" />
+
     <!-- 2D 降级路的"人"（WebGL 路用地图库 Marker，不在这里画） -->
     <div v-if="!mapAvailable" class="ws-dml__pins">
       <i
@@ -65,8 +72,10 @@
       >
     </div>
 
-    <!-- 指标条：验证用（也让人一眼看到"这是真数据还是降级"） -->
-    <div class="ws-dml__hud">
+    <!-- 指标条：验证用（也让人一眼看到"这是真数据还是降级"）。
+         `ref="hudEl"`：样式自检 JSON 里要带上 **HUD 原话**（机主看到的就是这一行，逐字带回，
+         不转述 —— 转述过一次就把"地图库 8 秒内没画出第一帧"写成了"加载失败"）。 -->
+    <div ref="hudEl" class="ws-dml__hud">
       <span>{{ stats.mode }}</span>
       <span>🏢 {{ stats.count }}</span>
       <span
@@ -182,6 +191,13 @@
      WebGL 那条路的故障；而代拍页要机主手动打开。它把"点代拍页"降成"**刷新一次**"。
      分工与纪律见 `wsAppSelfShot.ts` 的文件头。 */
   import { type AppShotCtx, type ShotMapLike, runAppSelfShot } from "./wsAppSelfShot";
+  /* 📊 「样式自检 JSON」的**纯**打包函数（图层/paint/错误/档位/HUD → 一份能读的 JSON）。
+     纯函数才能进 Node 自检（`ws_selfshot_selftest.mjs`），也才能保证"只读不写"。 */
+  import { type StyleLayerLite, buildStyleReport } from "./wsStyleReport";
+  /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
+     面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
+  import WsVerifyPanel from "./WsVerifyPanel.vue";
+  import { type VerifySnapshot, runVerifyChecks } from "./wsVerifyChecks";
   /* 真等高线（Terrarium DEM → marching squares，纯函数自检 37/37）。
      放在这里而不是只在自用页：小区级是 zoom≈15 的俯视/倾斜视角，**20m 间隔的等高线在这里最好看也最有用**
      （山城尤其明显），而且它和我们已接的 Esri 暗色底图、真楼房挤出是三层叠加。 */
@@ -262,16 +278,67 @@
        * 显式传 `false` 可关掉这个自动行为（那时只有 `showAi=true` 才画）。
        */
       aiAuto?: boolean;
+      /**
+       * 定位来源（`useWorldSim.locSource`：gps / ip / manual / restored）—— 验证面板要显示它。
+       *
+       * 机主实测「**定位拿到但落到北京**」时，屏幕上没有任何一处说明"这是 IP 兜底猜的"
+       * （多半还是 VPN 出口）⇒ 看着就像定位坏了。来源必须写出来。
+       */
+      locSource?: string;
+      /** 世界时间（如 `23:41`）—— 验证面板要"世界时间 + 夜色档"一起看，**透传**即可，别在这里算第二份 */
+      worldTime?: string;
     }>(),
     /* 🎨 2026-09-20 机主：「**2.5D 倾斜范围扩大至可看见天空（蔚蓝档案基沃托斯的天空）**」。
        55° 是"俯视看楼"的角度 —— 相机压得太低，天际线以上全在屏幕外，**根本看不到天空**。
        降到 38°：楼体的 2.5D 透视还在（看得出体量），但地平线和天空进了画面。
        ⚠️ 这只是**默认值**；机主仍可以用手势压到 85°（见下面 `maxPitch`）。 */
-    { area: "", radius: 600, pitch: 38, markers: () => [], grid: 28, night: 0, aiItems: () => [], showAi: false, aiAuto: true, snapPins: false }
+    {
+      area: "",
+      radius: 600,
+      pitch: 38,
+      markers: () => [],
+      grid: 28,
+      night: 0,
+      aiItems: () => [],
+      showAi: false,
+      aiAuto: true,
+      snapPins: false,
+      locSource: "",
+      worldTime: "",
+    }
   );
 
   const host = ref<HTMLElement | null>(null);
   const cv = ref<HTMLCanvasElement | null>(null);
+  /* 📊 样式自检要带上 **HUD 原话**（机主看到的那一行）—— 只读，不参与任何渲染逻辑 */
+  const hudEl = ref<HTMLElement | null>(null);
+  /**
+   * 🔬 验证面板要知道的"这一页现在到底是什么状态"。
+   *
+   * `renderKind` 初始是 `"init"`（还没分路）—— **不许猜**：分路之前说"WebGL 还是降级"就是编。
+   * `fallbackWhy` 是**降级原因原文**（看门狗期限 / `map.on('error')` 文本），面板与样式 JSON 共用。
+   * 面板展开是**一次快照**（不逐帧算），所以这几个 ref 的更新开销可以忽略。
+   */
+  const renderKind = ref<"init" | "webgl" | "fallback2d">("init");
+  const fallbackWhy = ref("");
+  /** `?wsverify=1` ⇒ 一进来就把验证面板摊开（机主要的"全部验证功能在 App 页可全部看到"） */
+  const verifyOpen = ref(
+    (() => {
+      try {
+        return /[?&]wsverify=1\b/.test(typeof location !== "undefined" ? location.search : "");
+      } catch {
+        return false;
+      }
+    })()
+  );
+  /**
+   * 地图库 `error` 事件收到的错（**只记不改**）。
+   *
+   * 为什么单独一个数组（而不是读 `stats.note`）：`stats.note` 是给机主看的一句话，
+   * 会被后面的写入**覆盖**；而"样式校验失败那类错误"往往发生在很早，等自拍时早就被冲掉了。
+   * ⇒ 用一个只增不减的数组兜住它，自检 JSON 里原样带走。
+   */
+  const mapErrs: string[] = [];
   /* 性能档位（模块级单例）。**只在这一处用**：`fallback2d()` 里把档位压到低档 ——
      因为只有这里知道"最后真的走了哪条渲染路"，而档位必须跟那条路一致。 */
   const perf = useWsPerf();
@@ -1058,13 +1125,21 @@
    * 等稳的判据（`sawFirstFrame && dataReady`）：首帧 + 数据到齐，或者**超时照拍**
    * （超时也要给证据，只是会在诊断图/HUD 里如实写 `数据到齐=false`）。
    */
-  function maybeAppSelfShot(kind: "webgl" | "fallback2d", fallbackWhy = ""): void {
+  function maybeAppSelfShot(kind: "webgl" | "fallback2d", why = ""): void {
+    /* 🔬 面板要的就是这两个事实（**先记下来再说要不要自拍** —— 没开自拍时面板照样要显示） */
+    renderKind.value = kind;
+    fallbackWhy.value = why;
     /* 没开就是一次 boolean 判断（零开销）—— 与代拍同一个纪律 */
     if (!appSelfShotArmed()) return;
     appSelfShotDisarm(); // 立刻落闸：这一轮就是这一轮，页面里其它挂载点不要重复发起
-    const ctx: AppShotCtx = {
+    void runAppSelfShot(appShotCtx(kind, why));
+  }
+
+  /** 自拍的上下文（**面板的「现在拍一张」按钮也用它** —— 一条路，不是两套） */
+  function appShotCtx(kind: "webgl" | "fallback2d", why: string): AppShotCtx {
+    return {
       kind,
-      fallbackWhy,
+      fallbackWhy: why,
       /* 画布**现取**：降级路会换掉画布元素（见 `fallback2d` 那段），存下来的引用会拍到旧画布 */
       getCanvas: () => cv.value,
       getMap: () => (kind === "webgl" ? (map as unknown as ShotMapLike | null) : null),
@@ -1073,16 +1148,137 @@
       dataReady: () => stats.count + stats.roads + stats.facilities + stats.pins > 0,
       dataNote: () =>
         `🏢${stats.count} 🛣${stats.roads} 🏪${stats.facilities} 👤${stats.pins} · ${stats.note || "无提示"}`,
-      /* 真机 Overpass 冷查询实测 20~100s；无头/自动化给短一点（免得把闸门拖成假失败） */
+      /* 真机 Overpass 冷查询实测 20~100s；无头/自动化给短一点（免得把闸门拖成假失败）。
+         面板按钮走的是"**机主已经站在这一屏前**"的场景 ⇒ 给 6 秒就够（数据早就在了） */
       waitMs: isAutomation() ? 15000 : 45000,
       /* 等数据的这几十秒里机主可能切走 ⇒ 组件卸载就**什么都不发**（发了就是假证据） */
       aborted: () => !alive,
+      /* 📊 样式自检 JSON：**有多少给多少，不知道写 null**（详见 `wsStyleReport.ts` 的文件头）。
+         取值全走"现读"：`map` 可能是 null（降级路）、画布可能被换过 —— 提前存下来的都会失真。 */
+      styleReport: (shot) => verifySnapshot(true, shot),
       note: (s) => {
         stats.note = stats.note ? `${stats.note} · ${s}` : s;
       },
       build: APP_SELF_SHOT_BUILD,
     };
-    void runAppSelfShot(ctx);
+  }
+
+  /**
+   * 🔬 面板与样式 JSON **共用的那一份快照**（同一件事，两种读者：人看面板、agent 读 JSON）。
+   *
+   * `full = true` 时给样式 JSON（带 shot 那一轮的细节）；面板走 `full = false`（没有 shot 段）。
+   * 一律**现读**：`map` 可能是 null、画布可能被换过、`theme` 可能正在切 —— 提前存下来的都会失真。
+   */
+  function verifySnapshot(
+    full: boolean,
+    shot?: { name: string; blank: boolean; attempts: number; waitedMs: number; ready: boolean; why: string; posted: boolean }
+  ): Record<string, unknown> {
+    const layers = ((map?.getStyle?.()?.layers as StyleLayerLite[] | undefined) || []).filter((l) => !!l?.id);
+    const canvas = cv.value
+      ? {
+          w: cv.value.width,
+          h: cv.value.height,
+          dpr: typeof devicePixelRatio === "number" ? devicePixelRatio : 1,
+          cssW: cv.value.clientWidth,
+          cssH: cv.value.clientHeight,
+        }
+      : null;
+    return buildStyleReport({
+      build: APP_SELF_SHOT_BUILD,
+      href: typeof location !== "undefined" ? location.href : "",
+      isStyleLoaded: map?.isStyleLoaded?.() ?? null,
+      layers,
+      paintOf: (id, key) => map?.getPaintProperty?.(id, key),
+      errors: mapErrs,
+      wstheme: themeId.value,
+      wsnight: { on: nightOn.value, level: nightLvl.value, lowTier: !!perf.low.value },
+      canvas,
+      fallback: { used: renderKind.value === "fallback2d", why: fallbackWhy.value },
+      sawRender: renderKind.value === "webgl" ? sawRender : renderKind.value === "fallback2d",
+      hud: hudEl.value?.innerText || "",
+      stats: { ...stats },
+      ...(full && shot
+        ? {
+            shot: {
+              name: shot.name,
+              blank: shot.blank,
+              attempts: shot.attempts,
+              waitedMs: shot.waitedMs,
+              ready: shot.ready,
+              note: shot.why,
+              posted: shot.posted,
+            },
+          }
+        : {}),
+    });
+  }
+
+  /** 面板要显示的那份（`VerifySnapshot`；图层 + 关键 paint 从上面那份里取，**不重算**） */
+  function panelSnapshot(): VerifySnapshot {
+    const rep = verifySnapshot(false) as {
+      isStyleLoaded: boolean | null;
+      layers: { ids: string[]; types: Record<string, string> };
+      keyPaints: Record<string, Record<string, unknown>>;
+      errors: string[];
+      canvas: { w: number; h: number; dpr: number; cssW: number | null; cssH: number | null } | null;
+      fallback2d: { used: boolean; why: string };
+      sawRender: boolean;
+    };
+    const layers = rep.layers.ids.map((id) => ({ id, type: rep.layers.types[id] || "?" }));
+    /* "主题期望的图层" —— 与当前档位同一份来源（`themeStyleParts`），少一条就能当场看出来 */
+    let expected: string[] = [];
+    try {
+      expected = (themeStyleParts(theme.value, !!perf.low.value, 0).layers || []).map((l: { id?: string }) => String(l.id || ""));
+    } catch {
+      expected = [];
+    }
+    const cvv = cv.value;
+    return {
+      kind: renderKind.value === "init" ? "webgl" : renderKind.value,
+      fallbackWhy: fallbackWhy.value,
+      isStyleLoaded: rep.isStyleLoaded,
+      sawRender: rep.sawRender,
+      layers,
+      expectedLayerIds: expected.filter(Boolean),
+      errors: rep.errors,
+      canvas: rep.canvas
+        ? {
+            w: rep.canvas.w,
+            h: rep.canvas.h,
+            cw: Number(rep.canvas.cssW || 0),
+            ch: Number(rep.canvas.cssH || 0),
+            dpr: rep.canvas.dpr,
+          }
+        : null,
+      canvasBlank: cvv ? canvasIsBlank(cvv) : null,
+      counts: { buildings: stats.count, roads: stats.roads, facilities: stats.facilities, pins: stats.pins },
+      roadSpecs: (() => {
+        try {
+          return roadLayerSpecs(theme.value.road).length;
+        } catch {
+          return 0;
+        }
+      })(),
+      capsLow: !!perf.low.value,
+      wstheme: themeId.value,
+      wsnight: { on: nightOn.value, level: nightLvl.value },
+      locSource: props.locSource || "",
+      keyPaints: rep.keyPaints || {},
+      worldTime: `${props.worldTime || "（拿不到）"} · 天黑 ${nightLvl.value}${nightOn.value ? "" : "（夜色关）"}`,
+      hud: hudEl.value?.innerText || "",
+    };
+  }
+
+  /** 面板的「现在拍一张」：**不看开关**（这是机主显式点的），拍完回一句人话 */
+  async function shootNow(): Promise<string> {
+    /* 还没分路（`init`）时按 WebGL 试：面板按钮多出现在地图已经起来之后，真降级了上面那条早就写了 */
+    const kind = renderKind.value === "fallback2d" ? "fallback2d" : "webgl";
+    const before = mapErrs.length;
+    const r = await runAppSelfShot(appShotCtx(kind, fallbackWhy.value));
+    const prefix = r.posted ? "已回传" : "POST 失败";
+    const extra = r.blank ? `（空白：${r.why}，试了 ${r.attempts} 次 ⇒ 发的是诊断图）` : `（真画面）`;
+    const errs = mapErrs.length > before ? ` · 期间地图库又报了 ${mapErrs.length - before} 条错` : "";
+    return `${prefix} ${r.name} ${extra}${errs}`;
   }
 
   /**
@@ -2295,6 +2491,12 @@
     m.on("error", (e: { error?: { message?: string } }) => {
       const msg = String(e?.error?.message || e || "").slice(0, 60);
       if (msg) stats.note = stats.note ? `${stats.note} · 地图库：${msg}` : `地图库报错：${msg}`;
+    });
+    /* 📊 **另挂一个只记不改的**（不动上面那条的语义）：`stats.note` 会被后来的写入覆盖，
+       而样式自检 JSON 要的是"从头到现在一共报过哪些错"。最多留 20 条（自检包不灌水）。 */
+    m.on("error", (e: { error?: { message?: string } }) => {
+      const msg = String(e?.error?.message || e || "").slice(0, 160);
+      if (msg && mapErrs.length < 20) mapErrs.push(msg);
     });
 
     /* ⏱ **看门狗**：地图库"起来了"不等于"画出来了"。

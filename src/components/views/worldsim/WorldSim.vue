@@ -200,6 +200,8 @@
           :markers="districtPins"
           :night="todNight"
           :map-style="style"
+          :loc-source="sim.locSource.value"
+          :world-time="todClock"
           @back="backTo(path.length - 1)"
           @done="onWorldEntered"
         >

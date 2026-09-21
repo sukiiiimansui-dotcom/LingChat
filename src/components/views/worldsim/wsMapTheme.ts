@@ -653,6 +653,157 @@ export function themeForTier(
   };
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * 夜色：由**当前主题派生**出来的一版（`DESIGN-NIGHT.md` 第 1 件）
+ *
+ * 🔴 纪律：**不许改 `ANIME` 已验收的值**（机主 2026-09-20 看过那套配色）。
+ *    所以夜色不是"再写一套常量"，而是**函数**：同一个主题 + 天黑程度 → 夜里那一版。
+ *    好处：以后调 ANIME 的白天配色，夜色会**自动跟着走**，不会两边漂。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 解析一个 CSS 颜色 —— **两种格式都要认**：
+ *   · `#rgb` / `#rrggbb`（大多数字段）
+ *   · `rgb(...)` / `rgba(...)`（`outline.color` 与 `ai.*` 用的是带 alpha 的写法）
+ *
+ * 🔴 为什么要认第二种：我第一版只认 hex，于是 `outline.color`（`rgba(190,235,255,.22)`）
+ *    和 `ai.park` **静默不变色** —— 夜色在"楼描边"和"AI 水系"上根本没生效，
+ *    而**页面上看不出任何报错**（函数按设计"认不出就原样返回"）。
+ *    是 `ws_night_selftest.mjs` 断言"夜里必须真的变了"才把它抓出来的。
+ *    教训：**"优雅降级"必须配一条"我确实生效了"的断言**，否则降级就是静默失效。
+ *
+ * @returns `{ rgb, alpha, fmt }`；认不出来返回 null（调用方原样回退，绝不抛）
+ */
+function parseColor(css: string): { rgb: [number, number, number]; alpha: number | null; fmt: "hex" | "rgb" } | null {
+  if (typeof css !== "string") return null;
+  const t = css.trim();
+  const hx = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(t);
+  if (hx) {
+    const h = hx[1].length === 3 ? hx[1].replace(/./g, (c) => c + c) : hx[1];
+    return {
+      rgb: [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)],
+      alpha: null,
+      fmt: "hex",
+    };
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(t);
+  if (rgb) {
+    return {
+      rgb: [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])],
+      alpha: rgb[4] === undefined ? null : Number(rgb[4]),
+      fmt: "rgb",
+    };
+  }
+  return null;
+}
+
+/** 按**进来的格式**吐回去（hex 还是 hex、rgba 还是 rgba）—— 免得把 `rgba` 写成 `#hex` 丢了 alpha。 */
+function formatColor(rgb: [number, number, number], alpha: number | null, fmt: "hex" | "rgb"): string {
+  const c = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
+  if (fmt === "hex") {
+    const h = (n: number) => c(n).toString(16).padStart(2, "0");
+    return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`;
+  }
+  return alpha === null ? `rgb(${c(rgb[0])}, ${c(rgb[1])}, ${c(rgb[2])})` : `rgba(${c(rgb[0])}, ${c(rgb[1])}, ${c(rgb[2])}, ${alpha})`;
+}
+
+/** 把 `a` 往 `b` 靠 `t`（0..1）。任一边认不出来就原样返回 `a` —— 宁可不变色，也别画出一个坏值。 */
+function mixColor(a: string, b: string, t: number): string {
+  const A = parseColor(a);
+  const B = parseColor(b);
+  if (!A || !B) return a;
+  const k = Math.max(0, Math.min(1, t));
+  return formatColor(
+    [A.rgb[0] + (B.rgb[0] - A.rgb[0]) * k, A.rgb[1] + (B.rgb[1] - A.rgb[1]) * k, A.rgb[2] + (B.rgb[2] - A.rgb[2]) * k],
+    A.alpha,
+    A.fmt
+  );
+}
+
+/**
+ * 楼体专用的"入夜"：**先压暗，再偏暖**。
+ *
+ * 为什么不能只压暗：全压暗会变成一堆冷灰，像"掉电"而不是"入夜"。
+ * 夜里楼体应当是**暗底 + 暖意**（窗里透出来的光是暖的）—— 所以压暗之后
+ * 给红通道补一点、蓝通道减一点。`k = 0` 时**必须**逐位等于原值。
+ */
+function duskColor(css: string, k: number, dim = 0.55, warm = 22): string {
+  const c = parseColor(css);
+  if (!c) return css;
+  const f = 1 - dim * k;
+  const [r, g, b] = c.rgb;
+  return formatColor([r * f + warm * k, g * f + warm * 0.35 * k, b * f - warm * 0.3 * k], c.alpha, c.fmt);
+}
+
+/** 夜幕蓝：地面/天空/色罩往这里靠（不是纯黑 —— 纯黑会把"层次"也一起吃掉） */
+const NIGHT_BLUE = "#0B1526";
+
+/**
+ * 由主题派生"夜里那一版"。**纯函数**：同样的输入永远同样的输出，且 `level = 0` 时
+ * **原样返回输入**（调用方因此可以无脑用它，不必自己判白天）。
+ *
+ * @param level 天黑程度 0..1（`wsTime.nightLevel(hour)`）
+ * @param flat  低档：只留"纯暗色"（关掉偏暖）—— 见 `DESIGN-NIGHT.md` 第 1 件
+ */
+export function nightVariant(theme: WsMapTheme, level = 1, flat = false): WsMapTheme {
+  const k = Math.max(0, Math.min(1, level));
+  if (k <= 0) return theme;
+  /* 低档要的是**均匀的暗**：偏暖会让每栋楼颜色都不一样，弱设备上反而更难看出层次，
+     而且多算一遍色。所以低档把 warm 关掉、压得更狠。 */
+  const warm = flat ? 0 : 22;
+  const dimA = flat ? 0.66 : 0.55;
+
+  const sky =
+    theme.sky === null
+      ? null
+      : {
+          ...theme.sky,
+          /* ⚠️ 只动三个**颜色**字段，其余（blend 系数）原样保留 ——
+             `sky` 那 7 个字段是从 vendored 包里抠出来的白名单，多写一个键
+             就会让**整份 style 校验失败**、全站退回 2D（踩过，见本文件头的注释）。 */
+          ...("sky-color" in theme.sky
+            ? { "sky-color": mixColor(String(theme.sky["sky-color"]), NIGHT_BLUE, 0.72 * k) }
+            : {}),
+          ...("horizon-color" in theme.sky
+            ? { "horizon-color": mixColor(String(theme.sky["horizon-color"]), "#243B5C", 0.66 * k) }
+            : {}),
+          ...("fog-color" in theme.sky
+            ? { "fog-color": mixColor(String(theme.sky["fog-color"]), NIGHT_BLUE, 0.7 * k) }
+            : {}),
+        };
+
+  const dimRaster = (p: WsMapRasterPaint | null): WsMapRasterPaint | null => {
+    if (!p) return p;
+    /* 只压 `raster-brightness-max`（"最亮能到多亮"）⇒ 整体压暗，
+       而且**不会**动主题里写死的 saturation/contrast（那些是风格，不是时刻）。 */
+    const cur = typeof p["raster-brightness-max"] === "number" ? (p["raster-brightness-max"] as number) : 1;
+    return { ...p, "raster-brightness-max": Math.max(0.12, cur * (1 - 0.62 * k)) };
+  };
+
+  return {
+    ...theme,
+    hud: `${theme.hud} · 夜`,
+    bg: mixColor(theme.bg, NIGHT_BLUE, 0.82 * k),
+    sky,
+    raster: {
+      base: dimRaster(theme.raster.base) as WsMapRasterPaint,
+      hi: dimRaster(theme.raster.hi),
+      ref: dimRaster(theme.raster.ref) as WsMapRasterPaint,
+    },
+    tint: theme.tint
+      ? {
+          color: mixColor(theme.tint.color, NIGHT_BLUE, 0.8 * k),
+          opacity: Math.min(0.92, theme.tint.opacity + 0.34 * k),
+        }
+      : theme.tint,
+    ramp: theme.ramp.map(([h, c]) => [h, duskColor(c, k, dimA, warm)] as [number, string]),
+    roofFallback: duskColor(theme.roofFallback, k, dimA, warm),
+    antennaFallback: duskColor(theme.antennaFallback, k, dimA, warm),
+    outline: { ...theme.outline, color: duskColor(theme.outline.color, k, dimA, warm) },
+    ai: { park: duskColor(theme.ai.park, k, dimA, warm), water: duskColor(theme.ai.water, k, dimA, warm) },
+  };
+}
+
 /**
  * 主题 → 一份 style 的**底半部分**（`sky` + `sources` + 背景那几条图层）。
  *
@@ -668,7 +819,14 @@ export function themeForTier(
  */
 export function themeStyleParts(
   theme: WsMapTheme,
-  low = false
+  low = false,
+  /**
+   * 颜色过渡时长（毫秒）。**默认 0 = 与之前逐字一致**（自检与老调用点不受影响）。
+   * 只有"昼夜缓变"这一件事需要它：把 `*-transition` 写进 paint ⇒ 之后
+   * `setPaintProperty(...)` 改变颜色时，地图库**自己**会把颜色缓过去（800~1500ms），
+   * 我们**不写插值动画**（`DESIGN-NIGHT.md` 的事实 ③：两个属性都 `transition: true`）。
+   */
+  transitionMs = 0
 ): {
   sky: Record<string, unknown> | undefined;
   sources: Record<string, unknown>;
@@ -683,7 +841,14 @@ export function themeStyleParts(
      别改成"只挑 tiles/maxzoom 手抄"：我第一版就是手抄的，结果**把 Esri 的署名弄丢了**
      （见 `WsMapRasterSource.attribution` 的说明）。自检里有一条专门断言署名在。 */
   const layers: Array<Record<string, unknown>> = [
-    { id: "bg", type: "background", paint: { "background-color": theme.bg } },
+    {
+      id: "bg",
+      type: "background",
+      paint: {
+        "background-color": theme.bg,
+        ...(transitionMs > 0 ? { "background-color-transition": { duration: transitionMs, delay: 0 } } : {}),
+      },
+    },
     {
       id: "base",
       type: "raster",
@@ -716,7 +881,16 @@ export function themeStyleParts(
     layers.push({
       id: "tint",
       type: "background",
-      paint: { "background-color": tier.tint.color, "background-opacity": tier.tint.opacity },
+      paint: {
+        "background-color": tier.tint.color,
+        "background-opacity": tier.tint.opacity,
+        ...(transitionMs > 0
+          ? {
+              "background-color-transition": { duration: transitionMs, delay: 0 },
+              "background-opacity-transition": { duration: transitionMs, delay: 0 },
+            }
+          : {}),
+      },
     });
   }
   /* 注记压在最上层（街名不该被楼挡）——**组件的楼房层靠这个 id 当插入锚点**，别改名。 */

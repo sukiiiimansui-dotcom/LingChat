@@ -827,7 +827,15 @@
     const el = host.value;
     const w = Math.max(64, el?.clientWidth || 320);
     const h = Math.max(64, el?.clientHeight || 240);
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    /* 🔴 2026-09-21：降级路的画布**像素数封顶 1.5×**（原来是 `min(2, dpr)`）。
+       机主的证据把这条钉死了：「**在小区级很卡**（那可能降级后的是，在那个代拍里的用 webgl
+       却一点都不卡）」—— 同一台手机，WebGL 那条路不卡 ⇒ **贵的是这条路**。
+       它贵在**填充率**：真机 1080×2400 @dpr2.4 的画布，按 dpr=2 建 = **1080×2400 像素**
+       （原来 `min(2, 2.4)` 就是 2），每一次自绘（底色 + 网格 + 楼 + 等高线 + 示意层）
+       都要把这么多像素写一遍；封到 1.5 ⇒ 810×1800 = **少 44% 的像素**，观感几乎无差别
+       （这块画布画的是平面俯视图，不是要抠细节的写实图）。
+       逃生阀：`?wsdpr=2`（低端机想对照/想更清楚时用，与 `?wsnight=off` 同一套口径）。 */
+    const dpr = Math.min(dprCap2d(), window.devicePixelRatio || 1);
     c.width = Math.round(w * dpr);
     c.height = Math.round(h * dpr);
     const ctx = c.getContext("2d");
@@ -1054,6 +1062,23 @@
      （2026-09-21 那次诊断图不带版本戳，差点把两轮不同的包当同一轮在比）。改这一页的行为就顺手 +1。 */
   const APP_SELF_SHOT_BUILD = "app-selfshot-2026-09-21-v1";
 
+  /** 2D 降级路画布的 DPR 封顶默认值（见 `draw2d` 里那段；`?wsdpr=` 可覆盖） */
+  const DPR_CAP_2D = 1.5;
+
+  /**
+   * 读「2D 降级路画布的 DPR 封顶」：`?wsdpr=<数字>` > 默认 1.5（夹在 1~3，脏值不认）。
+   * 与 `?wsnight=off` 同一套纪律：**URL 优先**（"我想看另一档"不能被默认值盖掉），读不到不抛。
+   */
+  function dprCap2d(): number {
+    try {
+      const v = Number(new URLSearchParams(location.search).get("wsdpr") || NaN);
+      if (Number.isFinite(v) && v >= 1 && v <= 3) return v;
+    } catch {
+      /* 隐私模式/无 location ⇒ 用默认 */
+    }
+    return DPR_CAP_2D;
+  }
+
   /**
    * 「代拍」：页面上有 `?autoshot=1` 时，走到小区级就**自动拍三张**（近/远/侧）回传。
    *
@@ -1250,6 +1275,8 @@
             dpr: rep.canvas.dpr,
           }
         : null,
+      /* 2D 路的 DPR 封顶（机主要的"降级路便宜了多少"的数字；WebGL 路不适用 ⇒ null） */
+      dprCap2d: renderKind.value === "fallback2d" ? dprCap2d() : null,
       canvasBlank: cvv ? canvasIsBlank(cvv) : null,
       counts: { buildings: stats.count, roads: stats.roads, facilities: stats.facilities, pins: stats.pins },
       roadSpecs: (() => {
@@ -2204,7 +2231,9 @@
        ⇒ 谁降级，谁负责把档位压下去（**因果**，不是**预测**）。
        用 `perf.low` 的地方会自动跟着变：`ws-perf-low` 类、天气层、车辆/行程卡全部生效。 */
     perf.forceLow(mode);
-    stats.perf = `已因「${mode}」压到低档`;
+    /* HUD 上如实写清两件事：**为什么被压到低档** + **2D 画布的 DPR 封顶**
+       （机主的三个症状里"很卡"就是这条路的填充率；写出来他才看得出我们为此做了什么） */
+    stats.perf = `已因「${mode}」压到低档（2D 画布 DPR 封顶 ${dprCap2d()}，真机 dpr=${typeof devicePixelRatio === "number" ? devicePixelRatio : "?"}）`;
     /* 🔴 **降级前必须换一块新画布**：`cv` 可能已经被 WebGL 占过（MapLibre 在它上面建了
        webgl 上下文），而按 HTML 规范，`canvas.getContext("2d")` 在**已经有 webgl 上下文**
        的画布上会返回 `null` ⇒ `draw2d()` 里 `if (!ctx) return;` 直接**静默不画**。

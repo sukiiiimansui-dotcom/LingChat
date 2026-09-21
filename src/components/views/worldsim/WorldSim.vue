@@ -10,6 +10,19 @@
           低于菜单/弹窗(60/1000)。机主给的层叠表里，立绘是 1、菜单是 1000，这里不越级。
   -->
   <div class="ws-root" :class="rootClassAll">
+    <!-- 🔬 验证面板（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」
+         的最终一项：**五个级别都要能开**）。这里挂的是**同一个组件**（`WsVerifyPanel`），
+         只是快照来自**阶段引擎** `geoStage`（全国/省/市/区县）；
+         小区级（`step === 'neighborhood'`）由 `WsDistrictMapLibre` 自己挂那一份（同一组件、不同快照）
+         ⇒ 避免"两套验证逻辑"这种病根，也不会同时冒出两个 🔬。 -->
+    <WsVerifyPanel
+      v-if="step !== 'neighborhood'"
+      :open="verifyOpen"
+      :snapshot="stageSnapshot"
+      :on-shoot="shootStage"
+      :on-retry-map="retryStageMap"
+      @toggle="verifyOpen = $event"
+    />
     <!-- ── 顶栏 ─────────────────────────────────────────────────────── -->
     <header class="ws-top">
       <button class="ws-btn ws-btn--ghost" type="button" title="回主菜单" @click="goMenu">←</button>
@@ -592,7 +605,14 @@
   import { useElementSize, useWorldSimGeo, useWorldSimTheme } from "@/composables/useWorldSimGeo";
   import { useWorldSim } from "@/composables/useWorldSim";
   import { useWorldSimGestures } from "@/composables/useWorldSimGestures";
-  import { useWsMapLibre } from "@/composables/useWsMapLibre";
+  import { ML_BG, ML_LAND, ML_LINE, useWsMapLibre } from "@/composables/useWsMapLibre";
+  /* 🔬 五级共用的验证面板（机主硬要求：全部验证功能在 App 页可见）—— **同一个组件**，
+     这里只是换一份快照来源（阶段引擎 `geoStage`）。 */
+  import WsVerifyPanel from "./WsVerifyPanel.vue";
+  import { type VerifySnapshot } from "./wsVerifyChecks";
+  import { type ShotMapLike, runAppSelfShot } from "./wsAppSelfShot";
+  import { buildStyleReport } from "./wsStyleReport";
+  import { blankOfDataUrl } from "./wsSelfShot";
   import { useWsActors } from "@/composables/useWsActors";
   import { useWsPanel } from "@/composables/useWsPanel";
   import { useWorldTrips } from "@/composables/useWorldTrips";
@@ -666,6 +686,201 @@
       else sim.setPick(p.adcode, p.name);
     },
   });
+  /* ── 🔬 验证面板（五级共用）─────────────────────────────────────────────
+     机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」+「整个世界模拟都必须最新」。
+     面板只有一个实现（`WsVerifyPanel` + `wsVerifyChecks`），这里提供**阶段舞台那一级**的快照：
+     级别名 / 该级渲染路 / 该级引擎错误原文 / 图层与关键 paint / 画布与 dpr / 定位来源。
+     取值全走 `geoStage`（引擎自己报的 `info` 与 `map`）—— **不另算第二份**。 */
+  const verifyOpen = ref(
+    (() => {
+      try {
+        return /[?&]wsverify=1\b/.test(location.search);
+      } catch {
+        return false;
+      }
+    })()
+  );
+  /** 当前在哪一级（面板第一行就要说清"你看的是哪一级的那条路"） */
+  const stageLevelName = computed(() => {
+    switch (step.value) {
+      case "country":
+        return "全国级";
+      case "province":
+        return "省级";
+      case "city":
+        return "市级";
+      case "district":
+        return "区县级";
+      case "neighborhood":
+        return "小区级";
+      default:
+        return `引导中（${step.value}）`;
+    }
+  });
+  /** 引擎实例上的"读 paint"（`MlMap` 类型里没有这一条，但运行时 MapLibre 有 ⇒ 显式窄化，别用 any） */
+  function stagePaintOf(id: string, key: string): unknown {
+    try {
+      const m = geoStage.map as unknown as { getPaintProperty?: (i: string, k: string) => unknown } | null;
+      return m?.getPaintProperty?.(id, key) ?? null;
+    } catch {
+      return null;
+    }
+  }
+  /** 阶段引擎的 canvas（拿不到就是 null —— 引擎未接管） */
+  function stageCanvas(): HTMLCanvasElement | null {
+    try {
+      return (geoStage.map?.getCanvas?.() as HTMLCanvasElement | undefined) || null;
+    } catch {
+      return null;
+    }
+  }
+  /** 这一级到底走哪条路：引擎接管 = webgl；引擎报过错 = failed；还没结论 = waiting */
+  function stagePath(): "webgl" | "waiting" | "failed" {
+    if (geoOk.value) return "webgl";
+    return String(geoStage.err.value || "") ? "failed" : "waiting";
+  }
+  function stageSnapshot(): VerifySnapshot {
+    const cv = stageCanvas();
+    const m = geoStage.map as unknown as ShotMapLike | null;
+    const info = geoStage.info.value;
+    const errText = String(geoStage.err.value || "");
+    const layers = (() => {
+      try {
+        return ((m?.getStyle?.()?.layers as Array<{ id?: string; type?: string }> | undefined) || [])
+          .filter((l) => !!l?.id)
+          .map((l) => ({ id: String(l.id), type: String(l.type || "?") }));
+      } catch {
+        return [];
+      }
+    })();
+    return {
+      kind: stagePath(),
+      level: stageLevelName.value,
+      build: "stage-2026-09-21-v1",
+      href: typeof location !== "undefined" ? location.href : "",
+      fallbackWhy: errText
+        ? `${errText}（引擎不可用时本页会**回退到后端 SVG 那条老路** —— 这一条本轮还没改，见 CHANGELOG 未做项）`
+        : geoOk.value
+          ? "（没降级：引擎已接管）"
+          : "（引擎还没接管，也没报错 —— 还在等）",
+      fallbackKind: geoOk.value ? "none" : errText ? "perm" : "temp",
+      recovered: false,
+      isStyleLoaded: (() => {
+        try {
+          return m?.isStyleLoaded?.() ?? null;
+        } catch {
+          return null;
+        }
+      })(),
+      /* ⚠️ 阶段引擎**没有** `render` 事件监听（那是小区级那条路加的）⇒ 这里用"要素已画"当代理，
+         并在口径里写明 —— 不许把代理说成事实。 */
+      sawRender: info.feats > 0,
+      sawRenderNote: "阶段引擎没有 render 监听，这里用「要素已画（info.feats>0）」当代理",
+      layers,
+      expectedLayerIds: [ML_BG, ML_LAND, ML_LINE],
+      errors: info.errors.slice(0, 20),
+      canvas: cv
+        ? {
+            w: cv.width,
+            h: cv.height,
+            cw: cv.clientWidth,
+            ch: cv.clientHeight,
+            dpr: typeof devicePixelRatio === "number" ? devicePixelRatio : 1,
+          }
+        : null,
+      dprCap2d: null,
+      canvasBlank: null,
+      /* 计数/路网规格：**本级没有这套口径** ⇒ 传 undefined（面板会如实写"本级没有"） */
+      counts: undefined,
+      roadSpecs: undefined,
+      capsLow: !!perf.low.value,
+      wstheme: `阶段舞台（${mapDark.value ? "暗" : "亮"}底）`,
+      wsnight: { on: isNightNow(), level: mapDark.value ? 1 : 0 },
+      locSource: sim.locSource.value,
+      keyPaints: (() => {
+        const out: Record<string, Record<string, unknown>> = {};
+        try {
+          for (const l of layers) {
+            const keys =
+              l.type === "raster" ? ["raster-opacity"] : l.type === "line" ? ["line-color", "line-width"] : [];
+            if (!keys.length) continue;
+            const one: Record<string, unknown> = {};
+            for (const k of keys) one[k] = stagePaintOf(l.id, k);
+            out[l.id] = one;
+          }
+        } catch {
+          /* 取不到 paint 就空着（有多少给多少） */
+        }
+        return out;
+      })(),
+      worldTime: todClock.value || "（拿不到）",
+      hud: (() => {
+        try {
+          const el = document.querySelector(".ws-brand__stage");
+          return el ? String((el as HTMLElement).innerText || "").replace(/\s+/g, " ").trim() : "";
+        } catch {
+          return "";
+        }
+      })(),
+    };
+  }
+  /** 「🔄 重试地图」：**只在引擎没接管时**重挂（绝不去拆一张正在工作的地图） */
+  async function retryStageMap(): Promise<string> {
+    if (geoOk.value) return "现在就是 WebGL 路（引擎已接管），不用重试";
+    const before = String(geoStage.err.value || "");
+    try {
+      geoStage.destroy();
+    } catch {
+      /* 拆不掉就往下试挂 */
+    }
+    try {
+      geoStage.mount();
+    } catch (e) {
+      return `重挂引擎失败：${String((e as Error)?.message || e)}`;
+    }
+    await new Promise<void>((r) => setTimeout(r, 2500));
+    return geoOk.value
+      ? "✅ 引擎已重挂并接管（渲染路 = WebGL）"
+      : `重挂后仍未接管（错误：${String(geoStage.err.value || before || "无")}）—— 可刷新页面再试`;
+  }
+  /** 📸 自拍：复用**同一条** `runAppSelfShot`（判空/重试/诊断图/JSON 全都在那边，不另写一套） */
+  async function shootStage(): Promise<string> {
+    const r = await runAppSelfShot({
+      kind: geoOk.value ? "webgl" : "fallback2d",
+      fallbackWhy: String(geoStage.err.value || ""),
+      getCanvas: () => stageCanvas(),
+      getMap: () => (geoStage.map as unknown as ShotMapLike | null) || null,
+      sawFirstFrame: () => geoStage.info.value.feats > 0,
+      dataReady: () => geoStage.info.value.feats > 0,
+      dataNote: () => `本级要素 ${geoStage.info.value.feats} 个 · ${geoStage.info.value.loadMs}ms · ${stageLevelName.value}`,
+      waitMs: 3000,
+      aborted: () => false,
+      build: "stage-2026-09-21-v1",
+      note: (t) => wsToast(t, "info"),
+      styleReport: (shot) => ({
+        ...buildStyleReport({
+          build: "stage-2026-09-21-v1",
+          href: typeof location !== "undefined" ? location.href : "",
+          isStyleLoaded: geoOk.value ? true : null,
+          layers: stageSnapshot().layers,
+          paintOf: (id, key) => stagePaintOf(id, key),
+          errors: geoStage.info.value.errors,
+          wstheme: "stage",
+          wsnight: { on: isNightNow(), level: mapDark.value ? 1 : 0 },
+          canvas: stageSnapshot().canvas,
+          fallback: { used: !geoOk.value, why: String(geoStage.err.value || "") },
+          fallbackKind: geoOk.value ? "none" : "perm",
+          recovered: false,
+          sawRender: geoStage.info.value.feats > 0,
+          hud: stageSnapshot().hud,
+          stats: { level: stageLevelName.value, feats: geoStage.info.value.feats, engine: geoStage.info.value.engine },
+        }),
+        shot: { name: shot.name, blank: shot.blank, attempts: shot.attempts, waitedMs: shot.waitedMs, ready: shot.ready, note: shot.why, posted: shot.posted },
+      }),
+    });
+    return r.posted ? `已回传 ${r.name}${r.blank ? "（空白 ⇒ 发的是诊断图）" : ""}` : "POST 失败（8789 没起？）";
+  }
+
   /* 悬浮手机：没接进来的应用点了要**如实提示**（绝不静默 —— 点了没反应最伤体验）。
      清单同 `WsPhone.vue` 的 APPS；已接的（READY）由 WsPhone 内部直接打开，不走这里。 */
   const PHONE_APP_LABEL: Record<string, string> = {

@@ -30,7 +30,7 @@
     <section v-if="open" class="wsv__box" role="region" aria-label="验证面板">
       <header class="wsv__hd">
         <b>🔬 验证面板</b>
-        <span class="wsv__sub">{{ snap.kind === "webgl" ? "WebGL（MapLibre）" : "2D 降级路" }}</span>
+        <span class="wsv__sub">{{ snap.level ? snap.level + " · " : "" }}{{ snap.kind === "webgl" ? "WebGL（MapLibre）" : snap.kind === "waiting" ? "等待引擎（未降级）" : snap.kind === "failed" ? "引擎没起来（未降级）" : "2D 降级路" }}</span>
         <button class="wsv__x" type="button" title="收起" @click="toggle">✕</button>
       </header>
 
@@ -96,6 +96,22 @@
         </li>
       </ul>
 
+      <!-- 🔄 画布重算（2026-09-21 真机"画布 300×150"事件的**定位工具**：
+           点一下就知道 resize 能不能治好，日志能分清"没调到"和"调了没生效"） -->
+      <h4>画布重算 <em>实际 vs 期望（布局 × dpr）</em></h4>
+      <p class="wsv__row">
+        <button class="wsv__btn" type="button" @click="forceResize">🔄 强制重算画布</button>
+        <span class="wsv__sub">
+          {{ snap.canvas ? `实际 ${snap.canvas.w}×${snap.canvas.h} · 期望 ${Math.round(snap.canvas.cw * snap.canvas.dpr)}×${Math.round(snap.canvas.ch * snap.canvas.dpr)}` : "拿不到画布" }}
+        </span>
+      </p>
+      <p v-if="resizeMsg" class="wsv__none">{{ resizeMsg }}</p>
+      <ul v-if="snap.resizeLog && snap.resizeLog.length" class="wsv__list">
+        <li v-for="(r, i) in snap.resizeLog" :key="i" class="unk">
+          <span class="wsv__ico">📐</span><span class="wsv__dt">{{ r }}</span>
+        </li>
+      </ul>
+
       <!-- ①.5 一键复制（机主排障用：**不用截图**，按一下再粘给 agent 就是全部原文） -->
       <h4>复制诊断 <em>降级原因 + 地图库错误原文 + 关键指标</em></h4>
       <p class="wsv__row">
@@ -131,7 +147,9 @@
         <dt>画布 / DPR</dt>
         <dd>{{ snap.canvas ? `${snap.canvas.w}×${snap.canvas.h} 像素 · ${snap.canvas.cw}×${snap.canvas.ch} 布局 · dpr=${snap.canvas.dpr}` : "（拿不到）" }}</dd>
         <dt>数据计数</dt>
-        <dd>🏢{{ snap.counts.buildings }} 🛣{{ snap.counts.roads }} 🏪{{ snap.counts.facilities }} 👤{{ snap.counts.pins }}</dd>
+        <dd>
+          {{ snap.counts ? `🏢${snap.counts.buildings} 🛣${snap.counts.roads} 🏪${snap.counts.facilities} 👤${snap.counts.pins}` : "本级没有计数口径（全国~区县；计数在小区级 HUD）" }}
+        </dd>
         <dt>定位来源</dt>
         <dd :class="{ 'wsv__bad': snap.locSource === 'ip' }">{{ locText }}</dd>
         <dt>动效状态</dt>
@@ -193,6 +211,8 @@
       onShoot?: () => Promise<string>;
       /** 点「重试地图」时调（P0：临时类降级可以让用户手动催一下；返回一句人话） */
       onRetryMap?: () => Promise<string>;
+      /** 点「🔄 强制重算画布」时调（同步返回一句人话：画布前后尺寸） */
+      onForceResize?: () => string;
     }>(),
     { open: false }
   );
@@ -204,6 +224,19 @@
   const shooting = ref(false);
   const shotMsg = ref("");
   const retrying = ref(false);
+  const resizeMsg = ref("");
+  function forceResize(): void {
+    if (!props.onForceResize) {
+      resizeMsg.value = "这一级没有接重算入口";
+      return;
+    }
+    try {
+      resizeMsg.value = props.onForceResize();
+    } catch (err) {
+      resizeMsg.value = `重算出错：${String((err as Error)?.message || err)}`;
+    }
+    rerun();
+  }
   const retryMsg = ref("");
   const copied = ref(false);
   const diagEl = ref<HTMLTextAreaElement | null>(null);
@@ -218,7 +251,7 @@
     const cat =
       s.fallbackKind === "temp" ? "临时类（只是慢，会自己恢复）" : s.fallbackKind === "perm" ? "永久类（报错/拿不到 WebGL）" : "未降级/未知";
     return [
-      `【App 小区级诊断】${s.build || ""}`,
+      `【App 诊断】级别=${s.level || "（未记录）"} ${s.build || ""}`,
       `地址=${s.href || ""}`,
       `渲染路=${s.kind === "webgl" ? "WebGL（MapLibre）" : "2D 降级"}${s.recovered ? "（曾降级，已自动切回 WebGL）" : ""}`,
       `降级原因原文=${s.fallbackWhy || "（无）"}`,
@@ -227,7 +260,9 @@
       `画布=${s.canvas ? `${s.canvas.w}x${s.canvas.h}px / ${s.canvas.cw}x${s.canvas.ch}布局 / dpr=${s.canvas.dpr}` : "（拿不到）"}`,
       `2D画布DPR封顶=${s.dprCap2d ?? "不适用"} 性能档=${s.capsLow ? "低档" : "正常"}`,
       `主题=${s.wstheme} 夜色=${s.wsnight.on ? "on" : "off"} level=${s.wsnight.level} 世界时间=${s.worldTime}`,
-      `计数=🏢${s.counts.buildings} 🛣${s.counts.roads} 🏪${s.counts.facilities} 👤${s.counts.pins}`,
+      s.counts
+        ? `计数=🏢${s.counts.buildings} 🛣${s.counts.roads} 🏪${s.counts.facilities} 👤${s.counts.pins}`
+        : "计数=（本级没有这套口径）",
       `定位来源=${s.locSource || "未知"}`,
       `地图库错误(${s.errors.length})：`,
       ...(s.errors.length ? s.errors.map((e, i) => `  ${i + 1}. ${e}`) : ["  （无）"]),

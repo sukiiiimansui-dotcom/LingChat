@@ -1987,4 +1987,10 @@
   .ws-toast--err {
     border-color: var(--ws-err);
   }
+  /* 低档兜底：见下面 `backdrop-filter` 处关于「blur(0px) 是假关」的说明 */
+  .ws-root.ws-perf-low .ws-drawer {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
 </style>

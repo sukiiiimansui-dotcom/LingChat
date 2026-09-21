@@ -198,6 +198,7 @@
           :area="areaLabel || '未知区域'"
           :adcode="String(sim.leaf?.value?.adcode || '')"
           :markers="districtPins"
+          :night="todNight"
           :map-style="style"
           @back="backTo(path.length - 1)"
           @done="onWorldEntered"

@@ -432,8 +432,65 @@
   let alive = true;
   /** 「放大才取楼」的去抖定时器（moveend 里用；卸载时要清） */
   let bldTimer = 0;
-  /** 「地图库 8 秒没画出第一帧就降级」的看门狗（卸载时要清，见 onBeforeUnmount） */
+  /** 「地图库多久没画出第一帧就降级」的看门狗（卸载时要清，见 onBeforeUnmount） */
   let watchdog = 0;
+  /** 地图库**真的出过一帧**没有？（`render` 事件；看门狗"别只看时间"就靠它） */
+  let sawRender = false;
+  /** 宽限用过了没有 —— **只宽限一次**，免得"宽限"变成"永远等下去" */
+  let watchdogGraceUsed = false;
+
+  /**
+   * 是不是**自动化/无头**环境（`navigator.webdriver`）。
+   *
+   * 为什么要分开：看门狗期限对这两种环境的意义**正好相反** ——
+   *   · 自动化（CI 闸门）：要的是"到点就**如实**降级"，等久了闸门自己先超时；
+   *   · 真机：要的是"**别误判**"，WebGL 冷启动 + 首批瓦片本来就要十几秒。
+   * 用一个开关环境都照顾到，而不是把 8 秒拍给所有人（那正是机主看到纯色屏的那条路）。
+   * `navigator.webdriver` 是 Selenium/WebDriver 起的浏览器的标准标记；
+   * 读不到就当**真机**（保守：真机的宽限比误判降级划算）。
+   */
+  function isAutomation(): boolean {
+    try {
+      return typeof navigator !== "undefined" && (navigator as { webdriver?: boolean }).webdriver === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 看门狗期限（**环境感知**，不是一刀切 8 秒）。
+   * 写成 computed 而不是常量：低档可能在挂载后才被压下去（`fallback2d` 会 `forceLow`），
+   * 读的时候取当时的值才是"这条渲染路真的该等多久"。
+   */
+  const WATCHDOG_MS = computed(() => {
+    if (isAutomation()) return 8000; // 闸门靠这条：到点如实降级，别把闸门拖成假失败
+    return perf.low.value ? 12000 : 24000; // 真机：低端短一档，其余给足冷启动时间
+  });
+
+  /**
+   * 看门狗到点：**如实降级**到 2D 自绘路，并把**实际期限**写进 HUD。
+   *
+   * ⚠️ 这里**没有**做"降级后再自动切回 WebGL"：`fallback2d()` 会换掉画布元素
+   * （同一个 canvas 不能同时有 webgl 和 2d 上下文，见那里的注释），
+   * 要切回来得**重建整张地图 + 换回那块画布**，代价与风险都不小。
+   * ⇒ 本轮只做到"别误判 + 如实降级 + 降级路不再是一片纯色"，
+   *   **自动回切列入未做**（写在 CHANGELOG 的未验/未做里，别当成已经支持）。
+   */
+  function watchdogFire(m: { remove(): void } | null, fc: { features?: BldFeature[] } | null, limitMs: number): void {
+    if (!alive || phase.value === "done") return;
+    try {
+      m?.remove();
+    } catch {
+      /* 已经没了就算了 */
+    }
+    map = null;
+    const secs = Math.round(limitMs / 1000);
+    fallback2d(
+      "2D 降级（地图库没起来）",
+      fc,
+      `地图库 ${secs} 秒内没画出第一帧（load 未触发）`
+    );
+  }
   /** 区界 bbox（setup 作用域也要用：Marker 同步要用它把网格换算成经纬度） */
   const bboxRef = ref<[number, number, number, number] | null>(null);
   /** 真的把地图库跑起来了？（2D 降级时为 false ⇒ 走 DOM 钉子） */
@@ -717,9 +774,50 @@
       if (ring?.length) aiPolys.push({ pts: ring as number[][], kind: String(f.properties.kind) });
     }
     if (!feats.length && !aiPolys.length) {
+      /* 🔴🔴 **这里曾经就是机主看到的「纯色屏」**（2026-09-21 定案）。
+         原来这个分支只做两件事：铺满 `pal.bg` + 在左上角写一行 12px 的
+         「这一带没有楼房数据」⇒ 一屏**只有底色**（二次元主题下是 `#DCEFF7` 一片浅蓝），
+         远看/缩略图看**就是一张纯色图**；而机主 21:54 那两张"逐字节相同"的截图
+         量出来正是 `std=0.00` 的单色。
+
+         为什么会走到这儿：看门狗把"地图库 8 秒内没画出第一帧"判成降级 ⇒ 2D 路，
+         而 2D 路的楼栋要**放大到街区**才会去取 ⇒ 全区视野下 `feats` 是空的。
+         两个"如实"叠在一起，结果是一屏什么都没有。
+
+         ⇒ 纪律改成：**降级路永远不许留一整片纯色**。没有数据就画一个**明确的等待态**：
+           浅网格（看得出"这是一块地，不是坏了"）+ 两行字（在等什么、为什么）。
+         代价是几十条线，**只画一次**（`draw2d` 不是逐帧调用）⇒ 低档帧率不受影响；
+         真正的"呼吸"动效交给 DOM/CSS（见模板里那块 `.ws-dml__wait`），不开 canvas 逐帧。
+         ⚠️ 网格颜色从**主题**取（`pal.empty` + 低透明度）而不是写死灰色：
+           夜色/暗色主题下写死的灰线会变成"亮底上的白线"（看不见），这条踩过。 */
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.strokeStyle = pal.empty;
+      ctx.lineWidth = 1;
+      const step = 28;
+      ctx.beginPath();
+      for (let x = step; x < w; x += step) {
+        ctx.moveTo(x + 0.5, 0);
+        ctx.lineTo(x + 0.5, h);
+      }
+      for (let y = step; y < h; y += step) {
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(w, y + 0.5);
+      }
+      ctx.stroke();
+      ctx.restore();
       ctx.fillStyle = pal.empty;
-      ctx.font = "12px system-ui";
-      ctx.fillText("这一带没有楼房数据", 12, 22);
+      ctx.font = "13px system-ui";
+      ctx.fillText("降级预览 · 楼栋还没取到", 12, 24);
+      ctx.globalAlpha = 0.75;
+      ctx.font = "11px system-ui";
+      /* 🔴 这两行必须**逐字为真**（原来那行「这一带没有楼房数据」是在替后端下结论，
+         而真相常常只是"这一档根本没去取"）。
+         为什么不能写「放大到街区会自动加载」：**2D 降级路上缩放是死的** ——
+         `zoomBy`/`fitDistrict` 都要 `map`（MapLibre 实例），而降级时 `map = null`
+         ⇒ 楼栋永远不会再取。写在画布上的承诺必须是我们真做得到的。 */
+      ctx.fillText("地图库没起来，走的是自绘路；HUD 里有原因", 12, 42);
+      ctx.globalAlpha = 1;
       return;
     }
     // 包围盒（真楼 + 示意图元一起算，否则示意层会被算到画布外）
@@ -2147,18 +2245,35 @@
        实测（2026-09-19 无头环境）：`hasWebGL()` 为真、`new Map()` 成功、`load` 永不触发、
        `stats.mode` 停在初值「初始化…」、fps 1 —— 这就是"能玩"闸门第③条挂掉的现场。
        ⇒ 给它一个期限；过期就**如实降级**到 2D 路（有楼、有人、有解释），
-         而不是让人对着一块不动的画面猜"是不是还没加载好"。 */
+         而不是让人对着一块不动的画面猜"是不是还没加载好"。
+
+       🔴 2026-09-21 两处修正（机主"整屏纯色"事件的后续）：
+       ① **期限不能一刀切 8 秒**：真机冷启动要等样式 + 首批瓦片（弱网实测十几秒），
+          而 8 秒刚好卡在中间 ⇒ 一台**本来能跑 WebGL** 的机器被无谓地打进 2D 自绘路，
+          那条路在"全区视野"下又没有楼栋数据 ⇒ 机主看到的就是**一整片底色**。
+          ⇒ 环境感知：自动化/无头保持 8s（**闸门就靠这条**，等久了会把闸门拖成假失败），
+            真机 24s、低端 12s。
+       ② **别只看时间**：期限到点先问一句"它到底动过没有"（`sawRender` = 真出过一帧）。
+          动过 ⇒ 真机上再宽限一次（**只宽限一次**，且自动化不宽限，免得无限等下去）。
+          仍然没动 ⇒ 如实降级，并把**实际期限**写进 HUD（原来写死"8 秒"，改了期限就成了假话）。 */
+    m.on("render", () => {
+      sawRender = true;
+    });
     watchdog = window.setTimeout(() => {
       /* 已经画完就不用管了（看门狗不是"超时即失败"，是"到点还没好才算失败"） */
       if (!alive || phase.value === "done") return;
-      try {
-        m.remove();
-      } catch {
-        /* 已经没了就算了 */
+      const limitMs = WATCHDOG_MS.value;
+      if (sawRender && !isAutomation() && !watchdogGraceUsed) {
+        /* 出过帧 ⇒ 它在动，只是还没到 `load`（大瓦片/慢盘）。**只宽限一次**。 */
+        watchdogGraceUsed = true;
+        stats.note = stats.note
+          ? `${stats.note} · 地图库已出帧但未就绪，宽限中`
+          : "地图库已出帧但未就绪，宽限中";
+        watchdog = window.setTimeout(() => watchdogFire(m, fc, limitMs), limitMs);
+        return;
       }
-      map = null;
-      fallback2d("2D 降级（地图库没起来）", fc, "地图库 8 秒内没画出第一帧（load 未触发）");
-    }, 8000);
+      watchdogFire(m, fc, limitMs);
+    }, WATCHDOG_MS.value);
 
     m.on("load", () => {
       /* 第一帧真的出来了 ⇒ 撤掉看门狗（它不是"超时就算失败"，是"到点还没好才算失败"） */

@@ -68,6 +68,8 @@ export interface VerifyCtx {
     covers?: boolean;
     /** 采样结论（非地图画布才有）：单色/透明 = 透明叠层（正常），有内容 = 它在画东西 */
     sample?: string;
+    /** 是不是**设计上的覆盖层**（天气/鼠标拖尾…）—— 白名单，见 `OVERLAY_CANVAS_HINTS` */
+    overlay?: boolean;
   }>;
   /** `map.isStyleLoaded()`（没有地图实例就是 null） */
   isStyleLoaded: boolean | null;
@@ -230,12 +232,28 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
       : "降级路不建图层（判不了）"
   );
 
-  /* ⑦ 画布非空白（用的是与自拍**同一个**判空实现） */
-  push(
-    "画布非空白",
-    c.canvasBlank ? !c.canvasBlank.blank : null,
-    c.canvasBlank ? c.canvasBlank.blank ? `**空白**：${c.canvasBlank.note}` : "有内容" : "拿不到画布"
-  );
+  /* ⑦ 画布非空白（用的是与自拍**同一个**判空实现）。
+     🔴 2026-09-21 纠正：**WebGL 路下"读不到像素"不等于"没渲染"** ——
+     `toDataURL`/`drawImage` 在渲染帧之外读 WebGL 画布，拿到全透明是**经典行为**
+     （`preserveDrawingBuffer` 与读的时机都会影响它）。机主那台机器当时的证据是
+     `sawRender=出过` + `isStyleLoaded=已加载` + `resize ok` + 屏幕上**已经能看到地图**
+     ⇒ 这条判词原来写"一帧都没渲染过"是**过度断言**，会把人带偏。现在改成：
+     WebGL 路且读过帧 ⇒ 判"**判不了**"并把两种可能都写出来。 */
+  if (!c.canvasBlank) {
+    push("画布非空白", null, "拿不到画布");
+  } else if (!c.canvasBlank.blank) {
+    push("画布非空白", true, "有内容");
+  } else if (c.kind === "webgl" && c.sawRender) {
+    push(
+      "画布非空白",
+      null,
+      `**读不到像素**（${c.canvasBlank.note}）—— 但样式已加载且**出过帧** ⇒ ` +
+        "这**很可能是「WebGL 画布在渲染帧之外读不到」**（`preserveDrawingBuffer` / 读的时机），" +
+        "**不能据此断言「没渲染」**；要出图请看 📸 自拍（它在 `render` 回调里**同帧**读）或真机截图"
+    );
+  } else {
+    push("画布非空白", false, `**空白**：${c.canvasBlank.note}`);
+  }
 
   /* ⑦.2 canvas 清单：**只报事实**（这是"画布为什么是 300×150"的直接答案） */
   if (c.canvases && c.canvases.length) {
@@ -247,13 +265,18 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
         `${v.sample ? ` ${v.sample}` : ""}${v.covers ? " ⚠️ **它盖住了地图**" : ""}`
     );
     const mapOnes = c.canvases.filter((v) => v.isMapCanvas).length;
+    /* ⚠️ "遮挡"要**排除设计上的覆盖层**（天气/鼠标拖尾…），否则面板天天假报警；
+       但**非覆盖层**的那种必须继续报 —— 这次抓到真凶（`ws-dml__cv` 空壳）就是靠它。 */
+    const stray = c.canvases.filter((v) => v.covers && !v.overlay);
     push(
       `页面上的 canvas（${c.canvases.length} 块）`,
-      mapOnes === 1 && c.canvases.length === 1 ? true : null,
+      stray.length === 0 ? true : false,
       rows.join(" ｜ ") +
-        (c.canvases.length > 1
-          ? ` ⇒ **有 ${c.canvases.length} 块画布**：非 map.getCanvas() 的那些若盖在上面，屏幕上就是它们（不是地图）`
-          : "")
+        (stray.length
+          ? ` ⇒ ⚠️ **有 ${stray.length} 块"非覆盖层"画布盖在地图上**：屏幕上看到的就是它们（不是地图）`
+          : c.canvases.length > 1
+            ? " ⇒ 其余都是**已知覆盖层**（天气/拖尾…），属设计如此 ✓"
+            : "")
     );
   }
 

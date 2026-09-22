@@ -4,9 +4,10 @@ var TF_RULES = {
     /** 只沿 class ≤ 2 的路设站 */
     maxCls: 2,
     /** 站间目标间隔（米）：350~500 ⇒ 生成时用 `spacing` 做步长，落点会因路口吸附而落在区间内 */
-    spacing: 420,
-    minGap: 350,
-    maxGap: 500,
+    spacing: 250,
+    // 机主 2026-09-22：太稀 ⇒ 420 → 250（一处改，生成逻辑跟着变）
+    minGap: 220,
+    maxGap: 300,
     /** 优先落在**路口 40m 内**：在这个半径内若有路口，就把站点挪过去 */
     preferJunctionM: 40,
     /** 上限（超出**按距离取近**，不随机丢） */
@@ -30,7 +31,8 @@ var TF_RULES = {
   },
   parking: {
     /** 楼脚印 ≥ 1500 m² 或 商业/办公 ⇒ 配停车场 */
-    minAreaM2: 1500,
+    minAreaM2: 800,
+    // 2026-09-22：1500 → 800（设施太稀）
     /** 触发停车场的用途（**string[] 而不是字面量元组**：调用方的 kind 是任意字符串，
         不然 `includes(b.kind)` 过不了类型检查 —— 这是类型与运行时语义的正当放宽，不是偷懒） */
     kinds: ["commercial", "office", "retail", "supermarket"],
@@ -44,7 +46,8 @@ var TF_RULES = {
   },
   driveway: {
     /** 楼脚印 ≥ 3000 m² ⇒ 车行出入口 */
-    minAreaM2: 3e3,
+    minAreaM2: 1500,
+    // 2026-09-22：3000 → 1500（同上）
     /** 楼边界最近点 → 最近路，接入线长 4~8m */
     accessMinM: 4,
     accessMaxM: 8,
@@ -65,26 +68,64 @@ var TF_LAYER_IDS = {
   parking: "tf-park",
   driveway: "tf-drive"
 };
+var zoomScale = (z0, s0, z1, s1) => [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  z0,
+  s0,
+  z1,
+  s1
+];
 var TF_LAYER_STYLE = {
+  /* 公交站 = **蓝色圆**（最大，一眼能认出"这是站"） */
   bus: {
     type: "circle",
-    paint: { "circle-radius": 3.4, "circle-color": "#2F7FD8", "circle-stroke-width": 1.2, "circle-stroke-color": "#FFFFFF" }
+    paint: {
+      "circle-radius": zoomScale(13, 2.4, 18, 6.5),
+      "circle-color": "#1E6FD9",
+      "circle-stroke-width": 1.4,
+      "circle-stroke-color": "#FFFFFF"
+    }
   },
+  /* 人行横道 = **白色短虚线**（线状：看得出来"横过马路"） */
   crosswalk: {
     type: "line",
-    paint: { "line-color": "#FFFFFF", "line-width": 2.2, "line-opacity": 0.9 }
+    paint: {
+      "line-color": "#FFFFFF",
+      "line-width": zoomScale(13, 1.6, 18, 4.5),
+      "line-opacity": 0.95,
+      "line-dasharray": [1.2, 1.2]
+    }
   },
+  /* 红绿灯 = **红/黄小点**（比公交站小一档，颜色最跳） */
   signal: {
     type: "circle",
-    paint: { "circle-radius": 2.6, "circle-color": "#FFC24B", "circle-stroke-width": 1, "circle-stroke-color": "#1B3550" }
+    paint: {
+      "circle-radius": zoomScale(13, 1.8, 18, 4.2),
+      "circle-color": "#FF5A3C",
+      "circle-stroke-width": 1,
+      "circle-stroke-color": "#FFD24B"
+    }
   },
+  /* 停车场 = **青色方块**（`circle` + 方角：MapLibre 圆没有方形 ⇒ 用大描边近似"牌"的观感） */
   parking: {
     type: "circle",
-    paint: { "circle-radius": 3, "circle-color": "#79D9FF", "circle-stroke-width": 1, "circle-stroke-color": "#FFFFFF" }
+    paint: {
+      "circle-radius": zoomScale(13, 2.2, 18, 5.2),
+      "circle-color": "#20C4C8",
+      "circle-stroke-width": 2.2,
+      "circle-stroke-color": "#0B3B3D"
+    }
   },
+  /* 车行出入口 = **浅灰线**（贴着楼边，别抢眼） */
   driveway: {
     type: "line",
-    paint: { "line-color": "#BFE6FF", "line-width": 2.6, "line-opacity": 0.95 }
+    paint: {
+      "line-color": "#D8E6F2",
+      "line-width": zoomScale(13, 2, 18, 5),
+      "line-opacity": 0.95
+    }
   }
 };
 var TF_LOW_TIER_KINDS = ["bus", "signal"];
@@ -398,7 +439,8 @@ function transportHudLine(r) {
     0
   );
   const per = ["bus", "crosswalk", "signal", "parking", "driveway"].map((k) => r.counts[k].kept).join("/");
-  return `交通设施 ${n}（示意，非事实）· 公交/斑马线/红绿灯/停车/出入口 = ${per}${dropped ? ` · 上限裁掉 ${dropped}` : ""}`;
+  const extra = r.counts.signal.kept === 0 ? "（红绿灯这一类要求「≥3 条路相交」或含主干路，**当前数据下常常为 0** —— 规则不为此放宽到失真）" : "";
+  return `交通设施 ${n}（示意，非事实）· 公交/斑马线/红绿灯/停车/出入口 = ${per}${dropped ? ` · 上限裁掉 ${dropped}` : ""}${extra}`;
 }
 
 // src/components/views/worldsim/wsRoads.ts

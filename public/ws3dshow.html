@@ -165,7 +165,7 @@
           if (!t) throw new Error("快照里没有主题 " + THEME_ID);
           THEME = t;
           /* 版本戳带上主题名 —— 代拍回来的图一眼能看出"跑的是哪一套"（缓存坑踩过） */
-          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label; } catch {}
+          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label + " · " + artHud(); } catch {}
         } catch (e) {
           THEME = null;
           try { document.getElementById("m-build").textContent = BUILD + " · 主题未加载(" + String(e).slice(0, 24) + ")"; } catch {}
@@ -180,6 +180,13 @@
           /* ⚠️ 用条件赋值而不是 `sky: undefined` —— 后者会被当成"写了这个键"，
              样式校验会报错，而 `load` 永不触发、画布全透明（这页的文件头记着这条）。 */
           if (THEME.sky) st.sky = THEME.sky;
+          /* 🎨 `?art=2` 的变体在这里落地（art=1 时 `applyArt` 原样返回 ⇒ 旧版零改动） */
+          try {
+            const r = applyArt(st);
+            window.__ART_CHANGED__ = r.changed;
+          } catch (e) {
+            window.__ART_CHANGED__ = -1; // 变体出错 ⇒ HUD 如实报，不影响旧版
+          }
           return st;
         }
         return makeStyleFallback();
@@ -262,16 +269,19 @@
       function bldLayerSpecs() {
         /* 色阶/描边/平涂开关**全部跟着主题走**（和产品组件同源，见 `wsMapTheme.ts`）。
            兜底值 = 本页原来那套暗色配方。 */
-        const ramp = THEME?.ramp || [
-          [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
-          [60, "#5f93b0"], [110, "#7fbcd4"], [200, "#b6e2f2"], [320, "#e8f7ff"],
-        ];
+        const ramp = artRamp(
+          THEME?.ramp || [
+            [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
+            [60, "#5f93b0"], [110, "#7fbcd4"], [200, "#b6e2f2"], [320, "#e8f7ff"],
+          ]
+        ); // 🎨 art=2 把高段推到近白（`artRamp` 在 art=1 时**原样返回**）
         const outline = THEME?.outline || { color: "rgba(190,235,255,0.22)", width: 0.5 };
         /* 平涂（二次元）= 关掉竖向渐变；写实（暗色）= 开着。 */
         const vgrad = THEME ? THEME.verticalGradient : true;
         const opacity = THEME?.extrudOpacity || 0.97;
         const stops = [];
         for (const [h, c] of ramp) stops.push(h, c);
+        void 0; // （`artRamp` 在 art=1 时原样返回 ⇒ 旧版色阶逐字节不变）
         return [
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
@@ -291,9 +301,106 @@
             /* 轮廓线。暗色里它只是淡淡一圈；**二次元里它是主角** ——
                BA 风的地面(0.919)和矮楼(0.87)亮度几乎一样，全靠这条深藏青细线把楼"勾"出来。 */
             id: "bld-line", type: "line", source: "bld",
-            paint: { "line-color": outline.color, "line-width": outline.width },
+            paint: {
+              "line-color": outline.color,
+              /* 🎨 art=2：描边**随 zoom 变细/变粗**（近粗 ⇒ 动画感；远细 ⇒ 不糊成一片）。
+                 art=1 保持主题给的固定宽度（旧版逐字节不变）。停靠点只有一份（`OUTLINE_STOPS`）。 */
+              "line-width": ART === 2 ? outlineWidthExpr() : outline.width,
+            },
           },
         ];
+      }
+
+      /* ══ 🎨 美术变体 `?art=2`（机主 2026-09-21：先在**代拍页**做一版，别碰 App 与角色）════
+         规矩：**只在这一页做**、**不动 `ANIME` 基准值**、**只改"图层里已经存在的 paint 键"**
+         （`patchPaint()` 会跳过不存在的键 —— 我们被"往 style 塞未知键 ⇒ 整份校验失败 ⇒ load 永不触发"坑过）。
+         参考：`~/rikka/Dsh-SYuki/world_map/ART-STUDY.md`（高调平涂 / 描边随距离 / 基沃托斯的天）。 */
+      const ART = (function () {
+        try { return /[?&]art=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; }
+      })();
+
+      /** 描边的 zoom→宽度 停靠点（**单一真源**：样式表达式与 HUD 显示都从这一份来，别写两遍） */
+      const OUTLINE_STOPS = [
+        [13, 0.5], [15, 1.2], [16.5, 2.0], [18, 2.8],
+      ];
+      /** 按 zoom 求描边宽度（纯函数；用于 HUD 显示"现在多粗"） */
+      function outlineWidthAt(z) {
+        const st = OUTLINE_STOPS;
+        if (z <= st[0][0]) return st[0][1];
+        for (let i = 1; i < st.length; i++) {
+          if (z <= st[i][0]) {
+            const [z0, w0] = st[i - 1], [z1, w1] = st[i];
+            return +(w0 + ((w1 - w0) * (z - z0)) / (z1 - z0)).toFixed(2);
+          }
+        }
+        return st[st.length - 1][1];
+      }
+      /** 由停靠点生成 MapLibre 的 zoom 插值表达式（与 `outlineWidthAt` 同源） */
+      function outlineWidthExpr() {
+        const out = ["interpolate", ["linear"], ["zoom"]];
+        for (const [z, w] of OUTLINE_STOPS) out.push(z, w);
+        return out;
+      }
+
+      /**
+       * 只改**该图层 paint 里已经存在的键**（防"塞未知键 ⇒ 整份 style 校验失败 ⇒ load 永不触发"）。
+       * 返回是否真的改了（HUD 会统计改了几处，别让人以为改了其实没改）。
+       */
+      function patchPaint(style, layerId, key, value) {
+        const l = (style.layers || []).filter(function (x) { return x.id === layerId; })[0];
+        if (!l || !l.paint || !(key in l.paint)) return false;
+        l.paint[key] = value;
+        return true;
+      }
+
+      /** 造这一版美术（art=2 才动；art=1 原样返回 ⇒ **旧版一个字节都不变**） */
+      function applyArt(style) {
+        if (ART !== 2) return { style: style, changed: 0 };
+        let n = 0;
+        const set = function (id, k, v) { if (patchPaint(style, id, k, v)) n++; };
+
+        /* ① 描边随 zoom 变细（近粗远细）—— 楼层的 `bld-line` 在 addLayer 时加，见 bldLayerSpecs() */
+        /* ② 基沃托斯的天：**根级 sky 只动白名单里的键**（sky-color/horizon-color/fog-color 等 7 个） */
+        if (style.sky) {
+          const sky = Object.assign({}, style.sky);
+          if ("horizon-color" in sky) { sky["horizon-color"] = "#FFFFFF"; }      // 地平线近白
+          if ("fog-color" in sky) { sky["fog-color"] = "#F4FBFF"; }              // 白雾带
+          if ("sky-color" in sky) { sky["sky-color"] = "#8FD8FA"; }              // 天顶更纯的青蓝
+          if ("horizon-fog-blend" in sky) { sky["horizon-fog-blend"] = 0.78; }   // 雾带更宽 ⇒ 云带的观感
+          if ("sky-horizon-blend" in sky) { sky["sky-horizon-blend"] = 0.55; }
+          style.sky = sky;
+          n++;
+        }
+        /* ③ 平涂高调：地面更近白（tint 层是"色罩"，提亮 + 降饱和观感）、照片底图更淡（少纹理） */
+        set("tint", "background-color", "#EAF7FF");
+        set("tint", "background-opacity", 0.6);
+        set("bg", "background-color", "#F2FAFF");
+        const baseOp = (style.layers || []).filter(function (x) { return x.id === "base"; })[0];
+        if (baseOp) set("base", "raster-opacity", ART === 2 ? 0.55 : 1);        // 照片更淡 ⇒ 平涂感
+        return { style: style, changed: n };
+      }
+
+      /** 楼体色阶：art=2 把高段推到近白（**不动 ANIME 基准**，只在这一页换一份 ramp） */
+      function artRamp(ramp) {
+        if (ART !== 2 || !ramp || !ramp.length) return ramp;
+        const r = ramp.map(function (p) { return [p[0], p[1]]; });
+        const hi = ["#D9F1FF", "#EAF8FF", "#F7FDFF", "#FFFFFF"];
+        for (let i = 0; i < hi.length && i < r.length; i++) r[r.length - 1 - i][1] = hi[hi.length - 1 - i];
+        return r;
+      }
+
+      /** HUD 上的"这一版是什么"：art 档位 + 描边当前宽度 + 变体生效处数（**自证**，别让人猜） */
+      function artHud() {
+        try {
+          let z = 0;
+          try { z = map && map.getZoom ? map.getZoom() : 0; } catch (e) { z = 0; }
+          const w = map && map.getPaintProperty ? map.getPaintProperty("bld-line", "line-width") : null;
+          const wTxt = w && w.length ? ("zoom插值→" + outlineWidthAt(z)) : String(w);
+          const ch = window.__ART_CHANGED__;
+          return "art=" + ART + " 描边=" + wTxt + (ch === undefined ? "" : " 变体改=" + ch + "处");
+        } catch (e) {
+          return "art=" + ART + "（HUD 取不到）";
+        }
       }
 
       function hasWebGL() {
@@ -500,7 +607,7 @@
           const d = g.getImageData(0, 0, s, s).data;
           let mn = 255, mx = 0, aMax = 0;
           for (let i = 0; i < d.length; i += 4) {
-            aMax = Math.max(aMax, d[i + 3]);
+            aMax = Math.max(aMax, d[i + 3]);;
             for (let k = 0; k < 3; k++) { mn = Math.min(mn, d[i + k]); mx = Math.max(mx, d[i + k]); }
           }
           if (aMax === 0) return "整张画布 alpha=0（一帧都没渲染过）";

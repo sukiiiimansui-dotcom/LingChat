@@ -38,7 +38,12 @@
          天气的"感觉"（下雨发暗、下雪发白）还在，丢的只是雨滴在动。
          高档走 `v-else` 分支，一字未改。 -->
     <div v-if="flat" class="ws-wx__flat" :style="flatStyle" />
-    <canvas v-else ref="cv" class="ws-wx__cv" />
+    <!-- 🔴 2026-09-21（机主面板实测 `ws-wx__cv α=78~78` 全屏均匀 ⇒ **把地图洗淡**，
+         而那一刻天气 pill 还写着「天气不可用」）：
+         **不可用时压根不挂这块画布** —— 既不洗淡地图，也省掉一个整屏合成层。
+         （"有天气才画、没天气就透明"这条纪律以前漏了：`paint()` 里那两层全屏色
+         是**无条件**画的，与"当前有没有天气"无关。） -->
+    <canvas v-else-if="!weather.degraded" ref="cv" class="ws-wx__cv" />
   </div>
 </template>
 
@@ -162,6 +167,26 @@
     if (ctx?.setTransform) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  /* 运行中"天气变不可用"⇒ **立刻清一次屏**（否则上一次画的全屏色会一直留在画布上） */
+  watch(
+    () => props.weather.degraded,
+    (deg) => {
+      if (deg) {
+        try {
+          const c2 = cv.value;
+          if (c2 && ctx) {
+            ctx.clearRect(0, 0, c2.width, c2.height);
+            cv.value = null; // 让后续 paint 不再动它（画布马上会被 v-else-if 摘掉）
+          }
+        } catch {
+          /* 清不掉也不影响（模板会摘掉它） */
+        }
+      } else {
+        void nextTick(() => paintOnce());
+      }
+    }
+  );
+
   /** 单帧：清屏 → 天气色 → 昼夜色 → 粒子（顺序照搬老线 `WeatherLayer._frame`） */
   function paint(t: number) {
     const c = cv.value;
@@ -170,6 +195,11 @@
     const h = cssH;
     ctx.clearRect(0, 0, w, h);
     const st = props.weather;
+    /* 🔴 天气**不可用**（`degraded`）时：**只清屏**，不画下面那两层全屏色。
+       为什么必须在这里也挡一道：模板的 `v-else-if` 只在**重建**时生效，
+       而"用了很久才变成不可用"（拿不到数据 / 掉线）是**运行中**发生的 ——
+       那一刻若还留着两层全屏色，地图就被洗淡（机主实测 α=78），而且没有任何报错。 */
+    if (st.degraded) return;
 
     // ① 天气色（`screen` 提亮 / `source-over` 压暗）
     const wt = weatherTint({ kind: st.kind, intensity: st.intensity });

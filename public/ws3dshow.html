@@ -52,10 +52,25 @@
       .ops button.on { background: #79d9ff; color: #06222e; font-weight: 700; }
       #fb { position: fixed; inset: 0; display: none; place-items: center; padding: 24px; z-index: 30;
             background: #070b11; text-align: center; }
+      /* art 徽标 + 回证表：**只读的诊断件**（收起时只占一行小字） */
+      .artb { position: fixed; right: 8px; top: 8px; z-index: 25; max-width: 46vw;
+              padding: 5px 8px; border-radius: 10px; background: rgba(7, 11, 17, 0.72);
+              font-size: 10.5px; line-height: 1.5; color: #eaf6ff; }
+      .artb__h { font-weight: 700; color: #79d9ff; cursor: pointer; }
+      .artb__b { display: none; margin-top: 4px; }
+      .artb.is-open .artb__b { display: block; }
+      .artb__row { white-space: nowrap; }
+      .artb__ok { color: #7ee787; }
+      .artb__bad { color: #ff7b72; }
     </style>
   </head>
   <body>
     <div id="map"></div>
+    <!-- 🎨 art 变体徽标 + **回证表**（机主第一反馈"这变了个啥"⇒ 先证明补丁真的生效） -->
+    <div id="artb" class="artb">
+      <div id="artb-head" class="artb__h">art=1（基准）</div>
+      <div id="artb-body" class="artb__b"></div>
+    </div>
     <div class="hud">
       <span><b id="m-n">0</b> 栋</span>
       <span>真高 <b id="m-h">0</b></span>
@@ -321,8 +336,8 @@
 
       /** 描边的 zoom→宽度 停靠点（**单一真源**：样式表达式与 HUD 显示都从这一份来，别写两遍） */
       const OUTLINE_STOPS = [
-        [13, 0.5], [15, 1.2], [16.5, 2.0], [18, 2.8],
-      ];
+        [13, 0.5], [15, 1.6], [16.5, 3.4], [18, 4.2],
+      ]; // 机主反馈"看不出变化" ⇒ 近景放大一档（远景仍保持细）
       /** 按 zoom 求描边宽度（纯函数；用于 HUD 显示"现在多粗"） */
       function outlineWidthAt(z) {
         const st = OUTLINE_STOPS;
@@ -353,11 +368,26 @@
         return true;
       }
 
+      /**
+       * 🎨 **补丁表（单一真源）**：art=2 要改的"图层 → 键 → 值"。
+       * `applyArt()` 按它改样式；`artReadback()` 按它**读回实时值**做回证 —— **同一份表**，
+       * 所以"改了但没生效"这种情况一定会在回证表里露出来（机主第一反馈："这变了个啥"）。
+       */
+      const ART_PATCHES = [
+        { id: "tint", key: "background-color", art2: "#EEF9FF", why: "地面色罩更近白" },
+        { id: "tint", key: "background-opacity", art2: 0.8, why: "色罩更实（平涂感）" },
+        { id: "bg", key: "background-color", art2: "#F7FCFF", why: "底色更亮" },
+        { id: "base", key: "raster-opacity", art2: 0.32, why: "照片更淡 ⇒ 少纹理" },
+      ];
+      /** 楼体色阶要推近白的档数（`artRamp` 用；也进回证表） */
+      const ART_RAMP_HI = ["#CFEDFF", "#E2F6FF", "#F2FCFF", "#FFFFFF"];
+
       /** 造这一版美术（art=2 才动；art=1 原样返回 ⇒ **旧版一个字节都不变**） */
       function applyArt(style) {
         if (ART !== 2) return { style: style, changed: 0 };
         let n = 0;
         const set = function (id, k, v) { if (patchPaint(style, id, k, v)) n++; };
+        for (const q of ART_PATCHES) set(q.id, q.key, q.art2);
 
         /* ① 描边随 zoom 变细（近粗远细）—— 楼层的 `bld-line` 在 addLayer 时加，见 bldLayerSpecs() */
         /* ② 基沃托斯的天：**根级 sky 只动白名单里的键**（sky-color/horizon-color/fog-color 等 7 个） */
@@ -365,18 +395,13 @@
           const sky = Object.assign({}, style.sky);
           if ("horizon-color" in sky) { sky["horizon-color"] = "#FFFFFF"; }      // 地平线近白
           if ("fog-color" in sky) { sky["fog-color"] = "#F4FBFF"; }              // 白雾带
-          if ("sky-color" in sky) { sky["sky-color"] = "#8FD8FA"; }              // 天顶更纯的青蓝
+          if ("sky-color" in sky) { sky["sky-color"] = "#6FCBFA"; }              // 天顶更纯的青蓝
           if ("horizon-fog-blend" in sky) { sky["horizon-fog-blend"] = 0.78; }   // 雾带更宽 ⇒ 云带的观感
           if ("sky-horizon-blend" in sky) { sky["sky-horizon-blend"] = 0.55; }
           style.sky = sky;
           n++;
         }
         /* ③ 平涂高调：地面更近白（tint 层是"色罩"，提亮 + 降饱和观感）、照片底图更淡（少纹理） */
-        set("tint", "background-color", "#EAF7FF");
-        set("tint", "background-opacity", 0.6);
-        set("bg", "background-color", "#F2FAFF");
-        const baseOp = (style.layers || []).filter(function (x) { return x.id === "base"; })[0];
-        if (baseOp) set("base", "raster-opacity", ART === 2 ? 0.55 : 1);        // 照片更淡 ⇒ 平涂感
         return { style: style, changed: n };
       }
 
@@ -384,7 +409,7 @@
       function artRamp(ramp) {
         if (ART !== 2 || !ramp || !ramp.length) return ramp;
         const r = ramp.map(function (p) { return [p[0], p[1]]; });
-        const hi = ["#D9F1FF", "#EAF8FF", "#F7FDFF", "#FFFFFF"];
+        const hi = ART_RAMP_HI;
         for (let i = 0; i < hi.length && i < r.length; i++) r[r.length - 1 - i][1] = hi[hi.length - 1 - i];
         return r;
       }
@@ -401,6 +426,95 @@
         } catch (e) {
           return "art=" + ART + "（HUD 取不到）";
         }
+      }
+
+      /**
+       * 🎨 **回证表**：按 `ART_PATCHES` 逐条读**地图上真实的** paint 值，与 art=2 期望值对照。
+       * 为什么必须有：上一版我只做了"拿 JSON 空跑"的自验 —— 那**不等于页面上生效**
+       * （真页面的图层/键可能与 JSON 不一致）。机主第一句反馈就是"这变了个啥"。
+       * 返回 `[{图层, 键, 现在, 期望, 命中}]`，命中/跳过**都列**。
+       */
+      function artReadback() {
+        const rows = [];
+        for (const q of ART_PATCHES) {
+          let now = null, has = false;
+          try {
+            has = !!(map && map.getLayer && map.getLayer(q.id));
+            now = map && map.getPaintProperty ? map.getPaintProperty(q.id, q.key) : null;
+          } catch (e) { now = "(取值抛错)"; }
+          rows.push({
+            id: q.id, key: q.key, now: now,
+            want: ART === 2 ? q.art2 : null,
+            /** art=1 时这一行只是"基准值"；art=2 时才判命中 */
+            hit: ART !== 2 ? null : (!has ? "no-layer" : JSON.stringify(now) === JSON.stringify(q.art2)),
+            why: q.why,
+          });
+        }
+        /* 描边（zoom 插值，特殊一行）：报告"现在这个 zoom 下实际多粗" */
+        try {
+          const w = map && map.getPaintProperty ? map.getPaintProperty("bld-line", "line-width") : null;
+          rows.push({
+            id: "bld-line", key: "line-width",
+            now: w && w.length ? ("zoom插值→现在 " + outlineWidthAt(map.getZoom())) : w,
+            want: ART === 2 ? ("zoom插值→" + JSON.stringify(OUTLINE_STOPS)) : "主题固定值",
+            hit: ART !== 2 ? null : (w && w.length ? true : false),
+            why: "描边随 zoom（近粗远细）",
+          });
+        } catch (e) { /* 忽略 */ }
+        return rows;
+      }
+
+      /** 把回证表画到徽标里（点击徽标展开/收起） */
+      function renderArtBadge() {
+        try {
+          const head = document.getElementById("artb-head");
+          const body = document.getElementById("artb-body");
+          const box = document.getElementById("artb");
+          if (!head || !body || !box) return;
+          const rows = artReadback();
+          const hitN = rows.filter(function (r) { return r.hit === true; }).length;
+          const missN = rows.filter(function (r) { return r.hit === false; }).length;
+          head.textContent = ART === 2
+            ? ("🎨 art=2 ✓ 命中 " + hitN + "/" + rows.length + (missN ? (" ❌未命中 " + missN) : ""))
+            : "🎨 art=1（基准版）";
+          head.onclick = function () { box.classList.toggle("is-open"); };
+          body.innerHTML = rows.map(function (r) {
+            const mark = r.hit === true ? '<span class="artb__ok">✅</span>'
+              : r.hit === false ? '<span class="artb__bad">❌</span>' : '<span>·</span>';
+            return '<div class="artb__row">' + mark + " " + r.id + "." + r.key +
+              " = " + JSON.stringify(r.now) +
+              (r.hit === false ? (" 期望 " + JSON.stringify(r.want)) : "") +
+              " <i>" + r.why + "</i></div>";
+          }).join("");
+        } catch (e) { /* 徽标画不出来不影响页面 */ }
+      }
+
+      /**
+       * 🔴 侧视角（近地平线）**倍率爆炸**的护栏（机主 2026-09-21：「一下划不见」）。
+       *
+       * 根因：pitch 越大，地面与视线越接近平行 ⇒ 同样的手指位移对应**巨大的地面距离**。
+       * 做法：① **`maxPitch` 85 → 70**（能给天空，但到不了"只剩一条线"）；
+       *      ② pitch > 55 之后**按比例降拖动速度**（`dragPan.enable({maxSpeed})`，MapLibre 的公开口子）；
+       *      ③ HUD 显示当前 pitch 与阻尼系数（**自证**：机主能看出护栏在不在工作）。
+       * ⚠️ 触屏的"捏合缩放"没有 rate 口子（`touchZoomRotate` 不暴露）⇒ 那一项**没做**，如实记。
+       */
+      const PITCH_SOFT = 55;
+      function panDamping(pitch) {
+        return pitch <= PITCH_SOFT ? 1 : 1 / (1 + (pitch - PITCH_SOFT) / 25);
+      }
+      function applyPitchGuard() {
+        try {
+          const p = map && map.getPitch ? map.getPitch() : 0;
+          const k = panDamping(p);
+          if (map && map.dragPan && map.dragPan.enable) {
+            map.dragPan.enable({ maxSpeed: Math.round(1400 * k) });
+          }
+          if (map && map.scrollZoom && map.scrollZoom.setWheelZoomRate) {
+            map.scrollZoom.setWheelZoomRate((1 / 450) * k);
+          }
+          const el = document.getElementById("m-msg");
+          if (el && ART === 2) el.textContent = "pitch=" + Math.round(p) + "° 拖动阻尼×" + k.toFixed(2);
+        } catch (e) { /* 护栏失败不影响地图 */ }
       }
 
       function hasWebGL() {
@@ -517,7 +631,7 @@
           /* 🎨 2026-09-20 机主要"**看得见天空（基沃托斯的天空）**"：
              58° 是俯视看楼的角度，天际线以上全在画面外 ⇒ 降到 38° 把地平线和天空收进来。
              `maxPitch: 85` 必须显式写：MapLibre 默认上限只有 **60°**，不放开就抬不起头。 */
-          zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 85,
+          zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 70,
           attributionControl: false, fadeDuration: 120,
           preserveDrawingBuffer: true, // 截图用（无头/代拍都要它）
         });
@@ -527,9 +641,17 @@
         let busy = false;
         map.on("load", async () => {
           await refresh();
+          /* 🎨 回证表要在**楼体图层加完之后**读（`bld-line` 是 addLayer 加的）⇒ 放在 refresh 之后 */
+          renderArtBadge();
           window.__w3d.ready = true;
         });
         map.on("moveend", () => { if (window.__w3d.ready) void refresh(); });
+        /* 🔴 侧视角护栏：pitch 一变就重算阻尼（拖动速度/滚轮速率），并刷新 HUD 上的自证数字 */
+        try {
+          map.on("pitch", applyPitchGuard);
+          applyPitchGuard();
+          applyPitchGuard(); // 再调一次：第一次可能在样式就绪前（`dragPan` 还没挂）
+        } catch (e) { errs.push("pitchGuard " + e); }
 
         async function refresh() {
           if (busy) return; busy = true;
@@ -766,6 +888,8 @@
           ok: !!map, zoom: +(map?.getZoom() || 0).toFixed(2), pitch: Math.round(map?.getPitch() || 0),
           center: [+(map?.getCenter().lng || 0).toFixed(4), +(map?.getCenter().lat || 0).toFixed(4)],
           layers: ls, ...stats, fps: Number($("m-fps").textContent) || null,
+          /* 🎨 art 变体自证：档位 + 回证表（"改了到底生效没有"由它回答） */
+          art: ART, artPatch: window.__ART_CHANGED__, artReadback: artReadback(),
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
         };
       }

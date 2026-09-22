@@ -20,7 +20,12 @@
 -->
 <template>
   <div ref="host" class="ws-dml">
-    <canvas ref="cv" class="ws-dml__cv" />
+    <!-- 🔴 2026-09-21 定案：这块模板画布**只在真的走 2D 自绘降级路时才存在**。
+         病根：它无条件渲染 ⇒ 在 WebGL 路下是一块**默认 300×150、透明、display:block** 的空壳，
+         CSS 又把它拉满整屏 ⇒ **盖住 MapLibre 那块 3759×1287 的真地图**（机主看到的"浅色矩形"就是它）。
+         现在 `v-if="show2d"`：WebGL 路下它**根本不在 DOM 里**（于是 `cv.value` 为 null 是**正确状态**，
+         所有取用点都按"可能为 null"处理；2D 路会自己建一块，见 `fallback2d`）。 -->
+    <canvas v-if="show2d" ref="cv" class="ws-dml__cv" />
 
     <!-- 长等待可视化（机主 2026-09-19：「ai 绘制太久了，做可视化吧」）：
          小区级要等 `/api/buildings` 现取真楼栋（实测十几秒起，最慢见过 91.7s），
@@ -317,6 +322,12 @@
 
   const host = ref<HTMLElement | null>(null);
   const cv = ref<HTMLCanvasElement | null>(null);
+  /**
+   * 那块**自绘**画布要不要存在？（模板 `v-if="show2d"`）
+   * 只有真的走 2D 降级路时才 `true` —— 定案证据：WebGL 路下它是一块**默认 300×150、透明、
+   * display:block** 的空壳，CSS 拉满整屏 ⇒ **盖住真地图**（机主的"浅色矩形"就是它）。
+   */
+  const show2d = ref(false);
   /* 📊 样式自检要带上 **HUD 原话**（机主看到的那一行）—— 只读，不参与任何渲染逻辑 */
   const hudEl = ref<HTMLElement | null>(null);
   /**
@@ -1222,35 +1233,76 @@
           visibility: String(st.visibility),
           isMapCanvas: !!mc && c2 === mc,
           isRef: c2 === cv.value,
+          /* ⚠️ 判"遮挡"必须用**渲染尺寸**（clientWidth/Height），不能用 buffer（width/height）：
+             罪魁那块 `ws-dml__cv` 的 buffer 只有 300×150，但 CSS 被拉满整屏 ⇒ 它照样盖住地图。 */
+          cw: c2.clientWidth,
+          ch: c2.clientHeight,
+          covers: false,
         };
       });
     } catch {
       return [];
     }
   }
+  /** 给清单补"是否遮挡"（**渲染面积**判：可见 + 非地图那块 + 面积 ≥ 地图的一半） */
+  function canvasFactsWithCover(): NonNullable<VerifySnapshot["canvases"]> {
+    const rows = canvasFacts();
+    const mc = realMapCanvas();
+    const mArea = mc ? Math.max(1, mc.clientWidth * mc.clientHeight) : 0;
+    return rows.map((r) => ({
+      ...r,
+      sample: (() => {
+        try {
+          const all = Array.from(document.querySelectorAll("canvas")) as HTMLCanvasElement[];
+          const el = all[r.i];
+          if (!el || el === mc) return "";
+          const v = canvasIsBlank(el);
+          return `采样=${v.blank ? `单色/透明（${v.note}）` : "有内容"}`;
+        } catch {
+          return "采样=失败";
+        }
+      })(),
+      covers:
+        !!mc &&
+        !r.isMapCanvas &&
+        r.display !== "none" &&
+        r.visibility !== "hidden" &&
+        mArea > 0 &&
+        (r.cw || 0) * (r.ch || 0) >= mArea * 0.5,
+    }));
+  }
+
   /**
    * 若发现有**非 map.getCanvas() 的画布盖在地图上**（同一父级、可见），把它藏掉 ——
    * 那块多半是历史遗留（换过画布/降级过又切回来），盖在真地图上 ⇒ 屏幕上就是它（一片纯色）。
    * 只做一次、只动"盖在真画布之上"的那块，并且写进 resize 日志（**可回溯**）。
    */
-  function hideStrayCanvases(): void {
+  function removeStrayCanvases(): void {
     const mc = realMapCanvas();
-    if (!mc) return;
-    const stray = canvasFacts().filter((v) => !v.isMapCanvas && v.visibility !== "hidden" && v.display !== "none");
-    if (!stray.length) return;
+    const box = host.value;
+    if (!mc || !box) return;
     try {
-      const all = Array.from(document.querySelectorAll("canvas")) as HTMLCanvasElement[];
-      for (const v of stray) {
-        const el = all[v.i];
-        if (!el || el === mc) continue;
-        if (el.parentElement !== mc.parentElement) continue; // 只动"同一层里压着真地图"的那块
-        el.style.display = "none";
-        pushResizeLog(`隐藏遗留画布 #${v.i}（${v.w}x${v.h} class=${v.cls}）—— 它盖在真地图上（真=${mc.width}x${mc.height}）`);
+      /* 规则（2026-09-21 定案后修正）：**只看"地图容器内部"**、可见、且不是 `map.getCanvas()` 的画布。
+         ⚠️ 原来那条"必须与真画布同一父级"是**漏网的原因**：罪魁 `.ws-dml__cv` 的父级是 `div.ws-dml`
+         （= 我们的 host），而真画布在 `div.maplibregl-canvas-container` 里 ⇒ 父级不同，规则放过了它。
+         ⚠️ 也**不能**无差别删掉页面上所有非地图画布：天气粒子那块（`div.ws-wx` 里）是**该在**的，
+         所以作用域限定在 host 内部。 */
+      const all = Array.from(box.querySelectorAll("canvas")) as HTMLCanvasElement[];
+      for (const el of all) {
+        if (el === mc) continue;
+        const st = getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden") continue;
+        const cls = String(el.className || "");
+        const where = `${el.width}x${el.height} buffer / ${el.clientWidth}x${el.clientHeight} 渲染`;
+        el.remove(); // **从 DOM 移除**（只 display:none 会留个空壳，下次判断又要靠运气）
+        pushResizeLog(`移除遗留画布（${where} class=${cls}）—— 它盖在真地图上（真=${mc.width}x${mc.height}）`);
       }
     } catch {
-      /* 藏不掉不影响别的 */
+      /* 删不掉不影响别的 */
     }
   }
+  /** 兼容旧名（kickResize 里调的是它） */
+  const hideStrayCanvases = removeStrayCanvases;
 
   /** 现在画布该有多大（容器 CSS 尺寸 × dpr）—— 判据与面板一致 */
   function wantCanvasSize(cv2: HTMLCanvasElement): string {
@@ -1735,7 +1787,7 @@
       worldTime: `${props.worldTime || "（拿不到）"} · 天黑 ${nightLvl.value}${nightOn.value ? "" : "（夜色关）"}`,
       motion: motionFacts(),
       resizeLog: resizeLog.value,
-      canvases: canvasFacts(),
+      canvases: canvasFactsWithCover(),
       hud: hudEl.value?.innerText || "",
     };
   }
@@ -2701,17 +2753,24 @@
         /* 样式写不上也不影响"盖一块新的"这件事 */
       }
     }
-    if (oldCv && !oldCv.getContext("2d")) {
+    /* 两种都要新建一块：
+       ① 旧画布拿不到 2D 上下文（它被 WebGL 占过）；
+       ② **旧画布压根不存在**（WebGL 路下模板那块被 `v-if` 关掉了）—— 这一条是这次加上的，
+          少了它，降级路会"什么都不画"（`draw2d` 里 `if (!c) return`）且**零报错**。 */
+    if (!oldCv || !oldCv.getContext("2d")) {
+      show2d.value = true; // 让 `v-if` 打开（下一帧生效；这一帧我们直接用新建的这块）
       const fresh = document.createElement("canvas");
       /* ⚠️ 要连**所有属性**一起搬（`class` 之外还有 Vue 的 scoped 标记 `data-v-xxxx`）——
          漏了它，新画布就丢掉了 `position:absolute; width:100%; height:100%`，
          会缩回浏览器默认的 300×150 跑到左上角：**又是一次"降级了但看着是坏的"**。 */
-      for (const a of Array.from(oldCv.attributes)) fresh.setAttribute(a.name, a.value);
-      if (keepAlive && oldCv.parentElement) {
+      /* 旧画布在不在都要能走通：不在就照**模板那块的类名**补上（`ws-dml__cv` 的定位/铺满规则靠它） */
+      if (oldCv) for (const at of Array.from(oldCv.attributes)) fresh.setAttribute(at.name, at.value);
+      else fresh.className = "ws-dml__cv";
+      if (keepAlive && oldCv?.parentElement) {
         /* 盖在**上面**（`afterend`）：下面那块 WebGL 画布继续存在、继续渲染，只是看不见 */
         oldCv.parentElement.insertBefore(fresh, oldCv.nextSibling);
         fresh.classList.add("ws-dml__cv--2d");
-      } else if (oldCv.parentElement) {
+      } else if (oldCv?.parentElement) {
         oldCv.replaceWith(fresh);
       } else if (hostEl) {
         /* `map.remove()` 会把画布**从 DOM 里摘掉**（我们把它交给了地图库管），
@@ -2760,7 +2819,9 @@
   }
 
   onMounted(async () => {
-    if (!cv.value) return;
+    /* ⚠️ 守卫看的是 **host**，不是 `cv`：2D 画布在 WebGL 路下**故意不存在**（`v-if="show2d"`），
+       以前那句 `if (!cv.value) return;` 会让整段建图逻辑**直接不跑**（白屏零报错那种）。 */
+    if (!host.value) return;
     /* `?autoshot=1` = 开代拍（页面自己截图回传）。写在最前面：
        后面任何一步 return（降级路）都不影响"开关已经开了"这件事。 */
     selfShotMaybeArmFromUrl();
@@ -2969,7 +3030,8 @@
     // ③ 建图（注意：样式里**不能写 `glyphs: undefined`** —— 会让样式校验失败且零报错）
     const m = new maplibregl.Map({
       container: host.value as HTMLElement,
-      canvas: cv.value as HTMLCanvasElement,
+      /* `cv.value` 在 WebGL 路下是 null（`v-if` 关着）⇒ 不能把 null 当 canvas 传 */
+      ...(cv.value ? { canvas: cv.value as HTMLCanvasElement } : {}),
       style: makeStyle(),
       center: [106.569, 29.558],
       zoom: 16.4,
@@ -3022,6 +3084,11 @@
     m.on("render", () => {
       sawRender = true;
     });
+    /* 🔴 建图后**立刻**清一次"容器里那些不是地图的画布"：
+       定案证据（机主 canvas 清单）—— 地图那块 `maplibregl-canvas` **尺寸完全正确 3759×1287**，
+       而模板那块 `ws-dml__cv`（buffer 停在默认 300×150、CSS 拉满整屏、display:block）**压在它上面**
+       ⇒ 机主看到的"浅色矩形"就是这块空壳。不清掉，地图画得再好也看不见。 */
+    removeStrayCanvases();
     /* 建图后补 resize（含观察容器尺寸变化）—— 见上面那段"真 P0"的说明 */
     kickResize(m);
     watchdog = window.setTimeout(() => {

@@ -61,6 +61,13 @@ export interface VerifyCtx {
     visibility: string;
     isMapCanvas: boolean;
     isRef: boolean;
+    /** CSS 渲染尺寸（判"遮挡"要用它，不能用 buffer 尺寸） */
+    cw?: number;
+    ch?: number;
+    /** 是否**盖住了地图**：可见 + 非 map.getCanvas() + 渲染面积接近/超过地图 */
+    covers?: boolean;
+    /** 采样结论（非地图画布才有）：单色/透明 = 透明叠层（正常），有内容 = 它在画东西 */
+    sample?: string;
   }>;
   /** `map.isStyleLoaded()`（没有地图实例就是 null） */
   isStyleLoaded: boolean | null;
@@ -234,8 +241,10 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
   if (c.canvases && c.canvases.length) {
     const rows = c.canvases.map(
       (v) =>
-        `#${v.i} ${v.w}×${v.h} class=${v.cls || "(无)"} 父=${v.parent} z=${v.z} display=${v.display} vis=${v.visibility}` +
-        `${v.isMapCanvas ? " ← **map.getCanvas()**" : ""}${v.isRef ? " ← cv.value" : ""}`
+        `#${v.i} buffer=${v.w}×${v.h} 渲染=${v.cw ?? "?"}×${v.ch ?? "?"} class=${v.cls || "(无)"} ` +
+        `父=${v.parent} display=${v.display} vis=${v.visibility}` +
+        `${v.isMapCanvas ? " ← **map.getCanvas()（真地图）**" : ""}${v.isRef ? " ← cv.value" : ""}` +
+        `${v.sample ? ` ${v.sample}` : ""}${v.covers ? " ⚠️ **它盖住了地图**" : ""}`
     );
     const mapOnes = c.canvases.filter((v) => v.isMapCanvas).length;
     push(

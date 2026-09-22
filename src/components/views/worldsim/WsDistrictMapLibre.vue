@@ -193,6 +193,7 @@
     canvasIsBlank,
     diagnosticPng,
     postShot,
+    sampleCanvas,
     selfShotArmed,
     selfShotDisarm,
     selfShotMaybeArmFromUrl,
@@ -1244,6 +1245,17 @@
       return [];
     }
   }
+  /**
+   * **设计上的覆盖层白名单**（判据：**它们本来就该铺在地图上面，且都应该是透明的**）。
+   * 命中判据（任一）：class 含这些片段，或父元素 class 含这些片段。
+   * ⚠️ 只用来**免掉"遮挡"误报**，绝不隐藏它们；**非白名单**的可见画布照旧要报（真凶就是这么抓到的）。
+   */
+  const OVERLAY_CANVAS_HINTS = ["cursor-trail", "cursor-effects", "ws-wx", "ws-weather", "ws-particle"];
+  function isOverlayCanvas(el: HTMLCanvasElement): boolean {
+    const cls = `${String(el.className || "")} ${String(el.parentElement?.className || "")}`;
+    return OVERLAY_CANVAS_HINTS.some((h) => cls.includes(h));
+  }
+
   /** 给清单补"是否遮挡"（**渲染面积**判：可见 + 非地图那块 + 面积 ≥ 地图的一半） */
   function canvasFactsWithCover(): NonNullable<VerifySnapshot["canvases"]> {
     const rows = canvasFacts();
@@ -1251,13 +1263,25 @@
     const mArea = mc ? Math.max(1, mc.clientWidth * mc.clientHeight) : 0;
     return rows.map((r) => ({
       ...r,
+      overlay: (() => {
+        try {
+          const all = Array.from(document.querySelectorAll("canvas")) as HTMLCanvasElement[];
+          const el = all[r.i];
+          return !!el && isOverlayCanvas(el);
+        } catch {
+          return false;
+        }
+      })(),
       sample: (() => {
         try {
           const all = Array.from(document.querySelectorAll("canvas")) as HTMLCanvasElement[];
           const el = all[r.i];
           if (!el || el === mc) return "";
-          const v = canvasIsBlank(el);
-          return `采样=${v.blank ? `单色/透明（${v.note}）` : "有内容"}`;
+          const v = sampleCanvas(el);
+          const alpha = v.aMin < 0 ? "" : ` α=${v.aMin}~${v.aMax}`;
+          return `采样=${v.blank ? `单色/透明（${v.note}）` : "有内容"}${alpha}${
+            v.aMax >= 250 && v.aMin >= 250 ? "（**不透明**：会挡住地图，需确认是否该铺在最上层）" : "（透明叠层 ✓）"
+          }`;
         } catch {
           return "采样=失败";
         }
@@ -1265,6 +1289,7 @@
       covers:
         !!mc &&
         !r.isMapCanvas &&
+        !r.overlay &&
         r.display !== "none" &&
         r.visibility !== "hidden" &&
         mArea > 0 &&

@@ -215,18 +215,46 @@ export async function settleForShot(
  * ⇒ 空白**必须自己判出来**，并且**不许**把空白图当成功。
  */
 export function canvasIsBlank(cv: HTMLCanvasElement): { blank: boolean; note: string } {
+  return sampleCanvas(cv);
+}
+
+/**
+ * 采样一块画布（8×8，**解码后的字节**）：给空白判定 + **alpha 统计**。
+ *
+ * 为什么要 alpha 统计：判"这块覆盖层是不是**不透明实心**、会不会挡住地图"要用它
+ * （2026-09-21 两块覆盖层：`cursor-trail` 全透明属正常；天气那块"有内容"但要看清透不透）。
+ */
+export function sampleCanvas(cv: HTMLCanvasElement): {
+  blank: boolean;
+  note: string;
+  aMin: number;
+  aMax: number;
+} {
   try {
     const s = 8; // 缩到 8×8 采样就够了（看的是"有没有内容"，不是细节）
     const t = document.createElement("canvas");
     t.width = s;
     t.height = s;
     const ctx = t.getContext("2d");
-    if (!ctx) return { blank: false, note: "拿不到 2D 上下文，跳过空白判定" };
+    if (!ctx) return { blank: false, note: "拿不到 2D 上下文，跳过空白判定", aMin: -1, aMax: -1 };
     ctx.drawImage(cv, 0, 0, s, s);
-    return blankFromSamples(ctx.getImageData(0, 0, s, s).data);
+    const d = ctx.getImageData(0, 0, s, s).data;
+    const v = blankFromSamples(d);
+    let aMin = 255;
+    let aMax = 0;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i]! < aMin) aMin = d[i]!;
+      if (d[i]! > aMax) aMax = d[i]!;
+    }
+    return { ...v, aMin, aMax };
   } catch (e) {
     /* 抛 SecurityError = 画布被跨域瓦片污染（`crossOrigin` 没生效） */
-    return { blank: false, note: `画布读取失败：${String((e as Error)?.name || e)}（多半是跨域污染）` };
+    return {
+      blank: false,
+      note: `画布读取失败：${String((e as Error)?.name || e)}（多半是跨域污染）`,
+      aMin: -1,
+      aMax: -1,
+    };
   }
 }
 

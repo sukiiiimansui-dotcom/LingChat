@@ -464,6 +464,65 @@
         return rows;
       }
 
+      /* ══ 🚌 交通设施 v0：`?tf=1`（机主 2026-09-21「预设 = 你先画一套」）══════════
+         规则/样式/生成逻辑都在 `wsTransportRules.ts` + `wsTransport.ts`（**唯一真源**），
+         页面只调**生成物** `/vendor/wsTransport.mjs`（`scripts/build-ws-vendor.sh` 产出）。 */
+      const TFON = (function () { try { return /[?&]tf=1\b/.test(location.search); } catch (e) { return false; } })();
+      let tfDone = false;
+
+      /** 取路网中心线（与 App 同一个后端口径：`/api/roads?lat&lng&r`） */
+      async function fetchRoads(r) {
+        const c = map.getCenter();
+        const res = await fetch(`${API}/api/roads?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`);
+        const body = await res.json();
+        if (!body.ok) throw new Error(body.error || "ok=false");
+        return body.geojson;
+      }
+
+      /** 生成 + 画（**路网之上、楼体之下**：`before="bld-ext"`） */
+      async function applyTransport(fc) {
+        const TF = window.__TF__;
+        if (!TF) { $("m-msg").textContent = "交通设施：生成物未加载（/vendor/wsTransport.mjs）"; return; }
+        let roads = { features: [] };
+        try { roads = await fetchRoads(stats.r || 600); } catch (e) { errs.push("roads " + e); }
+        const toRoad = (f) => ({ pts: (f.geometry && f.geometry.coordinates) || [], cls: f.properties && f.properties.class, name: f.properties && f.properties.name });
+        const toBld = (f) => {
+          const g = f.geometry || {};
+          const ring = g.type === "Polygon" ? (g.coordinates || [])[0] : [];
+          return { ring: ring || [], kind: (f.properties || {}).building || (f.properties || {}).kind || "" };
+        };
+        const c = map.getCenter();
+        const res = TF.buildTransport(
+          (roads.features || []).map(toRoad).filter(function (r) { return r.pts.length >= 2; }),
+          (fc.features || []).map(toBld).filter(function (b) { return b.ring.length >= 3; }),
+          [c.lng, c.lat],
+          !!(window.__PERF_LOW__ || /[?&]low=1\b/.test(location.search))
+        );
+        /* 按类别画：每类一个图层（顺序按规则文件；`before="bld-ext"` ⇒ 在楼体之下） */
+        for (const kind of ["crosswalk", "driveway", "parking", "bus", "signal"]) {
+          const feats = res.features.filter(function (f) { return f.kind === kind; });
+          const id = TF.TF_LAYER_IDS[kind];
+          try { if (map.getLayer(id)) map.removeLayer(id); } catch (e) { /* 没有就算了 */ }
+          try { if (map.getSource(id)) map.removeSource(id); } catch (e) { /* 同上 */ }
+          if (!feats.length) continue;
+          const style = TF.TF_LAYER_STYLE[kind];
+          const gj = {
+            type: "FeatureCollection",
+            features: feats.map(function (f) {
+              return f.to
+                ? { type: "Feature", geometry: { type: "LineString", coordinates: [f.at, f.to] }, properties: { why: f.why } }
+                : { type: "Feature", geometry: { type: "Point", coordinates: f.at }, properties: { why: f.why, name: f.name || "", n: f.count || 0 } };
+            }),
+          };
+          map.addSource(id, { type: "geojson", data: gj });
+          map.addLayer({ id: id, type: style.type, source: id, paint: style.paint }, map.getLayer("bld-ext") ? "bld-ext" : undefined);
+        }
+        /* HUD：**必须**带「示意，非事实」；并回证各计数与裁掉数 */
+        $("m-msg").textContent = TF.transportHudLine(res);
+        window.__TF_RES__ = res;
+        tfDone = true;
+      }
+
       /** 把回证表画到徽标里（点击徽标展开/收起） */
       function renderArtBadge() {
         try {
@@ -595,6 +654,7 @@
           const [h, src] = renderHeight(f.properties || {});
           return { ...f, properties: { ...f.properties, h3d: h, h_from: src } };
         });
+        window.__LASTFC__ = fc; // 🚌 `?tf=1` 要用楼栋轮廓（停车场/出入口按脚印算）
         stats.n = feats.length; stats.r = r;
         stats.real = feats.filter((f) => f.properties.h_from === "real").length;
         stats.levels = feats.filter((f) => f.properties.h_from === "levels").length;
@@ -643,6 +703,8 @@
           await refresh();
           /* 🎨 回证表要在**楼体图层加完之后**读（`bld-line` 是 addLayer 加的）⇒ 放在 refresh 之后 */
           renderArtBadge();
+          /* 🚌 `?tf=1`：楼到齐之后再摆交通设施（要用到楼栋轮廓） */
+          if (TFON) { try { await applyTransport(window.__LASTFC__ || { features: [] }); } catch (e) { errs.push("transport " + e); } }
           window.__w3d.ready = true;
         });
         map.on("moveend", () => { if (window.__w3d.ready) void refresh(); });
@@ -893,6 +955,12 @@
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
         };
       }
+    </script>
+    <!-- 🚌 交通设施 v0 的生成物（`scripts/build-ws-vendor.sh` 产出、**提交进仓库**、自检兜漂移）。
+         静态页引不到 TS ⇒ 走"生成物"这条路（与 `wtheme.json` 同款）。`?tf=1` 才用它。 -->
+    <script type="module">
+      import * as TF from "/vendor/wsTransport.mjs";
+      window.__TF__ = TF;
     </script>
   </body>
 </html>

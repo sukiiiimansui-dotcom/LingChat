@@ -104,11 +104,11 @@ export type TfKind = "bus" | "crosswalk" | "signal" | "parking" | "driveway";
 /** 图层 id（顺序即绘制顺序：**路网之上、楼体之下** —— 它们是地面设施） */
 export const TF_LAYER_IDS: Readonly<Record<TfKind, string>> = {
   bus: "tf-bus",
-  crosswalk: "tf-crosswalk",
+  crosswalk: "tf-cross",
   signal: "tf-signal",
-  parking: "tf-parking",
-  driveway: "tf-driveway",
-};
+  parking: "tf-park",
+  driveway: "tf-drive",
+}; // 命名与 `TRANSPORT-RULES.md` 一致（页面/App 都读这一份）
 
 /**
  * 图层样式（**只读这一份**）。

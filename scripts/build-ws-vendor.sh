@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 生成物：把交通设施的**入口**（`wsTransportVendor.ts` = 两个模块的 re-export）打成页面能引的 ESM
+# 生成物：把交通设施的**入口**（`wsPageVendor.ts` = 两个模块的 re-export）打成页面能引的 ESM
 # （**只做这一件事**的小步骤，秒级；⚠️ 入口必须打 re-export 那个文件，否则规则模块的导出会被漏掉）。
 #
 # 为什么需要：`public/ws3dshow.html` 是静态页，**引不到 TS**；而规则/生成逻辑必须**只有一份**
@@ -10,9 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ESB="node_modules/.pnpm/esbuild@0.25.12/node_modules/esbuild/bin/esbuild"
-OUT="public/vendor/wsTransport.mjs"
+OUT="public/vendor/wsScene.mjs"
 mkdir -p public/vendor
-"$ESB" src/components/views/worldsim/wsTransportVendor.ts \
+"$ESB" src/components/views/worldsim/wsPageVendor.ts \
   --bundle --format=esm --platform=browser --target=es2020 --charset=utf8 \
   --alias:@=src --outfile="$OUT"
 echo "✅ 生成 $OUT（$(wc -c < "$OUT") 字节）"

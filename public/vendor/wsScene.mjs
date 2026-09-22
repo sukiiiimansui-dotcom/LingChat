@@ -400,7 +400,78 @@ function transportHudLine(r) {
   const per = ["bus", "crosswalk", "signal", "parking", "driveway"].map((k) => r.counts[k].kept).join("/");
   return `交通设施 ${n}（示意，非事实）· 公交/斑马线/红绿灯/停车/出入口 = ${per}${dropped ? ` · 上限裁掉 ${dropped}` : ""}`;
 }
+
+// src/components/views/worldsim/wsRoads.ts
+var ROAD_RANK_STYLE = {
+  0: { label: "快速路", w: 4.2, color: "#e8dcc0", minzoom: 11 },
+  1: { label: "主干道", w: 3.4, color: "#dfd2b4", minzoom: 11 },
+  2: { label: "次干道", w: 2.6, color: "#c8c0ae", minzoom: 12.5 },
+  3: { label: "支路", w: 1.8, color: "#a9b3bd", minzoom: 13.5 },
+  4: { label: "社区路", w: 1.2, color: "#8fa0b0", minzoom: 14.5 },
+  5: { label: "步道", w: 0.8, color: "#79d9ff", minzoom: 15.5 }
+};
+var ROAD_STYLE_FALLBACK = ROAD_RANK_STYLE[3];
+function roadStyleOf(rank) {
+  const r = Number(rank);
+  return Number.isFinite(r) ? ROAD_RANK_STYLE[r] ?? ROAD_STYLE_FALLBACK : ROAD_STYLE_FALLBACK;
+}
+var ROAD_PALETTE_DARK = {
+  casing: "#0b1017",
+  casingOpacity: 0.75,
+  rankColors: { 0: "#e8dcc0", 1: "#dfd2b4", 2: "#c8c0ae", 3: "#a9b3bd", 4: "#8fa0b0", 5: "#79d9ff" }
+};
+function roadLayerSpecs(palette = ROAD_PALETTE_DARK) {
+  const out = [];
+  for (const key of Object.keys(ROAD_RANK_STYLE).map(Number).sort((a, b) => a - b)) {
+    const s = ROAD_RANK_STYLE[key];
+    out.push({
+      id: `road-casing-${key}`,
+      type: "line",
+      source: "roads",
+      minzoom: s.minzoom,
+      filter: ["==", ["get", "rank"], key],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": palette.casing, "line-width": s.w + 1.6, "line-opacity": palette.casingOpacity }
+    });
+  }
+  for (const key of Object.keys(ROAD_RANK_STYLE).map(Number).sort((a, b) => a - b)) {
+    const s = ROAD_RANK_STYLE[key];
+    out.push({
+      id: `road-line-${key}`,
+      type: "line",
+      source: "roads",
+      minzoom: s.minzoom,
+      filter: ["==", ["get", "rank"], key],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": palette.rankColors[key] ?? s.color,
+        /* 桥隧稍微亮一点：立交/跨江桥在地图上就该比地面路显眼（也是"可走"的强提示） */
+        "line-opacity": ["case", ["get", "bridge"], 0.95, ["get", "tunnel"], 0.5, 0.8],
+        "line-width": s.w
+      }
+    });
+  }
+  return out;
+}
+function roadStatsLine(stats) {
+  const n = Number(stats?.count) || 0;
+  if (!n) return "";
+  const by = stats?.by_rank || {};
+  const main = (Number(by["0"]) || 0) + (Number(by["1"]) || 0) + (Number(by["2"]) || 0);
+  const named = Number(stats?.named) || 0;
+  return `${n} 条路（主干 ${main} · 有名字 ${named}）`;
+}
+function visibleRoadCount(fc, zoom) {
+  let n = 0;
+  for (const f of fc?.features || []) {
+    if (roadStyleOf((f.properties || {}).rank).minzoom <= zoom) n++;
+  }
+  return n;
+}
 export {
+  ROAD_PALETTE_DARK,
+  ROAD_RANK_STYLE,
+  ROAD_STYLE_FALLBACK,
   TF_CAPS,
   TF_LAYER_IDS,
   TF_LAYER_STYLE,
@@ -410,7 +481,11 @@ export {
   junctions,
   nearestOnLine,
   ringAreaM2,
+  roadLayerSpecs,
+  roadStatsLine,
+  roadStyleOf,
   toLngLat,
   toMeters,
-  transportHudLine
+  transportHudLine,
+  visibleRoadCount
 };

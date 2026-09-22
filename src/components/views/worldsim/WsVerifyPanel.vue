@@ -196,7 +196,9 @@
   import { computed, ref } from "vue";
   import {
     TERMINAL_CHECKS,
+    compareThemeWithJson,
     runVerifyChecks,
+    type ThemeParity,
     type VerifyResult,
     type VerifySnapshot,
   } from "./wsVerifyChecks";
@@ -311,6 +313,43 @@
     }
   }
   const termChecks = TERMINAL_CHECKS;
+  /**
+   * 「App ↔ 代拍页」对账结果（**当场 fetch `/wstheme.json`** —— 代拍页消费的就是这一份）。
+   * 拿不到就 `ok:false`（面板如实写"没对成"），**绝不当成"一致"**。
+   */
+  const parity = ref<ThemeParity | null>(null);
+  /** 对账一次（打开面板/点重跑时）：同一份 JSON + App 现在的图层与 paint */
+  async function refreshParity(): Promise<void> {
+    try {
+      const snap0 = props.snapshot();
+      const themeId = snap0.wstheme === "night" ? "night" : snap0.wstheme === "anime" ? "anime" : "";
+      if (!themeId) {
+        parity.value = null; // 阶段舞台还没有主题 id（②要做的就是把四级也接上主题）
+        return;
+      }
+      const r = await fetch("/wstheme.json", { cache: "no-store" });
+      const json = r.ok ? await r.json() : null;
+      parity.value = compareThemeWithJson(
+        json,
+        themeId,
+        snap0.layers.map((l) => ({ id: l.id, type: l.type })),
+        /* paint 从**快照自己**取（`keyPaints` 里就是 App 现在的真实值）——
+           不绕 window、不另开一条取值路（少一条路就少一处漂移） */
+        (id, key) => snap0.keyPaints?.[id]?.[key] ?? null
+      );
+    } catch (e) {
+      parity.value = {
+        source: "/wstheme.json",
+        themeId: "?",
+        jsonLayers: [],
+        missing: [],
+        extra: [],
+        paintDiffs: [],
+        ok: false,
+        note: `对账失败：${String((e as Error)?.message || e)}`,
+      };
+    }
+  }
   /** 没过/判不了的条数（收起时挂在 🔬 上，让人知道"里面有事"） */
   const warnCount = ref(0);
   function refreshWarn(): void {
@@ -322,7 +361,10 @@
   function rerun(): void {
     try {
       snap.value = props.snapshot();
-      checks.value = runVerifyChecks(snap.value);
+      checks.value = runVerifyChecks({ ...snap.value, ...(parity.value ? { parity: parity.value } : {}) });
+      void refreshParity().then(() => {
+        checks.value = runVerifyChecks({ ...snap.value, ...(parity.value ? { parity: parity.value } : {}) });
+      });
     } catch (e) {
       checks.value = [{ name: "取快照", ok: false, detail: `抛错：${String((e as Error)?.message || e)}` }];
     }

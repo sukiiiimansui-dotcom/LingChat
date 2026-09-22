@@ -100,6 +100,8 @@ export interface VerifyCtx {
   wsnight: { on: boolean; level: number };
   /** 定位来源（`useWorldSim.locSource`）：gps / ip / manual / restored / "" */
   locSource: string;
+  /** 「App ↔ 代拍页」对账结果（拿不到 JSON 就 `ok:false`，如实说"没对成"） */
+  parity?: ThemeParity;
   /**
    * 「**动效状态**」（机主 2026-09-21：看不到 MG 动画时，要能分清"**没触发**"还是"**坏了**"）。
    * 全部来自**当场 DOM 观察**（有就有、没有就没有），不猜。
@@ -359,6 +361,25 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     );
   }
 
+  /* ⑪.8 App ↔ 代拍页一致性（机主追问「还是不是代拍里的那个啊」⇒ 面板要能**直接回答**） */
+  if (c.parity) {
+    const p = c.parity;
+    if (!p.ok) {
+      push("App ↔ 代拍页（同一份主题？）", null, p.note);
+    } else {
+      const bad = p.missing.length > 0 || p.paintDiffs.length > 0;
+      push(
+        "App ↔ 代拍页（同一份主题？）",
+        bad ? false : true,
+        `来源=${p.source} 主题=${p.themeId}｜JSON 期望 ${p.jsonLayers.length} 条图层（${p.jsonLayers.join(",")}）｜` +
+          `App 实际 ${p.jsonLayers.length - p.missing.length}/${p.jsonLayers.length} 条` +
+          (p.missing.length ? ` · **缺：${p.missing.join(",")}**（这就是两边观感不同的直接原因）` : "") +
+          (p.paintDiffs.length ? ` · paint 差异：${p.paintDiffs.slice(0, 3).join(" ｜ ")}` : "") +
+          (p.extra.length ? ` · App 运行时加的层 ${p.extra.length} 条（楼/路/设施等，正常）` : "")
+      );
+    }
+  }
+
   /* ⑫ 性能档（低档会少画东西，是"如实降级"不是故障，所以只报事实不判失败） */
   push(
     "性能档 / 2D 画布 DPR",
@@ -371,6 +392,81 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
   );
 
   return R;
+}
+
+/**
+ * 「**App ↔ 代拍页一致性**」的对账结果（2026-09-21 机主追问：「**还是不是代拍里的那个啊**」）。
+ *
+ * 代拍页 `public/ws3dshow.html` 消费的是 **`public/wstheme.json`**（由主题自检从 `wsMapTheme.ts` 生成）；
+ * App 小区级是**运行时**调 `themeStyleParts()`。两者**理论上同源**，但只要有一边漂了
+ * （JSON 没重新生成 / 图层被别处改过），观感就不一样 —— 机主肉眼已经感觉到了。
+ * ⇒ 面板**当场对账**：缺哪些图层、paint 差在哪、主题与夜色档位是什么，让面板**直接回答**。
+ */
+export interface ThemeParity {
+  /** 对账用的那份 JSON 的来源（URL） */
+  source: string;
+  /** 用的哪个主题 id */
+  themeId: string;
+  /** JSON 里这个主题期望的图层 id */
+  jsonLayers: string[];
+  /** App 少了的（**这就是"不一样"的直接原因**） */
+  missing: string[];
+  /** App 多出来的（运行时加的楼/路/设施层属正常，如实列出供人判断） */
+  extra: string[];
+  /** 关键 paint 的差异 */
+  paintDiffs: string[];
+  /** 对账本身成不成（拿不到 JSON ⇒ false，如实说"没对成"，**不许当成"一致"**） */
+  ok: boolean;
+  note: string;
+}
+
+/** JSON 形状（只读我们用到的那几个字段） */
+interface ThemeJson {
+  themes?: Record<string, { layers?: Array<{ id?: string; type?: string; paint?: Record<string, unknown> }> }>;
+}
+
+/**
+ * **纯函数**：把「代拍页那份 JSON 里期望的图层/paint」与「App 现在真的有的」对账。
+ * 纯函数 ⇒ 能在 Node 自检里直接断言（不依赖浏览器、不依赖网络）。
+ */
+export function compareThemeWithJson(
+  json: ThemeJson | null,
+  themeId: string,
+  appLayers: Array<{ id: string; type?: string }>,
+  appPaintOf: (id: string, key: string) => unknown,
+  source = "/wstheme.json"
+): ThemeParity {
+  const th = json?.themes?.[themeId] || null;
+  const jsonLayers = (th?.layers || []).map((l) => String(l.id || "")).filter(Boolean);
+  const have = new Set(appLayers.map((l) => l.id));
+  const missing = jsonLayers.filter((id) => !have.has(id));
+  const extra = appLayers.map((l) => l.id).filter((id) => !jsonLayers.includes(id));
+  const paintDiffs: string[] = [];
+  for (const l of th?.layers || []) {
+    const id = String(l.id || "");
+    if (!id || !have.has(id)) continue;
+    for (const [k, v] of Object.entries(l.paint || {})) {
+      let got: unknown;
+      try {
+        got = appPaintOf(id, k);
+      } catch {
+        got = "(取值抛错)";
+      }
+      if (JSON.stringify(got ?? null) !== JSON.stringify(v ?? null)) {
+        paintDiffs.push(`${id}.${k}: App=${JSON.stringify(got ?? null)} vs 代拍页=${JSON.stringify(v ?? null)}`);
+      }
+    }
+  }
+  return {
+    source,
+    themeId,
+    jsonLayers,
+    missing,
+    extra,
+    paintDiffs,
+    ok: !!th,
+    note: th ? "" : `拿不到 ${source} 里主题「${themeId}」的定义（对账没做成，别当成"一致"）`,
+  };
 }
 
 /** 面板里"终端能跑、浏览器跑不了"的那部分 —— **如实列命令**，不假装跑过 */

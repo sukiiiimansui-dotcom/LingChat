@@ -58,6 +58,16 @@
       weather: WsWeatherState;
       /** 当前昼夜色调（`wsTime.ts::timeTint`）；给了才叠第②层 */
       tint?: WsTimeTint | null;
+      /**
+       * 要不要那两层**全屏压暗色**（天气色 + 昼夜色）？
+       *
+       * 🔴 **2026-09-21 改成默认 `false`（原设计是画的）**：机主实测 `ws-wx__cv` 采样
+       * **α=78~78 全屏均匀** ⇒ **把地图洗淡**（他看到的"发灰/发白"）。
+       * 而 MapLibre 那边已经用主题自己的夜色派生（`nightVariant`）在管"夜里压暗"了，
+       * 这一层再压一遍就是**双重压暗 + 洗白**。⇒ 现在**只画粒子、底色全透明**；
+       * 真想要"下雨发暗"，把它传 `true`（逃生阀，默认关）。
+       */
+      dim?: boolean;
       /** 低端机（`ws-perf-low`）：降帧 + 减粒子 */
       low?: boolean;
       /** 是否驱动动画。默认 true；`false` 时只画一帧静态图（自检/演示页用） */
@@ -68,7 +78,7 @@
        */
       flat?: boolean;
     }>(),
-    { tint: null, low: false, animate: true, flat: false }
+    { tint: null, low: false, animate: true, flat: false, dim: false }
   );
 
   /**
@@ -201,8 +211,8 @@
        那一刻若还留着两层全屏色，地图就被洗淡（机主实测 α=78），而且没有任何报错。 */
     if (st.degraded) return;
 
-    // ① 天气色（`screen` 提亮 / `source-over` 压暗）
-    const wt = weatherTint({ kind: st.kind, intensity: st.intensity });
+    // ① 天气色（`screen` 提亮 / `source-over` 压暗）—— **默认不画**（见 `dim` 的说明）
+    const wt = props.dim ? weatherTint({ kind: st.kind, intensity: st.intensity }) : { a: 0, css: "", mode: "source-over" as GlobalCompositeOperation };
     if (wt.a > 0) {
       const prevOp = ctx.globalCompositeOperation;
       ctx.globalCompositeOperation = wt.mode;
@@ -211,8 +221,8 @@
       ctx.globalCompositeOperation = prevOp;
     }
 
-    // ② 昼夜色压在天气色之上（老线：「夜间压暗应覆盖天气提亮」）
-    const tint = props.tint;
+    // ② 昼夜色压在天气色之上（老线：「夜间压暗应覆盖天气提亮」）—— **默认不画**（同上）
+    const tint = props.dim ? props.tint : null;
     if (tint && tint.a > 0) {
       ctx.fillStyle = timeTint(tint.hour).css;
       ctx.globalAlpha = TIME_LAYER_SCALE;

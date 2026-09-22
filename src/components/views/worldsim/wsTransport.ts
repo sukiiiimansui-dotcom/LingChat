@@ -413,8 +413,12 @@ export function transportHudLine(r: TfResult): string {
     (s, k) => s + r.counts[k].droppedByCap,
     0
   );
+  /* ⚠️ **0 也要显示**（机主要能一眼看出"哪一类是 0"），别省略空类别 */
   const per = (["bus", "crosswalk", "signal", "parking", "driveway"] as TfKind[])
     .map((k) => r.counts[k].kept)
     .join("/");
-  return `交通设施 ${n}（示意，非事实）· 公交/斑马线/红绿灯/停车/出入口 = ${per}${dropped ? ` · 上限裁掉 ${dropped}` : ""}`;
+  const extra = r.counts.signal.kept === 0
+    ? "（红绿灯这一类要求「≥3 条路相交」或含主干路，**当前数据下常常为 0** —— 规则不为此放宽到失真）"
+    : "";
+  return `交通设施 ${n}（示意，非事实）· 公交/斑马线/红绿灯/停车/出入口 = ${per}${dropped ? ` · 上限裁掉 ${dropped}` : ""}${extra}`;
 }

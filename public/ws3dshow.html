@@ -73,6 +73,8 @@
     </div>
     <div class="hud">
       <span><b id="m-n">0</b> 栋</span>
+      <!-- 🛣 路网**独立一格**：交通设施那行会覆盖 m-msg ⇒ 路数必须有自己的位置（否则"看不见路"没人知道是没插还是没数） -->
+      <span id="m-roads" class="w">路网 —</span>
       <span>真高 <b id="m-h">0</b></span>
       <span>层数 <b id="m-l">0</b></span>
       <span class="w">按类型估 <b id="m-e">0</b></span>
@@ -495,7 +497,8 @@
         roadN = TF2.visibleRoadCount({ features: feats }, map.getZoom());
         if (!feats.length) {
           /* 空结果**必须说出来**（同 App 的纪律：静默 = 让人以为"这里没路"） */
-          $("m-msg").textContent = `这一带没有路网数据（${stats.r || 600}m）`;
+          const el = document.getElementById("m-roads");
+          if (el) el.textContent = `🛣 0 条 · 这一带没有路网数据（${stats.r || 600}m）`;
           return;
         }
         const data = { type: "FeatureCollection", features: feats };
@@ -508,8 +511,42 @@
           for (const l of specs) if (!map.getLayer(l.id)) map.addLayer(l, before);
         } catch (e) { errs.push("roadLayers " + e); }
         const stat = (roads && roads.stats) || null;
-        $("m-msg").textContent = `🛣 ${roadN} 条${stat ? " · " + TF2.roadStatsLine(stat) : ""}`;
         window.__ROAD_N__ = roadN;
+        window.__ROAD_STAT__ = stat ? TF2.roadStatsLine(stat) : null;
+        /* 🛣 路数走**独立 HUD 格**（`m-msg` 会被交通设施那行覆盖 —— 那就是"看不见路"的来源之一） */
+        renderRoadHud();
+        window.__ROAD_AUDIT__ = roadAudit();
+      }
+
+      /**
+       * 🛣 **路网自证**（2026-09-22：机主两张图对比发现"`?tf=1` 时路网不见了"——
+       * 本机无头无 WebGL，我复现不了 ⇒ 按主会话要求**把断言与证据放进页面**，
+       * 让下一次刷新直接告诉我们：source 在不在、图层在不在、可见几条、有什么错。
+       */
+      function roadAudit() {
+        const out = { hasSource: false, layerIds: [], visible: null, errs: [] };
+        try { out.hasSource = !!map.getSource("roads"); } catch (e) { out.errs.push("getSource " + e); }
+        try {
+          out.layerIds = (map.getStyle().layers || []).map(function (l) { return l.id; })
+            .filter(function (id) { return /^road-(casing|line)-/.test(id); });
+        } catch (e) { out.errs.push("layers " + e); }
+        try {
+          const src = map.getSource("roads");
+          const data = src && src._data ? src._data : null; // MapLibre 内部字段：**只读诊断**用
+          out.visible = data ? window.__TF__.visibleRoadCount(data, map.getZoom()) : null;
+        } catch (e) { out.errs.push("count " + e); }
+        return out;
+      }
+      function renderRoadHud() {
+        try {
+          const a = roadAudit();
+          const el = document.getElementById("m-roads");
+          if (!el) return;
+          const ok = a.layerIds.length > 0 && (a.visible === null || a.visible > 0);
+          el.textContent = `🛣 ${a.visible === null ? "?" : a.visible} 条 · 图层 ${a.layerIds.length} 个` +
+            (a.hasSource ? "" : " · **无 source**") + (ok ? "" : " · **路网没画上（见下）**") +
+            (a.errs.length ? " · " + a.errs.join("；") : "");
+        } catch (e) { /* HUD 失败不影响地图 */ }
       }
 
       /** 生成 + 画（**路网之上、楼体之下**：`before="bld-ext"`） */
@@ -989,6 +1026,8 @@
           art: ART, artPatch: window.__ART_CHANGED__, artReadback: artReadback(),
           /* 🛣 路网计数（与 App 的 `🛣 N` 同一算法 `visibleRoadCount`）+ 交通设施回证 */
           roads: (typeof window.__ROAD_N__ === "number" ? window.__ROAD_N__ : null),
+          roadAudit: window.__ROAD_AUDIT__ || null,
+          roadStat: window.__ROAD_STAT__ || null,
           tf: window.__TF_RES__ ? { n: (window.__TF_RES__.features || []).length, counts: window.__TF_RES__.counts, notes: window.__TF_RES__.notes, hud: (window.__TF && window.__TF.transportHudLine ? window.__TF.transportHudLine(window.__TF_RES__) : null) } : null,
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
         };

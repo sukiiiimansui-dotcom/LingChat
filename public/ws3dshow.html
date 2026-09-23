@@ -491,6 +491,27 @@
         return body.geojson;
       }
 
+      /**
+       * 🎬 **层序计划**取自公共模块 `wsScene.sceneLayerPlan()`（唯一真源）。
+       *
+       * 它与下面的 `ensureRoadOrder()`（防御性自愈）**是"计划 + 兜底"的关系**，不打架：
+       *   · **计划**（`sceneLayerPlan()`）：说"路网/设施该插在 `bld-ext` 之前"⇒ 建层时就用它；
+       *   · **兜底**（`ensureRoadOrder()`）：事后**核实**实际顺序，被压住了就 `moveLayer()` 修回来，
+       *     并计数（`#m-roads` 的"自愈 K 次"）—— 它**不改计划**，只是"计划没落实到"时的保险。
+       * ⇒ 两者都以"**事后断言**"为准：计划负责"怎么做对"，兜底负责"做错了也能发现并修回"。
+       */
+      function planBefore(group) {
+        try {
+          const TF2 = window.__TF__;
+          if (!TF2 || !TF2.sceneLayerPlan) return undefined;
+          const e = TF2.sceneLayerPlan().filter(function (x) { return x.group === group; })[0];
+          if (!e) return undefined;
+          window.__SCENE_LAYER_CONSUMED__ = true; // 自证：层序确实取自计划
+          if (!e.beforeId) return undefined;      // `null` = 追加到最上
+          return map.getLayer(e.beforeId) ? e.beforeId : undefined;
+        } catch (err) { return undefined; }
+      }
+
       /* ══ 🛣 路网（机主 2026-09-21：「也没有路线啊喵，我要看得到喵」）══════════════
          复用 App 那条线：`wsRoads.roadLayerSpecs(THEME.road)`（分级：主干粗亮/支路细淡）
          + `visibleRoadCount()` 计数 —— **不写第二套配色、不写第二套计数**。
@@ -516,8 +537,10 @@
           if (map.getSource("roads")) map.getSource("roads").setData(data);
           else map.addSource("roads", { type: "geojson", data });
           const specs = TF2.roadLayerSpecs((THEME && THEME.road) || undefined);
-          /* 插在**楼体之下**（路是地面上的东西；交通设施稍后插 ⇒ 落在路网**之上**） */
-          const before = map.getLayer("bld-ext") ? "bld-ext" : (map.getLayer("ref") ? "ref" : undefined);
+          /* 🎬 before 来自**计划**（`wsScene.sceneLayerPlan()`）；拿不到才退回本地判断 */
+          const before = planBefore("roads") !== undefined
+            ? planBefore("roads")
+            : (map.getLayer("bld-ext") ? "bld-ext" : (map.getLayer("ref") ? "ref" : undefined));
           for (const l of specs) if (!map.getLayer(l.id)) map.addLayer(l, before);
         } catch (e) { errs.push("roadLayers " + e); }
         const stat = (roads && roads.stats) || null;
@@ -632,7 +655,10 @@
             }),
           };
           map.addSource(id, { type: "geojson", data: gj });
-          map.addLayer({ id: id, type: style.type, source: id, paint: style.paint }, map.getLayer("bld-ext") ? "bld-ext" : undefined);
+          const tfBefore = planBefore("transport") !== undefined
+            ? planBefore("transport")
+            : (map.getLayer("bld-ext") ? "bld-ext" : undefined);
+          map.addLayer({ id: id, type: style.type, source: id, paint: style.paint }, tfBefore);
         }
         /* HUD：**必须**带「示意，非事实」；并回证各计数与裁掉数 */
         $("m-msg").textContent = TF.transportHudLine(res);
@@ -891,7 +917,8 @@
              模块还没加载（module 是 defer）时用同一份数值兜底 —— 但那样 `__SCENE_SRC__` 会标成"页面自带"。 */
           ...(() => {
             const cam = (window.__TF__ && window.__TF__.cameraDefaults) ? window.__TF__.cameraDefaults() : null;
-            window.__SCENE_CONSUMED__ = !!cam;
+            window.__SCENE_CONSUMED__ = !!cam;      // 相机取自公共模块
+          window.__SCENE_LAYER_CONSUMED__ = false; // 层序换用时由 planBefore() 置真
             const c = cam || { zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 70, minZoom: 3, maxZoom: 19 };
             return { zoom: c.zoom, pitch: c.pitch, bearing: c.bearing, maxPitch: c.maxPitch, minZoom: c.minZoom, maxZoom: c.maxZoom };
           })(),
@@ -1171,7 +1198,7 @@
           scene: (function () {
             const TFx = window.__TF__;
             if (!TFx || !TFx.sceneSelfReport) return null;
-            const r = TFx.sceneSelfReport(!!window.__SCENE_CONSUMED__);
+            const r = TFx.sceneSelfReport(!!window.__SCENE_CONSUMED__ && !!window.__SCENE_LAYER_CONSUMED__);
             return { ...r, plan: (TFx.sceneLayerPlan ? TFx.sceneLayerPlan().map(function (e) { return e.group; }) : []),
                      violations: (TFx.sceneOrderViolations ? TFx.sceneOrderViolations((map.getStyle().layers || []).map(function (l) { return l.id; })) : []) };
           })(),

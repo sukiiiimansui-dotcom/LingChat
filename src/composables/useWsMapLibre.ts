@@ -41,12 +41,15 @@
  */
 import { getCurrentInstance, isRef, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import { geoJson } from "@/api/services/worldMap";
+/* 🎨 对齐清单 B：舞台外观改吃主题（与小区级同一份真源） */
+import { themeStyleParts, wsMapTheme } from "@/components/views/worldsim/wsMapTheme";
 import { parseFeatures, THEME_DARK, THEME_LIGHT, type GeoFeat, type GeoTheme } from "@/components/views/worldsim/wsGeoMap";
 /* 🔴 2026-09-22：`ML_*` 常量组与 `styleFor`/`layersFor`/`paintUpdatesFor` **已搬至 `wsMapStyle.ts`**
    （唯一真源）—— **勿再本地实现**。
    ⚠️ 只写 `export *` **不够**（它不建本地绑定），而本文件剩余代码仍在用这些符号
    ⇒ 必须**同时 import 回来**；下面这份名单就是逐符号核对出来的。 */
 import {
+  styleForStage,
   WS_MAP_STYLE_SOURCE,
   wsMapStyleLayerIds,
   assetUrl,
@@ -539,6 +542,21 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
     return el;
   }
 
+  /** 取主题的 style 零件（`themeStyleParts`）；**任何失败都返回 null** ⇒ 调用方回退 `styleFor` */
+  function stageThemeParts(): { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>> } | null {
+    try {
+      const id = (typeof localStorage !== "undefined" ? (localStorage.getItem("wsm:v1:mapTheme") as "anime" | "night" | null) : null) || "anime";
+      const t = wsMapTheme(id === "night" ? "night" : "anime");
+      const p = themeStyleParts(t, false, 0);
+      /* 如实标注来源（面板那行读它 —— 换源有没有生效，页面上直接看得到） */
+      info.value.styleSource = `${WS_MAP_STYLE_SOURCE}/theme(${id})`;
+      return { sky: (p as { sky?: unknown }).sky, sources: (p as { sources: Record<string, unknown> }).sources, layers: (p as { layers: Array<Record<string, unknown>> }).layers };
+    } catch {
+      info.value.styleSource = `${WS_MAP_STYLE_SOURCE}/fallback(styleFor)`;
+      return null;
+    }
+  }
+
   function destroyMarkers(): void {
     for (const m of markers.splice(0)) {
       try {
@@ -845,7 +863,14 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
       await waitForBox(el);
       const m = new mod.Map({
         container: el,
-        style: styleFor(themeNow(), { basemap: baseOk }),
+        /* 🎨 对齐清单 B（区县级换源，机主选 A）：外观吃 `wsMapTheme.themeStyleParts`（与小区级同一份真源），
+           数据层仍是舞台自己的（交互载体，不许动）。拿不到主题 ⇒ `styleForStage` 内部回退 `styleFor`。 */
+        style: styleForStage(themeNow(), {
+          basemap: baseOk,
+          themeId: (typeof localStorage !== "undefined" ? (localStorage.getItem("wsm:v1:mapTheme") as "anime" | "night" | null) : null) || "anime",
+          low: false,
+          parts: stageThemeParts(),
+        }),
         // 初始相机只是占位：真正的 center/zoom 由第一批要素的 bbox 用 fitBounds 决定
         center: [104, 35],
         zoom: 3.2,

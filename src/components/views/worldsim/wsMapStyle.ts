@@ -182,3 +182,37 @@ export const WS_MAP_STYLE_SOURCE = "wsMapStyle.ts";
 export function wsMapStyleLayerIds(): string[] {
   return [ML_BG, ML_BASE_LAYER, ML_LAND, ML_LINE, ML_HI_LINE];
 }
+
+/**
+ * 🎨 **舞台样式（对齐清单 B · 区县级换源，2026-09-22 机主选 A）**
+ *
+ * 目标：区县级的**外观**（背景/底图/色罩/天空）改吃 `wsMapTheme.themeStyleParts`（**与小区级同一份真源**），
+ * 而**数据层**（`ML_SRC` 上的面/线/高亮）仍是舞台自己的 —— 那批是**交互的载体**
+ * （点击下钻靠 `queryRenderedFeatures({layers:[ML_LAND]})`、`fitBounds` 靠它算 bbox）⇒ **一层都不能动**。
+ *
+ * ⇒ 组合式：`[主题的 bg/base/tint/ref]` + `[舞台的 land/line/hi]`，**顺序即绘制序**（数据层在最上）。
+ * ⚠️ 纪律：**零手改数值** —— 主题那几个图层的 paint 原样搬过来（机主拍板选 A，不为好看微调）。
+ * ⚠️ 主题解析失败（拿不到 `themeStyleParts`）⇒ **回退到 `styleFor`**（老路），不让整级地图没掉。
+ */
+export function styleForStage(
+  theme: GeoTheme,
+  opts: { basemap?: boolean; themeId?: "anime" | "night"; low?: boolean; nightFadeMs?: number; parts?: { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>> } | null } = {}
+): Record<string, unknown> {
+  const base = styleFor(theme, opts); // 数据层与兜底都用它（**它本身一字未改**）
+  const parts = opts.parts;
+  if (!parts || !parts.layers || !parts.layers.length) {
+    return { ...base, __styleSource: "wsMapStyle.ts/fallback(styleFor)" }; // 兜底如实标注
+  }
+  /* 主题的外观层 + 舞台的数据层（后者引用 ML_SRC，由调用方 addSource/ addLayer 负责） */
+  const baseLayers = (base.layers || []) as Array<Record<string, unknown>>;
+  /* 数据层 = 舞台自己在 `ML_SRC` 上建的那几条（id 以 `ws-ml-` 开头）—— 它们是**交互载体**，原样保留 */
+  const dataLayers = baseLayers.filter((l) => String(l.id || "").startsWith("ws-ml-"));
+  return {
+    version: 8,
+    name: `ws-stage-${opts.themeId || "anime"}`,
+    ...(parts.sky ? { sky: parts.sky } : {}),
+    sources: { ...(parts.sources as Record<string, unknown>), ...(base.sources as Record<string, unknown>) },
+    layers: [...(parts.layers as Array<Record<string, unknown>>), ...dataLayers],
+    __styleSource: `${WS_MAP_STYLE_SOURCE}/theme(${opts.themeId || "anime"})`,
+  };
+}

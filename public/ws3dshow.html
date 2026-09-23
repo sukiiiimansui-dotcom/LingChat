@@ -562,13 +562,27 @@
 
       function renderRoadHud() {
         try {
-          const a = roadAudit();
+          const TF2 = window.__TF__;
           const el = document.getElementById("m-roads");
-          if (!el) return;
-          const ok = a.layerIds.length > 0 && (a.visible === null || a.visible > 0);
-          el.textContent = `🛣 ${a.visible === null ? "?" : a.visible} 条 · 图层 ${a.layerIds.length} 个 · 自愈 ${roadHeals} 次` +
-            (a.hasSource ? "" : " · **无 source**") + (ok ? "" : " · **路网没画上（见下）**") +
-            (a.errs.length ? " · " + a.errs.join("；") : "");
+          if (!el || !TF2 || !TF2.roadCountVerdict) return;
+          const a = roadAudit();
+          const lineIds = a.layerIds.filter(function (id) { return id.indexOf("road-line-") === 0; });
+          /* ① 直接证据：**屏幕上可见**的路网要素 */
+          let rendered = null, source = null, tilesLoaded = null;
+          try {
+            if (lineIds.length) rendered = map.queryRenderedFeatures({ layers: lineIds }).length;
+          } catch (e) { errs.push("qRendered " + e); }
+          /* ② 退路：数据源要素（⚠️ 瓦片没加载完时会是 0 ⇒ 不能当"没有"） */
+          try {
+            if (rendered === null || rendered === 0) source = map.querySourceFeatures("roads").length;
+          } catch (e) { errs.push("qSource " + e); }
+          try { if (map.areTilesLoaded) tilesLoaded = !!map.areTilesLoaded(); } catch (e) { tilesLoaded = null; }
+          const v = TF2.roadCountVerdict({
+            hasSource: a.hasSource, layerCount: a.layerIds.length,
+            rendered: rendered, source: source, tilesLoaded: tilesLoaded,
+          });
+          el.textContent = TF2.roadCountHud(v, a.layerIds.length, roadHeals) + (v.state === "unknown" ? " · " + v.why : "");
+          window.__ROAD_VERDICT__ = v;
         } catch (e) { /* HUD 失败不影响地图 */ }
       }
 

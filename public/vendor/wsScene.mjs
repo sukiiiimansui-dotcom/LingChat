@@ -544,6 +544,34 @@ function planEnsureRoadOrder(m) {
 function layerOrderHud(heals, roads) {
   return `🛣 ${roads} 条 · 层序自愈 ${heals} 次`;
 }
+function roadCountVerdict(input) {
+  if (!input.hasSource || input.layerCount === 0) {
+    return {
+      state: "missing",
+      n: 0,
+      gauge: "unknown",
+      why: input.hasSource ? "路网图层 0 个 ⇒ **确实没画上**" : "没有 roads source ⇒ **确实没画上**"
+    };
+  }
+  if (typeof input.rendered === "number" && input.rendered > 0) {
+    return { state: "ok", n: input.rendered, gauge: "rendered", why: "屏幕可见要素（queryRenderedFeatures）" };
+  }
+  if (typeof input.source === "number" && input.source > 0) {
+    return { state: "ok", n: input.source, gauge: "source", why: "数据源要素（querySourceFeatures）" };
+  }
+  const tileTxt = input.tilesLoaded === true ? "瓦片已加载" : input.tilesLoaded === false ? "**瓦片还没加载完**" : "瓦片状态未知";
+  return {
+    state: "unknown",
+    n: null,
+    gauge: "unknown",
+    why: `图层都在（${input.layerCount} 个）但两种口径都数不出要素（rendered=${String(input.rendered)}、source=${String(input.source)}，${tileTxt}）⇒ **数不出来**，不代表没有路`
+  };
+}
+function roadCountHud(v, layerCount, heals) {
+  const nTxt = v.state === "unknown" ? "数不出来" : String(v.n ?? 0);
+  const tail = v.state === "missing" ? " · **路网没画上**" : "";
+  return `🛣 ${nTxt} 条 · 图层 ${layerCount} 个 · 自愈 ${heals} 次 · 口径=${v.gauge}${tail}`;
+}
 export {
   BUILDING_LAYER_ID,
   ROAD_LAYER_PREFIXES,
@@ -562,6 +590,8 @@ export {
   nearestOnLine,
   planEnsureRoadOrder,
   ringAreaM2,
+  roadCountHud,
+  roadCountVerdict,
   roadLayerSpecs,
   roadLayersOf,
   roadStatsLine,

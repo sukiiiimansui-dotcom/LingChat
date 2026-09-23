@@ -112,3 +112,73 @@ export function horizonYOf(h: number, pitch: number): number {
 export function art3Summary(): string {
   return "art=3 比 art=2 多：① 云带（地平线以上、不遮地图）② 三层远景山影 + 雾带 ③ 底图更偏水青（raster 整体调色，**我们没有水系矢量数据**）";
 }
+
+/**
+ * 🎨 **可量化的对比度**（2026-09-22 机主第二次"看不清"之后加的）。
+ *
+ * 机主的判据是肉眼，而肉眼发现得太晚（两次了）⇒ 把"看不清"变成**屏幕上的数字**：
+ *   · `bldGroundRatio` = 楼体**最暗档**亮度 ÷ 地面亮度（暗色主题有 1.35 门槛；
+ *     二次元平涂做不到 ⇒ 它只是参考值，**真正撑住对比的是描边**）；
+ *   · `outlineGroundRatio` = 描边色对地面的对比度（WCAG 相对亮度比，1~21）；
+ *   · `verdict` = 低于阈值就 `low`（页面标红 + 写"对比度不足：可能看不清"）。
+ * 阈值是**保守值**（宁可先保证看得清，再加氛围）。
+ */
+export interface ContrastReport {
+  /** 楼最暗档亮度 / 地面亮度（<1 表示楼比地暗） */
+  bldGroundRatio: number;
+  /** 描边对地面的对比度（WCAG 比；1 = 完全同色） */
+  outlineGroundRatio: number;
+  /** 判定：`ok` / `low`（可能看不清） */
+  verdict: "ok" | "low";
+  why: string;
+}
+
+/** `#rrggbb` → 相对亮度（WCAG） */
+export function relLuminance(hex: string): number {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || "").trim());
+  if (!m) return 0.5; // 认不出就当中等亮度（不抛：诊断件不该把页面搞崩）
+  const n = parseInt(m[1]!, 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * ch[0]! + 0.7152 * ch[1]! + 0.0722 * ch[2]!;
+}
+
+/** 两个颜色之间的 WCAG 对比度（1~21） */
+export function contrastRatio(a: string, b: string): number {
+  const la = relLuminance(a);
+  const lb = relLuminance(b);
+  const hi = Math.max(la, lb);
+  const lo = Math.min(la, lb);
+  return +((hi + 0.05) / (lo + 0.05)).toFixed(2);
+}
+
+/**
+ * 算一份对比度报告（**纯函数**）。
+ * @param ramp 楼体色阶 `[高度, #hex][]`（取**最暗**那档与地面比）
+ * @param ground 地面色（取自 `tint` 图层的 `background-color`）
+ * @param outline 描边色（取自主题 `outline.color`；`rgba(...)` 也能认，认不出按中等亮度）
+ */
+export function contrastReport(
+  ramp: Array<[number, string]> | null,
+  ground: string,
+  outline: string
+): ContrastReport {
+  const lGround = relLuminance(ground);
+  const dark = (ramp && ramp.length ? ramp.map((r) => r[1]) : []).map((c) => relLuminance(c));
+  const lBldDark = dark.length ? Math.min(...dark) : 0.5;
+  const bldGroundRatio = +(lBldDark / Math.max(1e-6, lGround)).toFixed(2);
+  const outlineGroundRatio = contrastRatio(outline, ground);
+  /* 阈值（保守）：楼/地亮度比 ≥0.85（平涂本来就接近），或**描边对地面 ≥4.5**（WCAG AA 正文级）
+     —— 平涂主题里描边是唯一的分隔手段，所以后者才是"看得清"的硬指标。 */
+  const ok = outlineGroundRatio >= 4.5 || bldGroundRatio <= 0.85;
+  return {
+    bldGroundRatio,
+    outlineGroundRatio,
+    verdict: ok ? "ok" : "low",
+    why: ok
+      ? `描边对地面 ${outlineGroundRatio}:1（≥4.5 达 AA）或楼/地比 ${bldGroundRatio} 够分`
+      : `**对比度不足：可能看不清**（描边对地面只有 ${outlineGroundRatio}:1，楼/地比 ${bldGroundRatio} 也太接近）`,
+  };
+}

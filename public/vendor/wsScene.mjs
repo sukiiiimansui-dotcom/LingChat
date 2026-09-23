@@ -624,6 +624,37 @@ function horizonYOf(h, pitch) {
 function art3Summary() {
   return "art=3 比 art=2 多：① 云带（地平线以上、不遮地图）② 三层远景山影 + 雾带 ③ 底图更偏水青（raster 整体调色，**我们没有水系矢量数据**）";
 }
+function relLuminance(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || "").trim());
+  if (!m) return 0.5;
+  const n = parseInt(m[1], 16);
+  const ch = [n >> 16 & 255, n >> 8 & 255, n & 255].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+function contrastRatio(a, b) {
+  const la = relLuminance(a);
+  const lb = relLuminance(b);
+  const hi = Math.max(la, lb);
+  const lo = Math.min(la, lb);
+  return +((hi + 0.05) / (lo + 0.05)).toFixed(2);
+}
+function contrastReport(ramp, ground, outline) {
+  const lGround = relLuminance(ground);
+  const dark = (ramp && ramp.length ? ramp.map((r) => r[1]) : []).map((c) => relLuminance(c));
+  const lBldDark = dark.length ? Math.min(...dark) : 0.5;
+  const bldGroundRatio = +(lBldDark / Math.max(1e-6, lGround)).toFixed(2);
+  const outlineGroundRatio = contrastRatio(outline, ground);
+  const ok = outlineGroundRatio >= 4.5 || bldGroundRatio <= 0.85;
+  return {
+    bldGroundRatio,
+    outlineGroundRatio,
+    verdict: ok ? "ok" : "low",
+    why: ok ? `描边对地面 ${outlineGroundRatio}:1（≥4.5 达 AA）或楼/地比 ${bldGroundRatio} 够分` : `**对比度不足：可能看不清**（描边对地面只有 ${outlineGroundRatio}:1，楼/地比 ${bldGroundRatio} 也太接近）`
+  };
+}
 export {
   BUILDING_LAYER_ID,
   ROAD_LAYER_PREFIXES,
@@ -639,11 +670,14 @@ export {
   art3Summary,
   buildSkyGeometry,
   buildTransport,
+  contrastRatio,
+  contrastReport,
   horizonYOf,
   junctions,
   layerOrderHud,
   nearestOnLine,
   planEnsureRoadOrder,
+  relLuminance,
   ringAreaM2,
   roadCountHud,
   roadCountVerdict,

@@ -10,4 +10,5 @@
  */
 export * from "./wsTransport"; // 交通设施：生成逻辑
 export * from "./wsTransportRules"; // 交通设施：规则/图层 id/样式/低档名单
-export * from "./wsRoads"; // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
+export * from "./wsRoads"; // 路网：分级样式 + 计数
+export * from "./wsLayerOrder"; // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）

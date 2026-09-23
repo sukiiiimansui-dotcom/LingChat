@@ -510,20 +510,60 @@ function visibleRoadCount(fc, zoom) {
   }
   return n;
 }
+
+// src/components/views/worldsim/wsLayerOrder.ts
+var TF_LAYER_ID_LIST = ["tf-cross", "tf-drive", "tf-park", "tf-bus", "tf-signal"];
+var BUILDING_LAYER_ID = "bld-ext";
+var ROAD_LAYER_PREFIXES = ["road-casing-", "road-line-"];
+function roadLayersOf(m) {
+  return m.layerIds().filter((id) => ROAD_LAYER_PREFIXES.some((p) => id.startsWith(p)));
+}
+function planEnsureRoadOrder(m) {
+  const ops = [];
+  const roads = roadLayersOf(m);
+  if (!m.hasSource("roads") || !roads.length) {
+    return [{ op: "add-roads", why: m.hasSource("roads") ? "路网图层缺失 ⇒ 重新补层" : "roads source 缺失 ⇒ 重建" }];
+  }
+  const ids = m.layerIds();
+  const idx = (id) => ids.indexOf(id);
+  const firstRoad = Math.min(...roads.map(idx));
+  const tfIdx = TF_LAYER_ID_LIST.map(idx).filter((i) => i >= 0);
+  const bldIdx = idx(BUILDING_LAYER_ID);
+  const blockers = [];
+  const lowestTf = tfIdx.length ? Math.min(...tfIdx) : -1;
+  if (lowestTf >= 0 && firstRoad > lowestTf) blockers.push("交通设施");
+  if (bldIdx >= 0 && firstRoad > bldIdx) blockers.push("楼体");
+  if (!blockers.length) return ops;
+  let before = "";
+  if (lowestTf >= 0 && bldIdx >= 0) before = lowestTf < bldIdx ? ids[lowestTf] : ids[bldIdx];
+  else if (lowestTf >= 0) before = ids[lowestTf];
+  else before = ids[bldIdx];
+  for (const id of roads) ops.push({ op: "move", id, before, why: `路网被「${blockers.join("+")}」压在上面 ⇒ 显式移到它之下` });
+  return ops;
+}
+function layerOrderHud(heals, roads) {
+  return `🛣 ${roads} 条 · 层序自愈 ${heals} 次`;
+}
 export {
+  BUILDING_LAYER_ID,
+  ROAD_LAYER_PREFIXES,
   ROAD_PALETTE_DARK,
   ROAD_RANK_STYLE,
   ROAD_STYLE_FALLBACK,
   TF_CAPS,
   TF_LAYER_IDS,
+  TF_LAYER_ID_LIST,
   TF_LAYER_STYLE,
   TF_LOW_TIER_KINDS,
   TF_RULES,
   buildTransport,
   junctions,
+  layerOrderHud,
   nearestOnLine,
+  planEnsureRoadOrder,
   ringAreaM2,
   roadLayerSpecs,
+  roadLayersOf,
   roadStatsLine,
   roadStyleOf,
   toLngLat,

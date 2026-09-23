@@ -537,13 +537,36 @@
         } catch (e) { out.errs.push("count " + e); }
         return out;
       }
+      /** 🛣 层序**事后断言**：缺就补、被压在上面就 `moveLayer()`，并计数（HUD 报"自愈 N 次"） */
+      let roadHeals = 0;
+      function ensureRoadOrder() {
+        const TF2 = window.__TF__;
+        if (!TF2 || !TF2.planEnsureRoadOrder) return;
+        const fake = {
+          hasSource: function (id) { return !!map.getSource(id); },
+          hasLayer: function (id) { return !!map.getLayer(id); },
+          layerIds: function () { return (map.getStyle().layers || []).map(function (l) { return l.id; }); },
+        };
+        let ops = [];
+        try { ops = TF2.planEnsureRoadOrder(fake); } catch (e) { errs.push("planOrder " + e); return; }
+        for (const o of ops) {
+          try {
+            if (o.op === "add-roads") { void applyRoads(); }
+            else if (o.op === "move" && o.id && map.getLayer(o.id)) map.moveLayer(o.id, o.before);
+            roadHeals++;
+            errs.push("roadHeal: " + o.why);
+          } catch (e) { errs.push("roadHeal fail " + e); }
+        }
+        if (ops.length) { try { renderRoadHud(); } catch (e) { /* 忽略 */ } }
+      }
+
       function renderRoadHud() {
         try {
           const a = roadAudit();
           const el = document.getElementById("m-roads");
           if (!el) return;
           const ok = a.layerIds.length > 0 && (a.visible === null || a.visible > 0);
-          el.textContent = `🛣 ${a.visible === null ? "?" : a.visible} 条 · 图层 ${a.layerIds.length} 个` +
+          el.textContent = `🛣 ${a.visible === null ? "?" : a.visible} 条 · 图层 ${a.layerIds.length} 个 · 自愈 ${roadHeals} 次` +
             (a.hasSource ? "" : " · **无 source**") + (ok ? "" : " · **路网没画上（见下）**") +
             (a.errs.length ? " · " + a.errs.join("；") : "");
         } catch (e) { /* HUD 失败不影响地图 */ }
@@ -777,6 +800,9 @@
           if (ROADSON) { try { await applyRoads(); } catch (e) { errs.push("applyRoads " + e); } }
           /* 🚌 `?tf=1`：楼到齐之后再摆交通设施（要用到楼栋轮廓） */
           if (TFON) { try { await applyTransport(window.__LASTFC__ || { features: [] }); } catch (e) { errs.push("transport " + e); } }
+          /* 🔴 顺序**以事后断言为准**（机主真机回归：?tf=1 时路网不见了 ⇒ 不靠"先插的那一次"） */
+          ensureRoadOrder();
+          window.__ROAD_HEALS__ = roadHeals;
           window.__w3d.ready = true;
         });
         map.on("moveend", () => { if (window.__w3d.ready) void refresh(); });
@@ -1027,6 +1053,7 @@
           /* 🛣 路网计数（与 App 的 `🛣 N` 同一算法 `visibleRoadCount`）+ 交通设施回证 */
           roads: (typeof window.__ROAD_N__ === "number" ? window.__ROAD_N__ : null),
           roadAudit: window.__ROAD_AUDIT__ || null,
+          roadHeals: (typeof window.__ROAD_HEALS__ === "number" ? window.__ROAD_HEALS__ : null),
           roadStat: window.__ROAD_STAT__ || null,
           tf: window.__TF_RES__ ? { n: (window.__TF_RES__.features || []).length, counts: window.__TF_RES__.counts, notes: window.__TF_RES__.notes, hud: (window.__TF && window.__TF.transportHudLine ? window.__TF.transportHudLine(window.__TF_RES__) : null) } : null,
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),

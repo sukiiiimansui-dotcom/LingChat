@@ -665,7 +665,8 @@
           const missN = rows.filter(function (r) { return r.hit === false; }).length;
           head.textContent = ART >= 2
             ? ("🎨 art=" + ART + " ✓ 命中 " + hitN + "/" + rows.length + (missN ? (" ❌未命中 " + missN) : "") +
-               (ART3 ? " · " + (window.__TF__ && window.__TF__.art3Summary ? window.__TF__.art3Summary() : "") : ""))
+               (ART3 ? " · " + (window.__TF__ && window.__TF__.art3Summary ? window.__TF__.art3Summary() : "") : "") +
+               " · 🎬" + ((window.__TF__ && window.__TF__.WS_SCENE_SOURCE) ? (window.__SCENE_CONSUMED__ ? "wsScene ✓" : "页面自带（未换源）") : "未加载"))
             : "🎨 art=1（基准版）";
           head.onclick = function () { box.classList.toggle("is-open"); };
           body.innerHTML = rows.map(function (r) {
@@ -886,7 +887,14 @@
           /* 🎨 2026-09-20 机主要"**看得见天空（基沃托斯的天空）**"：
              58° 是俯视看楼的角度，天际线以上全在画面外 ⇒ 降到 38° 把地平线和天空收进来。
              `maxPitch: 85` 必须显式写：MapLibre 默认上限只有 **60°**，不放开就抬不起头。 */
-          zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 70,
+          /* 🎬 相机默认值取自**公共模块** `wsScene.cameraDefaults()`（唯一真源；页面不许再写字面量）。
+             模块还没加载（module 是 defer）时用同一份数值兜底 —— 但那样 `__SCENE_SRC__` 会标成"页面自带"。 */
+          ...(() => {
+            const cam = (window.__TF__ && window.__TF__.cameraDefaults) ? window.__TF__.cameraDefaults() : null;
+            window.__SCENE_CONSUMED__ = !!cam;
+            const c = cam || { zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 70, minZoom: 3, maxZoom: 19 };
+            return { zoom: c.zoom, pitch: c.pitch, bearing: c.bearing, maxPitch: c.maxPitch, minZoom: c.minZoom, maxZoom: c.maxZoom };
+          })(),
           attributionControl: false, fadeDuration: 120,
           preserveDrawingBuffer: true, // 截图用（无头/代拍都要它）
         });
@@ -1159,6 +1167,14 @@
           art: ART, artPatch: window.__ART_CHANGED__, artReadback: artReadback(),
           sky: window.__SKY_GEO__ || null,
           contrast: window.__CONTRAST__ || null,
+          /* 🎬 场景装配自证（主会话要求：等于公共模块 ⇒ ✅；页面自带 ⇒ 判"判不了"并写明还没换源） */
+          scene: (function () {
+            const TFx = window.__TF__;
+            if (!TFx || !TFx.sceneSelfReport) return null;
+            const r = TFx.sceneSelfReport(!!window.__SCENE_CONSUMED__);
+            return { ...r, plan: (TFx.sceneLayerPlan ? TFx.sceneLayerPlan().map(function (e) { return e.group; }) : []),
+                     violations: (TFx.sceneOrderViolations ? TFx.sceneOrderViolations((map.getStyle().layers || []).map(function (l) { return l.id; })) : []) };
+          })(),
           /* 🛣 路网计数（与 App 的 `🛣 N` 同一算法 `visibleRoadCount`）+ 交通设施回证 */
           roads: (typeof window.__ROAD_N__ === "number" ? window.__ROAD_N__ : null),
           roadAudit: window.__ROAD_AUDIT__ || null,

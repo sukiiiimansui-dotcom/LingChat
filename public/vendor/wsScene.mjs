@@ -655,21 +655,81 @@ function contrastReport(ramp, ground, outline) {
     why: ok ? `描边对地面 ${outlineGroundRatio}:1（≥4.5 达 AA）或楼/地比 ${bldGroundRatio} 够分` : `**对比度不足：可能看不清**（描边对地面只有 ${outlineGroundRatio}:1，楼/地比 ${bldGroundRatio} 也太接近）`
   };
 }
+
+// src/components/views/worldsim/wsScene.ts
+var WS_SCENE_SOURCE = "wsScene.ts";
+var CAMERA_DEFAULTS = {
+  center: [116.2, 39.9],
+  // 占位中心：真位置由定位/数据 bbox 决定
+  zoom: 16.4,
+  // 街区级（能看见楼体体量）
+  pitch: 38,
+  // 抬头能看见天空，又不至于把地面压扁
+  bearing: -18,
+  // 轻微斜角，楼有立体感
+  minZoom: 3,
+  maxZoom: 19,
+  maxPitch: 70
+};
+function cameraDefaults() {
+  return { ...CAMERA_DEFAULTS };
+}
+var SCENE_LAYER_ORDER = [
+  { group: "roads", idPrefixes: ["road-casing-", "road-line-"], beforeId: "bld-ext", why: "路是地面上的东西，压在楼上会像从楼顶穿过" },
+  { group: "transport", idPrefixes: ["tf-"], beforeId: "bld-ext", why: "交通设施**贴在路之上**（先插路网、后插设施 ⇒ 设施在上）" },
+  { group: "buildings", idPrefixes: ["bld-"], beforeId: null, why: "楼体在最上（数据层，交互载体）" }
+];
+function sceneLayerPlan() {
+  return SCENE_LAYER_ORDER.map((e) => ({ ...e }));
+}
+function sceneGroupOf(layerId) {
+  const id = String(layerId || "");
+  for (const e of SCENE_LAYER_ORDER) if (e.idPrefixes.some((p) => id.startsWith(p))) return e.group;
+  return null;
+}
+function sceneSelfReport(consumed) {
+  return consumed ? { source: WS_SCENE_SOURCE, ok: true, detail: `场景装配真源 = \`${WS_SCENE_SOURCE}\`（相机 + 层序都取自它）` } : {
+    source: "（页面自带）",
+    ok: false,
+    detail: "**这一处还没换源**：相机/层序仍是页面里各写一份 —— 换用 `wsScene.ts` 后这行会变 ✅"
+  };
+}
+function sceneOrderViolations(layerIds) {
+  const out = [];
+  const idx = (id) => layerIds.indexOf(id);
+  const firstOf = (g) => {
+    const e = SCENE_LAYER_ORDER.find((x) => x.group === g);
+    const positions = layerIds.map((id, i) => e.idPrefixes.some((p) => id.startsWith(p)) ? i : -1).filter((i) => i >= 0);
+    return positions.length ? Math.min(...positions) : -1;
+  };
+  const roads = firstOf("roads");
+  const tf = firstOf("transport");
+  const bld = firstOf("buildings");
+  if (roads >= 0 && tf >= 0 && roads > tf) out.push("路网被交通设施压在上面（应在下方）");
+  if (roads >= 0 && bld >= 0 && roads > bld) out.push("路网被楼体压在上面（应在下方）");
+  if (tf >= 0 && bld >= 0 && tf > bld) out.push("交通设施被楼体压在上面（应在下方）");
+  void idx;
+  return out;
+}
 export {
   BUILDING_LAYER_ID,
+  CAMERA_DEFAULTS,
   ROAD_LAYER_PREFIXES,
   ROAD_PALETTE_DARK,
   ROAD_RANK_STYLE,
   ROAD_STYLE_FALLBACK,
+  SCENE_LAYER_ORDER,
   TF_CAPS,
   TF_LAYER_IDS,
   TF_LAYER_ID_LIST,
   TF_LAYER_STYLE,
   TF_LOW_TIER_KINDS,
   TF_RULES,
+  WS_SCENE_SOURCE,
   art3Summary,
   buildSkyGeometry,
   buildTransport,
+  cameraDefaults,
   contrastRatio,
   contrastReport,
   horizonYOf,
@@ -685,6 +745,10 @@ export {
   roadLayersOf,
   roadStatsLine,
   roadStyleOf,
+  sceneGroupOf,
+  sceneLayerPlan,
+  sceneOrderViolations,
+  sceneSelfReport,
   toLngLat,
   toMeters,
   transportHudLine,

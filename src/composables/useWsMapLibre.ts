@@ -34,7 +34,7 @@
  * ── 另外两条本文件特有的决定 ───────────────────────────────────────────────
  * · **public 资源按 `location.href` 解析**（`assetUrl()`）：`/vendor/maplibre/*` 属于
  *   public 目录，永远由**页面所在源**提供。⚠️ 不能按模块 URL 解析 —— 验证页可能从另一个源
- *   取本模块（见 `public/wsmlstage.html`），那样会把 /vendor 指到错的源上（实测：vite dev
+ *   取本模块（见已退休的 `public/wsmlstage.html`，2026-09-24 删，见 `world_map/REMOVED-CODE.md`），那样会把 /vendor 指到错的源上（实测：vite dev
  *   的 public 快照里没有 maplibre → 拿到 index.html → 模块加载失败）。
  * · **`glyphs` 没有服务**（vendored 目录里没有字体）⇒ MapLibre 的 `symbol` 层画不出字。
  *   所以全国视图的 7 个大区名改用 **HTML Marker**（`MACRO_ANCHORS`，与 Canvas2D 版同一份锚点）。
@@ -150,7 +150,7 @@ export interface WsMapLibrePick {
 }
 
 /** 松引用：可以是 Vue 的 ref，也可以是**裸元素** ——
- *  验证页（`public/wsmlstage.html`）要能在**没有 Vue 组件实例**的环境里驱动本 composable。 */
+ *  验证页（`public/wsmlstage.html`，**2026-09-24 已退休**）要能在**没有 Vue 组件实例**的环境里驱动本 composable。 */
 export type MaybeEl<T> = Ref<T | null> | T | null | undefined;
 
 /** 相机留白：顶栏 / 底部动作条 / 浮动角标都压在地图上，fitBounds 必须给它们让位 */

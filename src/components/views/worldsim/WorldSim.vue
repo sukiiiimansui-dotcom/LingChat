@@ -793,6 +793,8 @@
       /* 计数/路网规格：**本级没有这套口径** ⇒ 传 undefined（面板会如实写"本级没有"） */
       counts: undefined,
       roadSpecs: undefined,
+      /* 🔎 对齐清单 B 的自证：这一级的 style 由哪一份实现产出（引擎自报，别在面板里猜） */
+      styleSource: (geoStage.info.value as { styleSource?: string }).styleSource || "（引擎没报）",
       capsLow: !!perf.low.value,
       wstheme: `阶段舞台（${mapDark.value ? "暗" : "亮"}底）`,
       wsnight: { on: isNightNow(), level: mapDark.value ? 1 : 0 },

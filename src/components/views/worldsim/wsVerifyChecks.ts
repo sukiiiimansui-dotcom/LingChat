@@ -102,6 +102,8 @@ export interface VerifyCtx {
   locSource: string;
   /** 「App ↔ 代拍页」对账结果（拿不到 JSON 就 `ok:false`，如实说"没对成"） */
   parity?: ThemeParity;
+  /** 🔎 这张图的 style **由哪一份实现产出**（对齐清单 B 的自证：`wsMapStyle.ts`） */
+  styleSource?: string;
   /**
    * 「**动效状态**」（机主 2026-09-21：看不到 MG 动画时，要能分清"**没触发**"还是"**坏了**"）。
    * 全部来自**当场 DOM 观察**（有就有、没有就没有），不猜。
@@ -358,6 +360,17 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
           m.facilityFadeDone === null ? "" : m.facilityFadeDone ? "（淡入已播完）" : "（淡入中/未播）"
         } · 事件条=${m.eventRows}${m.eventRows === 0 ? "（没有事件 ⇒ 入场动画自然看不到）" : ""} · ` +
         `天气粒子=${m.weatherCanvas ? "在跑" : "无"} · 档位=${m.low ? "低档（装饰动画关）" : "正常档（该动）"}`
+    );
+  }
+
+  /* ⑦.8 样式真源（B 的自证：换源有没有生效，页面上一眼可见） */
+  if (c.styleSource) {
+    push(
+      "样式真源（对齐清单 B）",
+      c.styleSource === "wsMapStyle.ts" ? true : null,
+      c.styleSource === "wsMapStyle.ts"
+        ? "`wsMapStyle.ts`（唯一真源）—— 这一级的 style 由它产出"
+        : `**${c.styleSource}**（不是 wsMapStyle ⇒ 这一级还没换源）`
     );
   }
 

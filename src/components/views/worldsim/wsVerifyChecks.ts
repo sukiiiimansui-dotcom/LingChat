@@ -104,6 +104,9 @@ export interface VerifyCtx {
   parity?: ThemeParity;
   /** 🔎 这张图的 style **由哪一份实现产出**（对齐清单 B 的自证：`wsMapStyle.ts`） */
   styleSource?: string;
+  /** 🎬 相机与层序**由哪一份实现产出**（`wsScene.ts`；主会话要求：装配也只有一份）+ 实际层序违规 */
+  sceneSource?: string;
+  sceneViolations?: string[];
   /**
    * 「**动效状态**」（机主 2026-09-21：看不到 MG 动画时，要能分清"**没触发**"还是"**坏了**"）。
    * 全部来自**当场 DOM 观察**（有就有、没有就没有），不猜。
@@ -371,6 +374,19 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
       c.styleSource === "wsMapStyle.ts"
         ? "`wsMapStyle.ts`（唯一真源）—— 这一级的 style 由它产出"
         : `**${c.styleSource}**（不是 wsMapStyle ⇒ 这一级还没换源）`
+    );
+  }
+
+  /* ⑦.9 场景装配真源（相机 + 层序；`wsScene.ts`） */
+  if (c.sceneSource) {
+    const bad = (c.sceneViolations || []).length > 0;
+    push(
+      "场景装配真源（相机+层序）",
+      c.sceneSource === "wsScene.ts" && !bad ? true : bad ? false : null,
+      (c.sceneSource === "wsScene.ts"
+        ? "`wsScene.ts`（唯一真源）—— 相机与层序都取自它"
+        : `**${c.sceneSource}**（这一处还没换源）`) +
+        (bad ? ` · ⚠️ **实际层序违规**：${(c.sceneViolations || []).join("；")}` : "")
     );
   }
 

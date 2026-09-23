@@ -572,6 +572,58 @@ function roadCountHud(v, layerCount, heals) {
   const tail = v.state === "missing" ? " · **路网没画上**" : "";
   return `🛣 ${nTxt} 条 · 图层 ${layerCount} 个 · 自愈 ${heals} 次 · 口径=${v.gauge}${tail}`;
 }
+
+// src/components/views/worldsim/wsArtSky.ts
+function hash01(i, seed) {
+  const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+function buildSkyGeometry(w, h, horizonY, pitch, zoom, low = false, seed = 1) {
+  const empty = { clouds: [], ridges: [], fog: { y: horizonY, h: 0, alpha: 0 } };
+  if (low || w <= 0 || h <= 0) return empty;
+  const skyH = Math.max(0, Math.min(h, horizonY));
+  if (skyH < 24) return empty;
+  const k = Math.max(0.6, Math.min(2.2, 1 + (zoom - 15) * 0.08));
+  const n = Math.max(3, Math.min(9, Math.round(4 + k * 2)));
+  const clouds = [];
+  for (let i = 0; i < n; i++) {
+    const u = hash01(i, seed);
+    const v = hash01(i + 100, seed);
+    const x = (0.06 + 0.88 * u) * w;
+    const yMax = Math.max(10, skyH * 0.92);
+    const y = 0.08 * yMax + v * 0.84 * yMax;
+    const rx = (34 + 70 * hash01(i + 200, seed)) * k;
+    const ry = rx * (0.32 + 0.16 * hash01(i + 300, seed));
+    const near = 1 - Math.min(1, y / yMax);
+    clouds.push({ x, y, rx, ry, a: 0.16 + 0.3 * near * (0.6 + 0.4 * hash01(i + 400, seed)) });
+  }
+  const layers = 3;
+  const bandH = Math.max(10, Math.min(skyH * 0.18, 46));
+  const ridges = [];
+  for (let L = 0; L < layers; L++) {
+    const far = layers - 1 - L;
+    const amp = bandH * (0.35 + 0.3 * far) / layers;
+    const baseY = skyH - bandH * 0.15 + far * (bandH / layers);
+    const pts = [];
+    const steps = 14;
+    for (let i = 0; i <= steps; i++) {
+      const x = i / steps * w;
+      const yy = baseY - amp * (0.6 + 0.4 * Math.sin(i / steps * Math.PI * (1.5 + 0.5 * L) + L * 1.7)) - amp * 0.35 * Math.sin(i / steps * Math.PI * (4 + L));
+      pts.push([x, yy]);
+    }
+    pts.push([w, skyH + bandH], [0, skyH + bandH]);
+    ridges.push({ layer: L, alpha: 0.1 + 0.14 * L, pts });
+  }
+  const fog = { y: skyH, h: Math.max(12, bandH * 0.9), alpha: 0.22 };
+  return { clouds, ridges, fog };
+}
+function horizonYOf(h, pitch) {
+  const t = Math.max(0, Math.min(1, (pitch - 20) / 60));
+  return Math.round(h * (0.78 - 0.42 * t));
+}
+function art3Summary() {
+  return "art=3 比 art=2 多：① 云带（地平线以上、不遮地图）② 三层远景山影 + 雾带 ③ 底图更偏水青（raster 整体调色，**我们没有水系矢量数据**）";
+}
 export {
   BUILDING_LAYER_ID,
   ROAD_LAYER_PREFIXES,
@@ -584,7 +636,10 @@ export {
   TF_LAYER_STYLE,
   TF_LOW_TIER_KINDS,
   TF_RULES,
+  art3Summary,
+  buildSkyGeometry,
   buildTransport,
+  horizonYOf,
   junctions,
   layerOrderHud,
   nearestOnLine,

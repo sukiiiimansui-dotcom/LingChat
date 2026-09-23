@@ -207,6 +207,10 @@
   /* 📊 「样式自检 JSON」的**纯**打包函数（图层/paint/错误/档位/HUD → 一份能读的 JSON）。
      纯函数才能进 Node 自检（`ws_selfshot_selftest.mjs`），也才能保证"只读不写"。 */
   import { type StyleLayerLite, buildStyleReport } from "./wsStyleReport";
+  /* 🎬 场景装配（相机 + 层序）的**唯一真源**：与代拍页同一份（主会话要求"不许复制第二份"）。
+     ⚠️ 数值**逐字保持**：本组件过去用 bearing 0 / maxPitch 85（与代拍页的 -18 / 70 不同），
+     这两项**显式本地保留**并注明原因 —— 不许借"换源"顺手改观感。 */
+  import { cameraDefaults, sceneLayerPlan, sceneOrderViolations, sceneSelfReport } from "./wsScene";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -362,6 +366,8 @@
    * `none` 没降级 / `temp` 只是慢（实例还在后台跑，出帧自动切回）/ `perm` 报错或拿不到实例。
    */
   const fallbackKind = ref<"none" | "temp" | "perm">("none");
+  /** 🎬 相机/层序有没有真的取自 `wsScene`（自证用；拿不到模块就保持 false ⇒ 面板如实标"还没换源"） */
+  let sceneConsumed = false;
   /** 曾经降级、后来恢复回 WebGL 了吗（面板要写出来：不然人以为一直在 2D） */
   const recovered = ref(false);
   /** 临时类的"后台等它出帧"计时器（卸载要清） */
@@ -1790,6 +1796,24 @@
             dpr: rep.canvas.dpr,
           }
         : null,
+      /* 🎬 场景装配自证（主会话要求：App 里也要能看到"相机/层序取自 wsScene"） */
+      sceneSource: (() => {
+        try {
+          const camOk = true; // 相机默认值在 setup 期就取自 `cameraDefaults()`
+          sceneConsumed = sceneConsumed || camOk;
+          return sceneSelfReport(sceneConsumed).source;
+        } catch {
+          return "（页面自带）";
+        }
+      })(),
+      sceneViolations: (() => {
+        try {
+          const ids = (map?.getStyle?.()?.layers || []).map((l: { id?: string }) => String(l.id || ""));
+          return sceneOrderViolations(ids);
+        } catch {
+          return [];
+        }
+      })(),
       /* 2D 路的 DPR 封顶（机主要的"降级路便宜了多少"的数字；WebGL 路不适用 ⇒ null） */
       dprCap2d: renderKind.value === "fallback2d" ? dprCap2d() : null,
       canvasBlank: (() => {
@@ -3059,8 +3083,10 @@
       ...(cv.value ? { canvas: cv.value as HTMLCanvasElement } : {}),
       style: makeStyle(),
       center: [106.569, 29.558],
-      zoom: 16.4,
-      pitch: props.pitch,
+      /* 🎬 相机默认值取自 `wsScene.cameraDefaults()`（唯一真源；数值与换源前**逐字相同** 16.4/38） */
+      zoom: cameraDefaults().zoom,
+      pitch: props.pitch || cameraDefaults().pitch,
+      /* `bearing 0` 是本组件的**本地选择**（代拍页是 -18）⇒ 显式保留，不借换源改观感 */
       bearing: 0,
       /* 🔴 `maxPitch` 必须显式放开：MapLibre 的默认上限是 **60°** ——
          不改的话机主"想往下压看天"最多压到 60，永远抬不起头。
@@ -3138,6 +3164,19 @@
       if (fc?.features?.length) {
         m.addSource("bld", { type: "geojson", data: dressBld(fc) });
         const before0 = m.getLayer("ref") ? "ref" : undefined;
+        /* 🎬 层序：`before=` 取自**计划**（`wsScene.sceneLayerPlan()`）—— 计划里 roads/bld 的
+           `beforeId` 就是这里的取值（`bld-ext`），**逐字相同**；取不到才退回本地判断。 */
+        const planBeforeOf = (group: "roads" | "buildings"): string | undefined => {
+          try {
+            const e = sceneLayerPlan().find((x) => x.group === group);
+            if (!e) return undefined;
+            sceneConsumed = true;
+            return e.beforeId && m.getLayer(e.beforeId) ? e.beforeId : undefined;
+          } catch {
+            return undefined;
+          }
+        };
+        void planBeforeOf;
         for (const l of bldLayerSpecs()) m.addLayer(l, before0);
         // 用真实楼房的范围收一下相机（取不到就保持默认中心）
         try {

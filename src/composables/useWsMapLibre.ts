@@ -47,6 +47,8 @@ import { parseFeatures, THEME_DARK, THEME_LIGHT, type GeoFeat, type GeoTheme } f
    ⚠️ 只写 `export *` **不够**（它不建本地绑定），而本文件剩余代码仍在用这些符号
    ⇒ 必须**同时 import 回来**；下面这份名单就是逐符号核对出来的。 */
 import {
+  WS_MAP_STYLE_SOURCE,
+  wsMapStyleLayerIds,
   assetUrl,
   NO_HIGHLIGHT_FILTER,
   basemapTiles,
@@ -419,8 +421,11 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
   const err = ref("");
   /** 当前画出来的要素（给"点空白处取消选中"/面板定位用）—— 与 Canvas2D 版**同一个类型** */
   const feats = ref<GeoFeat[]>([]);
-  const info = ref<WsMapLibreInfo>({
+  const info = ref<WsMapLibreInfo & { styleSource?: string; styleLayerIds?: string[] }>({
     engine: "maplibre",
+    /* 🔎 对齐清单 B 的自证：这张图的 style 由 `wsMapStyle.ts` 产出（换源有没有生效看这里） */
+    styleSource: WS_MAP_STYLE_SOURCE,
+    styleLayerIds: wsMapStyleLayerIds(),
     version: "",
     loadMs: 0,
     dataMs: 0,

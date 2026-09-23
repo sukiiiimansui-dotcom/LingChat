@@ -168,3 +168,17 @@ export function paintUpdatesFor(theme: GeoTheme): Array<[string, string, unknown
 
 /** 「谁也匹配不上」的过滤器：高亮层初始就用它，等价于不可见。 */
 export const NO_HIGHLIGHT_FILTER: unknown[] = ["==", ["get", "adcode"], "\u0000ws-none"];
+
+/**
+ * 🔎 **"同一份真源"的自证标记**（对齐清单 B 用）。
+ *
+ * 为什么要有它：B 的目标是"**各级都调同一份实现**"，而"有没有真的调到"以前只能靠读代码。
+ * ⇒ 让样式构建方**自报家门**：谁产出这张图的 style，谁的名字就写进 `info.styleSource`，
+ * 面板（五级都能开）会显示「样式真源 = …」⇒ 换源有没有生效，**在页面上一眼可见**，不必猜。
+ */
+export const WS_MAP_STYLE_SOURCE = "wsMapStyle.ts";
+
+/** 本模块产出的图层 id（面板/自检用它断言"图层确实来自这一份"） */
+export function wsMapStyleLayerIds(): string[] {
+  return [ML_BG, ML_BASE_LAYER, ML_LAND, ML_LINE, ML_HI_LINE];
+}

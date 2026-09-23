@@ -322,7 +322,7 @@
               "line-color": outline.color,
               /* 🎨 art=2：描边**随 zoom 变细/变粗**（近粗 ⇒ 动画感；远细 ⇒ 不糊成一片）。
                  art=1 保持主题给的固定宽度（旧版逐字节不变）。停靠点只有一份（`OUTLINE_STOPS`）。 */
-              "line-width": ART === 2 ? outlineWidthExpr() : outline.width,
+              "line-width": ART >= 2 ? outlineWidthExpr() : outline.width,
             },
           },
         ];
@@ -384,12 +384,12 @@
       const ART_PATCHES = [
         /* 🆕 art=3：底图整体往"水青"推（**我们没有水系矢量数据** —— 河/湖是栅格底图里的像素，
            所以只能调 raster 的整体饱和度/亮度，**不能假装给水体单独上色**） */
-        { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.72, why: "底图更青（无矢量水系，只能整体调）" },
-        { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 1, why: "底图更亮（干净一档）" },
+        { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.6, why: "底图更青（**保守**：0.72 洗掉了路与注记）" },
+        { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 0.94, why: "底图更亮但**不顶到 1**（顶到 1 吃掉层次）" },
         { id: "tint", key: "background-color", art2: "#EEF9FF", why: "地面色罩更近白" },
-        { id: "tint", key: "background-opacity", art2: 0.8, why: "色罩更实（平涂感）" },
+        { id: "tint", key: "background-opacity", art2: 0.5, why: "色罩**保守值**：0.8 会把地面糊成一片白" },
         { id: "bg", key: "background-color", art2: "#F7FCFF", why: "底色更亮" },
-        { id: "base", key: "raster-opacity", art2: 0.32, why: "照片更淡 ⇒ 少纹理" },
+        { id: "base", key: "raster-opacity", art2: 0.52, why: "照片更淡但**底图承载路与注记**：0.32 就「没有路」了" },
       ];
       /** 楼体色阶要推近白的档数（`artRamp` 用；也进回证表） */
       const ART_RAMP_HI = ["#CFEDFF", "#E2F6FF", "#F2FCFF", "#FFFFFF"];
@@ -648,6 +648,19 @@
           const box = document.getElementById("artb");
           if (!head || !body || !box) return;
           const rows = artReadback();
+          /* 🎨 **可量化的对比度**（把"看不清"变成数字；低于阈值标红 + 页面写一句） */
+          try {
+            const TFa = window.__TF__;
+            const ground = (map.getPaintProperty("tint", "background-color") || "#FFFFFF");
+            const outline = (THEME && THEME.outline && THEME.outline.color) || "#000000";
+            const rep = TFa && TFa.contrastReport ? TFa.contrastReport((THEME && THEME.ramp) || null, ground, outline) : null;
+            if (rep) {
+              rows.push({ id: "对比度", key: "楼最暗档/地面", now: rep.bldGroundRatio, want: "≥0.85（或靠描边）", hit: rep.verdict === "ok", why: "楼与地是否分得开" });
+              rows.push({ id: "对比度", key: "描边/地面", now: rep.outlineGroundRatio + ":1", want: "≥4.5:1", hit: rep.outlineGroundRatio >= 4.5, why: "平涂主题靠描边撑对比" });
+              window.__CONTRAST__ = rep;
+              if (rep.verdict === "low") head.textContent = "⚠️ " + rep.why;
+            }
+          } catch (e) { errs.push("contrast " + e); }
           const hitN = rows.filter(function (r) { return r.hit === true; }).length;
           const missN = rows.filter(function (r) { return r.hit === false; }).length;
           head.textContent = ART >= 2
@@ -1145,6 +1158,7 @@
           /* 🎨 art 变体自证：档位 + 回证表（"改了到底生效没有"由它回答） */
           art: ART, artPatch: window.__ART_CHANGED__, artReadback: artReadback(),
           sky: window.__SKY_GEO__ || null,
+          contrast: window.__CONTRAST__ || null,
           /* 🛣 路网计数（与 App 的 `🛣 N` 同一算法 `visibleRoadCount`）+ 交通设施回证 */
           roads: (typeof window.__ROAD_N__ === "number" ? window.__ROAD_N__ : null),
           roadAudit: window.__ROAD_AUDIT__ || null,

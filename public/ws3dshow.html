@@ -333,8 +333,14 @@
          （`patchPaint()` 会跳过不存在的键 —— 我们被"往 style 塞未知键 ⇒ 整份校验失败 ⇒ load 永不触发"坑过）。
          参考：`~/rikka/Dsh-SYuki/world_map/ART-STUDY.md`（高调平涂 / 描边随距离 / 基沃托斯的天）。 */
       const ART = (function () {
-        try { return /[?&]art=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; }
+        try {
+          if (/[?&]art=3\b/.test(location.search)) return 3;
+          if (/[?&]art=2\b/.test(location.search)) return 2;
+          return 1;
+        } catch (e) { return 1; }
       })();
+      /** art=3 才有的东西（云/山影/raster 调色）；art=2 及以上都走"高调"那套补丁 */
+      const ART3 = ART === 3;
 
       /** 描边的 zoom→宽度 停靠点（**单一真源**：样式表达式与 HUD 显示都从这一份来，别写两遍） */
       const OUTLINE_STOPS = [
@@ -376,6 +382,10 @@
        * 所以"改了但没生效"这种情况一定会在回证表里露出来（机主第一反馈："这变了个啥"）。
        */
       const ART_PATCHES = [
+        /* 🆕 art=3：底图整体往"水青"推（**我们没有水系矢量数据** —— 河/湖是栅格底图里的像素，
+           所以只能调 raster 的整体饱和度/亮度，**不能假装给水体单独上色**） */
+        { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.72, why: "底图更青（无矢量水系，只能整体调）" },
+        { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 1, why: "底图更亮（干净一档）" },
         { id: "tint", key: "background-color", art2: "#EEF9FF", why: "地面色罩更近白" },
         { id: "tint", key: "background-opacity", art2: 0.8, why: "色罩更实（平涂感）" },
         { id: "bg", key: "background-color", art2: "#F7FCFF", why: "底色更亮" },
@@ -386,10 +396,10 @@
 
       /** 造这一版美术（art=2 才动；art=1 原样返回 ⇒ **旧版一个字节都不变**） */
       function applyArt(style) {
-        if (ART !== 2) return { style: style, changed: 0 };
+        if (ART < 2) return { style: style, changed: 0 };
         let n = 0;
         const set = function (id, k, v) { if (patchPaint(style, id, k, v)) n++; };
-        for (const q of ART_PATCHES) set(q.id, q.key, q.art2);
+        for (const q of ART_PATCHES) set(q.id, q.key, ART3 && q.art3 !== undefined ? q.art3 : q.art2);
 
         /* ① 描边随 zoom 变细（近粗远细）—— 楼层的 `bld-line` 在 addLayer 时加，见 bldLayerSpecs() */
         /* ② 基沃托斯的天：**根级 sky 只动白名单里的键**（sky-color/horizon-color/fog-color 等 7 个） */
@@ -446,9 +456,9 @@
           } catch (e) { now = "(取值抛错)"; }
           rows.push({
             id: q.id, key: q.key, now: now,
-            want: ART === 2 ? q.art2 : null,
+            want: ART >= 2 ? (ART3 && q.art3 !== undefined ? q.art3 : q.art2) : null,
             /** art=1 时这一行只是"基准值"；art=2 时才判命中 */
-            hit: ART !== 2 ? null : (!has ? "no-layer" : JSON.stringify(now) === JSON.stringify(q.art2)),
+            hit: ART < 2 ? null : (!has ? "no-layer" : JSON.stringify(now) === JSON.stringify(ART3 && q.art3 !== undefined ? q.art3 : q.art2)),
             why: q.why,
           });
         }
@@ -640,8 +650,9 @@
           const rows = artReadback();
           const hitN = rows.filter(function (r) { return r.hit === true; }).length;
           const missN = rows.filter(function (r) { return r.hit === false; }).length;
-          head.textContent = ART === 2
-            ? ("🎨 art=2 ✓ 命中 " + hitN + "/" + rows.length + (missN ? (" ❌未命中 " + missN) : ""))
+          head.textContent = ART >= 2
+            ? ("🎨 art=" + ART + " ✓ 命中 " + hitN + "/" + rows.length + (missN ? (" ❌未命中 " + missN) : "") +
+               (ART3 ? " · " + (window.__TF__ && window.__TF__.art3Summary ? window.__TF__.art3Summary() : "") : ""))
             : "🎨 art=1（基准版）";
           head.onclick = function () { box.classList.toggle("is-open"); };
           body.innerHTML = rows.map(function (r) {
@@ -681,6 +692,70 @@
           const el = document.getElementById("m-msg");
           if (el && ART === 2) el.textContent = "pitch=" + Math.round(p) + "° 拖动阻尼×" + k.toFixed(2);
         } catch (e) { /* 护栏失败不影响地图 */ }
+      }
+
+      /* ══ ☁️ art=3：云带 + 远景山影 + 雾带（**独立 canvas 叠加层，不碰 style 白名单**）══════
+         几何来自纯函数 `wsArtSky.buildSkyGeometry()`（确定性 ⇒ 拖动不会乱跳）；
+         低档（`?low=1` / `__PERF_LOW__`）与 art<3 时**整块不画**。 */
+      let skyCv = null, skyCtx = null;
+      function ensureSkyCanvas() {
+        if (skyCv) return skyCv;
+        skyCv = document.createElement("canvas");
+        skyCv.className = "ws-sky";
+        skyCv.setAttribute("aria-hidden", "true");
+        /* 只在地图上、**不接手势**（否则又把拖动吃掉了） */
+        skyCv.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:1;";
+        document.body.appendChild(skyCv);
+        skyCtx = skyCv.getContext("2d");
+        return skyCv;
+      }
+      function drawSky() {
+        const TF2 = window.__TF__;
+        if (!TF2 || !TF2.buildSkyGeometry) return;
+        const low = !!(window.__PERF_LOW__ || /[?&]low=1\b/.test(location.search));
+        if (ART < 3 || low) { if (skyCv) skyCv.style.display = "none"; return; }
+        const cv = ensureSkyCanvas();
+        const w = window.innerWidth, h = window.innerHeight;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+        cv.style.display = "block";
+        const g = skyCtx;
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        g.clearRect(0, 0, w, h);
+        const pitch = map.getPitch ? map.getPitch() : 38;
+        const zoom = map.getZoom ? map.getZoom() : 16;
+        const horizonY = TF2.horizonYOf(h, pitch);
+        const geo = TF2.buildSkyGeometry(w, h, horizonY, pitch, zoom, false);
+        /* ① 远景山影（远→近；越近越实） */
+        for (const r of geo.ridges) {
+          g.beginPath();
+          r.pts.forEach(function (pt, i) { i ? g.lineTo(pt[0], pt[1]) : g.moveTo(pt[0], pt[1]); });
+          g.closePath();
+          g.fillStyle = "rgba(150,190,215," + r.alpha.toFixed(3) + ")";
+          g.fill();
+        }
+        /* ② 地平线雾带（渐变，**只在地平线上下一条**） */
+        const fy = geo.fog.y;
+        const grd = g.createLinearGradient(0, fy - geo.fog.h, 0, fy + geo.fog.h * 0.5);
+        grd.addColorStop(0, "rgba(255,255,255,0)");
+        grd.addColorStop(0.55, "rgba(255,255,255," + geo.fog.alpha + ")");
+        grd.addColorStop(1, "rgba(255,255,255,0)");
+        g.fillStyle = grd;
+        g.fillRect(0, fy - geo.fog.h, w, geo.fog.h * 1.5);
+        /* ③ 云（软边白椭圆；**只在地平线以上**，低 alpha ⇒ 不遮地图） */
+        g.save();
+        for (const c of geo.clouds) {
+          const rg = g.createRadialGradient(c.x, c.y, 0, c.x, c.y, Math.max(c.rx, c.ry));
+          rg.addColorStop(0, "rgba(255,255,255," + c.a.toFixed(3) + ")");
+          rg.addColorStop(0.6, "rgba(255,255,255," + (c.a * 0.55).toFixed(3) + ")");
+          rg.addColorStop(1, "rgba(255,255,255,0)");
+          g.fillStyle = rg;
+          g.beginPath();
+          g.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+        g.restore();
+        window.__SKY_GEO__ = { clouds: geo.clouds.length, ridges: geo.ridges.length, horizonY: geo.fog.y };
       }
 
       function hasWebGL() {
@@ -817,9 +892,14 @@
           /* 🔴 顺序**以事后断言为准**（机主真机回归：?tf=1 时路网不见了 ⇒ 不靠"先插的那一次"） */
           ensureRoadOrder();
           window.__ROAD_HEALS__ = roadHeals;
+          /* ☁️ 天空叠加放在最后（它在最上层，但低 alpha 且只在地平线以上） */
+          try { drawSky(); } catch (e) { errs.push("sky " + e); }
           window.__w3d.ready = true;
         });
         map.on("moveend", () => { if (window.__w3d.ready) void refresh(); });
+        /* ☁️ art=3：天空叠加重画（moveend 时重画一次即可 —— 几何是确定性的，不会抖） */
+        map.on("moveend", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });
+        map.on("pitch", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });
         /* 🔴 侧视角护栏：pitch 一变就重算阻尼（拖动速度/滚轮速率），并刷新 HUD 上的自证数字 */
         try {
           map.on("pitch", applyPitchGuard);
@@ -1064,6 +1144,7 @@
           layers: ls, ...stats, fps: Number($("m-fps").textContent) || null,
           /* 🎨 art 变体自证：档位 + 回证表（"改了到底生效没有"由它回答） */
           art: ART, artPatch: window.__ART_CHANGED__, artReadback: artReadback(),
+          sky: window.__SKY_GEO__ || null,
           /* 🛣 路网计数（与 App 的 `🛣 N` 同一算法 `visibleRoadCount`）+ 交通设施回证 */
           roads: (typeof window.__ROAD_N__ === "number" ? window.__ROAD_N__ : null),
           roadAudit: window.__ROAD_AUDIT__ || null,

@@ -33,7 +33,7 @@
       </div>
 
       <WsCrumb
-        v-if="path.length > 1"
+        v-if="SHOW_LEVEL_NAV && path.length > 1"
         class="ws-top__crumb"
         :crumbs="crumbs"
         :cursor-index="cursor"
@@ -892,6 +892,21 @@
   function onPhoneApp(key: string) {
     wsToast(`${PHONE_APP_LABEL[key] || key} 还没接进来`, "info");
   }
+
+  /**
+   * 🧭 **五级下钻导航开关**（机主 2026-09-22：「**算了喵，无级下钻不要了，现在把 App 页先改为只有代拍页**」）。
+   *
+   * · 默认 **`false`**：隐藏面包屑/层级导航，**入口直接进小区级 3D 视图**（= 代拍页那条渲染路）；
+   * · `?levels=1` ⇒ **一键恢复**五级下钻（**代码一行没删**，只是不显示、不参与流转）；
+   * · 想彻底恢复老行为：`?levels=1` 或把这一行改回 `true`。
+   */
+  const SHOW_LEVEL_NAV = (() => {
+    try {
+      return /[?&]levels=1\b/.test(location.search);
+    } catch {
+      return false;
+    }
+  })();
 
   const { ok: geoOk } = geoStage;
   /** 小区级底图是否可见（机主 2026-09-19：草图下线期间为 false —— 免得图层浮在空处）。
@@ -1787,6 +1802,26 @@
 
   onMounted(() => {
     void start();
+    /* 🧭 五级导航关闭时（默认）：**不等用户逐级下钻**，定位结果一到就直接进小区级 3D 视图。
+       为什么用"等 stage 有值"而不是直接改 step：`step` 由 `useWorldSim` 状态机管，
+       跳步要等它自己把 adcode/区县铺好；这里只做"到点推一把"，**不绕过它的内部不变量**。 */
+    if (!SHOW_LEVEL_NAV) {
+      const t0 = Date.now();
+      const kick = (): void => {
+        const ad = sim.stage.value?.adcode || sim.leaf?.value?.adcode || "";
+        if (ad || Date.now() - t0 > 12000) {
+          try {
+            step.value = "neighborhood";
+            sim.neighReady.value = true;
+          } catch {
+            /* 状态机不接受就保持原样（页面照常可用） */
+          }
+          return;
+        }
+        window.setTimeout(kick, 400);
+      };
+      window.setTimeout(kick, 400);
+    }
   });
 </script>
 

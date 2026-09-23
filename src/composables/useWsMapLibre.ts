@@ -685,11 +685,18 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
     if (!m) return false;
     try {
       if (!m.style) return false; // 样式还没装好（重建中）
+      /* 🛟 **幂等护栏**（2026-09-24，主会话放行 ③①）：
+         `styleForStage()`（建图时那条）**已经把 `ws-ml-*` 数据层放进 style 里了**，所以正常情况下
+         走到这里 `ML_LAND` 已经存在、整段跳过。这段保留的意义是**时序兜底**：
+         样式重建中 / 主题切换后 / 旧包加载顺序不同时，数据层可能还没装上 —— 那时按需补插。
+         ⇒ **行为不变**：判据仍是"`ML_LAND` 不存在才补"，且逐层 `getLayer(id) === undefined` 才 `addLayer`
+         （重复插入本来就不会发生，这里只是把"为什么保留"写成显式注释 + 逐层判据）。
+         ⚠️ 不许把它简化成"无条件 addLayer" —— 那会在 style 已含数据层时抛 duplicate layer id。 */
       if (m.getLayer(ML_LAND) === undefined) {
         if (!m.getSource(ML_SRC)) m.addSource(ML_SRC, { type: "geojson", data: EMPTY_FC });
         for (const layer of layersFor(themeNow())) {
           const id = String(layer.id);
-          if (m.getLayer(id) === undefined) m.addLayer(layer);
+          if (m.getLayer(id) === undefined) m.addLayer(layer); // ← 逐层幂等判据
         }
         applyHighlight(lastHi); // 图层是新的 → 高亮过滤器要重打一遍
         journal("layers+");

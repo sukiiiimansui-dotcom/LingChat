@@ -7,6 +7,7 @@
  *   原文件**import 回去**继续用（`export *` 不建本地绑定 —— 漏了这步就编译不过，量过的坑）。
  */
 import { THEME_DARK, THEME_LIGHT, type GeoTheme } from "@/components/views/worldsim/wsGeoMap";
+import { lodPlan, PRERENDER_LAYER_ID, PRERENDER_SOURCE_ID } from "@/components/views/worldsim/wsScene";
 
 /**
  * 把 public 资源解析成**页面源**下的绝对 URL。
@@ -182,6 +183,46 @@ export const WS_MAP_STYLE_SOURCE = "wsMapStyle.ts";
 export function wsMapStyleLayerIds(): string[] {
   return [ML_BG, ML_BASE_LAYER, ML_LAND, ML_LINE, ML_HI_LINE];
 }
+
+/**
+ * 🛰 **LOD 第 1 步：预渲染栅格层的样式入口**（2026-09-24，机主：「近距离渲染 / 远距离预渲染」）。
+ *
+ * 为什么在这里再包一层：`wsScene.lodPlan()` 是**结构与阈值**的唯一真源
+ * （层 id / before 锚点 / zoom 阈值 / 不透明度表达式 / 瓦片路径都在那边），
+ * 而"往一份 style 里放什么"属于本文件的职责（`wsMapStyle.ts` = 样式的唯一真源）。
+ * ⇒ 这里**一个数字都不写**，只是把计划取出来、顺手标上真源（防"两份装配"）。
+ *
+ * 🔴 **颜色不在这一层**：着色在**瓦片像素**里（骨架阶段由
+ * `world_map/make_prerender_tiles.mjs` 用 `wsMapTheme.wsPrerenderPalette()` 画），
+ * 本层只有一条 `raster-opacity`。改主题 ⇒ 重跑那个脚本 ⇒ 瓦片跟着变
+ * （`ws_lod_selftest.mjs` 用清单里的指纹盯着这件事，不是靠嘴说）。
+ *
+ * ⚠️ **默认不加**：App 侧这一轮**不接线**（原型先定稿）—— 谁调它，谁自己负责
+ * `?lod`/开关；没开的时候图层压根不该存在（否则会去要一批不存在的瓦片）。
+ */
+export function prerenderStyleSpecs(): {
+  sourceId: string;
+  layerId: string;
+  /** 插到哪个图层之前（来自 `SCENE_LAYER_ORDER`，预渲染层必须在矢量层之上） */
+  beforeId: string | null;
+  source: Record<string, unknown>;
+  layer: Record<string, unknown>;
+  /** 自证：这份 spec 来自哪一份真源（页面/面板可读） */
+  styleSource: string;
+} {
+  const p = lodPlan();
+  return {
+    sourceId: PRERENDER_SOURCE_ID,
+    layerId: PRERENDER_LAYER_ID,
+    beforeId: p.beforeId,
+    source: { ...p.source },
+    layer: { ...p.layer },
+    styleSource: `${WS_LOD_STYLE_SOURCE}(${p.far}→${p.near})`,
+  };
+}
+
+/** LOD 那份 spec 的"自报家门"标记（与 `WS_MAP_STYLE_SOURCE` 同一个用法） */
+export const WS_LOD_STYLE_SOURCE = "wsMapStyle.ts/wsScene.lodPlan";
 
 /**
  * 🎨 **舞台样式（对齐清单 B · 区县级换源，2026-09-22 机主选 A）**

@@ -34,3 +34,9 @@
 *.cmd text eol=crlf working-tree-encoding=UTF-8
 *.ps1 text eol=crlf working-tree-encoding=UTF-8
 
+
+# 🛰 LOD 预渲染瓦片（`world_map/make_prerender_tiles.mjs` 生成物）：**故意不进 LFS**。
+# 理由：① 每张只有几 KB（总 ~0.9MB），不是"大素材"；② 本机与 CI 的 checkout **没有 git-lfs**
+# ⇒ 走 LFS 会变成 130 字节指针、页面直接 404（这个坑我们为 62 个素材付过代价）。
+# ⚠️ 必须写在 `*.png filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
+public/prerender/** binary -filter

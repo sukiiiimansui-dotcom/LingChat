@@ -111,6 +111,10 @@
       <span>层数 <b id="m-l">0</b></span>
       <span class="w">按类型估 <b id="m-e">0</b></span>
       <span><b id="m-r">-</b> m</span>
+      <!-- 🔭 取数回证（机主 2026-09-25：「取数半径跟随视野放大 2~8km」+「HUD 如实报半径/要素数/是否命中缓存」）。
+           显示的是**模块算出来的**半径与后端回的实例（`cached`/`count`/耗时）——页面不自己编。
+           三态判词：正数 / `0（已量）` / `数不出来`。 -->
+      <span class="w" id="m-fetch">取数 —</span>
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
       <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
@@ -157,7 +161,7 @@
          `aedf87a` 给 `wsScene` 加了 3 个 LOD 导出但**没换戳**，`?v14` 的 vendor URL 被浏览器
          immutable 缓存占住 ⇒ LOD ❌0/✗2「模块里没有 lodPlan（重取后仍旧）」。
          本版：① 换戳；② `ensureVendor()` 加**一次性 token 强取**兜底（见下面那段注释）。 */
-      const BUILD = "ws3dshow-2026-09-25-v15";
+      const BUILD = "ws3dshow-2026-09-25-v16";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -573,18 +577,24 @@
          真数据管线（重庆全市、真实楼脚印+路网）是**第 2 步**，不在这里。
 
          🔴 开关：`?lod=1` 开、`?lod=0` 显式关、**不写 = 关**（默认一个字节都不改现有观感）。
-         🔴 阈值/层 id/不透明度表达式/瓦片键算法**全部取自 `wsScene`**（经 `/vendor/wsScene.mjs`），
+         🔴 **`?lod=demo`**（2026-09-25 机主拍板「占位瓦片默认不画」之后加的）：只给**对照/自检**用，
+            吃 `/prerender-demo/` 那批**示意**花纹；**默认（`?lod=1`）只吃真瓦片** —— 真瓦片没覆盖的
+            地方**就空着**，绝不拿花纹去补（他原话：「瓦片太难看了（覆盖全部地图）」）。
+         🔴 阈值/层 id/不透明度表达式/瓦片键算法/两个源的路径**全部取自 `wsScene`**（经 `/vendor/wsScene.mjs`），
             本页**不写第二份** —— 抄一份就一定会和 App 侧漂（项目反复踩过）。
          🔴 颜色也不在本页：着色在**瓦片像素**里，取自 `wsMapTheme.wsPrerenderPalette()`
             （生成脚本 `world_map/make_prerender_tiles.mjs`；清单里的指纹由自检对拍）。 */
       const LOD_PARAM = (function () {
         try {
           if (/[?&]lod=1\b/.test(location.search)) return 1;
+          if (/[?&]lod=demo\b/.test(location.search)) return "demo";
           if (/[?&]lod=0\b/.test(location.search)) return 0;
           return null; // 没写 = 关（**不改变现有观感**）
         } catch (e) { return null; }
       })();
-      const LOD_ON = LOD_PARAM === 1;
+      const LOD_ON = LOD_PARAM === 1 || LOD_PARAM === "demo";
+      /** 吃哪一批瓦片：`real` = 真数据（默认）/ `demo` = 示意占位（只在 `?lod=demo`） */
+      const LOD_SRC = LOD_PARAM === "demo" ? "demo" : "real";
       /** LOD 那一支的状态（**三态判词**：未启用 / 已建层 / 失败：原因）—— HUD 与徽标都读它 */
       let lodState = LOD_ON ? "待建层" : (LOD_PARAM === 0 ? "显式关闭（?lod=0）" : "未启用（要 ?lod=1）");
       /** 地图事件里数到的瓦片键（Set ⇒ 同一张不重复计数） */
@@ -816,13 +826,25 @@
       const TFON = (function () { try { return /[?&]tf=1\b/.test(location.search); } catch (e) { return false; } })();
       let tfDone = false;
 
-      /** 取路网中心线（与 App 同一个后端口径：`/api/roads?lat&lng&r`） */
+      /** 取路网中心线（与 App 同一个后端口径：`/api/roads?lat&lng&r`）。
+       *  🔴 **半径必须跟取楼半径走**（机主 2026-09-25：「剩下的路线也没画」）：
+       *     以前这里写 `stats.r || 600`，首屏取楼还没回来时就退到 **600m** ⇒ 楼铺 2km、路只画 600m，
+       *     画面就是"楼成片、路只有中心一小撮"。现在由调用方传**同一个半径**，并且返回体带
+       *     `cached/radius/count`（后端本身就有这些字段）⇒ HUD 能如实写"命中缓存"。 */
       async function fetchRoads(r) {
         const c = map.getCenter();
-        const res = await fetch(`${API}/api/roads?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`);
+        const t0 = Date.now();
+        const res = await fetchWithTimeout(`${API}/api/roads?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`, FETCH_TIMEOUT_MS);
         const body = await res.json();
-        if (!body.ok) throw new Error(body.error || "ok=false");
-        return body.geojson;
+        const ms = Date.now() - t0;
+        if (!body.ok) throw new Error((body.error || "ok=false") + (body.hint ? "（" + body.hint + "）" : ""));
+        fetchStat.road = {
+          r: Number(body.radius) || r,
+          n: Number(body.count) || ((body.geojson && body.geojson.features) || []).length,
+          cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "",
+        };
+        renderFetchHud();
+        return body;
       }
 
       /**
@@ -902,14 +924,23 @@
       async function applyRoads() {
         const TF2 = window.__TF__;
         if (!TF2) { $("m-msg").textContent = "路网：生成物未加载（/vendor/wsScene.mjs）"; return; }
+        /* 🔴 半径**跟取楼同一个**（机主 2026-09-25：「剩下的路线也没画」）。
+           取楼还没回来（`stats.r` 为 0）时，退到**策略半径**而不是旧的 600m ——
+           否则首屏永远是"楼 2km / 路 600m"的错配。 */
+        const rRoads = stats.r || radiusForView();
         let roads = { features: [] };
-        try { roads = await fetchRoads(stats.r || 600); } catch (e) { errs.push("roads " + e); }
-        const feats = (roads && roads.features) || [];
+        try { roads = await fetchRoads(rRoads); } catch (e) {
+          errs.push("roads r=" + rRoads + " " + e);
+          fetchStat.road = { r: rRoads, n: null, cached: null, ms: null, err: String(e).slice(0, 90) };
+          renderFetchHud();
+        }
+        const feats = (roads && roads.geojson && roads.geojson.features) || [];
         roadN = TF2.visibleRoadCount({ features: feats }, map.getZoom());
         if (!feats.length) {
           /* 空结果**必须说出来**（同 App 的纪律：静默 = 让人以为"这里没路"） */
           const el = document.getElementById("m-roads");
-          if (el) el.textContent = `🛣 0 条 · 这一带没有路网数据（${stats.r || 600}m）`;
+          const why = fetchStat.road && fetchStat.road.err ? ("取数失败：" + fetchStat.road.err) : "这一带没有路网数据";
+          if (el) el.textContent = `🛣 0 条 · ${why}（${rRoads}m）`;
           return;
         }
         const data = { type: "FeatureCollection", features: feats };
@@ -1015,7 +1046,8 @@
             「数不出来」一律带原因，**绝不裸写 0**（`AUDIT-STINK.md` 的判词纪律）。
          🔴 **默认不启用**：`?lod` 不写 = 一个源一个图层都不建（现有观感逐字节不变）。 */
 
-      /** 取"能用的" LOD 计划；模块缺符号 ⇒ **如实回退**并把原因写进 `lodState` */
+      /** 取"能用的" LOD 计划；模块缺符号 ⇒ **如实回退**并把原因写进 `lodState`。
+       *  `LOD_SRC`（real/demo）由模块的 `lodPlan(src)` 决定路径与署名 —— 页面**不拼路径字符串**。 */
       function lodPlanOf() {
         if (lodPlanCache) return lodPlanCache;
         const TFx = window.__TF__;
@@ -1024,7 +1056,7 @@
           return null;
         }
         try {
-          lodPlanCache = TFx.lodPlan();
+          lodPlanCache = TFx.lodPlan(LOD_SRC);
           return lodPlanCache;
         } catch (e) {
           lodState = "失败：lodPlan() 抛错 " + String(e).slice(0, 60);
@@ -1095,7 +1127,7 @@
           rows.push({ id: id, key: key, now: now, want: want, hit: hit, why: why });
         };
         const plan = lodPlanCache;
-        on("开关", "?lod", LOD_ON ? "1（已开）" : "未开", 1, "`?lod=0` 显式关 / 不写 = 关（默认不改现有观感）");
+        on("开关", "?lod", LOD_ON ? (LOD_SRC === "demo" ? "demo（示意瓦片，对照用）" : "1（真瓦片）") : "未开", 1, "`?lod=1` 真瓦片（默认）/ `?lod=demo` 示意瓦片（对照）/ `?lod=0` 显式关 / 不写 = 关");
         on("图层", "prerender 在", map.getLayer("prerender") ? "在" : "**不在**", "在", "由 lodPlan() 建；缺了就是没建成（看 errs/lodState）");
         on("数据源", "prerender 源在", map.getSource("prerender") ? "在" : "**不在**", "在", "我们**自己的**瓦片源（`" + ((plan && plan.tilePath) || "?") + "`），不是 Esri");
         /* 层序：预渲染层必须在矢量层**之上**（远景要盖住实时层），否则过渡一淡就露出实时层 */
@@ -1113,15 +1145,15 @@
         const num = function (n, zero) { return n === null || n === undefined ? "数不出来" : n === 0 ? (zero || "0（已量）") : String(n); };
         rows.push({ id: "瓦片", key: "命中（已载入）", now: num(v ? v.hit : null), want: null, hit: null, why: "口径：瓦片状态=loaded 的个数（MapLibre 内部只读诊断）；拿不到就写「数不出来」" });
         rows.push({ id: "瓦片", key: "加载失败", now: num(v ? v.fail : null), want: null, hit: null, why: "口径：瓦片状态=errored（含 404 —— `_loadTile` 的 catch 里先置状态）⇒ 这一格能数出**真缺图**；⚠️ 而 `map.on(\"error\")` **收不到 404**（读 vendored 源码确认），所以别只信事件" });
-        rows.push({ id: "瓦片", key: "清单缺（视野内）", now: num(v ? v.absent : null), want: null, hit: null, why: "视野需要的键里、`/prerender/manifest.json` **没有**的那些 ⇒ 必然会取不到（确定性证据，不依赖事件）" });
+        rows.push({ id: "瓦片", key: "清单缺（视野内）", now: num(v ? v.absent : null), want: null, hit: null, why: "视野需要的键里、清单 **没有**的那些 ⇒ 必然会取不到（确定性证据，不依赖事件）。⚠️ 真瓦片没覆盖的地方**就空着**（占位花纹默认不画），所以这一格是**正常会出现的正数**" });
         rows.push({ id: "瓦片", key: "本区应有", now: v && v.capped ? "被上限截断（数不全）" : num(v ? v.view : null), want: null, hit: null, why: "视野 + 当前 zoom 夹到瓦片层算出来的键数" });
-        rows.push({ id: "清单", key: "manifest", now: lodManifest ? (lodManifest.tileCount + " 张 · 主题 " + lodManifest.themeId + " · 指纹 " + String(lodManifest.themeFingerprint).slice(0, 12) + "…") : ("数不出来：" + (lodManifestErr || "还没取")), want: null, hit: null, why: "生成物清单；**指纹**由 ws_lod_selftest 对拍 wsMapTheme（改了主题没重跑生成脚本 ⇒ 那边会红）" });
+        rows.push({ id: "清单", key: "manifest", now: lodManifest ? (lodManifest.tileCount + " 张 · 主题 " + (lodManifest.themeLabel || lodManifest.themeId) + " · 指纹 " + String(lodManifest.themeFingerprint).slice(0, 12) + "…") : ("数不出来：" + (lodManifestErr || "还没取")), want: null, hit: null, why: "生成物清单（`" + ((plan && plan.manifestPath) || "?") + "`）；**指纹**由自检对拍 wsMapTheme（改了主题没重跑生成脚本 ⇒ 那边会红）" });
         rows.push({ id: "实时层", key: "要素数", now: lodLive ? (lodLive.state === "missing" ? "0（已量：图层没建）" : num(lodLive.n)) : "数不出来（还没查）", want: null, hit: null, why: lodLive ? lodLive.why : "还没查（移动地图后刷新）" });
         rows.push({ id: "档位", key: "当前 zoom", now: map.getZoom().toFixed(2) + " ⇒ " + (TFx && TFx.lodTierLabel ? TFx.lodTierLabel(TFx.lodTierOf(map.getZoom())) : "数不出来"), want: null, hit: null, why: "预渲染 / 过渡中 / 实时矢量（阈值与标签都来自 wsScene）" });
         rows.push({
-          id: "瓦片来源", key: "示意 / 真数据",
+          id: "瓦片来源", key: "真 / 占位（按瓦片记）",
           now: lodDataKindText(), want: null, hit: null,
-          why: "`manifest.dataKind`：`placeholder` = 骨架阶段的**示意**花纹（远景像瓷砖是它，不是 bug）；`real` = 离线管线用**真楼脚印+道路**画的",
+          why: "`manifest.tiles.*.kind`（**按瓦片记，没有全局 dataKind** —— 一张拼花里全局字段必然撒谎）+ `kinds` 汇总；名单里的 `staleFiles` = 目录里不在本轮计划的旧瓦片（**没**并进 tiles）",
         });
         rows.push({
           id: "署名", key: "ODbL 可见署名",
@@ -1147,19 +1179,25 @@
           if (!LOD_ON) { el.textContent = ""; return; }
           const at = lodManifest && lodManifest.attribution;
           if (at) { el.textContent = String(at); return; } // **逐字显示**清单里那句（不自己加前缀/改写）
-          /* 三态：清单没取到 / 取到了但**没有** attribution 字段（骨架阶段的示意瓦片就是这样）——
-             两种都**可见地写出来**，不许静默不显示（署名是 ODbL 的硬要求）。 */
+          /* 三态：清单没取到 / 取到了但**没有** attribution 字段（`?lod=demo` 那批示意瓦片就没有署名，
+             因为里面没有真实数据）—— 两种都**可见地写出来**，不许静默不显示（署名是 ODbL 的硬要求）。 */
           el.textContent = lodManifest
-            ? "© 数据署名 数不出来：清单里没有 attribution 字段（骨架阶段的示意瓦片没有署名；真瓦片由 prerender_pipeline.py 写）"
+            ? (LOD_SRC === "demo"
+              ? "© 数据署名：本页吃的是**示意瓦片**（`?lod=demo`），里面没有真实数据 ⇒ 无需署名；真瓦片由 prerender_pipeline.py 写"
+              : "© 数据署名 数不出来：清单里没有 attribution 字段（真瓦片由 prerender_pipeline.py 写，它会把 overture_api.ATTRIBUTION 抄进清单）")
             : "© 数据署名 数不出来：" + (lodManifestErr || "清单还没取到");
         } catch (e) { /* 署名失败不影响地图 */ }
       }
 
-      /** 这批瓦片是**示意**还是**真数据**（`manifest.dataKind`；缺失就如实说"标不出来"） */
+      /** 这批瓦片是**示意**还是**真数据**（清单汇总 `kinds`；缺失就如实说"标不出来"）。
+       *  两个源分目录之后，这里的口径也必须分得清：真瓦片清单只该有 real。 */
       function lodDataKindText() {
         if (!lodManifest) return "数不出来（清单没取到）";
         const n = lodManifest.kinds || null;
-        if (n && (n.real || n.placeholder)) return `清单汇总：真 ${n.real || 0} / 占位 ${n.placeholder || 0}`;
+        if (n && (n.real || n.placeholder || n.unknown)) {
+          return `清单汇总：真 ${n.real || 0} / 占位 ${n.placeholder || 0}` +
+            (n.unknown ? ` / 没标种类 ${n.unknown}` : "");
+        }
         const k = lodManifest.dataKind;
         if (k === "real") return "真数据（管线生成）";
         if (k === "placeholder") return "**示意**（骨架阶段占位花纹，不是真楼房）";
@@ -1200,9 +1238,9 @@
       }
 
       /**
-       * 建层：源 + 图层（**spec 全部来自 `wsScene.lodPlan()`**，页面只负责"插在哪里"）。
+       * 建层：源 + 图层（**spec 全部来自 `wsScene.lodPlan(src)`**，页面只负责"插在哪里"）。
        * 插在 `ref`（注记）之前 ⇒ 在楼体/路网**之上**、注记之下；`ref` 不在才退回最上。
-       * 清单（`/prerender/manifest.json`）在这里取：拿不到就**如实记原因**，相关数字判"数不出来"。
+       * 清单（`plan.manifestPath`）在这里取：拿不到就**如实记原因**，相关数字判"数不出来"。
        */
       async function applyLod() {
         if (!LOD_ON) { updateLodHud(); return; }
@@ -1216,7 +1254,9 @@
           lodManifestErr = "";
         } catch (e) {
           lodManifest = null;
-          lodManifestErr = String(e).slice(0, 60) + "（跑 node world_map/make_prerender_tiles.mjs 生成）";
+          lodManifestErr = String(e).slice(0, 60) + (LOD_SRC === "demo"
+            ? "（示意瓦片清单：跑 node world_map/make_prerender_tiles.mjs）"
+            : "（真瓦片清单：跑 python3 world_map/prerender_pipeline.py --pilot --disk-r 9000）");
         }
         try {
           if (!map.getSource(plan.sourceId)) map.addSource(plan.sourceId, plan.source);
@@ -1242,7 +1282,10 @@
         const TF = window.__TF__;
         if (!TF) { $("m-msg").textContent = "交通设施：生成物未加载（/vendor/wsTransport.mjs）"; return; }
         let roads = { features: [] };
-        try { roads = await fetchRoads(stats.r || 600); } catch (e) { errs.push("roads " + e); }
+        /* 🚌 交通设施的**路网输入**也用同一个半径口径（`stats.r` 优先、否则策略半径）；
+           注意这里是 `roads.geojson` —— `fetchRoads` 现在返回**整个响应体**（要读 cached/count）。 */
+        try { roads = (await fetchRoads(stats.r || radiusForView())).geojson || { features: [] }; }
+        catch (e) { errs.push("roads(tf) " + e); }
         const toRoad = (f) => ({ pts: (f.geometry && f.geometry.coordinates) || [], cls: f.properties && f.properties.class, name: f.properties && f.properties.name });
         const toBld = (f) => {
           const g = f.geometry || {};
@@ -1679,49 +1722,148 @@
         catch { return false; }
       }
 
-      /** 视野 → 取楼半径：**按屏幕真正看得见的范围**要数据，而不是拍脑袋跟 zoom 挂钩。
-       *  为什么：zoom 15.2 在手机横屏上其实能看到 4km 宽，"取 400m"必然大半屏是空的
-       *  —— 这正是 HUD 常显示"🏢 0"的成因之一。 */
+      /* ══ 🔭 取数半径（机主 2026-09-25：「取数半径跟随视野放大到 2~8km」）══════════
+         病根（他真机上的两条反馈同源）：「**楼房还是只有这一块**」「**剩下的路线也没画**」——
+         半径被写死在很小的值（楼 350~2000m、路固定 600m），而手机横屏 z15 一眼看到 ~4km 宽
+         ⇒ 半径之外必然是空的。
+
+         🔴 阶梯/封顶/取大者的**规则全在 `wsScene`**（`fetchRadiusForView` / `fetchRadiusLadder`），
+            本页只做两件事：把"视野有多大"量出来喂进去、把结果**如实写到 HUD**。
+         ⚠️ 代价如实报：半径翻倍 ⇒ Overpass 更慢、要素更多（实测见 HUD 的秒数与栋数）。
+            所以每一步都有**超时**（AbortController）+ 失败可见（写 errs 与 HUD），绝不静默空着。 */
+      const FETCH_TIMEOUT_MS = 45000; // 单次取数上限（冷查 27~33s 是常态；45s 留冗余，超了**说出来**）
+      /** 最近一次取楼/取路的实况（HUD 只显示它，不自己编数字） */
+      const fetchStat = {
+        bld: null,   // {r, n, cached, ms, err}
+        road: null,  // {r, n, cached, ms, err}
+        view: null,  // {halfM, decidedBy, ladder}
+      };
+
+      /** 视野半对角线（米）——量出来的，交给模块判半径 */
+      function viewHalfMeters() {
+        try {
+          const TFv = window.__TF__;
+          if (!TFv || typeof TFv.viewHalfMetersOf !== "function") return null;
+          const b = map.getBounds();
+          return TFv.viewHalfMetersOf(
+            { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() },
+            map.getCenter().lat,
+          );
+        } catch (e) { return null; }
+      }
+
+      /** 取楼半径（**规则在模块里**）：视野比档位大就按视野，否则按 zoom 档位，一律夹到 [2km, 8km] */
       function radiusForView() {
-        const b = map.getBounds();
-        const c = map.getCenter();
-        const dLng = Math.abs(b.getEast() - b.getWest()) / 2;
-        const dLat = Math.abs(b.getNorth() - b.getSouth()) / 2;
-        const mx = dLng * 111320 * Math.cos((c.lat * Math.PI) / 180);
-        const my = dLat * 110540;
-        /* 起点半径按视野算，**上限放到 2000**：稀疏地段（涪陵）只有放大半径才取得到楼，
-           而密集地段（渝中）在第一级就够 25 栋停下了，走不到上限 ⇒ 只帮稀疏区。 */
-        return Math.max(350, Math.min(2000, Math.round(Math.hypot(mx, my) * 0.95 / 50) * 50));
+        const TFv = window.__TF__;
+        const v = viewHalfMeters();
+        const zoom = map.getZoom();
+        if (!TFv || typeof TFv.fetchRadiusForView !== "function") {
+          /* 模块旧（缺符号）时**如实退回**旧口径（350~2000），并让 HUD 说清楚——不静默换算法 */
+          fetchStat.view = { halfM: v, decidedBy: "模块缺 fetchRadiusForView", ladder: null };
+          return Math.max(350, Math.min(2000, Math.round(((v || 0) * 0.95) / 50) * 50));
+        }
+        const p = TFv.fetchRadiusForView(zoom, v);
+        fetchStat.view = { halfM: v, decidedBy: p.decidedBy, ladder: null, zoomRadius: p.zoomRadius, viewRadius: p.viewRadius };
+        return p.radius;
       }
 
       async function fetchBuildings(r) {
         const c = map.getCenter();
         const url = `${API}/api/buildings?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`;
-        const res = await fetch(url);
+        const t0 = Date.now();
+        const res = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
         const body = await res.json();
-        if (!body.ok) throw new Error(body.error || "ok=false");
+        const ms = Date.now() - t0;
+        if (!body.ok) throw new Error((body.error || "ok=false") + (body.hint ? "（" + body.hint + "）" : ""));
+        /* 三态：后端没给 `cached` 就写 null（显示"数不出来"），**不许**默认成"实时取数"（那是撒谎） */
+        fetchStat.bld = { r: Number(body.radius) || r, n: Number(body.count) || (body.geojson && body.geojson.features || []).length, cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "" };
+        renderFetchHud();
         return body.geojson;
       }
 
-      /** 取楼：数据太少就**自动放大**再取，命中即停（涪陵那种地方 400m 是 0 栋，不放大学不到东西）。
-       *  ⚠️ 上限 2000m（2026-09-20 从 1200 放宽）：实测涪陵驻地 1000m→21 栋、1400m→29 栋，
-       *     再大（2500m）会整条查询失败；而密集区（渝中）**早就在第一级就够 25 栋停下**，
-       *     根本走不到这一级 ⇒ 放宽上限是**只帮稀疏区、不伤密集区**的改法。 */
-      const R_MAX = 2000;
+      /** 带超时的 fetch（**超时必须说出来**：静默空屏 == 让人以为"这一带没有楼"） */
+      async function fetchWithTimeout(url, ms) {
+        const ctl = typeof AbortController === "function" ? new AbortController() : null;
+        const timer = ctl ? setTimeout(function () { ctl.abort(); }, ms) : null;
+        try {
+          return await fetch(url, ctl ? { signal: ctl.signal } : undefined);
+        } catch (e) {
+          const why = (e && e.name === "AbortError") ? ("超时 " + Math.round(ms / 1000) + "s") : String(e);
+          throw new Error(why);
+        } finally { if (timer) clearTimeout(timer); }
+      }
+
+      /** 取楼：数据太少就**逐级放大**再取，够看即停。
+       *  阶梯由模块给（`fetchRadiusLadder`，2km 起、**封顶 8km**）：密集区第一级就够（渝中 2km 上千栋），
+       *  稀疏区才往上走 —— 所以放大**只帮稀疏区、不伤密集区**。
+       *  ⚠️ 2026-09-20 的旧结论「>2000m 会整条查询失败」现在是**后端硬闸**（`r ∈ (0,2000]`），
+       *     阶梯一旦超过它，那一级会返回 `ok:false` ⇒ 这里**记下原因**并保留上一级的结果，
+       *     HUD 会写「后端拒绝 R=4000（半径非法）」—— 绝不假装取到了。 */
       async function loadForView() {
+        const TFv = window.__TF__;
         const r0 = radiusForView();
-        const ladder = [r0];
-        while (ladder[ladder.length - 1] < R_MAX) ladder.push(Math.min(R_MAX, ladder[ladder.length - 1] * 2));
-        let best = { fc: { features: [] }, r: 0 };
+        const zoom = map.getZoom();
+        const ladder = (TFv && typeof TFv.fetchRadiusLadder === "function")
+          ? TFv.fetchRadiusLadder(zoom, viewHalfMeters())
+          : [r0];
+        if (fetchStat.view) fetchStat.view.ladder = ladder.slice();
+        /* 🔴 后端单查上限（模块里的实测常量）：策略要 4~8km 时**必须**夹一次并报出差异，
+           否则拿到的是一串 `半径非法`，看起来像"这一带没数据"。 */
+        const backendMax = (TFv && Number(TFv.WS_FETCH_R_BACKEND_MAX)) || 2000;
+        const asks = [];
         for (const r of ladder) {
-          $("m-msg").textContent = `取楼中… ${r}m`;
+          const a = Math.min(r, backendMax);
+          if (asks.indexOf(a) < 0) asks.push(a);
+        }
+        let best = { fc: { features: [] }, r: 0 };
+        for (let i = 0; i < asks.length; i++) {
+          const r = asks[i];
+          const want = ladder[Math.min(i, ladder.length - 1)];
+          $("m-msg").textContent = `取楼中… ${r}m` + (want > r ? `（策略要 ${want}m，后端上限 ${backendMax}m）` : "");
           try {
             const fc = await fetchBuildings(r);
+            if (fetchStat.bld) fetchStat.bld.want = want;
+            renderFetchHud();
             if ((fc.features || []).length > (best.fc.features || []).length) best = { fc, r };
             if ((fc.features || []).length >= 25) break; // 够看了，别再花时间
-          } catch { /* 这一级失败就试下一级，不因为一次失败放弃整屏 */ }
+          } catch (e) {
+            /* 这一级失败就试下一级（不因一次失败放弃整屏），但**必须留痕** */
+            errs.push(`buildings r=${r}: ${String(e).slice(0, 90)}`);
+            fetchStat.bld = { r, want, n: null, cached: null, ms: null, err: String(e).slice(0, 90) };
+            renderFetchHud();
+          }
         }
         return best;
+      }
+
+      /**
+       * 🔭 **取数回证**（机主 2026-09-25：「HUD 里如实报『取数半径 R / 要素数 / 是否命中缓存』」）。
+       *
+       * 为什么必须有一格专门的：半径放大之后**代价是真实的**（Overpass 冷查十几秒到分钟级），
+       * 而"空屏"与"还在取"在截图里长得一模一样 —— 没有这一格，谁也判断不了 8km 是不是太大。
+       * 三态判词：正数 / `0（已量）` / `数不出来`；失败**写明原因**，绝不静默。
+       */
+      function renderFetchHud() {
+        const el = $("m-fetch");
+        if (!el) return;
+        const v = fetchStat.view;
+        const tag = (s) => {
+          if (!s) return "未取";
+          if (s.err) return `失败：${s.err}${s.want && s.want > s.r ? `（策略要 ${s.want}m）` : ""}`;
+          const n = s.n === null || s.n === undefined ? "数不出来" : (s.n === 0 ? "0（已量）" : String(s.n));
+          const secs = s.ms === null || s.ms === undefined ? "?" : (s.ms / 1000).toFixed(1) + "s";
+          const ch = s.cached === true ? "缓存命中" : (s.cached === false ? "实时取数" : "缓存：数不出来");
+          return `R=${s.r}m${s.want && s.want > s.r ? `（策略 ${s.want}）` : ""} ${n} · ${ch} · ${secs}`;
+        };
+        const zoomR = v && v.decidedBy ? `（${v.decidedBy === "view" ? "视野更大" : v.decidedBy === "cap" ? "撞 8km 上限" : "按 zoom 档位"}）` : "";
+        el.textContent = `🔭 取数 楼 ${tag(fetchStat.bld)} / 路 ${tag(fetchStat.road)}${zoomR}`;
+        el.title = [
+          "取楼与取路用**同一个半径**（以前路固定 600m ⇒ 楼成片、路只有中心一小撮）",
+          "半径规则来自 wsScene.fetchRadiusForView：视野中心→角 与 zoom 档位取大者，夹到 [2km, 8km]",
+          v ? `视野半对角线 ${v.halfM === null ? "数不出来" : v.halfM + "m"} · zoom 档位 ${v.zoomRadius || "?"}m` : "还没量视野",
+          v && v.ladder ? "加档序列 " + v.ladder.join(" → ") + "m（够 25 栋即停）" : "",
+          "后端单查上限 2000m（`r ∈ (0,2000]`）：请求更大时后端回 `半径非法` ⇒ 这里会如实写失败，不假装取到了",
+        ].filter(Boolean).join("\n");
       }
 
       /**
@@ -2238,11 +2380,14 @@
             tiles: lodVerdict,
             tileStates: window.__LOD_TILE_STATES__ || null,
             loadedKeys: lodLoadedKeys.size, failedKeys: lodFailedKeys.size, noKey: lodNoKey,
-            manifest: lodManifest ? { tileCount: lodManifest.tileCount, themeId: lodManifest.themeId, fingerprint: lodManifest.themeFingerprint, zoomRange: lodManifest.zoomRange, palette: lodManifest.palette, attribution: lodManifest.attribution || null, dataKind: lodManifest.dataKind || null } : null,
+            src: LOD_SRC, srcKind: (lodPlanCache && lodPlanCache.srcKind) || null,
+            manifest: lodManifest ? { tileCount: lodManifest.tileCount, themeLabel: lodManifest.themeLabel || null, fingerprint: lodManifest.themeFingerprint, zoomRange: lodManifest.zoomRange, palette: lodManifest.palette, attribution: lodManifest.attribution || null, kinds: lodManifest.kinds || null, staleFiles: (lodManifest.staleFiles || []).length } : null,
             manifestErr: lodManifestErr || null,
             live: lodLive,
             hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })(),
           } : { on: false, param: LOD_PARAM, state: lodState, hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })() },
+          /* 🔭 取数回证（半径/要素数/是否命中缓存）—— 机主 2026-09-25 要求"如实报" */
+          fetch: { view: fetchStat.view, bld: fetchStat.bld, road: fetchStat.road, hud: (function () { try { return $("m-fetch").textContent; } catch (e) { return null; } })() },
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
         };
       }

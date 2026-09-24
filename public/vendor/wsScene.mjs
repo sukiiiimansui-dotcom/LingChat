@@ -726,11 +726,14 @@ var PRERENDER_LAYER_ID = "prerender";
 var PRERENDER_SOURCE_ID = "prerender";
 var PRERENDER_TILE_PATH = "/prerender/{z}/{x}/{y}.png";
 var PRERENDER_MANIFEST_PATH = "/prerender/manifest.json";
+var PRERENDER_DEMO_TILE_PATH = "/prerender-demo/{z}/{x}/{y}.png";
+var PRERENDER_DEMO_MANIFEST_PATH = "/prerender-demo/manifest.json";
 var PRERENDER_TILE_SIZE = 512;
 var PRERENDER_TILE_MAXZOOM = 13;
 var LOD_FAR_ZOOM = 12;
 var LOD_NEAR_ZOOM = 14;
-var PRERENDER_ATTRIBUTION = "预渲染瓦片（自产；骨架阶段为示意瓦片，非真实楼/路数据）";
+var PRERENDER_ATTRIBUTION = "预渲染瓦片（自产）· 数据署名见清单 manifest.attribution";
+var PRERENDER_DEMO_ATTRIBUTION = "预渲染瓦片（示意/占位，非真实楼·路数据）";
 var LOD_VIEW_TILE_CAP = 2048;
 function lodTierOf(zoom) {
   const z = Number.isFinite(zoom) ? Number(zoom) : LOD_FAR_ZOOM;
@@ -752,13 +755,32 @@ function lodOpacityAt(zoom) {
 function lodOpacityExpression() {
   return ["interpolate", ["linear"], ["zoom"], LOD_FAR_ZOOM, 1, LOD_NEAR_ZOOM, 0];
 }
-function lodSourceSpec() {
+function prerenderSourceOf(src = "real") {
+  if (src === "demo") {
+    return {
+      src: "demo",
+      tilePath: PRERENDER_DEMO_TILE_PATH,
+      manifestPath: PRERENDER_DEMO_MANIFEST_PATH,
+      attribution: PRERENDER_DEMO_ATTRIBUTION,
+      kind: "placeholder"
+    };
+  }
+  return {
+    src: "real",
+    tilePath: PRERENDER_TILE_PATH,
+    manifestPath: PRERENDER_MANIFEST_PATH,
+    attribution: PRERENDER_ATTRIBUTION,
+    kind: "real"
+  };
+}
+function lodSourceSpec(src = "real") {
+  const s = prerenderSourceOf(src);
   return {
     type: "raster",
-    tiles: [PRERENDER_TILE_PATH],
+    tiles: [s.tilePath],
     tileSize: PRERENDER_TILE_SIZE,
     maxzoom: PRERENDER_TILE_MAXZOOM,
-    attribution: PRERENDER_ATTRIBUTION
+    attribution: s.attribution
   };
 }
 function lodLayerSpec() {
@@ -771,23 +793,70 @@ function lodLayerSpec() {
     paint: { "raster-opacity": lodOpacityExpression() }
   };
 }
-function lodPlan() {
+function lodPlan(src = "real") {
   const entry = SCENE_LAYER_ORDER.find((e) => e.group === "prerender");
+  const s = prerenderSourceOf(src);
   return {
     group: "prerender",
     layerId: PRERENDER_LAYER_ID,
     sourceId: PRERENDER_SOURCE_ID,
     beforeId: entry ? entry.beforeId : null,
-    tilePath: PRERENDER_TILE_PATH,
-    manifestPath: PRERENDER_MANIFEST_PATH,
+    src: s.src,
+    srcKind: s.kind,
+    tilePath: s.tilePath,
+    manifestPath: s.manifestPath,
     tileSize: PRERENDER_TILE_SIZE,
     tileMaxzoom: PRERENDER_TILE_MAXZOOM,
     layerMaxzoom: LOD_NEAR_ZOOM,
     far: LOD_FAR_ZOOM,
     near: LOD_NEAR_ZOOM,
-    source: lodSourceSpec(),
+    source: lodSourceSpec(src),
     layer: lodLayerSpec()
   };
+}
+var WS_FETCH_R_MIN = 2e3;
+var WS_FETCH_R_MAX = 8e3;
+var WS_FETCH_R_BACKEND_MAX = 2e3;
+var WS_FETCH_R_LADDER = [
+  [15, 2e3],
+  [14, 3e3],
+  [13, 4e3],
+  [12, 6e3],
+  [11, 8e3]
+];
+function fetchRadiusRound(r) {
+  return Math.round(r / 50) * 50;
+}
+function viewHalfMetersOf(bounds, lat) {
+  if (!bounds) return null;
+  const w = Number(bounds.west), s = Number(bounds.south), e = Number(bounds.east), n = Number(bounds.north);
+  if (![w, s, e, n, lat].every((v) => Number.isFinite(v))) return null;
+  const mx = Math.abs(e - w) / 2 * 111320 * Math.cos(lat * Math.PI / 180);
+  const my = Math.abs(n - s) / 2 * 110540;
+  return Math.round(Math.hypot(mx, my));
+}
+function fetchRadiusForZoom(zoom) {
+  const z = Number.isFinite(zoom) ? Number(zoom) : 15;
+  for (const [z0, r] of WS_FETCH_R_LADDER) if (z >= z0) return r;
+  return WS_FETCH_R_LADDER[WS_FETCH_R_LADDER.length - 1][1];
+}
+function fetchRadiusForView(zoom, viewHalfMeters) {
+  const zoomRadius = fetchRadiusForZoom(zoom);
+  const viewRadius = Number.isFinite(viewHalfMeters) ? fetchRadiusRound(Number(viewHalfMeters)) : null;
+  const want = Math.max(zoomRadius, viewRadius === null ? 0 : viewRadius);
+  const radius = Math.min(WS_FETCH_R_MAX, Math.max(WS_FETCH_R_MIN, want));
+  const decidedBy = want > WS_FETCH_R_MAX ? "cap" : viewRadius !== null && viewRadius > zoomRadius ? "view" : "zoom";
+  return { radius, decidedBy, zoomRadius, viewRadius };
+}
+function fetchRadiusLadder(zoom, viewHalfMeters) {
+  const r0 = fetchRadiusForView(zoom, viewHalfMeters).radius;
+  const out = [r0];
+  while (out[out.length - 1] < WS_FETCH_R_MAX) {
+    const next = Math.min(WS_FETCH_R_MAX, fetchRadiusRound(out[out.length - 1] * 2));
+    if (next === out[out.length - 1]) break;
+    out.push(next);
+  }
+  return out;
 }
 function lodTileKey(z, x, y) {
   return `${Math.round(z)}/${Math.round(x)}/${Math.round(y)}`;
@@ -1631,6 +1700,9 @@ export {
   PODIUM_MIN_AREA_M2,
   PODIUM_MIN_H,
   PRERENDER_ATTRIBUTION,
+  PRERENDER_DEMO_ATTRIBUTION,
+  PRERENDER_DEMO_MANIFEST_PATH,
+  PRERENDER_DEMO_TILE_PATH,
   PRERENDER_LAYER_ID,
   PRERENDER_MANIFEST_PATH,
   PRERENDER_SOURCE_ID,
@@ -1661,6 +1733,10 @@ export {
   WHEEL_ZOOM_RATE,
   WIN_MIN_H,
   WIN_PATTERN_SIZE,
+  WS_FETCH_R_BACKEND_MAX,
+  WS_FETCH_R_LADDER,
+  WS_FETCH_R_MAX,
+  WS_FETCH_R_MIN,
   WS_SCENE_SOURCE,
   applyPitchGuard,
   art3Summary,
@@ -1675,6 +1751,10 @@ export {
   contrastReport,
   decorateBuildings,
   equipBoxes,
+  fetchRadiusForView,
+  fetchRadiusForZoom,
+  fetchRadiusLadder,
+  fetchRadiusRound,
   fmtCount,
   footprintMetrics,
   hash32,
@@ -1710,6 +1790,7 @@ export {
   pitchGuardParams,
   planEnsureRoadOrder,
   pointInRing,
+  prerenderSourceOf,
   rampColorOf,
   relLuminance,
   renderHeight,
@@ -1732,6 +1813,7 @@ export {
   toLngLat,
   toMeters,
   transportHudLine,
+  viewHalfMetersOf,
   visibleRoadCount,
   windowPatternSpec
 };

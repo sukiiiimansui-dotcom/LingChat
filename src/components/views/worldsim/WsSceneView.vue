@@ -43,13 +43,15 @@
     <!-- 🚌 交通设施那一行（代拍页 `?tf=1` 的 HUD 位置）。
          **只读诊断**：显示 `wsTransport.transportHudLine()` 的原文（含「示意，非事实」与各计数）。
          没有设施（或还没算出来）时**不占地方**；层序自愈/路网缺失也如实写出来，绝不静默。 -->
-    <div v-if="tfHud || layerNote" class="ws-sceneview__tf">
+    <div v-if="layerNote || tfHud" class="ws-sceneview__tf">
       <span v-if="tfHud">{{ tfHud }}</span>
       <span v-if="layerNote" class="is-warn">{{ layerNote }}</span>
     </div>
 
     <!-- 底部两个动作（与 `WsDistrict` 那一屏**同一组按钮、同一套类名**）：
-         机主要"进这个世界"的入口不能因为重做而消失。 -->
+         机主要"进这个世界"的入口不能因为重做而消失。
+         ⚠️ 类名复用，但样式**必须在本文件里重写一份** —— `WsDistrict.vue` 是 `<style scoped>`，
+         那些 `.ws-dist__*` 规则不会作用到本组件（见下面 style 块里的说明）。 -->
     <div class="ws-dist__foot">
       <div class="ws-dist__area">
         <span class="ws-dist__pin" aria-hidden="true">🏘</span>
@@ -218,5 +220,48 @@
   }
   .ws-sceneview__tf .is-warn {
     color: #ffcf8a;
+  }
+
+  /* ── 底部两个动作（复刻 `WsDistrict.vue` 里 `.ws-dist__*` 那一组）──
+     ⚠️ 为什么**必须在这里再写一份**：`WsDistrict.vue` 的样式是 `<style scoped>`，
+     只作用于那个组件自己的元素 —— 换到本组件后那些类名**一个样式都吃不到**
+     （第一版我直接复用了类名 ⇒ 底栏会变成"贴着顶部的一行字"，而且会挡住地图顶部）。
+     口径照抄（间距/换行/省略号都一样），但**位置改成浮在地图下沿**（这一屏是整屏地图）。 */
+  .ws-sceneview .ws-dist__foot {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6em;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+    border-radius: var(--ws-radius, 12px);
+    background: rgba(7, 11, 17, 0.62);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #eaf6ff;
+  }
+  .ws-sceneview .ws-dist__area {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    min-width: 0;
+  }
+  .ws-sceneview .ws-dist__pin {
+    font-size: 1.1em;
+  }
+  .ws-sceneview .ws-dist__name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws-sceneview .ws-dist__ops2 {
+    display: flex;
+    gap: 0.5em;
   }
 </style>

@@ -14,3 +14,7 @@ export * from "./wsRoads"; // 路网：分级样式 + 计数
 export * from "./wsLayerOrder"; // 层序保证（事后断言式自愈）
 export * from "./wsArtSky"; // art=3 天空几何（云/山影/雾带，纯函数）
 export * from "./wsScene"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
+/* 🏢 楼房**形体细化**（2026-09-24）：代拍页 `?bld=2` 用 `decorateBuildings(fc, ramp, {mode:"detail"})`
+   生成裙楼/塔楼/退台/女儿墙/设备箱，并拿 `shapeCountsLine()` 做回证；`windowPatternSpec()` 供 `?win=1`。
+   ⚠️ 这里只是**让页面能拿到同一份纯函数**（不在页面里抄第二份几何/计数逻辑）。 */
+export * from "./wsBuildingLook";

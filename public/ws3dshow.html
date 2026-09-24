@@ -62,6 +62,9 @@
       .artb__row { white-space: nowrap; }
       .artb__ok { color: #7ee787; }
       .artb__bad { color: #ff7b72; }
+      /* 🏢 形体徽标（`?bld=2` 的回证）：**放左上**，因为右上被 art 徽标占了 */
+      .bldb { left: 8px; right: auto; max-width: 62vw; }
+      .bldb .artb__h { color: #ffd479; }
     </style>
   </head>
   <body>
@@ -70,6 +73,13 @@
     <div id="artb" class="artb">
       <div id="artb-head" class="artb__h">art=1（基准）</div>
       <div id="artb-body" class="artb__b"></div>
+    </div>
+    <!-- 🏢 形体徽标（`?bld=2`）：逐项回证"各细节生成了多少" + 当前档位。
+         🔴 计数口径（三态）：正数=真的生成了这么多 · `0（已量）`=确实量到 0 · `数不出来`=没拿到统计。
+         **绝不裸写 0** —— 免得"没数"和"数出来是 0"混在一起（点标题展开逐项）。 -->
+    <div id="bldb" class="artb bldb">
+      <div id="bldb-head" class="artb__h">🏢 形体 —</div>
+      <div id="bldb-body" class="artb__b"></div>
     </div>
     <div class="hud">
       <span><b id="m-n">0</b> 栋</span>
@@ -81,6 +91,9 @@
       <span><b id="m-r">-</b> m</span>
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
+      <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
+           三态判词：正数 / `0（已量）` / `数不出来` —— 绝不裸写 0。 -->
+      <span class="w" id="m-bld">形体 —</span>
       <span class="w" id="m-msg"></span>
       <span id="m-build" style="opacity:.55"></span>
     </div>
@@ -103,7 +116,7 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      const BUILD = "ws3dshow-2026-09-20-v8";
+      const BUILD = "ws3dshow-2026-09-24-v10";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -147,7 +160,7 @@
       let maplibregl = null;
       let map = null;
       let fcCache = null;
-      const stats = { n: 0, real: 0, levels: 0, kind: 0, r: 0 };
+      const stats = { n: 0, real: 0, levels: 0, kind: 0, r: 0, parts: 0 };
 
       function fail(why) {
         const el = $("fb"); el.style.display = "grid";
@@ -285,20 +298,16 @@
        */
       function bldLayerSpecs() {
         /* 色阶/描边/平涂开关**全部跟着主题走**（和产品组件同源，见 `wsMapTheme.ts`）。
-           兜底值 = 本页原来那套暗色配方。 */
-        const ramp = artRamp(
-          THEME?.ramp || [
-            [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
-            [60, "#5f93b0"], [110, "#7fbcd4"], [200, "#b6e2f2"], [320, "#e8f7ff"],
-          ]
-        ); // 🎨 art=2 把高段推到近白（`artRamp` 在 art=1 时**原样返回**）
+           兜底值 = 本页原来那套暗色配方（与「一页一主题」原则一致：只在 `FALLBACK_RAMP` 写一份）。 */
+        const ramp = artRamp(THEME?.ramp || FALLBACK_RAMP); // 🎨 art=2 把高段推到近白（`artRamp` 在 art=1 时**原样返回**）
         const outline = THEME?.outline || { color: "rgba(190,235,255,0.22)", width: 0.5 };
         /* 平涂（二次元）= 关掉竖向渐变；写实（暗色）= 开着。 */
         const vgrad = THEME ? THEME.verticalGradient : true;
         const opacity = THEME?.extrudOpacity || 0.97;
         const stops = [];
         for (const [h, c] of ramp) stops.push(h, c);
-        void 0; // （`artRamp` 在 art=1 时原样返回 ⇒ 旧版色阶逐字节不变）
+        /* 🏢 `?bld=2` 走"拆件"那套图层（颜色读要素自带的 `color3d`、底座读 `h_base`） */
+        if (BLD === 2) return bldLayerSpecsDetail(outline, vgrad, opacity, stops);
         return [
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
@@ -328,6 +337,52 @@
         ];
       }
 
+      /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
+      function bldLineLayer(outline) {
+        return {
+          id: "bld-line", type: "line", source: "bld",
+          paint: {
+            "line-color": outline.color,
+            "line-width": ART >= 2 ? outlineWidthExpr() : outline.width,
+          },
+        };
+      }
+
+      /**
+       * 🏢 `?bld=2` 的楼房图层：**色彩层 + （可选）窗格层 + 描边层**。
+       *
+       * 为什么窗格要单开一层：`fill-extrusion-color` 带 `requires: 非 pattern`
+       * ⇒ **同一个图层里 pattern 与 color 互斥**（写了 pattern 再写 color，样式校验会失败、
+       *  图层不画，而这个项目为"图层静默不画"付过代价）。所以两层，filter **互补**：
+       *  · `bld-win`：`win == 1`（纯函数里算好的"够高的墙面"）→ 铺图案；
+       *  · `bld-ext`：`win != 1` → 走色阶（与基准版同一张色阶，逐要素取 `color3d`）。
+       * 互补由**要素上的 0/1 标记**保证（不是在图层的 filter 里拼表达式 —— 表达式报错是静默的）。
+       */
+      function bldLayerSpecsDetail(outline, vgrad, opacity, stops) {
+        const paintCommon = {
+          "fill-extrusion-height": ["get", "h3d"],
+          /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
+          "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
+          "fill-extrusion-opacity": opacity,
+          "fill-extrusion-vertical-gradient": vgrad,
+        };
+        const colorLayer = {
+          id: "bld-ext", type: "fill-extrusion", source: "bld",
+          paint: {
+            ...paintCommon,
+            /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深） */
+            "fill-extrusion-color": ["coalesce", ["get", "color3d"], ["interpolate", ["linear"], ["get", "h3d"], ...stops]],
+          },
+        };
+        if (WINS) colorLayer.filter = ["!=", ["get", "win"], 1]; // 与窗格层互补
+        const winLayer = {
+          id: "bld-win", type: "fill-extrusion", source: "bld",
+          filter: ["==", ["get", "win"], 1],
+          paint: { ...paintCommon, "fill-extrusion-pattern": WIN_IMAGE_ID },
+        };
+        return WINS ? [colorLayer, winLayer, bldLineLayer(outline)] : [colorLayer, bldLineLayer(outline)];
+      }
+
       /* ══ 🎨 美术变体 `?art=2`（机主 2026-09-21：先在**代拍页**做一版，别碰 App 与角色）════
          规矩：**只在这一页做**、**不动 `ANIME` 基准值**、**只改"图层里已经存在的 paint 键"**
          （`patchPaint()` 会跳过不存在的键 —— 我们被"往 style 塞未知键 ⇒ 整份校验失败 ⇒ load 永不触发"坑过）。
@@ -341,6 +396,31 @@
       })();
       /** art=3 才有的东西（云/山影/raster 调色）；art=2 及以上都走"高调"那套补丁 */
       const ART3 = ART === 3;
+
+      /* ══ 🏢 楼房**形体细化** `?bld=2`（机主 2026-09-24：「能优化一下楼房模吗啊喵」）════════
+         做法：几何**全在纯函数里**（`wsBuildingLook.ts` 第四步 → 经 `/vendor/wsScene.mjs` 进来），
+         页面只干两件事：① 把生成好的要素喂给地图；② 把"生成了多少"写进 HUD/徽标（回证）。
+         这一页**不抄第二份几何/计数逻辑** —— 抄一份就一定会和 App 侧漂。
+
+         A/B（**不加参数 = 这一页原来的行为，一字不改**）：
+           · （无参数）基准版：一栋楼一个挤出体（只有 h3d 上色）；
+           · `?bld=2`：裙楼+塔楼 / 退台 / 女儿墙 / 设备箱 / 天线（拆成多块要素）；
+           · `?bld=2&win=1`：再加**窗格贴图**层（`pattern` 与 `color` 互斥 ⇒ 同一 source 开两层）；
+           · `?bld=2&low=1`（或 `__PERF_LOW__`）：低档 —— 只画主体 + 描边。
+         ⚠️ 模块没加载/没有 `decorateBuildings` 时**如实回退**到基准版，并把原因写进徽标
+         （回退 == 静默失效，是这个项目反复踩过的坑）。 */
+      const BLD = (function () { try { return /[?&]bld=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; } })();
+      let WINS = BLD === 2 && (function () { try { return /[?&]win=1\b/.test(location.search); } catch (e) { return false; } })();
+      const BLD_LOW = (function () { try { return !!(window.__PERF_LOW__ || /[?&]low=1\b/.test(location.search)); } catch (e) { return false; } })();
+      /** 窗格层的状态（**三态判词**：未开 / 已开 / 失败：原因）—— 徽标如实显示，别让人以为是开了 */
+      let winState = WINS ? "待建图" : "未开（要 ?win=1）";
+      /** 窗格贴图在 `map.addImage()` 里的 id（图由 `windowPatternSpec()` 现产，**不引 sprite 服务器**） */
+      const WIN_IMAGE_ID = "ws-win";
+      /** 取不到主题时的色阶兜底（与 `wsMapTheme.ANIME` 同源）。**只在这一处写**，别在两处抄。 */
+      const FALLBACK_RAMP = [
+        [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
+        [60, "#5f93b0"], [110, "#7fbcd4"], [200, "#b6e2f2"], [320, "#e8f7ff"],
+      ];
 
       /** 描边的 zoom→宽度 停靠点（**单一真源**：样式表达式与 HUD 显示都从这一份来，别写两遍） */
       const OUTLINE_STOPS = [
@@ -707,6 +787,48 @@
       }
 
       /**
+       * 🏢 **形体回证徽标**（`?bld=2`）：把"各细节生成了多少 + 当前档位"写到页面与 HUD 上。
+       *
+       * 🔴 **三态判词纪律**（`shapeCountsLine()` / `shapeCountRows()` 在纯函数里实现，
+       *    页面不再自己拼字符串 —— 免得两处口径不一致）：
+       *    · 正数        = 真的生成了这么多；
+       *    · `0（已量）` = 确实量到 0；
+       *    · `数不出来`  = 没拿到统计（模块没加载 / 生成抛错 / 字段不是有限数）。
+       *    **绝不裸写 0** —— "没数"和"数出来是 0"混在一起，回证就废了。
+       */
+      function renderBldBadge() {
+        try {
+          const head = $("bldb-head");
+          const body = $("bldb-body");
+          const box = $("bldb");
+          if (!head || !body || !box) return;
+          const TFb = window.__TF__;
+          const count = window.__BLD_COUNT__ || null;
+          const tier = BLD_LOW ? "低档（只主体）" : "普通";
+          const line = BLD !== 2
+            ? "未开（想看新形体：URL 加 ?bld=2）"
+            : (TFb && TFb.shapeCountsLine ? TFb.shapeCountsLine(count) : "数不出来（模块里没有 shapeCountsLine）");
+          const hud = $("m-bld");
+          if (hud) hud.textContent = (BLD === 2 ? "形体[bld=2·" + tier + "] " : "形体[bld=1] ") + line;
+          const rows = BLD !== 2
+            ? [
+                { k: "档位", v: "基准版（bld=1）", why: "这一页原来的行为，**一字不改**" },
+                { k: "新形体", v: "未开", why: "URL 加 `?bld=2`（裙楼/塔楼/退台/女儿墙/设备箱）；再加 `&win=1` 开窗格" },
+              ]
+            : (TFb && TFb.shapeCountRows ? TFb.shapeCountRows(count) : [{ k: "统计", v: "数不出来", why: "模块里没有 shapeCountRows" }]);
+          rows.push({ k: "窗格层", v: winState, why: "pattern 与 color 互斥 ⇒ 同一 source 两层；图案由纯函数现产（不引 sprite 服务器）" });
+          if (window.__BLD_FALLBACK__) rows.push({ k: "回退", v: String(window.__BLD_FALLBACK__), why: "取不到形体生成 ⇒ 如实退回基准版（回退必须有回执）" });
+          rows.push({ k: "未验", v: "真机观感", why: "本机无头无 WebGL ⇒ 这里只能回证「生成了什么、多少」；像不像真楼要机主真机刷新看" });
+          const bad = BLD === 2 && (!count || winState.indexOf("失败") === 0);
+          head.textContent = (bad ? "⚠️ " : "") + "🏢 " + (BLD === 2 ? "bld=2 · 档位=" + tier : "bld=1（基准版）");
+          head.onclick = function () { box.classList.toggle("is-open"); };
+          body.innerHTML = rows.map(function (r) {
+            return '<div class="artb__row"><span>·</span> ' + r.k + " = " + String(r.v) + " <i>" + r.why + "</i></div>";
+          }).join("");
+        } catch (e) { /* 徽标画不出来不影响页面 */ }
+      }
+
+      /**
        * 🔴 侧视角（近地平线）**倍率爆炸**的护栏（机主 2026-09-21：「一下划不见」）。
        *
        * 根因：pitch 越大，地面与视线越接近平行 ⇒ 同样的手指位移对应**巨大的地面距离**。
@@ -872,15 +994,40 @@
       }
 
       function applyBuildings(fc, r) {
-        const feats = (fc.features || []).map((f) => {
+        /* 🏢 `?bld=2`：形体（裙楼/塔楼/退台/女儿墙/设备箱/天线）由**纯函数**生成 ——
+           同一份代码将来 App 侧也要用，页面这边**只调用、不重写**。
+           取不到就**如实回退**到基准版（回退没有回执 = 静默失效，这项目反复踩过）。 */
+        let feats = null;
+        let bldCount = null;
+        let bldWhy = "";
+        if (BLD === 2) {
+          const TFb = window.__TF__;
+          if (TFb && typeof TFb.decorateBuildings === "function") {
+            try {
+              const dec = TFb.decorateBuildings(fc, artRamp((THEME && THEME.ramp) || FALLBACK_RAMP), { mode: "detail", low: BLD_LOW });
+              feats = dec.features;
+              bldCount = dec.count;
+            } catch (e) {
+              bldWhy = "形体生成抛错：" + String(e).slice(0, 60);
+            }
+          } else {
+            bldWhy = "数不出来：模块里没有 decorateBuildings（vendor 没重新生成？）";
+          }
+        }
+        if (!feats) feats = (fc.features || []).map((f) => {
           const [h, src] = renderHeight(f.properties || {});
           return { ...f, properties: { ...f.properties, h3d: h, h_from: src } };
         });
+        window.__BLD_COUNT__ = bldCount || null;
+        window.__BLD_FALLBACK__ = bldWhy || null;
         window.__LASTFC__ = fc; // 🚌 `?tf=1` 要用楼栋轮廓（停车场/出入口按脚印算）
-        stats.n = feats.length; stats.r = r;
-        stats.real = feats.filter((f) => f.properties.h_from === "real").length;
-        stats.levels = feats.filter((f) => f.properties.h_from === "levels").length;
-        stats.kind = feats.filter((f) => f.properties.h_from === "kind").length;
+        /* ⚠️ `stats.n` **永远是楼栋数**（拆件之后要素会变多，HUD 的「N 栋」不能变成要素数） */
+        stats.n = bldCount ? bldCount.n : feats.length;
+        stats.parts = feats.length;
+        stats.r = r;
+        stats.real = bldCount ? bldCount.real : feats.filter((f) => f.properties.h_from === "real").length;
+        stats.levels = bldCount ? bldCount.levels : feats.filter((f) => f.properties.h_from === "levels").length;
+        stats.kind = bldCount ? bldCount.kind : feats.filter((f) => f.properties.h_from === "kind").length;
         $("m-n").textContent = String(stats.n);
         $("m-h").textContent = String(stats.real);
         $("m-l").textContent = String(stats.levels);
@@ -891,12 +1038,52 @@
         fcCache = data;
         if (map.getSource("bld")) map.getSource("bld").setData(data);
         else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
+        renderBldBadge(); // 🏢 回证（各细节生成了多少 + 档位）随每次取楼刷新
+      }
+
+      /**
+       * 🏢 现产窗格贴图（`?win=1`）。**不引 sprite 服务器**：图案是纯函数产出的 32×32 RGBA，
+       * 直接交给 `map.addImage()`（本构建接受 `{width,height,data}`）。
+       * 失败 ⇒ 关掉窗格层并把原因写进 `winState`（**绝不让"没开成"看起来像"开了"**）。
+       */
+      function ensureWinImage() {
+        try {
+          const TFb = window.__TF__;
+          if (!TFb || typeof TFb.windowPatternSpec !== "function") throw new Error("模块里没有 windowPatternSpec");
+          const ramp = artRamp((THEME && THEME.ramp) || FALLBACK_RAMP);
+          /* 配色**从主题色阶派生**（不写第二套配色）：墙面取高段色，窗格 = 墙面压暗 18% */
+          const wall = TFb.rampColorOf ? TFb.rampColorOf(60, ramp) : "#F2FAFF";
+          const pane = TFb.shade ? TFb.shade(wall, 0.82) : "#C9DDEA";
+          const spec = TFb.windowPatternSpec(wall, pane);
+          if (!map.hasImage(WIN_IMAGE_ID)) map.addImage(WIN_IMAGE_ID, { width: spec.size, height: spec.size, data: new Uint8Array(spec.data) });
+          winState = "已开（墙 " + wall + " / 窗 " + pane + " · " + spec.size + "×" + spec.size + "）";
+        } catch (e) {
+          winState = "失败：" + String(e).slice(0, 60);
+          WINS = false; // 建不了图就不开那层（否则 win=1 的那半边楼会两层都不画 ⇒ 楼缺一块）
+        }
+      }
+
+      /** 窗格层没加成 ⇒ 把色彩层的 filter 去掉（不然 `win=1` 的墙面两边都不画） */
+      function healColorLayer(before) {
+        try {
+          if (map.getLayer("bld-ext")) map.removeLayer("bld-ext");
+          const c = bldLayerSpecs().filter((l) => l.id === "bld-ext")[0];
+          if (c && !map.getLayer("bld-ext")) map.addLayer(c, before);
+        } catch (e) { errs.push("healColorLayer " + e); }
       }
 
       function addBldLayers() {
         /* 插在注记层之前 ⇒ 街名压在楼上面 */
         const before = map.getLayer("ref") ? "ref" : undefined;
-        for (const l of bldLayerSpecs()) if (!map.getLayer(l.id)) map.addLayer(l, before);
+        if (WINS) ensureWinImage(); // 图必须在 addLayer 之前进 images
+        for (const l of bldLayerSpecs()) {
+          if (map.getLayer(l.id)) continue;
+          try { map.addLayer(l, before); }
+          catch (e) {
+            errs.push("addLayer " + l.id + " " + e);
+            if (l.id === "bld-win") { winState = "失败：" + String(e).slice(0, 50); WINS = false; healColorLayer(before); }
+          }
+        }
       }
 
       void (async () => {
@@ -933,6 +1120,8 @@
           await refresh();
           /* 🎨 回证表要在**楼体图层加完之后**读（`bld-line` 是 addLayer 加的）⇒ 放在 refresh 之后 */
           renderArtBadge();
+          /* 🏢 形体回证（`?bld=2` 时最有信息量；bld=1 时如实写"未开"） */
+          renderBldBadge();
           /* 🛣 路网先画（**在最下**），交通设施后画（**贴在路之上**） */
           if (ROADSON) { try { await applyRoads(); } catch (e) { errs.push("applyRoads " + e); } }
           /* 🚌 `?tf=1`：楼到齐之后再摆交通设施（要用到楼栋轮廓） */
@@ -1192,6 +1381,17 @@
           layers: ls, ...stats, fps: Number($("m-fps").textContent) || null,
           /* 🎨 art 变体自证：档位 + 回证表（"改了到底生效没有"由它回答） */
           art: ART, artPatch: window.__ART_CHANGED__, artReadback: artReadback(),
+          /* 🏢 形体自证（`?bld=2`）：档位 + 各细节计数 + 窗格层状态 + 回退原因。
+             `count: null` ⇒ 判词是"数不出来"，**不是 0**（三态纪律）。 */
+          bld: {
+            mode: BLD, tier: BLD_LOW ? "low" : "normal", winOn: WINS, win: winState,
+            count: window.__BLD_COUNT__ || null,
+            line: (window.__TF__ && window.__TF__.shapeCountsLine ? window.__TF__.shapeCountsLine(window.__BLD_COUNT__ || null) : null),
+            fallback: window.__BLD_FALLBACK__ || null,
+            parts: stats.parts,
+            layers: (map.getStyle().layers || []).filter(function (l) { return /^bld-/.test(l.id); }).map(function (l) { return l.id; }),
+            hasWinImage: (function () { try { return !!map.hasImage(WIN_IMAGE_ID); } catch (e) { return null; } })(),
+          },
           sky: window.__SKY_GEO__ || null,
           contrast: window.__CONTRAST__ || null,
           /* 🎬 场景装配自证（主会话要求：等于公共模块 ⇒ ✅；页面自带 ⇒ 判"判不了"并写明还没换源） */

@@ -202,7 +202,9 @@
     "bldGroundRatio": 1.564,
     "outlineGroundRatio": 1.69,
     "minGroundContrast": 1.35,
-    "separation": "luminance"
+    "separation": "luminance",
+    "groundEps": 0.02,
+    "vignetteOpacity": null
    }
   },
   "anime": {
@@ -383,7 +385,9 @@
     "bldGroundRatio": 0.877,
     "outlineGroundRatio": 10.61,
     "minGroundContrast": 1,
-    "separation": "outline"
+    "separation": "outline",
+    "groundEps": 0.02,
+    "vignetteOpacity": null
    }
   }
  },
@@ -392,14 +396,14 @@
    "night": {
     "id": "night",
     "label": "暗色（原来的） · 游戏过场",
-    "hud": "暗色夜景 · 游戏过场（深底亮线）",
+    "hud": "暗色夜景 · 游戏过场（cel 三档 + 接触阴影）",
     "sky": {
-     "sky-color": "#71797f",
-     "horizon-color": "#65727f",
-     "fog-color": "#0c131c",
+     "sky-color": "#0a1119",
+     "horizon-color": "#1b2a3a",
+     "fog-color": "#0d1620",
      "sky-horizon-blend": 0.6,
      "horizon-fog-blend": 0.4,
-     "atmosphere-blend": 0.9
+     "atmosphere-blend": 0.7
     },
     "sources": {
      "base": {
@@ -458,9 +462,9 @@
         16.2,
         0
        ],
-       "raster-saturation": 0.34,
-       "raster-contrast": 0.1,
-       "raster-brightness-max": 0.45
+       "raster-saturation": -0.25,
+       "raster-contrast": 0.04,
+       "raster-brightness-max": 0.74
       }
      },
      {
@@ -500,21 +504,21 @@
     "ramp": [
      [
       3,
-      "#2d4256"
+      "#3b566f"
      ],
      [
-      12,
+      16,
       "#54809f"
      ],
      [
-      45,
-      "#dbf1fa"
+      110,
+      "#9fd0e2"
      ]
     ],
-    "roofFallback": "#152029",
-    "antennaFallback": "#eef9ff",
+    "roofFallback": "#1b2833",
+    "antennaFallback": "#cfe8f5",
     "outline": {
-     "color": "#eef9ff",
+     "color": "rgba(190,235,255,0.22)",
      "width": 0.5
     },
     "ai": {
@@ -522,24 +526,24 @@
      "water": "rgba(90, 150, 210, 0.42)"
     },
     "road": {
-     "casing": "#0a1017",
-     "casingOpacity": 0.95,
+     "casing": "#0b1017",
+     "casingOpacity": 0.75,
      "rankColors": {
       "0": "#e8dcc0",
-      "1": "#d2c6ab",
-      "2": "#8f8b81",
-      "3": "#5d656d",
-      "4": "#3f4a54",
-      "5": "#b4e9ff"
+      "1": "#dfd2b4",
+      "2": "#c8c0ae",
+      "3": "#a9b3bd",
+      "4": "#8fa0b0",
+      "5": "#79d9ff"
      }
     },
     "canvas": {
-     "bg": "#0a1017",
+     "bg": "#101820",
      "empty": "rgba(255,255,255,.7)",
-     "bldStroke": "#eef9ff",
+     "bldStroke": "rgba(255,255,255,.28)",
      "bldStrokeW": 0.7,
-     "aiShadow": "rgba(0,0,0,.35)",
-     "aiStroke": "rgba(0,0,0,.5)",
+     "aiShadow": "rgba(40,20,0,.45)",
+     "aiStroke": "rgba(255,226,170,.6)",
      "aiStrokeW": 0.6
     },
     "baseFade": null,
@@ -553,43 +557,34 @@
       "zoom"
      ],
      12.8,
-     0.55,
+     0.72,
      15,
-     0.8,
+     0.86,
      17,
-     1
+     0.97
     ],
     "low": {
      "outlineWidth": null
     },
     "look": {
      "shadow": {
-      "color": "#040608",
-      "opacity": 0.45,
-      "blur": 5,
+      "color": "#0a1017",
+      "opacity": 0.42,
+      "blur": 6,
       "dx": 3,
       "dy": 4,
       "width": 1.1
      },
      "vignette": {
-      "color": "#060a0e",
-      "opacity": 0.5,
-      "inner": 42,
+      "color": "#0a1017",
+      "opacity": 0.18,
+      "inner": 55,
       "outer": 100
      },
      "road": {
       "casingAdd": 2.2,
       "widthScale": 1.25,
-      "glow": {
-       "ranks": [
-        0,
-        1,
-        2
-       ],
-       "blur": 9,
-       "opacity": 0.4,
-       "widthScale": 2.4
-      }
+      "glow": null
      },
      "skipped": [
       {
@@ -600,29 +595,49 @@
        "k": "真阴影（投影遮挡）",
        "why": "MapLibre 的 fill-extrusion **不投阴影**（无 shadow map）⇒ 本版用楼脚印深色薄层 + 贴边模糊线**近似**，不是真阴影。"
       }
+     ],
+     "reverted": [
+      {
+       "k": "压暗地面（第一版的「深底亮线」）",
+       "why": "**机主 2026-09-24 裁定**：「代拍页的地图底都看不清了」⇒ 地面回到 BA 亮底（`bg`/`tint`/`raster` 逐字段等于基准）。而且我自己的调研就写着 MT3D 地面**也是近白** ⇒「深底」不是 MT3D 的事实，是我选错了方向。**派生件不许改机主拍板的美术方向。**"
+      },
+      {
+       "k": "霓虹辉光（`road-glow-*`）",
+       "why": "**撤了**：它在「深底」前提成立时才有意义 —— BA 亮底上白色辉光与地面**同明度** ⇒ 既看不见、又把路缘糊掉（**降低可读性**）。机制仍在数据里（`look.road.glow`，`null` = 不建层），要开只需改数据；页面那条路有自检守着（注入 glow 数据 ⇒ 层必须建出来）。"
+      },
+      {
+       "k": "远景淡出（大气透视）",
+       "why": "**撤回基准值**（`extrudOpacity` 逐字段等于基准）：亮底上把远景楼调透明 = 楼「化」进地面，与机主「底要看得清」的诉求相反；它也不在机主的保留清单里（清单 = 接触阴影 / cel 硬边 / 路 casing）。"
+      },
+      {
+       "k": "楼体竖向渐变（受光面/背光面）",
+       "why": "**撤回基准值**（`verticalGradient` 保持 false）：BA 的**平涂**是机主拍板的美术方向，「受光/背光」改用 **cel 分档**表达（结构手段），不再动渐变。"
+      }
      ]
     },
     "metrics": {
-     "groundHex": "#1e1e1e",
-     "groundLuma": 0.1185,
-     "rampFloorLuma": 0.247,
-     "bldGroundRatio": 2.084,
-     "outlineGroundRatio": 15.58,
+     "groundHex": "#343434",
+     "groundLuma": 0.2058,
+     "rampFloorLuma": 0.3218,
+     "bldGroundRatio": 1.564,
+     "outlineGroundRatio": 1.69,
      "minGroundContrast": 1.35,
-     "separation": "luminance"
+     "separation": "luminance",
+     "groundEps": 0.02,
+     "vignetteOpacity": 0.18
     }
    },
    "anime": {
     "id": "anime",
     "label": "二次元（蔚蓝档案） · 游戏过场",
-    "hud": "二次元 · 平涂 · 游戏过场（深底亮线）",
+    "hud": "二次元 · 平涂 · 游戏过场（cel 三档 + 接触阴影）",
     "sky": {
-     "sky-color": "#42779b",
-     "horizon-color": "#bfe7fc",
-     "fog-color": "#92acbf",
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
      "sky-horizon-blend": 0.6,
      "horizon-fog-blend": 0.65,
-     "atmosphere-blend": 0.9,
+     "atmosphere-blend": 0.85,
      "fog-ground-blend": 0.75
     },
     "sources": {
@@ -651,7 +666,7 @@
       "id": "bg",
       "type": "background",
       "paint": {
-       "background-color": "#385069"
+       "background-color": "#E8F8FF"
       }
      },
      {
@@ -672,17 +687,17 @@
         14.8,
         0
        ],
-       "raster-saturation": 0.34,
-       "raster-contrast": 0.1,
-       "raster-brightness-max": 0.45
+       "raster-saturation": 0.55,
+       "raster-contrast": 0.06,
+       "raster-brightness-max": 1
       }
      },
      {
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#3e5c75",
-       "background-opacity": 0.82
+       "background-color": "#BCE7F8",
+       "background-opacity": 0.45
       }
      },
      {
@@ -697,21 +712,21 @@
     "ramp": [
      [
       3,
-      "#8fb3ca"
+      "#BCE4F9"
      ],
      [
-      12,
+      25,
       "#A2D8F6"
      ],
      [
-      45,
-      "#fbfeff"
+      110,
+      "#EBF7FE"
      ]
     ],
-    "roofFallback": "#77a1bb",
+    "roofFallback": "#A8DBF5",
     "antennaFallback": "#FFFFFF",
     "outline": {
-     "color": "#b1e1fb",
+     "color": "#1B3550",
      "width": 1.8
     },
     "ai": {
@@ -719,31 +734,31 @@
      "water": "rgba(79, 195, 234, 0.5)"
     },
     "road": {
-     "casing": "#27435d",
-     "casingOpacity": 0.95,
+     "casing": "#8FBBD4",
+     "casingOpacity": 0.9,
      "rankColors": {
-      "0": "#ffffff",
-      "1": "#eef1f5",
-      "2": "#b3bfca",
-      "3": "#8799a9",
-      "4": "#6b8094",
-      "5": "#79cef4"
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
      }
     },
     "canvas": {
-     "bg": "#3e5c75",
+     "bg": "#DCEFF7",
      "empty": "rgba(27,53,80,.75)",
-     "bldStroke": "#b1e1fb",
+     "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
-     "aiShadow": "rgba(0,0,0,.35)",
-     "aiStroke": "rgba(0,0,0,.5)",
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
      "aiStrokeW": 0.8
     },
     "baseFade": {
      "from": 13.6,
      "to": 14.8
     },
-    "verticalGradient": true,
+    "verticalGradient": false,
     "extrudOpacity": [
      "interpolate",
      [
@@ -753,9 +768,9 @@
       "zoom"
      ],
      12.8,
-     0.55,
-     15,
      0.8,
+     15,
+     0.92,
      17,
      1
     ],
@@ -764,32 +779,23 @@
     },
     "look": {
      "shadow": {
-      "color": "#162029",
-      "opacity": 0.45,
-      "blur": 5,
+      "color": "#405870",
+      "opacity": 0.42,
+      "blur": 6,
       "dx": 3,
       "dy": 4,
       "width": 1.1
      },
      "vignette": {
-      "color": "#22303f",
-      "opacity": 0.5,
-      "inner": 42,
+      "color": "#1B3550",
+      "opacity": 0.18,
+      "inner": 55,
       "outer": 100
      },
      "road": {
       "casingAdd": 2.2,
       "widthScale": 1.25,
-      "glow": {
-       "ranks": [
-        0,
-        1,
-        2
-       ],
-       "blur": 9,
-       "opacity": 0.4,
-       "widthScale": 2.4
-      }
+      "glow": null
      },
      "skipped": [
       {
@@ -800,16 +806,36 @@
        "k": "真阴影（投影遮挡）",
        "why": "MapLibre 的 fill-extrusion **不投阴影**（无 shadow map）⇒ 本版用楼脚印深色薄层 + 贴边模糊线**近似**，不是真阴影。"
       }
+     ],
+     "reverted": [
+      {
+       "k": "压暗地面（第一版的「深底亮线」）",
+       "why": "**机主 2026-09-24 裁定**：「代拍页的地图底都看不清了」⇒ 地面回到 BA 亮底（`bg`/`tint`/`raster` 逐字段等于基准）。而且我自己的调研就写着 MT3D 地面**也是近白** ⇒「深底」不是 MT3D 的事实，是我选错了方向。**派生件不许改机主拍板的美术方向。**"
+      },
+      {
+       "k": "霓虹辉光（`road-glow-*`）",
+       "why": "**撤了**：它在「深底」前提成立时才有意义 —— BA 亮底上白色辉光与地面**同明度** ⇒ 既看不见、又把路缘糊掉（**降低可读性**）。机制仍在数据里（`look.road.glow`，`null` = 不建层），要开只需改数据；页面那条路有自检守着（注入 glow 数据 ⇒ 层必须建出来）。"
+      },
+      {
+       "k": "远景淡出（大气透视）",
+       "why": "**撤回基准值**（`extrudOpacity` 逐字段等于基准）：亮底上把远景楼调透明 = 楼「化」进地面，与机主「底要看得清」的诉求相反；它也不在机主的保留清单里（清单 = 接触阴影 / cel 硬边 / 路 casing）。"
+      },
+      {
+       "k": "楼体竖向渐变（受光面/背光面）",
+       "why": "**撤回基准值**（`verticalGradient` 保持 false）：BA 的**平涂**是机主拍板的美术方向，「受光/背光」改用 **cel 分档**表达（结构手段），不再动渐变。"
+      }
      ]
     },
     "metrics": {
-     "groundHex": "#476074",
-     "groundLuma": 0.361,
-     "rampFloorLuma": 0.6785,
-     "bldGroundRatio": 1.88,
-     "outlineGroundRatio": 4.71,
-     "minGroundContrast": 1.35,
-     "separation": "luminance"
+     "groundHex": "#dceff7",
+     "groundLuma": 0.9244,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 0.877,
+     "outlineGroundRatio": 10.61,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": 0.18
     }
    }
   }

@@ -116,7 +116,9 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      const BUILD = "ws3dshow-2026-09-24-v10";
+      /* v11（2026-09-24 晚）：加「模块被缓存成旧副本」的自愈 + 逐符号诊断（真机那次 `?bld=2` 什么都没变）。
+         ⚠️ `VENDOR_VER` 取的就是这个戳 ⇒ **换版必换模块 URL**，不会再撞 immutable 缓存。 */
+      const BUILD = "ws3dshow-2026-09-24-v11";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -416,6 +418,47 @@
       let winState = WINS ? "待建图" : "未开（要 ?win=1）";
       /** 窗格贴图在 `map.addImage()` 里的 id（图由 `windowPatternSpec()` 现产，**不引 sprite 服务器**） */
       const WIN_IMAGE_ID = "ws-win";
+      /**
+       * 🔴 2026-09-24 真机事故（机主截图：`?bld=2` 回退成基准版，面板写"模块里没有 decorateBuildings"）：
+       * **不是产物缺符号**（三份副本逐字节一致、`import()` 后 `typeof` 全绿、重新生成也一字节不差），
+       * 而是**浏览器缓存** —— 这一页用**静态** `import "/vendor/wsScene.mjs"`（URL 里没有内容哈希），
+       * 而预览服务给它的响应头是 `Cache-Control: public, max-age=31536000, immutable`
+       * ⇒ `&v=10` 只顶掉了 HTML，**模块还是旧的**。
+       * ⇒ ① 缺符号时用**带版本号的 URL** 再 import 一次（新 URL 必 miss 缓存，自愈）；
+       *    ② 把**逐符号在场情况**与自愈结果写进徽标 ⇒ 下次一眼看出是"模块旧"还是"真没有"。
+       */
+      const TF_NEEDED = ["decorateBuildings", "shapeCountsLine", "shapeCountRows", "windowPatternSpec", "rampColorOf", "shade"];
+      const VENDOR_URL = "/vendor/wsScene.mjs";
+      /** vendor 的"内容版本" = 页面版本戳（同源 ⇒ 换版就换 URL，不会再撞 immutable 缓存） */
+      const VENDOR_VER = BUILD;
+      let tfState = "未取";
+      /** 缺失的符号名（全在就是空数组） */
+      function tfMissing(mod) {
+        return !mod ? TF_NEEDED.slice() : TF_NEEDED.filter(function (k) { return typeof mod[k] !== "function"; });
+      }
+      /**
+       * 拿到"能用的" vendor 模块：够用就用现有的；缺符号就用**带版本号的 URL** 重取一次。
+       * 取不到也**不假装**（如实退回基准版 + 写明"是模块旧还是真没有"）。
+       */
+      async function ensureVendor() {
+        const have = window.__TF__;
+        const miss0 = tfMissing(have);
+        if (!miss0.length) { tfState = "完整"; return have; }
+        try {
+          const fresh = await import(/* @vite-ignore */ VENDOR_URL + "?" + encodeURIComponent(VENDOR_VER));
+          const miss1 = tfMissing(fresh);
+          if (!miss1.length) {
+            window.__TF__ = fresh; // 换掉 ⇒ 路网/设施那些模块一起受益
+            window.__TF_FRESH__ = VENDOR_VER;
+            tfState = "旧副本（缺 " + miss0.length + " 个）⇒ 带版本号重取成功";
+            return fresh;
+          }
+          tfState = "重取后仍缺：" + miss1.join(",");
+        } catch (e) {
+          tfState = "重取失败：" + String(e).slice(0, 48) + "（缺 " + miss0.join(",") + "）";
+        }
+        return have;
+      }
       /** 取不到主题时的色阶兜底（与 `wsMapTheme.ANIME` 同源）。**只在这一处写**，别在两处抄。 */
       const FALLBACK_RAMP = [
         [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
@@ -817,9 +860,16 @@
               ]
             : (TFb && TFb.shapeCountRows ? TFb.shapeCountRows(count) : [{ k: "统计", v: "数不出来", why: "模块里没有 shapeCountRows" }]);
           rows.push({ k: "窗格层", v: winState, why: "pattern 与 color 互斥 ⇒ 同一 source 两层；图案由纯函数现产（不引 sprite 服务器）" });
+          /* 🔴 2026-09-24：真机那次"`?bld=2` 什么都没变"就是**模块被缓存成旧副本** ⇒ 这两行让下次一眼可判 */
+          rows.push({
+            k: "模块符号",
+            v: TF_NEEDED.map(function (k) { return k + (typeof (TFb || {})[k] === "function" ? "✓" : "✗"); }).join(" "),
+            why: "打叉的就是缺的 ⇒ `?bld=2` 会退化；多半是浏览器缓存了旧的 /vendor/wsScene.mjs（服务端 immutable、URL 无内容哈希）⇒ 强刷/清缓存，或让主会话重建预览包",
+          });
+          rows.push({ k: "vendor", v: tfState + (window.__TF_FRESH__ ? "（重取版本 " + window.__TF_FRESH__ + "）" : ""), why: "静态 import 的模块可能与页面不同版；这条是自愈记录（「缺符号」不等于「产物里没有」）" });
           if (window.__BLD_FALLBACK__) rows.push({ k: "回退", v: String(window.__BLD_FALLBACK__), why: "取不到形体生成 ⇒ 如实退回基准版（回退必须有回执）" });
           rows.push({ k: "未验", v: "真机观感", why: "本机无头无 WebGL ⇒ 这里只能回证「生成了什么、多少」；像不像真楼要机主真机刷新看" });
-          const bad = BLD === 2 && (!count || winState.indexOf("失败") === 0);
+          const bad = BLD === 2 && (!count || winState.indexOf("失败") === 0 || tfMissing(window.__TF__).length > 0);
           head.textContent = (bad ? "⚠️ " : "") + "🏢 " + (BLD === 2 ? "bld=2 · 档位=" + tier : "bld=1（基准版）");
           head.onclick = function () { box.classList.toggle("is-open"); };
           body.innerHTML = rows.map(function (r) {
@@ -993,15 +1043,17 @@
         });
       }
 
-      function applyBuildings(fc, r) {
+      async function applyBuildings(fc, r) {
         /* 🏢 `?bld=2`：形体（裙楼/塔楼/退台/女儿墙/设备箱/天线）由**纯函数**生成 ——
            同一份代码将来 App 侧也要用，页面这边**只调用、不重写**。
-           取不到就**如实回退**到基准版（回退没有回执 = 静默失效，这项目反复踩过）。 */
+           取不到就**如实回退**到基准版（回退没有回执 = 静默失效，这项目反复踩过）。
+           ⚠️ 先 `await ensureVendor()`：2026-09-24 真机那次就是**模块被浏览器缓存成旧副本** ⇒
+           缺符号 ⇒ 静默退回基准版（画面"什么都没变"）。现在会带版本号重取一次。 */
         let feats = null;
         let bldCount = null;
         let bldWhy = "";
         if (BLD === 2) {
-          const TFb = window.__TF__;
+          const TFb = await ensureVendor();
           if (TFb && typeof TFb.decorateBuildings === "function") {
             try {
               const dec = TFb.decorateBuildings(fc, artRamp((THEME && THEME.ramp) || FALLBACK_RAMP), { mode: "detail", low: BLD_LOW });
@@ -1011,7 +1063,7 @@
               bldWhy = "形体生成抛错：" + String(e).slice(0, 60);
             }
           } else {
-            bldWhy = "数不出来：模块里没有 decorateBuildings（vendor 没重新生成？）";
+            bldWhy = "数不出来：模块里没有 decorateBuildings（" + tfState + "）—— 若产物里明明有，多半是**浏览器缓存了旧的 /vendor/wsScene.mjs**（服务端 immutable、URL 无内容哈希）：强刷/清缓存，或让主会话重建预览包";
           }
         }
         if (!feats) feats = (fc.features || []).map((f) => {
@@ -1150,7 +1202,7 @@
           $("m-z").textContent = z.toFixed(1);
           try {
             if (z < 12.5) { $("m-msg").textContent = "太远了不取楼（放大到街区）"; }
-            else { const { fc, r } = await loadForView(); applyBuildings(fc, r); }
+            else { const { fc, r } = await loadForView(); await applyBuildings(fc, r); }
           } catch (e) { errs.push("buildings " + e); $("m-msg").textContent = "取楼失败：" + String(e).slice(0, 40); }
           busy = false;
         }
@@ -1176,6 +1228,8 @@
            （卫星=写实，与平涂冲突，见 `wsMapTheme.ts`）⇒ 这个按钮在二次元下应当
            **如实禁用**，而不是"点了没反应"（点了没反应最容易被当成 bug 反复点）。 */
         const hasHi = !!map.getLayer("hi");
+        /* 🏢 开局就把 vendor 体检一次（`?bld=2` 时会重取；bld=1 时只记账）⇒ 徽标第一帧就是真话 */
+        void ensureVendor().then(function () { try { renderBldBadge(); } catch (e) { /* 徽标失败不影响地图 */ } });
         const applySat = () => {
           try { map.setLayoutProperty("hi", "visibility", satOn ? "visible" : "none"); } catch { /* 图层还没建好 */ }
           const b = $("b-sat");
@@ -1391,6 +1445,8 @@
             parts: stats.parts,
             layers: (map.getStyle().layers || []).filter(function (l) { return /^bld-/.test(l.id); }).map(function (l) { return l.id; }),
             hasWinImage: (function () { try { return !!map.hasImage(WIN_IMAGE_ID); } catch (e) { return null; } })(),
+            /* 🔴 2026-09-24：模块是否"旧副本"及其自愈结果（真机那次 `?bld=2` 什么都没变就是它） */
+            vendor: { url: VENDOR_URL, ver: VENDOR_VER, state: tfState, refetched: window.__TF_FRESH__ || null, missing: tfMissing(window.__TF__) },
           },
           sky: window.__SKY_GEO__ || null,
           contrast: window.__CONTRAST__ || null,

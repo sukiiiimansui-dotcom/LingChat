@@ -138,8 +138,21 @@ export function sceneOrderViolations(layerIds: readonly string[]): string[] {
 /** 预渲染层/源/资源路径（**我们自己的瓦片**，不是 Esri） */
 export const PRERENDER_LAYER_ID = "prerender";
 export const PRERENDER_SOURCE_ID = "prerender";
+/**
+ * 🔴 **真瓦片**（默认）：由 `world_map/prerender_pipeline.py` 用**真楼脚印（Overture，ODbL）+ OSM 道路**画的那批。
+ * 机主 2026-09-25 拍板：「**占位瓦片默认不画**」+「取数半径跟随视野放大」。
+ */
 export const PRERENDER_TILE_PATH = "/prerender/{z}/{x}/{y}.png";
 export const PRERENDER_MANIFEST_PATH = "/prerender/manifest.json";
+/**
+ * **示意/占位瓦片**（骨架阶段的假几何花纹）：机主在真机上看到「瓦片太难看了（覆盖全部地图）」
+ * —— 占位瓦片铺满整张图、而真数据只覆盖一小片 —— 所以把它挪到**单独目录**：
+ *   · 默认（`?lod=1`）**一条都不请求**：真瓦片没覆盖到的地方**就空着**，绝不再拿花纹去补；
+ *   · 只有显式 `?lod=demo` 才用它（对照 A/B、自检、复现第 1 步的过渡观感）。
+ * 两者**必须分目录**：混在一起时 HUD 分不出"这张是真数据还是花纹"，判词就等于撒谎。
+ */
+export const PRERENDER_DEMO_TILE_PATH = "/prerender-demo/{z}/{x}/{y}.png";
+export const PRERENDER_DEMO_MANIFEST_PATH = "/prerender-demo/manifest.json";
 /** 瓦片像素尺寸（与生成脚本一致；设计文档定 512） */
 export const PRERENDER_TILE_SIZE = 512;
 /** 瓦片金字塔的 zoom 上限（源级 `maxzoom`：更高的 zoom 由地图库放大复用 z13 那张） */
@@ -147,8 +160,15 @@ export const PRERENDER_TILE_MAXZOOM = 13;
 /** `z ≤ FAR` = 预渲染瓦片独占；`z ≥ NEAR` = 实时矢量独占；中间按 zoom 线性交叉过渡 */
 export const LOD_FAR_ZOOM = 12;
 export const LOD_NEAR_ZOOM = 14;
-/** 瓦片署名（**自产**，如实写清不是真实数据 —— 骨架阶段它是示意瓦片） */
-export const PRERENDER_ATTRIBUTION = "预渲染瓦片（自产；骨架阶段为示意瓦片，非真实楼/路数据）";
+/** 瓦片源：`real` = 真数据（默认）、`demo` = 示意/占位（只在 `?lod=demo` 下用） */
+export type PrerenderSource = "real" | "demo";
+/**
+ * 源层署名（写进**样式 spec 的 `attribution`**）。⚠️ 画面上的**可见**署名不读这里：
+ * `attributionControl` 是关的 ⇒ 由 HUD 那一行显示，文案**逐字取自清单 `manifest.attribution`**
+ * （真数据那句 Overture ODbL 由管线的 `overture_api.ATTRIBUTION` 生成并写进清单，不在这里抄第二版）。
+ */
+export const PRERENDER_ATTRIBUTION = "预渲染瓦片（自产）· 数据署名见清单 manifest.attribution";
+export const PRERENDER_DEMO_ATTRIBUTION = "预渲染瓦片（示意/占位，非真实楼·路数据）";
 /** 视野内瓦片键的硬上限（防"缩到 z3 时把整个世界铺满"那种意外；超了如实标 `capped`） */
 export const LOD_VIEW_TILE_CAP = 2048;
 
@@ -184,14 +204,42 @@ export function lodOpacityExpression(): unknown[] {
   return ["interpolate", ["linear"], ["zoom"], LOD_FAR_ZOOM, 1, LOD_NEAR_ZOOM, 0];
 }
 
+/** 某个源的路径/署名（**只这一份表**：页面与 App 都从这里取，别在两处写路径字面量） */
+export function prerenderSourceOf(src: PrerenderSource = "real"): {
+  src: PrerenderSource;
+  tilePath: string;
+  manifestPath: string;
+  attribution: string;
+  /** 这个源里的瓦片按什么口径记来源（真数据 / 示意占位） */
+  kind: "real" | "placeholder";
+} {
+  if (src === "demo") {
+    return {
+      src: "demo",
+      tilePath: PRERENDER_DEMO_TILE_PATH,
+      manifestPath: PRERENDER_DEMO_MANIFEST_PATH,
+      attribution: PRERENDER_DEMO_ATTRIBUTION,
+      kind: "placeholder",
+    };
+  }
+  return {
+    src: "real",
+    tilePath: PRERENDER_TILE_PATH,
+    manifestPath: PRERENDER_MANIFEST_PATH,
+    attribution: PRERENDER_ATTRIBUTION,
+    kind: "real",
+  };
+}
+
 /** 预渲染层的栅格源（**我们自己的瓦片路径**；`maxzoom` = 金字塔上限，更高的 zoom 放大复用） */
-export function lodSourceSpec(): Record<string, unknown> {
+export function lodSourceSpec(src: PrerenderSource = "real"): Record<string, unknown> {
+  const s = prerenderSourceOf(src);
   return {
     type: "raster",
-    tiles: [PRERENDER_TILE_PATH],
+    tiles: [s.tilePath],
     tileSize: PRERENDER_TILE_SIZE,
     maxzoom: PRERENDER_TILE_MAXZOOM,
-    attribution: PRERENDER_ATTRIBUTION,
+    attribution: s.attribution,
   };
 }
 
@@ -208,11 +256,13 @@ export function lodLayerSpec(): Record<string, unknown> {
 }
 
 /** 计划（页面/App 照它建层；`beforeId` 取自 `SCENE_LAYER_ORDER`，不在这里手写锚点） */
-export function lodPlan(): {
+export function lodPlan(src: PrerenderSource = "real"): {
   group: "prerender";
   layerId: string;
   sourceId: string;
   beforeId: string | null;
+  src: PrerenderSource;
+  srcKind: "real" | "placeholder";
   tilePath: string;
   manifestPath: string;
   tileSize: number;
@@ -224,25 +274,124 @@ export function lodPlan(): {
   layer: Record<string, unknown>;
 } {
   const entry = SCENE_LAYER_ORDER.find((e) => e.group === "prerender");
+  const s = prerenderSourceOf(src);
   return {
     group: "prerender",
     layerId: PRERENDER_LAYER_ID,
     sourceId: PRERENDER_SOURCE_ID,
     beforeId: entry ? entry.beforeId : null,
-    tilePath: PRERENDER_TILE_PATH,
-    manifestPath: PRERENDER_MANIFEST_PATH,
+    src: s.src,
+    srcKind: s.kind,
+    tilePath: s.tilePath,
+    manifestPath: s.manifestPath,
     tileSize: PRERENDER_TILE_SIZE,
     tileMaxzoom: PRERENDER_TILE_MAXZOOM,
     layerMaxzoom: LOD_NEAR_ZOOM,
     far: LOD_FAR_ZOOM,
     near: LOD_NEAR_ZOOM,
-    source: lodSourceSpec(),
+    source: lodSourceSpec(src),
     layer: lodLayerSpec(),
   };
 }
 
-/* ── 瓦片键（slippy map 的标准算法；**只这一份**） ───────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════════
+   🔭 **取数半径**（机主 2026-09-25 拍板：「取数半径跟随视野放大到 2~8km」）
 
+   病根：半径以前被写死在很小的值（楼 350~2000m、路固定 600m），而手机横屏 z15
+   一眼就能看到 ~4km 宽 ⇒ 半径之外**必然是空的**，看起来就是「楼房只有这一块」
+   「剩下的路没画」。这两条反馈同源。
+
+   🔴 三条口径（都在这里定，页面/App 只调用）：
+     ① **近景 2km 起、远景最多 8km**（阶梯见 `WS_FETCH_R_LADDER`）；
+     ② **封顶 8km**：请求再大也不会超过它（`clamp` 在函数里，调用方拿不到超标值）；
+     ③ 视野比档位更大时**按视野取大者**（`decidedBy: "view"`）—— 否则"看得见的地方没数据"。
+   ⚠️ 代价要如实报：半径翻倍 ⇒ 取数时间与要素数都涨（Overpass 冷查十几秒到分钟级）。
+     所以 HUD 必须回证「半径 R / 要素数 / 是否命中缓存 / 花了多久」，页面不许自己编。
+   ══════════════════════════════════════════════════════════════════════════════ */
+export const WS_FETCH_R_MIN = 2000;
+export const WS_FETCH_R_MAX = 8000;
+/**
+ * **后端单次查询的硬上限**（实测事实，不是策略）：`/api/buildings` 与 `/api/roads` 在
+ * `src-tauri/src/world_map/...` 对应的调试服务里写死 `r ∈ (0, 2000]`，超过直接回
+ * `{"ok":false,"error":"半径非法"}`（`world_map_rs/src/main.rs` 的 buildings_api/roads_api 两处）。
+ * ⇒ 策略要 4~8km 时，调用方**必须**按它夹一次并**如实报出**「请求 X / 上限 Y」，
+ *   否则页面只会拿到一串失败，看起来像"这一带没数据"。
+ * 🔴 放开这个数需要**实测证据**（2026-09-25 实测：渝中 r=2000 的 Overpass 查询一次跑了 96.6s 才超时）；
+ *    在拿到证据前，这里保持与后端一致 —— 策略与能力不一致时，**如实报差异**而不是假装。
+ */
+export const WS_FETCH_R_BACKEND_MAX = 2000;
+/** zoom → 半径（近景 2000m；每退一档加一档；`z ≤ 11` 顶格 8000m） */
+export const WS_FETCH_R_LADDER: ReadonlyArray<readonly [number, number]> = [
+  [15, 2000], [14, 3000], [13, 4000], [12, 6000], [11, 8000],
+];
+
+/** 半径按 50m 取整（请求 URL 稳定 ⇒ 后端缓存键稳定；别每帧换一个半径把缓存打散） */
+export function fetchRadiusRound(r: number): number {
+  return Math.round(r / 50) * 50;
+}
+
+/**
+ * 视野**中心到角**的距离（米）—— 宿主无关：调用方把地图的四个边界与中心纬度传进来即可
+ * （页面用 `map.getBounds()`、App 用同一份；两边不各写一套三角函数）。
+ * 为什么用半对角线而不是宽/2：角落也要有数据，否则屏幕上四个角是空的。
+ */
+export function viewHalfMetersOf(
+  bounds: { west: number; south: number; east: number; north: number } | null | undefined,
+  lat: number,
+): number | null {
+  if (!bounds) return null;
+  const w = Number(bounds.west), s = Number(bounds.south), e = Number(bounds.east), n = Number(bounds.north);
+  if (![w, s, e, n, lat].every((v) => Number.isFinite(v))) return null;
+  const mx = (Math.abs(e - w) / 2) * 111320 * Math.cos((lat * Math.PI) / 180);
+  const my = (Math.abs(n - s) / 2) * 110540;
+  return Math.round(Math.hypot(mx, my));
+}
+
+/** 档位值（只看 zoom，不看视野） */
+export function fetchRadiusForZoom(zoom: number): number {
+  const z = Number.isFinite(zoom) ? Number(zoom) : 15;
+  for (const [z0, r] of WS_FETCH_R_LADDER) if (z >= z0) return r;
+  return WS_FETCH_R_LADDER[WS_FETCH_R_LADDER.length - 1][1];
+}
+
+/**
+ * 最终取数半径 = clamp(max(档位值, 视野要的), 2km, 8km)。
+ * `viewHalfMeters` = 视野**中心到角**的距离（米）；拿不到就传 null（只用档位值）。
+ * 返回 `decidedBy`：是档位定的、视野定的、还是撞了 8km 上限 —— HUD 照实写。
+ */
+export function fetchRadiusForView(zoom: number, viewHalfMeters: number | null): {
+  radius: number;
+  decidedBy: "zoom" | "view" | "cap";
+  zoomRadius: number;
+  viewRadius: number | null;
+} {
+  const zoomRadius = fetchRadiusForZoom(zoom);
+  const viewRadius = Number.isFinite(viewHalfMeters as number)
+    ? fetchRadiusRound(Number(viewHalfMeters))
+    : null;
+  const want = Math.max(zoomRadius, viewRadius === null ? 0 : viewRadius);
+  const radius = Math.min(WS_FETCH_R_MAX, Math.max(WS_FETCH_R_MIN, want));
+  const decidedBy = want > WS_FETCH_R_MAX ? "cap" : (viewRadius !== null && viewRadius > zoomRadius ? "view" : "zoom");
+  return { radius, decidedBy, zoomRadius, viewRadius };
+}
+
+/**
+ * 加档序列：数据太少时逐级放大（`×2`），**绝不越过 8km**。
+ * 为什么还要加档：稀疏地段（涪陵那种）2km 里可能一栋楼都没有，而密集地段第一级就够
+ * （调用方拿到"够了"就 break）⇒ 加档只帮稀疏区、不伤密集区。
+ */
+export function fetchRadiusLadder(zoom: number, viewHalfMeters: number | null): number[] {
+  const r0 = fetchRadiusForView(zoom, viewHalfMeters).radius;
+  const out = [r0];
+  while (out[out.length - 1] < WS_FETCH_R_MAX) {
+    const next = Math.min(WS_FETCH_R_MAX, fetchRadiusRound(out[out.length - 1] * 2));
+    if (next === out[out.length - 1]) break;
+    out.push(next);
+  }
+  return out;
+}
+
+/* ── 瓦片键（slippy map 的标准算法；**只这一份**） ───────────────────────────── */
 export function lodTileKey(z: number, x: number, y: number): string {
   return `${Math.round(z)}/${Math.round(x)}/${Math.round(y)}`;
 }

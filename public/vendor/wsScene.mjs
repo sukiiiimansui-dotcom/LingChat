@@ -711,34 +711,633 @@ function sceneOrderViolations(layerIds) {
   void idx;
   return out;
 }
+
+// src/components/views/worldsim/wsBuildingLook.ts
+var KIND_HEIGHT_M = {
+  house: 7,
+  detached: 7,
+  semidetached_house: 7,
+  terrace: 9,
+  bungalow: 4,
+  hut: 3,
+  shed: 3,
+  garage: 3,
+  garages: 3,
+  carport: 3,
+  roof: 3,
+  residential: 18,
+  dormitory: 15,
+  apartments: 21,
+  commercial: 15,
+  retail: 12,
+  office: 45,
+  hotel: 40,
+  tower: 90,
+  hospital: 24,
+  school: 12,
+  university: 15,
+  kindergarten: 9,
+  industrial: 10,
+  warehouse: 9,
+  factory: 10,
+  church: 18,
+  temple: 10,
+  mosque: 15,
+  museum: 18,
+  construction: 12,
+  yes: 12
+};
+var FALLBACK_HEIGHT_M = 12;
+function hash32(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+var KIND_JITTER = 0.15;
+var MAX_RENDER_H = 500;
+function renderHeight(props) {
+  const p = props || {};
+  const raw = Number(p.height);
+  const src = String(p.height_src || "default");
+  if (Number.isFinite(raw) && raw > 0) {
+    if (src === "height") return { h: Math.min(MAX_RENDER_H, raw), from: "real" };
+    if (src === "levels") return { h: Math.min(MAX_RENDER_H, raw), from: "levels" };
+  }
+  const base = KIND_HEIGHT_M[String(p.kind || "yes").toLowerCase()] ?? FALLBACK_HEIGHT_M;
+  const k = hash32(String(p.osm_id || p.name || "x")) % 31;
+  const jitter = 1 - KIND_JITTER + 2 * KIND_JITTER * k / 30;
+  const h = Math.max(3, Math.round(base * jitter * 10) / 10);
+  return { h: Math.min(MAX_RENDER_H, h), from: "kind" };
+}
+function decorateBuildings(fc, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
+  const feats = fc?.features || [];
+  const count = {
+    n: feats.length,
+    real: 0,
+    levels: 0,
+    kind: 0,
+    /* ⚠️ 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
+       `detail` 只在代拍页 `?bld=2` 打开。 */
+    mode: opts.mode === "detail" ? "detail" : "base",
+    low: !!opts.low,
+    body: 0,
+    podium: 0,
+    tower: 0,
+    setback: 0,
+    roof: 0,
+    parapet: 0,
+    equip: 0,
+    antenna: 0,
+    equipSkipped: 0,
+    skipped: 0,
+    skippedWhy: "",
+    parts: 0
+  };
+  const out = [];
+  for (const f of feats) {
+    count[renderHeight(f.properties).from]++;
+    const set = buildingPartSet(f, ramp, opts);
+    for (const part of set.parts) {
+      out.push(part);
+      const k = String(part.properties.part || "");
+      if (k === "body") count.body++;
+      else if (k === "podium") count.podium++;
+      else if (k === "tower") count.tower++;
+      else if (k === "setback") count.setback++;
+      else if (k === "roof") count.roof++;
+      else if (k === "parapet") count.parapet++;
+      else if (k === "equip") count.equip++;
+      else if (k === "antenna") count.antenna++;
+    }
+    if (set.info.skipped) {
+      count.skipped++;
+      if (!count.skippedWhy) count.skippedWhy = set.info.skipWhy;
+    }
+    count.equipSkipped += set.info.equipSkipped;
+  }
+  count.parts = out.length;
+  return { features: out, count };
+}
+var HEIGHT_COLOR_RAMP = [
+  [3, "#23323e"],
+  [8, "#2d4356"],
+  [16, "#3a586f"],
+  [30, "#4a7290"],
+  [60, "#5f93b0"],
+  [110, "#7fbcd4"],
+  [200, "#b6e2f2"],
+  [320, "#e8f7ff"]
+];
+function heightColorExpression(ramp = HEIGHT_COLOR_RAMP) {
+  const stops = [];
+  for (const [h, c] of ramp) stops.push(h, c);
+  return ["interpolate", ["linear"], ["coalesce", ["get", "h3d"], 8], ...stops];
+}
+var ROOF_MIN_H = 15;
+var ROOF_INSET = 0.85;
+var ROOF_THICK_M = 1.3;
+var ANTENNA_MIN_H = 60;
+var ANTENNA_M = 12;
+function shade(hex, k) {
+  const n = parseInt(hex.replace("#", ""), 16);
+  const ch = (v) => Math.max(0, Math.min(255, Math.round(v * k))).toString(16).padStart(2, "0");
+  return `#${ch(n >> 16 & 255)}${ch(n >> 8 & 255)}${ch(n & 255)}`;
+}
+function rampColorOf(h, ramp = HEIGHT_COLOR_RAMP) {
+  let c = ramp[0][1];
+  for (const [stop, col] of ramp) if (h >= stop) c = col;
+  return c;
+}
+function buildingColor(h, seed, ramp = HEIGHT_COLOR_RAMP) {
+  const k = 0.9 + hash32(seed || "x") % 21 / 100;
+  return shade(rampColorOf(h, ramp), k);
+}
+function outerRing(geom) {
+  const g = geom;
+  if (!g || g.type !== "Polygon" || !Array.isArray(g.coordinates)) return null;
+  const ring = g.coordinates[0];
+  if (!Array.isArray(ring) || ring.length < 4) return null;
+  return ring;
+}
+function insetRing(ring, k) {
+  const n = ring.length - 1;
+  if (n < 3) return ring;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += ring[i][0];
+    cy += ring[i][1];
+  }
+  cx /= n;
+  cy /= n;
+  const out = ring.map((p) => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k]);
+  out[out.length - 1] = out[0].slice();
+  return out;
+}
+function ringSpan(ring) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const p of ring) {
+    const x = p[0];
+    const y = p[1];
+    if (x < x0) x0 = x;
+    if (y < y0) y0 = y;
+    if (x > x1) x1 = x;
+    if (y > y1) y1 = y;
+  }
+  return { w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+function antennaRing(ring) {
+  const n = ring.length - 1;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += ring[i][0];
+    cy += ring[i][1];
+  }
+  cx /= n;
+  cy /= n;
+  const { w, h } = ringSpan(ring);
+  const r = Math.max(25e-6, Math.min(w, h) * 0.06);
+  return [
+    [cx - r, cy - r],
+    [cx + r, cy - r],
+    [cx + r, cy + r],
+    [cx - r, cy + r],
+    [cx - r, cy - r]
+  ];
+}
+function partFeature(src, ring, base, top, part, color, extra = {}) {
+  return {
+    type: "Feature",
+    id: `${String(src.id || "")}#${part}${extra.tier ? "-t" + String(extra.tier) : ""}${extra.idx !== void 0 ? "-" + String(extra.idx) : ""}`,
+    properties: { ...src.properties || {}, part, h3d: top, h_base: base, color3d: color, ...extra },
+    geometry: { type: "Polygon", coordinates: [ring] }
+  };
+}
+function buildingParts(f, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
+  return buildingPartSet(f, ramp, opts).parts;
+}
+function buildingPartSet(f, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
+  const props = f.properties || {};
+  const { h, from } = renderHeight(props);
+  const seed = String(props.osm_id || f.id || "");
+  const color = buildingColor(h, seed, ramp);
+  const base = Number(props.min_height) || 0;
+  const info = { skipped: false, skipWhy: "", podium: false, tiers: 1, equipWanted: 0, equipPlaced: 0, equipSkipped: 0 };
+  const body = {
+    type: "Feature",
+    id: `${String(f.id || "")}#body`,
+    properties: {
+      ...props,
+      part: "body",
+      h3d: h,
+      h_from: from,
+      h_base: base,
+      color3d: color
+    },
+    geometry: f.geometry
+  };
+  const ring = outerRing(f.geometry);
+  if (!ring) return { parts: [body], info };
+  if (opts.low) return { parts: [body], info };
+  const detail = (opts.mode ?? "base") === "detail";
+  if (!detail) {
+    const parts2 = [body];
+    if (h >= ROOF_MIN_H) {
+      parts2.push(partFeature(f, insetRing(ring, ROOF_INSET), h, h + ROOF_THICK_M, "roof", shade(color, 0.62)));
+    }
+    if (h >= ANTENNA_MIN_H) {
+      parts2.push(partFeature(f, antennaRing(ring), h, h + ANTENNA_M, "antenna", shade(color, 1.25)));
+    }
+    return { parts: parts2, info };
+  }
+  const plan = buildingMasses(ring, h, base, opts);
+  info.skipped = plan.skipped;
+  info.skipWhy = plan.why;
+  info.podium = plan.podium;
+  info.tiers = plan.tiers;
+  const parts = plan.masses.map((mass) => {
+    const wall = mass.top >= base + WIN_MIN_H && !plan.skipped;
+    return partFeature(f, mass.ring, mass.base, mass.top, mass.part, massColor(mass, color), {
+      shape: plan.skipped ? "sliver" : "mass",
+      tier: mass.tier,
+      /* 窗格层与色彩层**互补**（同一 source 两层：一层 pattern、一层 color，两者互斥）。
+         用 JS 里算好的 0/1 标记，而不是在图层的 filter 里拼表达式 —— 表达式报错是静默的。 */
+      win: wall ? 1 : 0
+    });
+  });
+  const topH = base + h;
+  const topRing = plan.masses[plan.masses.length - 1].ring;
+  if (!plan.skipped && h >= PARAPET_MIN_H) {
+    const fm = footprintMetrics(topRing);
+    const t = Math.max(0.2, Math.min(PARAPET_THICK_M, fm.minSideM * 0.18));
+    parts.push(partFeature(f, ringBand(topRing, insetRingMeters(topRing, t)), topH, topH + PARAPET_H, "parapet", shade(color, 1.08), { wallThickM: +t.toFixed(2), win: 0 }));
+    const eq = equipBoxes(topRing, seed, topH);
+    info.equipWanted = eq.wanted;
+    info.equipPlaced = eq.boxes.length;
+    info.equipSkipped = eq.skipped;
+    for (let i = 0; i < eq.boxes.length; i++) {
+      const b = eq.boxes[i];
+      parts.push(partFeature(f, b.ring, b.base, b.top, "equip", shade(color, 0.72), { side: b.side, idx: i, win: 0 }));
+    }
+  }
+  if (!plan.skipped && h >= ANTENNA_MIN_H) {
+    parts.push(partFeature(f, antennaRing(topRing), topH, topH + ANTENNA_M, "antenna", shade(color, 1.25), { win: 0 }));
+  }
+  return { parts, info };
+}
+var PODIUM_MIN_AREA_M2 = 800;
+var PODIUM_MIN_H = 24;
+var PODIUM_INSET = 0.8;
+var PODIUM_H_RATIO = 0.3;
+var PODIUM_H_MIN = 8;
+var PODIUM_H_MAX = 21;
+var TOWER_MIN_H = 10;
+var SETBACK_MIN_H = 60;
+var SETBACK_INSET = 0.1;
+var SETBACK_TIERS_3_H = 120;
+var PARAPET_MIN_H = ROOF_MIN_H;
+var PARAPET_H = 0.6;
+var PARAPET_THICK_M = 0.7;
+var EQUIP_MIN_AREA_M2 = 60;
+var EQUIP_SIDE_MIN = 1.5;
+var EQUIP_SIDE_STEPS = 6;
+var EQUIP_SIDE_STEP_M = 0.5;
+var SLIVER_AREA_M2 = 20;
+var SLIVER_ASPECT = 6;
+var WIN_MIN_H = 40;
+var WIN_PATTERN_SIZE = 32;
+var M_PER_DEG_LAT2 = 110540;
+var M_PER_DEG_LNG = 111320;
+function ringCentroid(ring) {
+  const n = Math.max(1, ring.length - 1);
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += ring[i][0];
+    cy += ring[i][1];
+  }
+  return [cx / n, cy / n];
+}
+function footprintMetrics(ring) {
+  const n = ring.length - 1;
+  if (n < 3) return { areaM2: 0, aspect: Infinity, minSideM: 0, meanRadiusM: 0 };
+  const c = ringCentroid(ring);
+  const lat0 = ring[0][1];
+  const kx = M_PER_DEG_LNG * Math.cos(lat0 * Math.PI / 180);
+  const ky = M_PER_DEG_LAT2;
+  let area = 0;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  let rSum = 0;
+  for (let i = 0; i < n; i++) {
+    const px = (ring[i][0] - c[0]) * kx;
+    const py = (ring[i][1] - c[1]) * ky;
+    const qx = (ring[(i + 1) % n][0] - c[0]) * kx;
+    const qy = (ring[(i + 1) % n][1] - c[1]) * ky;
+    area += px * qy - qx * py;
+    x0 = Math.min(x0, px);
+    x1 = Math.max(x1, px);
+    y0 = Math.min(y0, py);
+    y1 = Math.max(y1, py);
+    rSum += Math.hypot(px, py);
+  }
+  const w = x1 - x0;
+  const hgt = y1 - y0;
+  const minSideM = Math.min(w, hgt);
+  return {
+    areaM2: Math.abs(area) / 2,
+    aspect: minSideM > 0.01 ? Math.max(w, hgt) / minSideM : Infinity,
+    minSideM,
+    meanRadiusM: rSum / n
+  };
+}
+function pointInRing(x, y, ring) {
+  const n = ring.length >= 4 ? ring.length - 1 : ring.length;
+  if (n < 3) return false;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function insetRingMeters(ring, meters) {
+  const n = ring.length - 1;
+  if (n < 3 || !(meters > 0)) return ring;
+  const c = ringCentroid(ring);
+  const lat0 = ring[0][1];
+  const kx = M_PER_DEG_LNG * Math.cos(lat0 * Math.PI / 180);
+  const ky = M_PER_DEG_LAT2;
+  const out = ring.map((p) => {
+    const dx = (p[0] - c[0]) * kx;
+    const dy = (p[1] - c[1]) * ky;
+    const d = Math.hypot(dx, dy);
+    if (!(d > 1e-6)) return [p[0], p[1]];
+    const k = Math.max(0.08, 1 - meters / d);
+    return [c[0] + (p[0] - c[0]) * k, c[1] + (p[1] - c[1]) * k];
+  });
+  out[out.length - 1] = out[0].slice();
+  return out;
+}
+function ringBand(outer, inner) {
+  const o = outer.slice(0, Math.max(0, outer.length - 1));
+  const i = inner.slice(0, Math.max(0, inner.length - 1));
+  if (o.length < 3 || i.length !== o.length) return outer;
+  const ring = o.concat(i.slice().reverse());
+  ring.push(ring[0].slice());
+  return ring;
+}
+function buildingMasses(ring, h, base = 0, opts = {}) {
+  const single = { masses: [{ part: "body", ring, base, top: base + h, tier: 1 }], skipped: false, podium: false, tiers: 1, why: "" };
+  const detail = (opts.mode ?? "base") === "detail" && !opts.low;
+  if (!detail) return single;
+  const m = footprintMetrics(ring);
+  if (m.areaM2 < SLIVER_AREA_M2 || m.aspect > SLIVER_ASPECT) {
+    return {
+      ...single,
+      skipped: true,
+      why: `脚印 ${m.areaM2.toFixed(1)}m² / 长宽比 ${Number.isFinite(m.aspect) ? m.aspect.toFixed(1) : "∞"}`
+    };
+  }
+  const top = base + h;
+  const masses = [];
+  let curRing = ring;
+  let curBase = base;
+  let podium = false;
+  if (m.areaM2 >= PODIUM_MIN_AREA_M2 && h >= PODIUM_MIN_H) {
+    let pH = Math.round(Math.min(PODIUM_H_MAX, Math.max(PODIUM_H_MIN, h * PODIUM_H_RATIO)) * 2) / 2;
+    if (pH > h - TOWER_MIN_H) pH = Math.max(2, Math.round((h - TOWER_MIN_H) * 2) / 2);
+    masses.push({ part: "podium", ring, base, top: base + pH, tier: 1 });
+    curRing = insetRing(ring, PODIUM_INSET);
+    curBase = base + pH;
+    podium = true;
+  }
+  const tiers = h >= SETBACK_TIERS_3_H ? 3 : h >= SETBACK_MIN_H ? 2 : 1;
+  const slice = (top - curBase) / tiers;
+  for (let k = 0; k < tiers; k++) {
+    const prev = masses[masses.length - 1];
+    const ringK = k === 0 ? curRing : insetRing(prev ? prev.ring : curRing, 1 - SETBACK_INSET);
+    masses.push({
+      part: k === 0 ? podium ? "tower" : "body" : "setback",
+      ring: ringK,
+      base: curBase + slice * k,
+      top: k === tiers - 1 ? top : curBase + slice * (k + 1),
+      // 最后一段封顶 = base+h（不靠浮点累加）
+      tier: k + 1
+    });
+  }
+  return { masses, skipped: false, podium, tiers, why: "" };
+}
+function equipBoxes(ring, seed, roofTop) {
+  const m = footprintMetrics(ring);
+  if (m.areaM2 < EQUIP_MIN_AREA_M2) return { boxes: [], wanted: 0, skipped: 0 };
+  const wanted = m.areaM2 < 400 ? 1 : m.areaM2 < 1500 ? 2 : 3;
+  const inner = insetRingMeters(ring, Math.min(PARAPET_THICK_M + 0.6, Math.max(0.5, m.minSideM * 0.12)));
+  const c = ringCentroid(inner);
+  const im = footprintMetrics(inner);
+  const kx = M_PER_DEG_LNG * Math.cos(c[1] * Math.PI / 180);
+  const ky = M_PER_DEG_LAT2;
+  const boxes = [];
+  let skipped = 0;
+  for (let i = 0; i < wanted; i++) {
+    let placed = false;
+    for (let cand = 0; cand < 4 && !placed; cand++) {
+      const s = hash32(`${seed}#eq${i}:${cand}`);
+      const ang = s % 360 * Math.PI / 180;
+      const frac = 0.15 + (s >>> 9) % 40 / 100;
+      const side = EQUIP_SIDE_MIN + (s >>> 17) % EQUIP_SIDE_STEPS * EQUIP_SIDE_STEP_M;
+      const rot = (s >>> 23) % 90 * Math.PI / 180;
+      const r = im.meanRadiusM * frac;
+      const cx = c[0] + Math.cos(ang) * r / kx;
+      const cy = c[1] + Math.sin(ang) * r / ky;
+      const half = side / 2;
+      const corners = [];
+      const signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+      for (const sg of signs) {
+        const dx = sg[0] * half * Math.cos(rot) - sg[1] * half * Math.sin(rot);
+        const dy = sg[0] * half * Math.sin(rot) + sg[1] * half * Math.cos(rot);
+        corners.push([cx + dx / kx, cy + dy / ky]);
+      }
+      if (!corners.every((p) => pointInRing(p[0], p[1], inner))) continue;
+      corners.push(corners[0].slice());
+      boxes.push({ ring: corners, base: roofTop, top: roofTop + Math.max(1, Math.min(3, side * 0.75)), side });
+      placed = true;
+    }
+    if (!placed) skipped++;
+  }
+  return { boxes, wanted, skipped };
+}
+function massColor(mass, baseColor) {
+  if (mass.part === "podium") return shade(baseColor, 0.94);
+  if (mass.part === "body") return shade(baseColor, 0.97);
+  return baseColor;
+}
+function fmtCount(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "数不出来";
+  if (n === 0) return "0（已量）";
+  return String(n);
+}
+function shapeCountsLine(c) {
+  if (!c) return "形体细节：数不出来（没拿到统计）";
+  if (c.low) return "形体细节：低档已关（裙楼/退台/女儿墙/设备箱都不生成）";
+  if (c.mode !== "detail") return "形体细节：未开（bld=1 基准版：只有主体/压顶/天线）";
+  const eqSkip = Number(c.equipSkipped);
+  const eqExtra = Number.isFinite(eqSkip) && eqSkip > 0 ? `（另 ${eqSkip} 个放不下）` : "";
+  const skipWhy = c.skipped ? `（如 ${String(c.skippedWhy || "未记录原因").slice(0, 40)}）` : "";
+  return `形体细节：裙楼 ${fmtCount(c.podium)} · 塔楼 ${fmtCount(c.tower)} · 退台 ${fmtCount(c.setback)} · 女儿墙 ${fmtCount(c.parapet)} · 设备箱 ${fmtCount(c.equip)}${eqExtra} · 跳过纸片楼 ${fmtCount(c.skipped)}${skipWhy} · 要素 ${fmtCount(c.parts)}`;
+}
+function shapeCountRows(c) {
+  if (!c) return [{ k: "统计", v: "数不出来", why: "没拿到 decorateBuildings 的计数" }];
+  if (c.low) {
+    return [
+      { k: "档位", v: "低档（perfLow / ?low=1）", why: "只画主体 + 描边" },
+      { k: "细节", v: "已关", why: "裙楼/退台/女儿墙/设备箱/窗格都不生成（保帧率）" }
+    ];
+  }
+  if (c.mode !== "detail") {
+    return [
+      { k: "档位", v: "基准版（bld=1）", why: "只有主体/压顶/天线 —— 想看新形体请加 ?bld=2" },
+      { k: "楼栋", v: fmtCount(c.n), why: "这一屏取到的楼栋数（不是要素数）" },
+      { k: "要素", v: fmtCount(c.parts), why: "真正画出去的要素数" }
+    ];
+  }
+  return [
+    { k: "档位", v: "普通（detail）", why: "裙楼/塔楼 + 退台 + 女儿墙 + 设备箱 + 天线" },
+    { k: "楼栋", v: fmtCount(c.n), why: "这一屏取到的楼栋数（不是要素数）" },
+    { k: "裙楼", v: fmtCount(c.podium), why: `脚印 ≥${PODIUM_MIN_AREA_M2}m² 且 h ≥${PODIUM_MIN_H}m 才切` },
+    { k: "塔楼", v: fmtCount(c.tower), why: `塔楼相对裙楼内缩 ${Math.round((1 - PODIUM_INSET) * 100)}%` },
+    { k: "退台", v: fmtCount(c.setback), why: `h ≥${SETBACK_MIN_H}m 分 2 段 / ≥${SETBACK_TIERS_3_H}m 分 3 段，每段内缩 ${Math.round(SETBACK_INSET * 100)}%` },
+    { k: "女儿墙", v: fmtCount(c.parapet), why: `h ≥${PARAPET_MIN_H}m 的楼，屋顶一圈 ${PARAPET_H}m 薄墙` },
+    { k: "设备箱", v: fmtCount(c.equip), why: `按楼顶面积 1~3 个；另有 ${fmtCount(c.equipSkipped)} 个放不下` },
+    { k: "天线", v: fmtCount(c.antenna), why: `h ≥${ANTENNA_MIN_H}m` },
+    { k: "跳过纸片楼", v: fmtCount(c.skipped), why: `脚印 <${SLIVER_AREA_M2}m² 或长宽比 >${SLIVER_ASPECT}（跳过细节，只留主体）${c.skippedWhy ? "；如 " + c.skippedWhy : ""}` },
+    { k: "要素", v: fmtCount(c.parts), why: "画出去的要素总数（含主体/裙楼/塔楼/退台/女儿墙/设备箱/天线）" }
+  ];
+}
+function hexRgb(hex) {
+  let s = String(hex || "").trim().replace("#", "");
+  if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+  const n = parseInt(s.slice(0, 6), 16);
+  if (!Number.isFinite(n)) return [255, 255, 255];
+  return [n >> 16 & 255, n >> 8 & 255, n & 255];
+}
+function windowPatternSpec(wall, pane, size = WIN_PATTERN_SIZE, cols = 4, rows = 4) {
+  const w = hexRgb(wall);
+  const p = hexRgb(pane);
+  const sill = hexRgb(shade(pane, 0.8));
+  const data = new Array(size * size * 4);
+  const put = (x, y, c) => {
+    const i = (y * size + x) * 4;
+    data[i] = c[0];
+    data[i + 1] = c[1];
+    data[i + 2] = c[2];
+    data[i + 3] = 255;
+  };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) put(x, y, w);
+  const cw = Math.floor(size / cols);
+  const ch = Math.floor(size / rows);
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      const x0 = cx * cw + 1;
+      const y0 = cy * ch + 1;
+      for (let y = y0; y < y0 + Math.max(1, ch - 3); y++) {
+        for (let x = x0; x < x0 + Math.max(1, cw - 2); x++) put(x, y, p);
+      }
+      for (let x = x0; x < x0 + Math.max(1, cw - 2); x++) put(x, Math.min(size - 1, y0 + Math.max(1, ch - 3)), sill);
+    }
+  }
+  return { size, wall, pane, cols, rows, data };
+}
 export {
+  ANTENNA_M,
+  ANTENNA_MIN_H,
   BUILDING_LAYER_ID,
   CAMERA_DEFAULTS,
+  EQUIP_MIN_AREA_M2,
+  EQUIP_SIDE_MIN,
+  EQUIP_SIDE_STEPS,
+  EQUIP_SIDE_STEP_M,
+  FALLBACK_HEIGHT_M,
+  HEIGHT_COLOR_RAMP,
+  KIND_HEIGHT_M,
+  KIND_JITTER,
+  MAX_RENDER_H,
+  PARAPET_H,
+  PARAPET_MIN_H,
+  PARAPET_THICK_M,
+  PODIUM_H_MAX,
+  PODIUM_H_MIN,
+  PODIUM_H_RATIO,
+  PODIUM_INSET,
+  PODIUM_MIN_AREA_M2,
+  PODIUM_MIN_H,
   ROAD_LAYER_PREFIXES,
   ROAD_PALETTE_DARK,
   ROAD_RANK_STYLE,
   ROAD_STYLE_FALLBACK,
+  ROOF_INSET,
+  ROOF_MIN_H,
+  ROOF_THICK_M,
   SCENE_LAYER_ORDER,
+  SETBACK_INSET,
+  SETBACK_MIN_H,
+  SETBACK_TIERS_3_H,
+  SLIVER_AREA_M2,
+  SLIVER_ASPECT,
   TF_CAPS,
   TF_LAYER_IDS,
   TF_LAYER_ID_LIST,
   TF_LAYER_STYLE,
   TF_LOW_TIER_KINDS,
   TF_RULES,
+  TOWER_MIN_H,
+  WIN_MIN_H,
+  WIN_PATTERN_SIZE,
   WS_SCENE_SOURCE,
   art3Summary,
   buildSkyGeometry,
   buildTransport,
+  buildingColor,
+  buildingMasses,
+  buildingPartSet,
+  buildingParts,
   cameraDefaults,
   contrastRatio,
   contrastReport,
+  decorateBuildings,
+  equipBoxes,
+  fmtCount,
+  footprintMetrics,
+  hash32,
+  heightColorExpression,
+  hexRgb,
   horizonYOf,
+  insetRing,
+  insetRingMeters,
   junctions,
   layerOrderHud,
   nearestOnLine,
   planEnsureRoadOrder,
+  pointInRing,
+  rampColorOf,
   relLuminance,
+  renderHeight,
   ringAreaM2,
+  ringBand,
+  ringCentroid,
   roadCountHud,
   roadCountVerdict,
   roadLayerSpecs,
@@ -749,8 +1348,12 @@ export {
   sceneLayerPlan,
   sceneOrderViolations,
   sceneSelfReport,
+  shade,
+  shapeCountRows,
+  shapeCountsLine,
   toLngLat,
   toMeters,
   transportHudLine,
-  visibleRoadCount
+  visibleRoadCount,
+  windowPatternSpec
 };

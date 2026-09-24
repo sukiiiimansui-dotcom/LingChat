@@ -119,6 +119,10 @@
       <!-- 🛰 LOD 的**一行回证**（`?lod=1` 时写：走哪条路 / 瓦片命中 / 缺图 / 实时层要素数）。
            三态判词：正数 / `0（已量）` / `数不出来` —— 取不到就如实写，**绝不裸写 0**。 -->
       <span class="w" id="m-lod">🛰 LOD —</span>
+      <!-- 🛰 署名（**ODbL 要求可见**；MapLibre 的 attributionControl 是关的 ⇒ 这一行就是等价方案）。
+           文案**来自清单** `manifest.attribution`（生成管线写的那句，与 overture_api.py 同一份），
+           页面**不抄第二份**；清单没取到就如实写「数不出来」，不许静默不显示。 -->
+      <span id="m-attr" style="opacity:.85"></span>
       <span class="w" id="m-msg"></span>
       <span id="m-build" style="opacity:.55"></span>
     </div>
@@ -1037,6 +1041,7 @@
           lodVerdict = null;
           lodLive = null;
           renderLodBadge();
+          renderLodAttribution();
           return;
         }
         const TFx = window.__TF__;
@@ -1055,7 +1060,8 @@
         lodVerdict = TFx.lodTileVerdict({
           enabled: true,
           view: view,
-          inventory: lodManifest && lodManifest.tiles ? Object.keys(lodManifest.tiles) : null,
+          /* 清单**整份**传进去（键 → 记录）⇒ 判词能分出"真 / 占位 / 缺"（只传键就分不出来） */
+          inventory: lodManifest && lodManifest.tiles ? lodManifest.tiles : null,
           /* 事件口径（可能一张都没到：那时是空数组 = **真的量到 0**，与"拿不到坐标"不同） */
           loaded: lodNoKey && !lodLoadedKeys.size ? null : Array.from(lodLoadedKeys),
           failed: lodFailedKeys.size ? Array.from(lodFailedKeys) : (lodNoKey ? null : []),
@@ -1069,6 +1075,7 @@
         window.__LOD_LIVE__ = lodLive;
         window.__LOD_TILE_STATES__ = states;
         renderLodBadge();
+        renderLodAttribution();
       }
       let lodHudTimer = null;
       function scheduleLodHud() {
@@ -1111,9 +1118,52 @@
         rows.push({ id: "清单", key: "manifest", now: lodManifest ? (lodManifest.tileCount + " 张 · 主题 " + lodManifest.themeId + " · 指纹 " + String(lodManifest.themeFingerprint).slice(0, 12) + "…") : ("数不出来：" + (lodManifestErr || "还没取")), want: null, hit: null, why: "生成物清单；**指纹**由 ws_lod_selftest 对拍 wsMapTheme（改了主题没重跑生成脚本 ⇒ 那边会红）" });
         rows.push({ id: "实时层", key: "要素数", now: lodLive ? (lodLive.state === "missing" ? "0（已量：图层没建）" : num(lodLive.n)) : "数不出来（还没查）", want: null, hit: null, why: lodLive ? lodLive.why : "还没查（移动地图后刷新）" });
         rows.push({ id: "档位", key: "当前 zoom", now: map.getZoom().toFixed(2) + " ⇒ " + (TFx && TFx.lodTierLabel ? TFx.lodTierLabel(TFx.lodTierOf(map.getZoom())) : "数不出来"), want: null, hit: null, why: "预渲染 / 过渡中 / 实时矢量（阈值与标签都来自 wsScene）" });
-        rows.push({ id: "跳过", key: "真数据（重庆全市）", now: "未做", want: null, hit: null, skip: true, why: "本卡 = 第 1 步骨架；**真实楼脚印+路网的离线管线是第 2 步**（另一张卡），现在这些瓦片是**示意**的" });
+        rows.push({
+          id: "瓦片来源", key: "示意 / 真数据",
+          now: lodDataKindText(), want: null, hit: null,
+          why: "`manifest.dataKind`：`placeholder` = 骨架阶段的**示意**花纹（远景像瓷砖是它，不是 bug）；`real` = 离线管线用**真楼脚印+道路**画的",
+        });
+        rows.push({
+          id: "署名", key: "ODbL 可见署名",
+          now: lodManifest && lodManifest.attribution ? String(lodManifest.attribution) : ("数不出来：" + (lodManifestErr || "清单还没取到")),
+          want: null, hit: null,
+          why: "**PR 阻断项**：Overture 派生瓦片按 ODbL 要求可见署名；MapLibre 的 attributionControl 关着 ⇒ HUD 那一行就是等价方案（文案取自清单，不抄第二份）",
+        });
+        rows.push({ id: "跳过", key: "真数据（重庆全市）", now: window.__LOD_REAL__ ? "是（管线瓦片）" : "未确认（清单里没有 data.buildings）", want: null, hit: null, skip: true, why: "全量全市真楼脚印**没做**（公网 S3 实测 4km 盘 224s ⇒ 全市是天级）；试点的真瓦片见 manifest.data.buildings" });
         rows.push({ id: "跳过", key: "真机画面 / 帧率", now: "未验", want: null, hit: null, skip: true, why: "本机无头**没有 WebGL** ⇒ 「远处清不清楚、过渡跳不跳」只能机主真机看，我不下结论" });
         return rows;
+      }
+
+      /**
+       * 🛰 **署名**（PR 阻断项）：我们渲染的是 Overture（**ODbL 1.0**）派生瓦片 ⇒ 许可要求**可见署名**。
+       * MapLibre 的 `attributionControl` 是关的 ⇒ 这一行就是"等价可见方案"（面板/HUD 一行小字）。
+       * 文案**只从清单里读**（生成管线写的那句，与 `overture_api.py.ATTRIBUTION` 同一份）——
+       * 页面不抄第二份，清单没取到就写「数不出来」+ 原因（**不许静默不显示**）。
+       */
+      function renderLodAttribution() {
+        try {
+          const el = $("m-attr");
+          if (!el) return;
+          if (!LOD_ON) { el.textContent = ""; return; }
+          const at = lodManifest && lodManifest.attribution;
+          if (at) { el.textContent = String(at); return; } // **逐字显示**清单里那句（不自己加前缀/改写）
+          /* 三态：清单没取到 / 取到了但**没有** attribution 字段（骨架阶段的示意瓦片就是这样）——
+             两种都**可见地写出来**，不许静默不显示（署名是 ODbL 的硬要求）。 */
+          el.textContent = lodManifest
+            ? "© 数据署名 数不出来：清单里没有 attribution 字段（骨架阶段的示意瓦片没有署名；真瓦片由 prerender_pipeline.py 写）"
+            : "© 数据署名 数不出来：" + (lodManifestErr || "清单还没取到");
+        } catch (e) { /* 署名失败不影响地图 */ }
+      }
+
+      /** 这批瓦片是**示意**还是**真数据**（`manifest.dataKind`；缺失就如实说"标不出来"） */
+      function lodDataKindText() {
+        if (!lodManifest) return "数不出来（清单没取到）";
+        const n = lodManifest.kinds || null;
+        if (n && (n.real || n.placeholder)) return `清单汇总：真 ${n.real || 0} / 占位 ${n.placeholder || 0}`;
+        const k = lodManifest.dataKind;
+        if (k === "real") return "真数据（管线生成）";
+        if (k === "placeholder") return "**示意**（骨架阶段占位花纹，不是真楼房）";
+        return "标不出来（清单里既没有 kinds 也没有 dataKind）";
       }
 
       function renderLodBadge() {
@@ -1134,7 +1184,10 @@
           const hitN = rows.filter(function (r) { return r.hit === true; }).length;
           const missN = rows.filter(function (r) { return r.hit === false || r.hit === "no-layer"; }).length;
           const skipN = rows.filter(function (r) { return r.skip; }).length;
-          head.textContent = (missN ? "⚠️ " : "") + "🛰 LOD ✅" + hitN + " ❌" + missN + " ⏭" + skipN + " · " + lodState;
+          const badKeys = rows.filter(function (r) { return r.hit === false || r.hit === "no-layer"; })
+            .map(function (r) { return r.id + "." + r.key; });
+          head.textContent = (missN ? "⚠️ " : "") + "🛰 LOD ✅" + hitN + " ❌" + missN + (badKeys.length ? "（" + badKeys.join("；") + "）" : "") +
+            " ⏭" + skipN + " · " + lodState;
           body.innerHTML = rows.map(function (r) {
             const mark = r.skip ? '<span class="artb__skip">⏭</span>'
               : r.hit === true ? '<span class="artb__ok">✅</span>'
@@ -2185,7 +2238,7 @@
             tiles: lodVerdict,
             tileStates: window.__LOD_TILE_STATES__ || null,
             loadedKeys: lodLoadedKeys.size, failedKeys: lodFailedKeys.size, noKey: lodNoKey,
-            manifest: lodManifest ? { tileCount: lodManifest.tileCount, themeId: lodManifest.themeId, fingerprint: lodManifest.themeFingerprint, zoomRange: lodManifest.zoomRange, palette: lodManifest.palette } : null,
+            manifest: lodManifest ? { tileCount: lodManifest.tileCount, themeId: lodManifest.themeId, fingerprint: lodManifest.themeFingerprint, zoomRange: lodManifest.zoomRange, palette: lodManifest.palette, attribution: lodManifest.attribution || null, dataKind: lodManifest.dataKind || null } : null,
             manifestErr: lodManifestErr || null,
             live: lodLive,
             hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })(),

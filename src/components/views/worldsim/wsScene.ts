@@ -317,6 +317,12 @@ export function lodViewTiles(
 
 export interface LodTileVerdict {
   state: "off" | "ok" | "missing" | "unknown";
+  /** 视野内、清单里标为 **真数据** 的张数；`null` = 数不出来 */
+  real: number | null;
+  /** 视野内、清单里标为 **占位（示意）** 的张数；`null` = 数不出来 */
+  placeholder: number | null;
+  /** 视野内、清单里有但**没标种类**的张数（老清单）—— 如实报出来，不当成 0 */
+  unknownKind: number | null;
   /** **已载入**的瓦片数；`null` = 数不出来（取不到坐标/状态） */
   hit: number | null;
   /** 命中数的**口径**（`cache` = 瓦片状态（最硬）；`events` = 事件计数；`unknown` = 没拿到） */
@@ -362,8 +368,9 @@ export interface LodTileStates {
 export function lodTileVerdict(input: {
   enabled: boolean;
   view: { z: number; keys: string[]; capped: boolean } | null;
-  /** 清单里的瓦片键（`null` = 清单没取到 ⇒ 数不出来）。数组或 Set 都认 */
-  inventory: string[] | Set<string> | null;
+  /** 清单里的瓦片键（`null` = 清单没取到 ⇒ 数不出来）。
+   *  三种写法都认：`string[]` / `Set` / **`Record<键, 记录>`**（后者能分出真/占位） */
+  inventory: string[] | Set<string> | Record<string, unknown> | null;
   /** 事件里数到的已载入键（`null` = 事件没给可用坐标） */
   loaded: string[] | null;
   /** 事件里数到的失败键（`null` = 同上） */
@@ -372,6 +379,9 @@ export function lodTileVerdict(input: {
   states?: LodTileStates | null;
 }): LodTileVerdict {
   const empty = {
+    real: null as number | null,
+    placeholder: null as number | null,
+    unknownKind: null as number | null,
     hit: null,
     hitGauge: "unknown" as const,
     fail: null,
@@ -384,7 +394,15 @@ export function lodTileVerdict(input: {
   if (!input.enabled) {
     return { state: "off", ...empty, why: "未启用（URL 加 `?lod=1` 才建预渲染层）" };
   }
-  const inv = input.inventory === null ? null : input.inventory instanceof Set ? input.inventory : new Set(input.inventory);
+  const raw = input.inventory === null || input.inventory === undefined ? null : input.inventory;
+  const inv: Set<string> | null = raw === null ? null
+    : raw instanceof Set ? raw
+      : Array.isArray(raw) ? new Set(raw)
+        : new Set(Object.keys(raw as Record<string, unknown>));
+  const kindOf = (k: string): LodTileKind => {
+    if (raw === null || raw instanceof Set || Array.isArray(raw)) return "unknown";
+    return lodTileKindOf((raw as Record<string, unknown>)[k]);
+  };
   const view = input.view;
   if (!view) {
     return { state: "unknown", ...empty, why: "数不出来：拿不到视野/zoom（地图还没就绪）" };
@@ -392,6 +410,9 @@ export function lodTileVerdict(input: {
   const keys = view.keys;
   const inInv = inv === null ? null : keys.filter((k) => inv.has(k)).length;
   const absent = inInv === null ? null : keys.length - inInv;
+  const real = inv === null ? null : keys.filter((k) => inv.has(k) && kindOf(k) === "real").length;
+  const placeholder = inv === null ? null : keys.filter((k) => inv.has(k) && kindOf(k) === "placeholder").length;
+  const unknownKind = inv === null ? null : keys.filter((k) => inv.has(k) && kindOf(k) === "unknown").length;
   const st = input.states || null;
   const hit = st ? st.loaded : input.loaded === null ? null : input.loaded.length;
   const hitGauge: LodTileVerdict["hitGauge"] = st ? "cache" : input.loaded === null ? "unknown" : "events";
@@ -399,6 +420,7 @@ export function lodTileVerdict(input: {
   const failGauge: LodTileVerdict["failGauge"] = st ? "cache" : input.failed === null ? "unknown" : "events";
   const why: string[] = [];
   if (inv === null) why.push("清单没取到 ⇒ 「本区应有/清单缺」数不出来");
+  if (unknownKind !== null && unknownKind > 0) why.push(`视野里有 ${unknownKind} 张清单记录**没标种类**（老清单）⇒ 真/占位分不出来`);
   if (hit === null) why.push("拿不到瓦片状态、事件里也没有 tile 坐标 ⇒ 命中数不出来");
   if (absent !== null && absent > 0) why.push(`视野里有 ${absent} 张**清单里没有** ⇒ 它们必然取不到（这是确定性证据，不依赖事件）`);
   if (view.capped) why.push(`视野瓦片数超过上限 ${LOD_VIEW_TILE_CAP} ⇒ 只数了一部分（不能说"共 N 张"）`);
@@ -411,6 +433,9 @@ export function lodTileVerdict(input: {
         : "ok";
   return {
     state,
+    real,
+    placeholder,
+    unknownKind,
     hit,
     hitGauge,
     fail,
@@ -460,6 +485,19 @@ export function lodEventTileKey(e: unknown): string | null {
   return null;
 }
 
+/** 一张瓦片的**来源种类**（🔴 判词纪律：一张拼花里必须分得出哪张是真、哪张是占位） */
+export type LodTileKind = "real" | "placeholder" | "unknown";
+
+/** 清单里一条瓦片记录（**新格式**是对象；老格式是数字 = 字节数，视为 `placeholder`） */
+export interface PrerenderTileEntry {
+  kind: LodTileKind;
+  src?: string;
+  bytes?: number;
+  /** 这张瓦片里画进去的楼栋数（`null` = 数不出来） */
+  bld?: number | null;
+  fetchedSecs?: number;
+}
+
 /** 一张瓦片清单（`/prerender/manifest.json`）的形状 —— 生成脚本写、页面读 */
 export interface PrerenderManifest {
   generatedBy: string;
@@ -469,7 +507,20 @@ export interface PrerenderManifest {
   tileSize: number;
   zoomRange: [number, number];
   tileCount: number;
-  tiles: Record<string, number>;
+  /** 按瓦片：对象 = 新格式（带 `kind`）；数字 = 老格式（当初只有示意瓦片，一律按 `placeholder` 认） */
+  tiles: Record<string, number | PrerenderTileEntry>;
+  /** 汇总（生成方给；页面自己也会按视野重算一遍，两者不一致时以**视野**为准） */
+  kinds?: Record<string, number>;
+  attribution?: string;
+  dataKind?: string;
+}
+
+/** 把清单里的一条记录归一成"种类"（认不出就是 `unknown`，**不猜**） */
+export function lodTileKindOf(entry: unknown): LodTileKind {
+  if (entry === null || entry === undefined) return "unknown";
+  if (typeof entry === "number") return "placeholder"; // 老格式：那时只有示意瓦片
+  const k = (entry as PrerenderTileEntry).kind;
+  return k === "real" || k === "placeholder" ? k : "unknown";
 }
 
 export interface LodLiveVerdict {
@@ -647,9 +698,13 @@ export function lodHudLine(input: {
   if (!input.enabled) return "🛰 LOD 未启用（URL 加 `?lod=1`；当前未建预渲染层）";
   const t = lodTierOf(input.zoom);
   const v = input.tiles;
+  /* 🔴 判词不许含糊（机主看到的可能是"一张拼花"）：**真 / 占位 / 缺** 三样分列，
+     不许只报一个"命中 N 张"（那样分不出哪张是真数据、哪张是骨架阶段的占位花纹）。 */
   const tileTxt =
     `瓦片 命中 ${lodNum(v.hit)}（口径=${v.hitGauge}） · 失败 ${lodNum(v.fail)}（口径=${v.failGauge}）` +
-    ` · 清单缺 ${lodNum(v.absent)} · 本区应有 ${lodNum(v.view)}` +
+    ` · 本区 **真 ${lodNum(v.real)} / 占位 ${lodNum(v.placeholder)} / 缺 ${lodNum(v.absent, "0（已量）")}**` +
+    (v.unknownKind ? `（另有 ${v.unknownKind} 张未标种类）` : "") +
+    ` · 应有 ${lodNum(v.view)}` +
     (v.capped ? " ⚠️被上限截断" : "");
   const liveTxt = input.live
     ? `实时层 ${input.live.state === "missing" ? "0（已量：图层没建）" : lodNum(input.live.n)} 要素`

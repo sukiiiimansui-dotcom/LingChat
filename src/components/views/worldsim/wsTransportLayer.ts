@@ -123,7 +123,9 @@ export function buildTransportFor(
   }
   const toRoad = (f: NonNullable<TfRoadsFc["features"]>[number]): TfRoad => ({
     pts: (f?.geometry?.coordinates as Array<[number, number]>) || [],
-    cls: Number(f?.properties?.class) || undefined,
+    /* 🔴 走 `roadClassOf`（`class` → `rank` 兜底）：后端给的是 `rank`，只读 `class` 会让
+       **公交站恒为 0**（详见 `roadClassOf` 的注释与实测数字）。 */
+    cls: roadClassOf(f?.properties) as TfRoad["cls"],
     name: typeof f?.properties?.name === "string" ? f.properties.name : undefined,
   });
   const toBld = (f: NonNullable<TfBuildingsFc["features"]>[number]): TfBuilding => {
@@ -141,6 +143,36 @@ export function buildTransportFor(
 function isGeoFeature(f: unknown): boolean {
   const g = (f as { geometry?: { coordinates?: unknown } } | null)?.geometry;
   return !!g && Array.isArray(g.coordinates);
+}
+
+/**
+ * 🔴 从**真实 `/api/roads` 的 properties** 里取"道路等级"（0 快速路 … 5 步道）。
+ *
+ * ## 为什么专门写一个函数（2026-09-24 真机截图抓到的 bug，**已用真数据复现**）
+ * 后端 (`world_map_rs` 的 osm 解析) 给的字段是 **`rank`**（0~5，见 `wsRoads.RoadRankStyle`
+ * 的注释："档次由后端给（`properties.rank`，见 Rust `osm::road_rank`）"），
+ * 而交通设施的规则文件 `wsTransportRules.TfRoad.cls` 写的是 **`class`**。
+ * 原来这里读 `properties.class` ⇒ **恒为 undefined** ⇒ `buildTransport` 里 `cls` 兜底成 3
+ * ⇒ **公交站规则 `cls <= 2` 一条都不满足** ⇒ **公交站恒为 0**，而斑马线/红绿灯照旧拉满上限。
+ * 实测（渝中区 600m 的真实 `/api/roads`，197 条）：
+ * ```
+ * 读 class（旧）  → 交通设施 90 · 公交/斑马线/红绿灯/停车/出入口 =  0/60/30/0/0 · 上限裁掉 489
+ * 读 rank（新）   → 交通设施 110 · 公交/斑马线/红绿灯/停车/出入口 = 20/60/30/0/0 · 上限裁掉 454
+ * ```
+ * ⚠️ **停车/出入口是 0 是另一回事**：它们要**楼栋脚印**（`parking` 要 ≥800m² 或商业/办公楼、
+ * `driveway` 要 ≥1500m²）—— 真机那张截图是在"楼房没取到"的时刻拍的，楼栋为空 ⇒ 这两类必为 0。
+ * 属**已量=0**（有输入、规则明确判否），不是"数不出来"。
+ *
+ * 取法：**`class` 优先、`rank` 兜底**（两个字段语义相同、都是 0~5）。
+ * 这样后端哪天真加了 `class`，行为自动跟着它走，不必改这里。
+ */
+export function roadClassOf(properties: Record<string, unknown> | null | undefined): number | undefined {
+  const p = properties || {};
+  for (const key of ["class", "rank"]) {
+    const v = Number(p[key]);
+    if (Number.isFinite(v)) return v;
+  }
+  return undefined;
 }
 
 /**

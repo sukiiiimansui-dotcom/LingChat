@@ -149,7 +149,11 @@
          「代拍页的地图底都看不清了，还有就是配色为什么把 BA 风格改喵了！」）。
          只留结构（接触阴影 / cel 三档硬边 / 路 casing 加粗 / 弱暗角 0.18）；地面/底色/描边/路色**逐字段回基准**；
          红线"派生地面明度不许低于基准"写进自检。⚠️ 同版含 **LOD 第 1 步**（`?lod=1`）的页面 hunk（另一代理）。 */
-      const BUILD = "ws3dshow-2026-09-25-v14";
+      /* v15（2026-09-25）：🛰 **治「远端预渲染层加载不出来」的真因** —— 机主截图实证：
+         `aedf87a` 给 `wsScene` 加了 3 个 LOD 导出但**没换戳**，`?v14` 的 vendor URL 被浏览器
+         immutable 缓存占住 ⇒ LOD ❌0/✗2「模块里没有 lodPlan（重取后仍旧）」。
+         本版：① 换戳；② `ensureVendor()` 加**一次性 token 强取**兜底（见下面那段注释）。 */
+      const BUILD = "ws3dshow-2026-09-25-v15";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -609,7 +613,13 @@
         /* 读地图的那两件（宿主无关，App 侧接 LOD 时同样只调它们） */
         "lodTileStatesOf", "lodLiveVerdictOf"];
       const VENDOR_URL = "/vendor/wsScene.mjs";
-      /** vendor 的"内容版本" = 页面版本戳（同源 ⇒ 换版就换 URL，不会再撞 immutable 缓存） */
+      /** vendor 的"内容版本" = 页面版本戳（同源 ⇒ 换版就换 URL，不会再撞 immutable 缓存）
+          🔴 **2026-09-25 真机事故（机主截图「没有加载远处的啊喵」）**：`aedf87a` 往 `wsScene` 加了 3 个导出
+          （`lodTileStatesOf`/`lodLiveVerdictOf`/`lodLiveLayerIds`）**却没换 BUILD 戳** ⇒ `?v14` 这个 URL
+          早被浏览器 immutable 缓存占住（内容是旧的一份）⇒ 原来那句"带版本号重取"取到的**还是旧的**，
+          页面于是如实报 `重取后仍缺`，LOD 就永远建不出层。
+          ⇒ 两条规矩：① **动 vendor 就必须换 BUILD 戳**；② 下面再加一层兜底——带版本号仍缺时用
+          **一次性 token** 强取（`?t=<时间戳>`，必然绕过任何缓存）。 */
       const VENDOR_VER = BUILD;
       let tfState = "未取";
       /** 缺失的符号名（全在就是空数组） */
@@ -636,7 +646,21 @@
             tfState = "旧副本（缺 " + miss0.length + " 个）⇒ 带版本号重取成功";
             return fresh;
           }
-          tfState = "重取后仍缺：" + miss1.join(",");
+          /* 兜底②（2026-09-25 真机事故加的）：**同一个戳被两次构建复用**时，版本号 URL 本身仍在缓存里
+             ⇒ 再带一个一次性 token 强取（必然绕过缓存）。取到就用，取不到**照实报**缺哪些符号。 */
+          try {
+            const forced = await import(/* @vite-ignore */ VENDOR_URL + "?t=" + Date.now());
+            const miss2 = tfMissing(forced);
+            if (!miss2.length) {
+              window.__TF__ = forced;
+              window.__TF_FRESH__ = "force:" + VENDOR_VER;
+              tfState = "旧副本（缺 " + miss0.length + " 个）⇒ 版本号 URL 也被缓存占住，改用一次性 token 取到";
+              return forced;
+            }
+            tfState = "重取后仍缺：" + miss2.join(",") + "（版本号与一次性 token 都试过）";
+          } catch (e2) {
+            tfState = "重取后仍缺：" + miss1.join(",") + "（强取抛错：" + String(e2).slice(0, 32) + "）";
+          }
         } catch (e) {
           tfState = "重取失败：" + String(e).slice(0, 48) + "（缺 " + miss0.join(",") + "）";
         }

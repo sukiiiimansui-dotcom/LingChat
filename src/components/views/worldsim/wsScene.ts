@@ -106,3 +106,57 @@ export function sceneOrderViolations(layerIds: readonly string[]): string[] {
   void idx;
   return out;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   🎬 侧视角（近地平线）**倍率爆炸**的护栏 —— 机主 2026-09-21：「一下划不见」。
+
+   根因：pitch 越大，地面与视线越接近平行 ⇒ **同样的手指位移对应巨大的地面距离**。
+   做法（与代拍页 `ws3dshow.html` 里那套**同一套数值**；这里是唯一真源，App 侧照它接线）：
+     ① `maxPitch` 85 → 70（见上面的 `CAMERA_DEFAULTS`：能给天空，但到不了"只剩一条线"）；
+     ② pitch > 55° 之后**按比例降拖动/滚轮速度**（MapLibre 的公开口子）；
+     ③ 系数可被读出（HUD 自证：能看出护栏在不在工作）。
+   ⚠️ 触屏"捏合缩放"**没有** rate 口子（`touchZoomRotate` 不暴露）⇒ 那一项**没做**，如实记。
+   ⚠️ **为什么可以每次 pitch 变化都重设**（读过 vendored maplibre 源码才敢写）：
+     `dragPan.enable(o)` 是 `this._inertiaOptions = o || {}`（**无条件重写、没有"已启用就早退"**），
+     而惯性在**手势结束时**才读：`this._inertia._onMoveEnd(this._map.dragPan._inertiaOptions)`；
+     `scrollZoom.setWheelZoomRate(e)` 也只是 `this._wheelZoomRate = e`（滚轮时读）。
+     ⇒ 重设**真的会生效**，不是空操作。
+   ⚠️ 本函数**幂等且容错**：地图半初始化 / 没挂这些句柄 / 抛错 ⇒ 只是这次护栏不生效，**绝不影响地图**。
+   ══════════════════════════════════════════════════════════════════════════════ */
+export const PITCH_SOFT = 55;
+/** 未阻尼时的拖动惯性上限（MapLibre `dragPan` 的 `maxSpeed`，px/s 量级） */
+export const PAN_MAX_SPEED = 1400;
+/** 未阻尼时的滚轮缩放速率（MapLibre `scrollZoom.setWheelZoomRate`） */
+export const WHEEL_ZOOM_RATE = 1 / 450;
+
+/** pitch → 阻尼系数。≤55° 恒为 **1**（低角度手感逐字不变）；超过后按 25° 一档缓降，**永不为 0/负** */
+export function panDamping(pitch: number): number {
+  const p = Number.isFinite(pitch) ? pitch : 0;
+  return p <= PITCH_SOFT ? 1 : 1 / (1 + (p - PITCH_SOFT) / 25);
+}
+
+/** 阻尼后**真正写进地图**的两个值（纯值 ⇒ 自检能直接断言，不必建地图、更不必有 WebGL） */
+export function pitchGuardParams(pitch: number): { damping: number; maxSpeed: number; wheelZoomRate: number } {
+  const damping = panDamping(pitch);
+  return { damping, maxSpeed: Math.round(PAN_MAX_SPEED * damping), wheelZoomRate: WHEEL_ZOOM_RATE * damping };
+}
+
+/** 只要求"有那几个口子"，**不 import maplibre 类型** —— 页面能用、自检里能塞假地图 */
+export interface PitchGuardMap {
+  getPitch?: () => number;
+  dragPan?: { enable?: (opts: { maxSpeed: number }) => void };
+  scrollZoom?: { setWheelZoomRate?: (rate: number) => void };
+}
+
+/** 把护栏应用到真地图（或自检里的假地图）。返回本次的阻尼系数；失败返回 1（= 不阻尼） */
+export function applyPitchGuard(map: PitchGuardMap | null | undefined): number {
+  try {
+    const p = map && typeof map.getPitch === "function" ? map.getPitch() : 0;
+    const { damping, maxSpeed, wheelZoomRate } = pitchGuardParams(p);
+    if (map && map.dragPan && typeof map.dragPan.enable === "function") map.dragPan.enable({ maxSpeed });
+    if (map && map.scrollZoom && typeof map.scrollZoom.setWheelZoomRate === "function") map.scrollZoom.setWheelZoomRate(wheelZoomRate);
+    return damping;
+  } catch {
+    return 1; // 护栏失败**不影响地图**
+  }
+}

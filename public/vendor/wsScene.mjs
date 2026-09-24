@@ -711,6 +711,28 @@ function sceneOrderViolations(layerIds) {
   void idx;
   return out;
 }
+var PITCH_SOFT = 55;
+var PAN_MAX_SPEED = 1400;
+var WHEEL_ZOOM_RATE = 1 / 450;
+function panDamping(pitch) {
+  const p = Number.isFinite(pitch) ? pitch : 0;
+  return p <= PITCH_SOFT ? 1 : 1 / (1 + (p - PITCH_SOFT) / 25);
+}
+function pitchGuardParams(pitch) {
+  const damping = panDamping(pitch);
+  return { damping, maxSpeed: Math.round(PAN_MAX_SPEED * damping), wheelZoomRate: WHEEL_ZOOM_RATE * damping };
+}
+function applyPitchGuard(map) {
+  try {
+    const p = map && typeof map.getPitch === "function" ? map.getPitch() : 0;
+    const { damping, maxSpeed, wheelZoomRate } = pitchGuardParams(p);
+    if (map && map.dragPan && typeof map.dragPan.enable === "function") map.dragPan.enable({ maxSpeed });
+    if (map && map.scrollZoom && typeof map.scrollZoom.setWheelZoomRate === "function") map.scrollZoom.setWheelZoomRate(wheelZoomRate);
+    return damping;
+  } catch {
+    return 1;
+  }
+}
 
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
@@ -1283,9 +1305,11 @@ export {
   KIND_HEIGHT_M,
   KIND_JITTER,
   MAX_RENDER_H,
+  PAN_MAX_SPEED,
   PARAPET_H,
   PARAPET_MIN_H,
   PARAPET_THICK_M,
+  PITCH_SOFT,
   PODIUM_H_MAX,
   PODIUM_H_MIN,
   PODIUM_H_RATIO,
@@ -1313,9 +1337,11 @@ export {
   TF_RULES,
   TOWER_MIN_H,
   UNKNOWN_KIND_BAND_M,
+  WHEEL_ZOOM_RATE,
   WIN_MIN_H,
   WIN_PATTERN_SIZE,
   WS_SCENE_SOURCE,
+  applyPitchGuard,
   art3Summary,
   buildSkyGeometry,
   buildTransport,
@@ -1339,6 +1365,8 @@ export {
   junctions,
   layerOrderHud,
   nearestOnLine,
+  panDamping,
+  pitchGuardParams,
   planEnsureRoadOrder,
   pointInRing,
   rampColorOf,

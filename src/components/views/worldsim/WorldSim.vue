@@ -201,190 +201,58 @@
            写成 `v-else-if` 会把两条本不相干的链悄悄接在一起（读的人很难发现），
            而它的条件本身是自足的（step === 'neighborhood'），没必要挂靠。 -->
       <section v-if="step === 'neighborhood'" ref="neighWrap" class="ws-neighwrap">
-        <WsDistrict
-          ref="districtRef"
+        <!-- 🎬 2026-09-24 机主裁定：「**App 页现在只准保留代拍页代码**」+「现在 App 页有多余 UI」。
+             ⇒ 小区级**只剩这一屏**：`WsSceneView`（= `WsDistrictMapLibre` + 交通设施，
+             外观/相机/层序全部取自 `wsScene`/`wsMapTheme`/`wsTransportRules` 那套真源）。
+             恢复：`git revert <本 commit>`（本 commit 只动模板，不删任何文件）。
+             备份：tag `attic/pre-sceneview2-20260924` + `~/chk/removed-backup-20260924-sceneview2/`；
+             台账见 `~/rikka/Dsh-SYuki/world_map/REMOVED-CODE.md`。 -->
+        <WsSceneView
           :area="areaLabel || '未知区域'"
           :adcode="String(sim.leaf?.value?.adcode || '')"
           :markers="districtPins"
           :night="todNight"
-          :map-style="style"
           :loc-source="sim.locSource.value"
           :world-time="todClock"
           @back="backTo(path.length - 1)"
           @done="onWorldEntered"
-        >
-          <!-- P2-1：人物层钉在地图上（跟着手势一起缩放平移，见 WsDistrict 的 pin 插槽说明）
-               `zoom` = 小区图自己的手势倍率（由 WsDistrict defineExpose 出来）：
-               头像位置跟着地图缩放走，但尺寸始终是屏幕上那么大（不然放大 4× 会变成大饼）。
-               P4-3：交通工具标记也铺在这一层（同一个手势变换容器里才会跟着地图动）。 -->
-          <template #pin>
-            <!-- T4-1：窗户光。放在 `#pin` 里才和建筑同一套坐标系与手势变换。
-                 低端机（ws-perf-low）直接关掉 —— 几百个节点在合成器上排队不值当。 -->
-            <!-- 🔴 机主 2026-09-19：小区草图已下线（异常卡顿 → 改用加载动画，见 WsDistrict 的
-                 `SKETCH_DISABLED`）。**没有底图时这些点会"浮在空处"**，所以这里整组先不渲染；
-                 等小区级改用 MapLibre 底图（看板卡「小区级 2.5D 化」）再一起打开。
-                 数据层不受影响：设施/交通/头像各自取数照旧，只是暂时不画。 -->
-            <template v-if="districtUnderlayVisible">
-            <WsWindowLight :night="perfLow ? 0 : todNight" :size="WS_GRID" />
-            <!-- T2-1：生活设施图层。放在窗户光之后、头像之前 —— 设施是"地面上的点"，
-                 人必须压在它上面（层序即语义）。取不到数据时组件自己如实说明，不画假点。 -->
-            <WsFacilityLayer :area="areaLabel || '未知区域'" :grid="WS_GRID" :zoom="districtScale" />
-            <!-- T2-2：交通站点图层。**必须在头像层之前** —— 它和头像层同级（z-index 3），
-                 靠 DOM 顺序决定谁在上面；放前面，人才压着车站。
-                 ⚠️ 不要再打开 WsFacilityLayer 的「交通设施」分组（默认关），否则同一批点画两遍。 -->
-            <WsTransitLayer :area="areaLabel || '未知区域'" :grid="WS_GRID" :zoom="districtScale" />
-            <WsAvatarLayer
-              :placed="placedActors"
-              :grid="WS_GRID"
-              :selected-id="wsPanel.targetId.value"
-              :me-name="meName"
-              :zoom="districtScale"
-              :drag="true"
-              :drag-pin="dragPin"
-              :focus="focus.queue.value"
-              :low="perfLow"
-              @pick="onActorPick"
-              @dragstart="onDragStart"
-              @dragmove="onDragMove"
-              @dragend="onDragEnd"
-            />
-            <WsVehicleMark
-              v-for="t in movingTrips"
-              :key="t.id"
-              :trip="t"
-              :grid="WS_GRID"
-              :zoom="districtScale"
-              :low="perfLow"
-            />
-            <!-- P5-2：事件气泡（bubble 通道）。铺在同一层里才会跟着地图平移缩放；
-                 位置不在这里算（`WsEventBubble` 用 letterboxOf + 角色的 px/py 自己算）。
-                 P5-5：低性能档下调同时显示的气泡上限、入场动画退化成纯淡入。 -->
-            <WsEventBubble
-              :bubbles="wsEventBubbles"
-              :placed="placedActors"
-              :grid="WS_GRID"
-              :zoom="districtScale"
-              :me-name="meName"
-              :max="bubbleMax"
-              :low="perfLow"
-            />
-          </template>
-          </template>
-        </WsDistrict>
-
-        <!-- P4-2：行程卡（浮在左下角）。只在真有行程时出现，绝不占着地方。 -->
-        <WsTripCard
-          v-if="shownTrip"
-          floating
-          :trip="shownTrip"
-          :speedup="trips.speedup.value"
-          :busy="tripBusy"
-          :low="perfLow"
-          @speedup="onTripSpeedup"
-          @cancel="onTripCancel"
         />
+
+        <!-- 🗄 2026-09-24 已移除（**文件都还在**，只是不再被引用；一行 `git revert` 可整体切回）：
+             · `WsDistrict`（旧小区壳：手势变换容器 + 草图 + AI 精绘卡 + 缩放进度条）
+             · `#pin` 插槽整组：`WsWindowLight` / `WsFacilityLayer` / `WsTransitLayer`
+               / `WsAvatarLayer` / `WsVehicleMark` / `WsEventBubble`
+             · `WsTripCard`（行程卡）
+             移除理由见本文件顶部那段；这里**不再保留注释掉的模板副本** —— 备份在
+             `attic/pre-sceneview2-20260924` 与仓外目录里，注释副本只会让"到底挂没挂"变得难读。
+             以下数据/状态（placedActors / districtPins / movingTrips / wsEventBubbles …）**照旧在跑**，
+             只是这一屏不再画它们：这是"暂时只构建代拍页内容"的直接后果，不是坏了。 -->
       </section>
 
-      <!-- ⑦.5 地图上的小人浮标（P2-1 的入口）：一眼看到「地图上有人」，
-           点它也能直接把「自己」的面板打开（不依赖刚好点中那个小圆头像） -->
-      <div v-if="step === 'neighborhood'" class="ws-people">
-        <button class="ws-chip" type="button" @click="loadActors(true)">
-          👥 {{ placedActors.length }}
-        </button>
-        <button class="ws-chip" type="button" :title="t('worldsim.me.title')" @click="openMe">
-          🙂 {{ meName }}
-        </button>
-      </div>
+      <!-- 🗄 2026-09-24 已移除：⑦.5 小人浮标（`.ws-people`）、⑦.6 事件流面板（`WsEventFeed`）、
+           ⑧ 角色/自己面板（`WsCharPanel`/`WsMePanel`）、天气角标（`WsWeatherBadge`）、
+           时段角标（`.ws-todtag`）、`WsTimeLayer` 色调层、`WsWeatherLayer` 天气粒子层。
+           ↑ 这些元素在代拍页 `ws3dshow.html` 那一屏里**一个都没有** —— 机主要的就是那一屏。
+           恢复：`git revert <本 commit>`；备份 tag `attic/pre-sceneview2-20260924`。 -->
 
-      <!-- ⑦.6 P5-2：事件流面板（含三通道开关）。钉在右下角、小人浮标上方；
-           开关的语义就是「这类事件要不要打扰我」，所以它跟事件列表在同一处。 -->
-      <WsEventFeed
-        v-if="step === 'neighborhood'"
-        :events="wsEventItems"
-        :channels="wsEventChannels"
-        :pending="wsEventPending"
-        :pending-after="wsEventPendingAfter"
-        :speech-hint="wsEventSpeechHint"
-        :now-ms="wsEventNowMs"
-        :reason="wsEventReason"
-        :next-ok-in-secs="wsEventNextOk"
-        :supported="wsEventSupported"
-        :running="wsEventRunning"
-        :error="wsEventError"
-        @toggle="wsEvents.setChannel"
-        @open="onEventPanelOpen"
-        @refresh="onEventPanelOpen"
-      />
+      <!-- 悬浮手机（T5-1）：**保留**。
+           ⚠️ 它与上面那批"叠加"不同：它不在小区级那一屏里（`fixed` 定位、只在世界模拟的菜单/引导里出现），
+           而且机主 2026-09-18 明确要过「手机是**仅在地图里**的功能」。删它不在本轮授权范围。 -->
+      <WsPhone @open-app="onPhoneApp" />
 
-      <!-- ⑧ P2-3 / P2-4：角色面板（含立绘侧边栏）/ 自己的面板。
-           挂在 .ws-stage 里而不是 <main> 里：定位是相对 stage 的，
-           这样面板底部不会盖住底部动作条（「回到区县 / 进入这个世界」还要能点）。 -->
-      <WsCharPanel
-        v-if="wsPanel.open.value && !wsPanel.isMe.value && currentActor"
-        :actor="currentActor"
-        :data="actors"
-        :area-text="areaLabel"
-        :narrow="wsPanel.narrow.value"
-        :open="wsPanel.open.value"
-        :portrait-open="wsPanel.portraitOpen.value"
-        :current-role-id="currentRoleId"
-        @close="wsPanel.closePanel"
-        @portrait="wsPanel.togglePortrait"
-        @goto-chat="onGotoChat"
-        @quick="onQuick"
-        @direct="onDirect"
-        @gift="onGift"
-        :affinity="currentAffinity"
-        :affinity-rank="relRankOf(currentAffinity)"
-      />
-      <WsMePanel
-        v-else-if="wsPanel.open.value && wsPanel.isMe.value"
-        :data="actors"
-        :placed="placedActors"
-        :grid="WS_GRID"
-        :area-text="areaLabel"
-        :narrow="wsPanel.narrow.value"
-        :open="wsPanel.open.value"
-        :selected-id="wsPanel.targetId.value"
-        :me-name="meName"
-        :feats="geoStage.feats.value"
-        :dark="mapDark"
-        @close="wsPanel.closePanel"
-        @pick="onActorPick"
-        @refresh="actors.loadTimeWeather()"
-      />
-      <!-- T4-2 角标：当前天气（图标 + 描述 + 温度）。拿不到天气时它显示
-           「天气不可用」而不是「晴」—— 这是 T4-2 的硬要求：优雅降级，不伪造数据。 -->
-      <WsWeatherBadge :weather="wxState" />
-
-      <!-- T4-1 角标：当前时段 + 时刻。位置与样式在 worldsim-tod.css 里（左上角，
-           避开右下的缩放控件与顶栏按钮）。放在 `</main>` 之内 —— 它的包含块就是
-           `.ws-stage` 的 padding box，天然贴着舞台左上角，不需要页面给它算坐标。 -->
-      <div class="ws-todtag" data-ws-todtag>
-        <span class="ws-todtag__ico" aria-hidden="true">{{ todPeriodIcon }}</span>
-        <span class="ws-todtag__txt">{{ todPeriodText }}</span>
-        <span class="ws-todtag__clock">{{ todClock }}</span>
-      </div>
+      <!-- 🗄 2026-09-24 已移除（机主：「App 页现在只准保留代拍页代码」）：
+           ⑦.6 事件流面板 `WsEventFeed`、⑧ `WsCharPanel`/`WsMePanel`、天气角标 `WsWeatherBadge`、
+           时段角标 `.ws-todtag`、以及 `</main>` 之后的 `WsTimeLayer` 色调层 / `WsWeatherLayer` 粒子层。
+           ↑ 代拍页 `ws3dshow.html` 那一屏里一个都没有。
+           恢复：`git revert <本 commit>`（不删文件）；备份 tag `attic/pre-sceneview2-20260924` +
+           `~/chk/removed-backup-20260924-sceneview2/`；台账 `world_map/REMOVED-CODE.md`。
+           ⚠️ 这些组件对应的**数据**（事件引擎 / 面板状态 / 天气 / 时刻）**照旧在跑**，
+              只是不再上屏 —— 本轮只重做"App 页那一屏"。 -->
     </main>
 
-    <!-- ── T4-1：昼夜色调覆盖层 ──────────────────────────────────────────
-         `WsTimeLayer` 是 `position: absolute; inset: 0`，包含块就是 `.ws-stage`
-         （它已经是 `position: relative`，见本文件末尾那条规则）→ 覆盖层**天然**只盖住
-         地图舞台：顶栏、信息行、底栏一个都不碰，不需要量任何高度。
-         刻意不做成「盖住整页再挖掉顶栏底栏」：那要靠实测顶栏/底栏高度，
-         而底栏在 boot/定位中根本不渲染、宽扁屏那一档还会变成悬浮 —— 会量错的活别干。 -->
-    <WsTimeLayer :tint="todTint" :night="todNight" />
-
-    <!-- ── T4-2：天气视觉层 ──────────────────────────────────────────────
-         包含块同样是 `.ws-stage`（`position: relative`）→ 只盖地图舞台。
-         `:tint` 是必须传的：昼夜色要**压在天气色之上**（老线的顺序，
-         「夜间压暗应覆盖天气提亮」），少传它雨夜就会是亮的。
-         🔴 `:animate="!perfLow"`（2026-09-20 fps 兜底第一刀）：低档下这层**只画一帧**。
-         为什么直接停而不是"降频"：它是**整屏 canvas**（每帧 clearRect + 2 次全屏 fillRect
-         + 上百个粒子），在软渲染路上每帧都是实打实的像素填充；而雨雪只是气氛，
-         帧率是"能不能玩"的门槛 —— 门槛优先。天气色/昼夜色**仍然照画**（静态那一帧里），
-         所以低档下画面不是"没有天气"，只是雨滴不再动。 -->
-    <WsWeatherLayer :weather="wxState" :tint="todTint" :low="perfLow" :animate="!perfLow" />
+    <!-- 🗄 2026-09-24 已移除：`WsTimeLayer`（昼夜色调覆盖层）与 `WsWeatherLayer`（雨雪粒子层）。
+         它们都是"盖住地图舞台"的整屏叠加，代拍页那一屏没有。
+         恢复：`git revert <本 commit>`。 -->
 
     <!-- ── 显示设置抽屉（把原来散在顶栏/信息行的低频开关收进来）──────────────
          浮块预算：顶栏 ①、底部动作条 ②、地图本身 ③ —— 抽屉只在用户点「⋯」时出现，
@@ -548,34 +416,30 @@
   import WsLoading from "./WsLoading.vue";
   import WsConfirm from "./WsConfirm.vue";
   import WsPicker from "./WsPicker.vue";
-  import WsDistrict from "./WsDistrict.vue";
-  // T4-1：昼夜视觉表现（色调覆盖层 + 角标 + 窗户光）。各自的样式独立成文件，
-  // 与 worldsim.css 解耦 —— 那两个增量样式文件的文件头写了为什么。
+  /* 🎬 2026-09-24 机主裁定「App 页现在只准保留代拍页代码」⇒ 小区级改由**薄壳**渲染：
+     `WsSceneView` = `WsDistrictMapLibre`（外观/相机/层序同一份真源）+ 交通设施（`?tf=1` 的内容）。
+     🗄 被换下的 `WsDistrict`（旧小区壳）**文件还在**，只是不再被引用。 */
+  import WsSceneView from "./WsSceneView.vue";
+  /* 🗄 2026-09-24 移除（不再被引用；组件文件都还在，见世界模拟顶层注释）：
+     `WsTimeLayer` / `WsWindowLight` / `WsWeatherLayer` / `WsWeatherBadge`。
+     ⚠️ 两个增量样式文件（`worldsim-tod.css` / `worldsim-weather.css`）**必须留着**：
+        它们同时给**其它级别的世界地图页**供样式（顶栏的 `data-ws-todtag` 之类不在这里，
+        但 `.ws-dist__*` / 时刻角标在别的组件里仍被引用），删 import 会让那些页面掉样式。
+        本轮"只重做 App 页那一屏"⇒ 样式文件不动。 */
   import "@/assets/styles/worldsim-tod.css";
-  import WsTimeLayer from "./WsTimeLayer.vue";
-  import WsWindowLight from "./WsWindowLight.vue";
-  import { useWorldTime } from "@/composables/useWorldTime";
-  // T4-2：天气视觉（雨/雪/雾粒子 + 天气色调 + 角标）。同样自带独立样式文件。
   import "@/assets/styles/worldsim-weather.css";
-  import WsWeatherLayer from "./WsWeatherLayer.vue";
-  import WsWeatherBadge from "./WsWeatherBadge.vue";
+  import { useWorldTime } from "@/composables/useWorldTime";
   import { useWorldWeather } from "@/composables/useWorldWeather";
-  // P2：人物层 + 两个面板（面板与头像层都是这一页独有的，懒加载没有意义，直接静态 import）
-  import WsAvatarLayer from "./WsAvatarLayer.vue";
-  import WsCharPanel from "./WsCharPanel.vue";
-  import WsMePanel from "./WsMePanel.vue";
-  import WsFacilityLayer from "./WsFacilityLayer.vue";
-  import WsTransitLayer from "./WsTransitLayer.vue";
+  /* 🗄 2026-09-24 移除引用：`WsAvatarLayer` / `WsCharPanel` / `WsMePanel` /
+     `WsFacilityLayer` / `WsTransitLayer`（"我的/角色"面板与设施、交通 DOM 层）。
+     交通设施改由 `WsSceneView` 走**地图图层**那条路（与代拍页同一份规则）。 */
   import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   import { useWsFocus } from "./wsFocus";
   import { rankOf as relRankOf, useWsRelation } from "./wsRelation";
   import { resolveAffinity } from "./wsAffinityPlan";
-  // P4-2 / P4-3：行程卡 + 地图上的交通工具（样式由组件自己 import worldsim-trip.css）
-  import WsTripCard from "./WsTripCard.vue";
-  import WsVehicleMark from "./WsVehicleMark.vue";
-  // P5-2：事件通知三通道的地图气泡 + 事件流面板（数据层在 useWorldEvents）
-  import WsEventBubble from "./WsEventBubble.vue";
-  import WsEventFeed from "./WsEventFeed.vue";
+  /* 🗄 2026-09-24 移除引用：`WsTripCard` / `WsVehicleMark` / `WsEventBubble` / `WsEventFeed`
+     （行程卡、车辆标记、事件气泡、事件流面板 —— 代拍页那一屏都没有）。
+     数据层（`useWorldTrips` / `useWorldEvents`）**照旧在跑**，只是不再上屏。 */
   import { wsToast, useWsToast } from "./wsToast";
   import { scatterGrid, type PlacedActor, type WsDistrictPin } from "./wsActors";
   import {

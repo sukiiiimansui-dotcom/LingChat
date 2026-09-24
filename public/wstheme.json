@@ -193,6 +193,16 @@
    ],
    "low": {
     "outlineWidth": null
+   },
+   "look": null,
+   "metrics": {
+    "groundHex": "#343434",
+    "groundLuma": 0.2058,
+    "rampFloorLuma": 0.3218,
+    "bldGroundRatio": 1.564,
+    "outlineGroundRatio": 1.69,
+    "minGroundContrast": 1.35,
+    "separation": "luminance"
    }
   },
   "anime": {
@@ -364,6 +374,443 @@
    ],
    "low": {
     "outlineWidth": 0.6
+   },
+   "look": null,
+   "metrics": {
+    "groundHex": "#dceff7",
+    "groundLuma": 0.9244,
+    "rampFloorLuma": 0.8105,
+    "bldGroundRatio": 0.877,
+    "outlineGroundRatio": 10.61,
+    "minGroundContrast": 1,
+    "separation": "outline"
+   }
+  }
+ },
+ "looks": {
+  "game": {
+   "night": {
+    "id": "night",
+    "label": "暗色（原来的） · 游戏过场",
+    "hud": "暗色夜景 · 游戏过场（深底亮线）",
+    "sky": {
+     "sky-color": "#71797f",
+     "horizon-color": "#65727f",
+     "fog-color": "#0c131c",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.4,
+     "atmosphere-blend": 0.9
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "hi": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 19,
+      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#0a1017"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": [
+        "interpolate",
+        [
+         "linear"
+        ],
+        [
+         "zoom"
+        ],
+        14.5,
+        0.92,
+        16.2,
+        0
+       ],
+       "raster-saturation": 0.34,
+       "raster-contrast": 0.1,
+       "raster-brightness-max": 0.45
+      }
+     },
+     {
+      "id": "hi",
+      "type": "raster",
+      "source": "hi",
+      "minzoom": 14.5,
+      "paint": {
+       "raster-opacity": [
+        "interpolate",
+        [
+         "linear"
+        ],
+        [
+         "zoom"
+        ],
+        14.5,
+        0,
+        16.2,
+        0.95
+       ],
+       "raster-saturation": -0.22,
+       "raster-contrast": 0.1,
+       "raster-brightness-min": 0,
+       "raster-brightness-max": 0.56
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.9
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#2d4256"
+     ],
+     [
+      12,
+      "#54809f"
+     ],
+     [
+      45,
+      "#dbf1fa"
+     ]
+    ],
+    "roofFallback": "#152029",
+    "antennaFallback": "#eef9ff",
+    "outline": {
+     "color": "#eef9ff",
+     "width": 0.5
+    },
+    "ai": {
+     "park": "rgba(126, 200, 130, 0.42)",
+     "water": "rgba(90, 150, 210, 0.42)"
+    },
+    "road": {
+     "casing": "#0a1017",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#e8dcc0",
+      "1": "#d2c6ab",
+      "2": "#8f8b81",
+      "3": "#5d656d",
+      "4": "#3f4a54",
+      "5": "#b4e9ff"
+     }
+    },
+    "canvas": {
+     "bg": "#0a1017",
+     "empty": "rgba(255,255,255,.7)",
+     "bldStroke": "#eef9ff",
+     "bldStrokeW": 0.7,
+     "aiShadow": "rgba(0,0,0,.35)",
+     "aiStroke": "rgba(0,0,0,.5)",
+     "aiStrokeW": 0.6
+    },
+    "baseFade": null,
+    "verticalGradient": true,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.55,
+     15,
+     0.8,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": null
+    },
+    "look": {
+     "shadow": {
+      "color": "#040608",
+      "opacity": 0.45,
+      "blur": 5,
+      "dx": 3,
+      "dy": 4,
+      "width": 1.1
+     },
+     "vignette": {
+      "color": "#060a0e",
+      "opacity": 0.5,
+      "inner": 42,
+      "outer": 100
+     },
+     "road": {
+      "casingAdd": 2.2,
+      "widthScale": 1.25,
+      "glow": {
+       "ranks": [
+        0,
+        1,
+        2
+       ],
+       "blur": 9,
+       "opacity": 0.4,
+       "widthScale": 2.4
+      }
+     },
+     "skipped": [
+      {
+       "k": "水体（渐变 / 高光边）",
+       "why": "**没有水系矢量源**：本页只取 `/api/buildings`、`/api/roads`；`hydro.rs` 那套 Natural Earth 1:50m 只喂行政区划 SVG，且区级实测 0 环 ⇒ 江面在底图里只是**栅格像素**，无法单独上色/描边。要做得先有水的矢量数据（另一张卡）。"
+      },
+      {
+       "k": "真阴影（投影遮挡）",
+       "why": "MapLibre 的 fill-extrusion **不投阴影**（无 shadow map）⇒ 本版用楼脚印深色薄层 + 贴边模糊线**近似**，不是真阴影。"
+      }
+     ]
+    },
+    "metrics": {
+     "groundHex": "#1e1e1e",
+     "groundLuma": 0.1185,
+     "rampFloorLuma": 0.247,
+     "bldGroundRatio": 2.084,
+     "outlineGroundRatio": 15.58,
+     "minGroundContrast": 1.35,
+     "separation": "luminance"
+    }
+   },
+   "anime": {
+    "id": "anime",
+    "label": "二次元（蔚蓝档案） · 游戏过场",
+    "hud": "二次元 · 平涂 · 游戏过场（深底亮线）",
+    "sky": {
+     "sky-color": "#42779b",
+     "horizon-color": "#bfe7fc",
+     "fog-color": "#92acbf",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.9,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#385069"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": [
+        "interpolate",
+        [
+         "linear"
+        ],
+        [
+         "zoom"
+        ],
+        13.6,
+        1,
+        14.8,
+        0
+       ],
+       "raster-saturation": 0.34,
+       "raster-contrast": 0.1,
+       "raster-brightness-max": 0.45
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#3e5c75",
+       "background-opacity": 0.82
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#8fb3ca"
+     ],
+     [
+      12,
+      "#A2D8F6"
+     ],
+     [
+      45,
+      "#fbfeff"
+     ]
+    ],
+    "roofFallback": "#77a1bb",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#b1e1fb",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(150, 214, 160, 0.45)",
+     "water": "rgba(79, 195, 234, 0.5)"
+    },
+    "road": {
+     "casing": "#27435d",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#ffffff",
+      "1": "#eef1f5",
+      "2": "#b3bfca",
+      "3": "#8799a9",
+      "4": "#6b8094",
+      "5": "#79cef4"
+     }
+    },
+    "canvas": {
+     "bg": "#3e5c75",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#b1e1fb",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(0,0,0,.35)",
+     "aiStroke": "rgba(0,0,0,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": {
+     "from": 13.6,
+     "to": 14.8
+    },
+    "verticalGradient": true,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.55,
+     15,
+     0.8,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": {
+     "shadow": {
+      "color": "#162029",
+      "opacity": 0.45,
+      "blur": 5,
+      "dx": 3,
+      "dy": 4,
+      "width": 1.1
+     },
+     "vignette": {
+      "color": "#22303f",
+      "opacity": 0.5,
+      "inner": 42,
+      "outer": 100
+     },
+     "road": {
+      "casingAdd": 2.2,
+      "widthScale": 1.25,
+      "glow": {
+       "ranks": [
+        0,
+        1,
+        2
+       ],
+       "blur": 9,
+       "opacity": 0.4,
+       "widthScale": 2.4
+      }
+     },
+     "skipped": [
+      {
+       "k": "水体（渐变 / 高光边）",
+       "why": "**没有水系矢量源**：本页只取 `/api/buildings`、`/api/roads`；`hydro.rs` 那套 Natural Earth 1:50m 只喂行政区划 SVG，且区级实测 0 环 ⇒ 江面在底图里只是**栅格像素**，无法单独上色/描边。要做得先有水的矢量数据（另一张卡）。"
+      },
+      {
+       "k": "真阴影（投影遮挡）",
+       "why": "MapLibre 的 fill-extrusion **不投阴影**（无 shadow map）⇒ 本版用楼脚印深色薄层 + 贴边模糊线**近似**，不是真阴影。"
+      }
+     ]
+    },
+    "metrics": {
+     "groundHex": "#476074",
+     "groundLuma": 0.361,
+     "rampFloorLuma": 0.6785,
+     "bldGroundRatio": 1.88,
+     "outlineGroundRatio": 4.71,
+     "minGroundContrast": 1.35,
+     "separation": "luminance"
+    }
    }
   }
  }

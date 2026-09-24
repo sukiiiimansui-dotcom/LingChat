@@ -309,17 +309,92 @@ export function lodPlan(src: PrerenderSource = "real"): {
      所以 HUD 必须回证「半径 R / 要素数 / 是否命中缓存 / 花了多久」，页面不许自己编。
    ══════════════════════════════════════════════════════════════════════════════ */
 export const WS_FETCH_R_MIN = 2000;
+/** 机主拍板的**策略上限**（将来源支持时用；当前被下面的源上限夹住） */
 export const WS_FETCH_R_MAX = 8000;
 /**
- * **后端单次查询的硬上限**（实测事实，不是策略）：`/api/buildings` 与 `/api/roads` 在
- * `src-tauri/src/world_map/...` 对应的调试服务里写死 `r ∈ (0, 2000]`，超过直接回
- * `{"ok":false,"error":"半径非法"}`（`world_map_rs/src/main.rs` 的 buildings_api/roads_api 两处）。
- * ⇒ 策略要 4~8km 时，调用方**必须**按它夹一次并**如实报出**「请求 X / 上限 Y」，
- *   否则页面只会拿到一串失败，看起来像"这一带没数据"。
- * 🔴 放开这个数需要**实测证据**（2026-09-25 实测：渝中 r=2000 的 Overpass 查询一次跑了 96.6s 才超时）；
- *    在拿到证据前，这里保持与后端一致 —— 策略与能力不一致时，**如实报差异**而不是假装。
+ * **后端单次查询的硬上限**（实测事实，不是策略）：`/api/buildings` 与 `/api/roads` 在调试服务里
+ * 写死 `r ∈ (0, 2000]`，超过直接回 `{"ok":false,"error":"半径非法"}`（`world_map_rs/src/main.rs`
+ * 的 buildings_api / roads_api 两处；fork 侧 App 通路 `src-tauri/src/world_map/mod.rs` 同款）。
  */
 export const WS_FETCH_R_BACKEND_MAX = 2000;
+/**
+ * 🔴 **数据源自己的上限 = 真正卡住的那一层**（2026-09-25 带对照组的 A/B 实测，不是拍脑袋）。
+ *
+ * 同一个端点（overpass-api.de）、相差 22 秒的两发，只有半径不同：
+ * | R | 结果 |
+ * |---|---|
+ * | 300m  | **200 / 1.8s / 100 个要素**（对照：端点当时是活的） |
+ * | 2000m | **504 Gateway Timeout**（9.2s，服务端直接拒）—— 注意这**就是现在放开的那一档** |
+ * | 4000m | 连接被掐（`OpenSSL SSL_read`）/ 另一端点 504 |
+ * | 8000m | 一次 200，但只回 **5,651** 个要素（同一片区域 Overture 有 **10.8 万栋**）⇒ **结果被截断** |
+ *
+ * 外加两条机制性事实：query 里 `[out:json][timeout:40]` 是**服务端**超时（我们改不了），
+ * 公共实例还有按 IP 的限流 ⇒ **不是"改大 Rust 的闸门就能拿"**。
+ * ⇒ 结论：**不放开**。放开只会把"明确的 `半径非法`"换成"慢失败 + 可能**静默截断**的错数据"，
+ *   而截断正是本项目最忌讳的那种错（看起来像"这一带楼少"）。
+ * ⇒ 远景**靠预渲染瓦片**（LOD 本来的设计），实时矢量只服务近景 2km。
+ */
+export const WS_FETCH_R_SOURCE_MAX = 2000;
+/* ══ 🛣 路网（**另一条源上限**：比楼更严 —— 2026-09-25 真机回归「道路全没了喵」）════════
+   后端实测（`/api/roads`，渝中 29.5567,106.5629；主会话与我各测一次，数字一致）：
+     r=600m  → **197 条 / 0~1s**（缓存命中）
+     r=800m  → `ok:false` / **0 条 / 99s**   ← 悬崖就在 600 与 800 之间
+     r=1200m → `ok:false` / **0 条 / 79~100s**
+     r=2000m → `ok:false` / **0 条 / 94s**
+   ⇒ 把路的半径跟楼一起抬到 2000m = **把路弄没了**（慢 94s 之后回 0 条）。教训：楼与路的
+     "能吃住的半径"**不是一个数**，不许共用一条策略；每一条都要有自己的实测上限。
+   ⇒ 单次取路**封顶 600m**；再远**不靠实时取数**，交给**预渲染瓦片**（真瓦片里已画 rank0~3 路网）——
+     这正是 LOD 的分工（近处实时 / 远处预渲染）。 */
+export const WS_ROADS_R_MAX = 600;
+export const WS_ROADS_LIMIT_WHY =
+  "后端实测：取路 r≥800m 会跑 79~100s 后返回空（800→0/99s、1200→0/79s、2000→0/94s；600 才有 197 条）"
+  + "⇒ 单次封顶 600m，远处的路看预渲染瓦片";
+
+/** 取路半径：**永远夹到实测上限**（与楼半径无关——两条源的能力不是一个数） */
+export function roadsRadiusFor(buildingsRadius: number | null | undefined): {
+  radius: number; wanted: number; capped: boolean; why: string | null;
+} {
+  const want = Number.isFinite(buildingsRadius as number) ? Math.max(0, Number(buildingsRadius as number)) : WS_ROADS_R_MAX;
+  const capped = want > WS_ROADS_R_MAX;
+  return { radius: WS_ROADS_R_MAX, wanted: capped ? want : WS_ROADS_R_MAX, capped, why: capped ? WS_ROADS_LIMIT_WHY : null };
+}
+
+/**
+ * 取路那一格的**判词**（三态 + "没取"与"没数据"必须分得开）。
+ *
+ * 机主真机回归的第二个坑：路取不到时页面写的是「这一带没有路网数据」——**把"没取到"说成了"没有"**。
+ * 五态各说各的话：`pending` 取数中 / `ok` 正数 / `empty` 0（已量：后端在这些块都回 0）/
+ * `failed` 取数失败（带原因）/ `off` 未开（?roads=0）。
+ */
+export function roadsVerdictText(input: {
+  state: "pending" | "ok" | "empty" | "failed" | "off";
+  n?: number | null;
+  radius?: number | null;
+  capped?: boolean;
+  wanted?: number | null;
+  why?: string | null;
+  cached?: boolean | null;
+  ms?: number | null;
+  err?: string | null;
+}): string {
+  const r = input.radius === null || input.radius === undefined ? "?" : String(Math.round(input.radius));
+  const cap = input.capped ? `（半径已封顶；本想要 ${Math.round(Number(input.wanted) || 0)}m —— ${input.why || ""}）` : "";
+  if (input.state === "off") return "🛣 未开（?roads=0）";
+  if (input.state === "pending") return `🛣 取数中…（r=${r}m${cap}）`;
+  if (input.state === "failed") return `🛣 取数**失败**：${input.err || "原因未知"}（r=${r}m${cap}）—— 不是「这一带没有路」`;
+  const n = input.n === null || input.n === undefined ? "数不出来" : (input.n === 0 ? "0（已量：后端返回 0 条）" : String(input.n));
+  const ch = input.cached === true ? " · 缓存命中" : (input.cached === false ? " · 实时取数" : "");
+  const secs = Number.isFinite(input.ms as number) ? ` · ${(Number(input.ms) / 1000).toFixed(1)}s` : "";
+  return `🛣 ${n} 条（r=${r}m${cap}${ch}${secs}）`;
+}
+
+/** 为什么只能到 2000m（HUD 要如实说出来，别让人以为是"我们不想给"） */
+export const WS_FETCH_R_LIMIT_WHY =
+  "Overpass 公共实例实测：R=2000 起常 504、R=8000 会静默截断 ⇒ 远景改用预渲染瓦片";
+/** 实际可用的上限（策略与能力取小）—— 调用方只该用这个 */
+export function wsFetchRadiusMax(): number {
+  return Math.min(WS_FETCH_R_MAX, WS_FETCH_R_SOURCE_MAX, WS_FETCH_R_BACKEND_MAX);
+}
 /** zoom → 半径（近景 2000m；每退一档加一档；`z ≤ 11` 顶格 8000m） */
 export const WS_FETCH_R_LADDER: ReadonlyArray<readonly [number, number]> = [
   [15, 2000], [14, 3000], [13, 4000], [12, 6000], [11, 8000],
@@ -361,18 +436,24 @@ export function fetchRadiusForZoom(zoom: number): number {
  */
 export function fetchRadiusForView(zoom: number, viewHalfMeters: number | null): {
   radius: number;
+  /** `cap` = 撞了**实际可用的上限**（策略要更多，但源给不了 —— `limitWhy` 说明原因） */
   decidedBy: "zoom" | "view" | "cap";
   zoomRadius: number;
   viewRadius: number | null;
+  /** 策略原本想要多少（被夹住时用来说明差距；没被夹住就是 radius） */
+  want: number;
+  /** 被夹住的原因（没被夹住 = null） */
+  limitWhy: string | null;
 } {
   const zoomRadius = fetchRadiusForZoom(zoom);
   const viewRadius = Number.isFinite(viewHalfMeters as number)
     ? fetchRadiusRound(Number(viewHalfMeters))
     : null;
+  const hardMax = wsFetchRadiusMax();
   const want = Math.max(zoomRadius, viewRadius === null ? 0 : viewRadius);
-  const radius = Math.min(WS_FETCH_R_MAX, Math.max(WS_FETCH_R_MIN, want));
-  const decidedBy = want > WS_FETCH_R_MAX ? "cap" : (viewRadius !== null && viewRadius > zoomRadius ? "view" : "zoom");
-  return { radius, decidedBy, zoomRadius, viewRadius };
+  const radius = Math.min(hardMax, Math.max(WS_FETCH_R_MIN, want));
+  const decidedBy = want > hardMax ? "cap" : (viewRadius !== null && viewRadius > zoomRadius ? "view" : "zoom");
+  return { radius, decidedBy, zoomRadius, viewRadius, want, limitWhy: want > hardMax ? WS_FETCH_R_LIMIT_WHY : null };
 }
 
 /**
@@ -381,10 +462,11 @@ export function fetchRadiusForView(zoom: number, viewHalfMeters: number | null):
  * （调用方拿到"够了"就 break）⇒ 加档只帮稀疏区、不伤密集区。
  */
 export function fetchRadiusLadder(zoom: number, viewHalfMeters: number | null): number[] {
+  const hardMax = wsFetchRadiusMax();
   const r0 = fetchRadiusForView(zoom, viewHalfMeters).radius;
   const out = [r0];
-  while (out[out.length - 1] < WS_FETCH_R_MAX) {
-    const next = Math.min(WS_FETCH_R_MAX, fetchRadiusRound(out[out.length - 1] * 2));
+  while (out[out.length - 1] < hardMax) {
+    const next = Math.min(hardMax, fetchRadiusRound(out[out.length - 1] * 2));
     if (next === out[out.length - 1]) break;
     out.push(next);
   }

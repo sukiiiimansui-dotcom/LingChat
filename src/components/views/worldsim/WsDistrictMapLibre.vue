@@ -210,7 +210,7 @@
   /* 🎬 场景装配（相机 + 层序）的**唯一真源**：与代拍页同一份（主会话要求"不许复制第二份"）。
      ⚠️ 数值**逐字保持**：本组件过去用 bearing 0 / maxPitch 85（与代拍页的 -18 / 70 不同），
      这两项**显式本地保留**并注明原因 —— 不许借"换源"顺手改观感。 */
-  import { cameraDefaults, sceneLayerPlan, sceneOrderViolations, sceneSelfReport } from "./wsScene";
+  import { applyPitchGuard, cameraDefaults, sceneLayerPlan, sceneOrderViolations, sceneSelfReport } from "./wsScene";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -3212,6 +3212,16 @@
       preserveDrawingBuffer: true,
     });
     map = m;
+
+    /* 🎬 侧视角护栏（**唯一真源** `wsScene.applyPitchGuard()`）—— 补「App = 代拍页那一屏」的欠账：
+       代拍页早就有这套（pitch > 55° 按比例降拖动/滚轮速度），App 侧一直没搬 ⇒ 侧视角一划就没
+       （同样的手指位移对应巨大的地面距离）。数值全部取自 `wsScene`，**不在这里抄第二份**。
+       调两次：建图后立刻一次（此刻 `dragPan` 可能还没挂 ⇒ 函数内部静默跳过），
+       之后每次 `pitch` 变化重设一次（已读源码确认 `enable()` 会重写惯性选项 ⇒ 真的生效）。 */
+    applyPitchGuard(m);
+    m.on("pitch", () => {
+      applyPitchGuard(m);
+    });
 
     /* 🔴 **必须有这个监听器**（2026-09-19 用一次真实事故换来的）：
        地图库的错误**不会**冒泡成 JS 异常 —— 样式校验失败时它只发一个 `error` 事件，

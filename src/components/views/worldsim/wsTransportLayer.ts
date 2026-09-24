@@ -103,6 +103,24 @@ export function buildTransportFor(
   center: [number, number],
   low = false
 ): TfResult {
+  /* 🔴 入参必须是 **GeoJSON FeatureCollection**（`{features:[{geometry:{coordinates}, properties}]}`）。
+     为什么值得一道护栏：**形状不对时它会静默产出 0 个点位**（页面上就是"交通设施一个都没有"
+     且零报错）。本会话自检里就踩到过：把已经摊平的**数组** `[{pts, cls}]` 直接喂进来 ⇒
+     `roads?.features` 是 `undefined` ⇒ `made:0 / kept:0`，看起来像"这一带没有设施"。
+     ⇒ 两件事：① 数组入参当场抛（那是把 `.features` 漏了）；② 两个都不给 = 合法的空输入（返回空）。 */
+  if (Array.isArray(roads) || Array.isArray(buildings)) {
+    throw new Error(
+      "buildTransportFor 要的是 GeoJSON FeatureCollection，不是 features 数组（漏了 .features 会静默变 0 个设施）"
+    );
+  }
+  const roadsArr = roads?.features;
+  const bldArr = buildings?.features;
+  if (roadsArr && roadsArr.length && !roadsArr.some(isGeoFeature)) {
+    throw new Error("buildTransportFor：roads 不是 GeoJSON FeatureCollection（要 geometry.coordinates）");
+  }
+  if (bldArr && bldArr.length && !bldArr.some(isGeoFeature)) {
+    throw new Error("buildTransportFor：buildings 不是 GeoJSON FeatureCollection（要 geometry.coordinates）");
+  }
   const toRoad = (f: NonNullable<TfRoadsFc["features"]>[number]): TfRoad => ({
     pts: (f?.geometry?.coordinates as Array<[number, number]>) || [],
     cls: Number(f?.properties?.class) || undefined,
@@ -114,9 +132,15 @@ export function buildTransportFor(
     const kind = (f?.properties?.building ?? f?.properties?.kind ?? "") as string;
     return { ring: ring as Array<[number, number]>, kind: String(kind || "") };
   };
-  const roadList = (roads?.features || []).map(toRoad).filter((r) => r.pts.length >= 2);
-  const bldList = (buildings?.features || []).map(toBld).filter((b) => b.ring.length >= 3);
+  const roadList = (roadsArr || []).map(toRoad).filter((r) => r.pts.length >= 2);
+  const bldList = (bldArr || []).map(toBld).filter((b) => b.ring.length >= 3);
   return buildTransport(roadList, bldList, center, low);
+}
+
+/** 这是不是一个 GeoJSON 要素（有 `geometry.coordinates`）？——**形状护栏**用，见 `buildTransportFor` */
+function isGeoFeature(f: unknown): boolean {
+  const g = (f as { geometry?: { coordinates?: unknown } } | null)?.geometry;
+  return !!g && Array.isArray(g.coordinates);
 }
 
 /**

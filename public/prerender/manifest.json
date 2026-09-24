@@ -51,9 +51,9 @@
  "staleFiles": [],
  "staleNote": "输出目录里**不在本轮计划内**的 PNG（大概是上一个 bbox/zoom 留下的）。**没有**并进 `tiles`：它们不是本轮真数据的产物，标成 real 就是撒谎；页面按清单判「缺图」，所以留它们会让那一格显示为「缺」——要么重跑覆盖，要么手工清掉。",
  "timings": {
-  "fetchSecs": 3.9,
-  "drawSecs": 24.2,
-  "totalSecs": 28.9
+  "fetchSecs": 3.8,
+  "drawSecs": 23.6,
+  "totalSecs": 28.3
  },
  "data": {
   "buildings": {
@@ -85,6 +85,7 @@
   },
   "places": {
    "elements": 0,
+   "requested": false,
    "failed": false,
    "error": null,
    "source": "OpenStreetMap / Overpass(place=*)"
@@ -95,13 +96,13 @@
   "roads": 2937
  },
  "cost": {
-  "fetchSecs": 3.9,
-  "drawSecs": 24.2,
-  "fetchSecsPerTile": 0.39,
-  "drawSecsPerTile": 2.419,
+  "fetchSecs": 3.8,
+  "drawSecs": 23.6,
+  "fetchSecsPerTile": 0.38,
+  "drawSecsPerTile": 2.365,
   "disks": 1,
   "disksReusedFromCache": 1,
-  "verdict": "取数 3.9s / 渲染 24.2s"
+  "verdict": "取数 3.8s / 渲染 23.6s"
  },
  "attribution": "楼房数据 © Overture Maps Foundation（ODbL 1.0）· 由 OpenStreetMap 等来源合成",
  "license": "ODbL-1.0（楼脚印）· ODbL（OSM 道路）",

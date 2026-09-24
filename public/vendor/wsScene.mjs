@@ -838,6 +838,9 @@ function lodViewTiles(bounds, zoom, maxzoom = PRERENDER_TILE_MAXZOOM) {
 }
 function lodTileVerdict(input) {
   const empty = {
+    real: null,
+    placeholder: null,
+    unknownKind: null,
     hit: null,
     hitGauge: "unknown",
     fail: null,
@@ -850,7 +853,12 @@ function lodTileVerdict(input) {
   if (!input.enabled) {
     return { state: "off", ...empty, why: "未启用（URL 加 `?lod=1` 才建预渲染层）" };
   }
-  const inv = input.inventory === null ? null : input.inventory instanceof Set ? input.inventory : new Set(input.inventory);
+  const raw = input.inventory === null || input.inventory === void 0 ? null : input.inventory;
+  const inv = raw === null ? null : raw instanceof Set ? raw : Array.isArray(raw) ? new Set(raw) : new Set(Object.keys(raw));
+  const kindOf = (k) => {
+    if (raw === null || raw instanceof Set || Array.isArray(raw)) return "unknown";
+    return lodTileKindOf(raw[k]);
+  };
   const view = input.view;
   if (!view) {
     return { state: "unknown", ...empty, why: "数不出来：拿不到视野/zoom（地图还没就绪）" };
@@ -858,6 +866,9 @@ function lodTileVerdict(input) {
   const keys = view.keys;
   const inInv = inv === null ? null : keys.filter((k) => inv.has(k)).length;
   const absent = inInv === null ? null : keys.length - inInv;
+  const real = inv === null ? null : keys.filter((k) => inv.has(k) && kindOf(k) === "real").length;
+  const placeholder = inv === null ? null : keys.filter((k) => inv.has(k) && kindOf(k) === "placeholder").length;
+  const unknownKind = inv === null ? null : keys.filter((k) => inv.has(k) && kindOf(k) === "unknown").length;
   const st = input.states || null;
   const hit = st ? st.loaded : input.loaded === null ? null : input.loaded.length;
   const hitGauge = st ? "cache" : input.loaded === null ? "unknown" : "events";
@@ -865,6 +876,7 @@ function lodTileVerdict(input) {
   const failGauge = st ? "cache" : input.failed === null ? "unknown" : "events";
   const why = [];
   if (inv === null) why.push("清单没取到 ⇒ 「本区应有/清单缺」数不出来");
+  if (unknownKind !== null && unknownKind > 0) why.push(`视野里有 ${unknownKind} 张清单记录**没标种类**（老清单）⇒ 真/占位分不出来`);
   if (hit === null) why.push("拿不到瓦片状态、事件里也没有 tile 坐标 ⇒ 命中数不出来");
   if (absent !== null && absent > 0) why.push(`视野里有 ${absent} 张**清单里没有** ⇒ 它们必然取不到（这是确定性证据，不依赖事件）`);
   if (view.capped) why.push(`视野瓦片数超过上限 ${LOD_VIEW_TILE_CAP} ⇒ 只数了一部分（不能说"共 N 张"）`);
@@ -872,6 +884,9 @@ function lodTileVerdict(input) {
   const state = absent !== null && absent > 0 ? "missing" : hit === null || inv === null || keys.length === 0 ? "unknown" : "ok";
   return {
     state,
+    real,
+    placeholder,
+    unknownKind,
     hit,
     hitGauge,
     fail,
@@ -895,6 +910,12 @@ function lodEventTileKey(e) {
     if (Number.isFinite(z) && Number.isFinite(x) && Number.isFinite(y)) return lodTileKey(z, x, y);
   }
   return null;
+}
+function lodTileKindOf(entry) {
+  if (entry === null || entry === void 0) return "unknown";
+  if (typeof entry === "number") return "placeholder";
+  const k = entry.kind;
+  return k === "real" || k === "placeholder" ? k : "unknown";
 }
 function lodLiveVerdict(input) {
   if (input.layerCount === 0) {
@@ -995,7 +1016,7 @@ function lodHudLine(input) {
   if (!input.enabled) return "🛰 LOD 未启用（URL 加 `?lod=1`；当前未建预渲染层）";
   const t = lodTierOf(input.zoom);
   const v = input.tiles;
-  const tileTxt = `瓦片 命中 ${lodNum(v.hit)}（口径=${v.hitGauge}） · 失败 ${lodNum(v.fail)}（口径=${v.failGauge}） · 清单缺 ${lodNum(v.absent)} · 本区应有 ${lodNum(v.view)}` + (v.capped ? " ⚠️被上限截断" : "");
+  const tileTxt = `瓦片 命中 ${lodNum(v.hit)}（口径=${v.hitGauge}） · 失败 ${lodNum(v.fail)}（口径=${v.failGauge}） · 本区 **真 ${lodNum(v.real)} / 占位 ${lodNum(v.placeholder)} / 缺 ${lodNum(v.absent, "0（已量）")}**` + (v.unknownKind ? `（另有 ${v.unknownKind} 张未标种类）` : "") + ` · 应有 ${lodNum(v.view)}` + (v.capped ? " ⚠️被上限截断" : "");
   const liveTxt = input.live ? `实时层 ${input.live.state === "missing" ? "0（已量：图层没建）" : lodNum(input.live.n)} 要素` : "实时层 数不出来（还没查）";
   return `🛰 LOD[${lodTierLabel(t)} 不透明度 ${lodOpacityAt(input.zoom).toFixed(2)}] ${tileTxt} · ${liveTxt}`;
 }
@@ -1678,6 +1699,7 @@ export {
   lodTierLabel,
   lodTierOf,
   lodTileKey,
+  lodTileKindOf,
   lodTileStatesOf,
   lodTileVerdict,
   lodTileX,

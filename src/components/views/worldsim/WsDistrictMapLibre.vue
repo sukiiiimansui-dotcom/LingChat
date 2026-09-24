@@ -3086,12 +3086,13 @@
       /* 🎬 相机默认值取自 `wsScene.cameraDefaults()`（唯一真源；数值与换源前**逐字相同** 16.4/38） */
       zoom: cameraDefaults().zoom,
       pitch: props.pitch || cameraDefaults().pitch,
-      /* `bearing 0` 是本组件的**本地选择**（代拍页是 -18）⇒ 显式保留，不借换源改观感 */
-      bearing: 0,
+      /* 🎬 2026-09-24 机主拍板「相机全统一」⇒ bearing/maxPitch 也取自 `wsScene`（-18 / 70）。
+         顺带修掉「侧视角一划就没」：原来 85° 太贴近地平线，同样的手指位移对应巨大的地面距离。 */
+      bearing: cameraDefaults().bearing,
       /* 🔴 `maxPitch` 必须显式放开：MapLibre 的默认上限是 **60°** ——
          不改的话机主"想往下压看天"最多压到 60，永远抬不起头。
          85° 是 MapLibre 允许的上限（90 会把相机压到与地面平行、数值上容易出问题）。 */
-      maxPitch: 85,
+      maxPitch: cameraDefaults().maxPitch, // 70（机主拍板：与代拍页统一）
       attributionControl: false,
       // 无头截图需要；真机无影响
       preserveDrawingBuffer: true,

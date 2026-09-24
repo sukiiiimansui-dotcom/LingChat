@@ -62,9 +62,15 @@
       .artb__row { white-space: nowrap; }
       .artb__ok { color: #7ee787; }
       .artb__bad { color: #ff7b72; }
-      /* 🏢 形体徽标（`?bld=2` 的回证）：**放左上**，因为右上被 art 徽标占了 */
-      .bldb { left: 8px; right: auto; max-width: 62vw; }
+      /* 🏢 形体徽标 + 🎮 观感徽标（`?bld=2` / `?look=2` 的回证）：**竖排叠在左上**
+         （右上被 art 徽标占了）。原来是各自 `position:fixed; left:8px; top:8px` ⇒ 两个会重叠，
+         所以套一个 flex 容器，徽标自己改成 `static`。 */
+      .badgesL { position: fixed; left: 8px; top: 8px; z-index: 25; max-width: 62vw;
+                 display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+      .bldb { position: static; left: auto; right: auto; max-width: 62vw; }
       .bldb .artb__h { color: #ffd479; }
+      #lookb .artb__h { color: #9ef7c4; }
+      .artb__skip { color: #d0b6ff; }
     </style>
   </head>
   <body>
@@ -77,9 +83,17 @@
     <!-- 🏢 形体徽标（`?bld=2`）：逐项回证"各细节生成了多少" + 当前档位。
          🔴 计数口径（三态）：正数=真的生成了这么多 · `0（已量）`=确实量到 0 · `数不出来`=没拿到统计。
          **绝不裸写 0** —— 免得"没数"和"数出来是 0"混在一起（点标题展开逐项）。 -->
-    <div id="bldb" class="artb bldb">
-      <div id="bldb-head" class="artb__h">🏢 形体 —</div>
-      <div id="bldb-body" class="artb__b"></div>
+    <div class="badgesL">
+      <div id="bldb" class="artb bldb">
+        <div id="bldb-head" class="artb__h">🏢 形体 —</div>
+        <div id="bldb-body" class="artb__b"></div>
+      </div>
+      <!-- 🎮 观感回证（`?look=2`）：逐项列"改了什么"，命中 ✅ / 未命中 ❌ / **跳过 ⏭**（跳过 = 如实记没做的项，
+           不是失败）；下面还带**对比度数值**（楼/地、描边/地）—— 低于阈值整行标红。 -->
+      <div id="lookb" class="artb bldb">
+        <div id="lookb-head" class="artb__h">🎮 观感 —</div>
+        <div id="lookb-body" class="artb__b"></div>
+      </div>
     </div>
     <div class="hud">
       <span><b id="m-n">0</b> 栋</span>
@@ -116,9 +130,9 @@
        * ⇒ 诊断图里带上版本戳，一眼分辨"跑的是哪一版"；请机主打开时在 URL 后面加
        *   一个 `&v=数字`（或先刷新清缓存），把旧缓存顶掉。
        */
-      /* v11（2026-09-24 晚）：加「模块被缓存成旧副本」的自愈 + 逐符号诊断（真机那次 `?bld=2` 什么都没变）。
+      /* v12（2026-09-24 晚）：🎮 `?look=2`「游戏过场」观感（派生主题 + 接触阴影 + 霓虹路 + 暗角 + 回证徽标）。
          ⚠️ `VENDOR_VER` 取的就是这个戳 ⇒ **换版必换模块 URL**，不会再撞 immutable 缓存。 */
-      const BUILD = "ws3dshow-2026-09-24-v11";
+      const BUILD = "ws3dshow-2026-09-24-v12";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -169,6 +183,27 @@
         return [Math.max(3, Math.round(base * jitter * 10) / 10), "kind"];
       }
 
+      /* ══ 🎮 「游戏过场」观感 `?look=2`（机主 2026-09-24：「**这个好难看，去网上学**」）════════
+         当时的样子：**整屏近白 + 楼像薄板 + 只有细描边** ⇒ 像石膏模型/蓝图，没有游戏感。
+
+         🔴 这一页**不自己写第二套配色**（与 `?art=` 那条同样的纪律）：
+         新观感 = `wsMapTheme.wsGameLook()` **派生**出来的一整套主题，由
+         `world_map/ws_map_theme_selftest.mjs --write-theme-json` 落进 `/wstheme.json` 的
+         `looks.game.<主题 id>`（和 `themes.<id>` **逐字段同构**）⇒ 页面只是**换一个对象**读。
+         页面自己只做**结构性**的三件事（颜色全从 `THEME.look` 取）：接触阴影两层、霓虹路两层、暗角一层。
+
+         A/B（**不加参数 = 这一页原来的行为，一字不改**）：
+           · （无参数）基准版：近白地面 + 平涂色阶 + 细描边；
+           · `?look=2`：深底亮线（地面压暗 + 描边翻亮）+ 楼体 3 档 cel + 竖向渐变 + 接触阴影 + 霓虹路 + 暗角；
+           · 可与 `?bld=2` / `?wstheme=night` 叠加（观感是**主题的**属性，形体是**几何的**属性，两者独立）。
+         ⚠️ 快照里没有 `looks.game`（老 `/wstheme.json` 被缓存 / 没重新生成）⇒ **如实回退基准主题**
+         并把原因写进徽标 —— 不许"开了却什么都没变"。 */
+      const LOOK = (function () { try { return /[?&]look=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; } })();
+      /** 观感 id（`look=1` 时为 null = 用基准主题；不做第三套观感） */
+      const LOOK_ID = LOOK === 2 ? "game" : null;
+      /** 观感**有没有真的生效**（三态：未开 / 已用派生主题 / 回退：原因）—— 徽标与 probe 都读它 */
+      let lookState = LOOK === 2 ? "待载入主题" : "未开（要 ?look=2）";
+
       const $ = (id) => document.getElementById(id);
       const errs = [];
       let maplibregl = null;
@@ -194,6 +229,9 @@
          A/B：`?wstheme=night` 回暗色、`?wstheme=anime` 二次元（不给就用默认=二次元）。
          取不到 JSON 时**退回本页原来那套暗色配方**（页脚会如实写"主题未加载"）。 */
       let THEME = null;
+      /** 基准主题（**永远是 `themes.<id>` 那一份**）。`?look=2` 时 `THEME` 是派生版，
+       *  回证/对比度要拿它当参照 ⇒ 两份都留着（"改了什么"才有得比）。 */
+      let THEME_BASE = null;
       let THEME_ID = "anime";
       try {
         const q = new URLSearchParams(location.search).get("wstheme");
@@ -207,12 +245,24 @@
           const j = await r.json();
           const t = j?.themes?.[THEME_ID];
           if (!t) throw new Error("快照里没有主题 " + THEME_ID);
-          THEME = t;
+          /* 🎮 观感：`?look=2` 时**换成派生主题**（同一份快照、同一个形状）。
+             拿不到就**如实回退基准**（回退 == 静默失效，这项目反复踩过）并把原因写进徽标。 */
+          const g = LOOK === 2 ? j?.looks?.[LOOK_ID]?.[THEME_ID] : null;
+          if (LOOK === 2) {
+            lookState = g
+              ? "已用派生主题（looks." + LOOK_ID + "." + THEME_ID + "）"
+              : "回退：快照里没有 looks." + LOOK_ID + "." + THEME_ID +
+                "（多半是 /wstheme.json 是旧的 ⇒ 跑 node ws_map_theme_selftest.mjs --write-theme-json，或强刷）";
+          }
+          THEME = g || t;
+          THEME_BASE = t; // 基准那一份永远留着（回证要能对比"改了什么"）
+          window.__LOOK_DEBUG__ = { look: LOOK, id: LOOK_ID, themeKeys: Object.keys(THEME || {}), lookKeys: Object.keys((THEME && THEME.look) || {}), outline: (THEME && THEME.outline) || null, isGame: !!g };
           /* 版本戳带上主题名 —— 代拍回来的图一眼能看出"跑的是哪一套"（缓存坑踩过） */
-          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label + " · " + artHud(); } catch {}
+          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label + " · " + artHud() + " · " + lookHud(); } catch {}
         } catch (e) {
           THEME = null;
-          try { document.getElementById("m-build").textContent = BUILD + " · 主题未加载(" + String(e).slice(0, 24) + ")"; } catch {}
+          if (LOOK === 2) lookState = "回退：主题快照没取到（" + String(e).slice(0, 32) + "）";
+          try { document.getElementById("m-build").textContent = BUILD + " · 主题未加载(" + String(e).slice(0, 24) + ") · " + lookHud(); } catch {}
         }
       }
 
@@ -310,6 +360,59 @@
        *
        * 规矩：**样式里只写"一开始就存在的东西"**；随数据来的图层一律 `addLayer` 后加。
        */
+      /**
+       * 🎮 楼体色阶表达式。
+       * · 基准版 = 平滑插值（`interpolate`，8 档）；
+       * · `?look=2` = **硬边 `step`（cel 分档）** —— 抄 cel shading 的"三档之间是硬边"。
+       *
+       * ⚠️ **停靠点与颜色都来自主题**（`THEME.ramp`），这里只决定"**插值形式**"
+       * ⇒ 换观感换的是关系，不是又一份配色（页面里没有一个楼体色号）。
+       */
+      function rampExpr(stops, ramp) {
+        if (LOOK === 2 && ramp && ramp.length >= 2) {
+          const out = ["step", ["get", "h3d"], ramp[0][1]];
+          for (let i = 1; i < ramp.length; i++) out.push(ramp[i][0], ramp[i][1]);
+          return out;
+        }
+        return ["interpolate", ["linear"], ["get", "h3d"], ...stops];
+      }
+
+      /**
+       * 🎮 **接触阴影**（`?look=2`）：把同一份楼脚印再画两遍，压在楼体**之下**。
+       *
+       * 为什么要这样：MapLibre 的 `fill-extrusion` **不投阴影**（没有 shadow map，
+       * 也没有 `fill-extrusion-ambient-occlusion-*` —— 那是 Mapbox 的字段，我们的 spec 里没有）。
+       * ⇒ 用"楼脚印的深色薄层"近似落地感：一层带像素偏移的**面**（太阳在左上 ⇒ 影子往右下）
+       *   + 一层贴边的**模糊线**（接触阴影，让楼像"坐"在地上而不是飘着）。
+       * 颜色/偏移/模糊**全部取自 `THEME.look.shadow`**（页面不写第二套数字）。
+       * 低档（`?low=1`）**不画**（两条全屏要素层，帧率优先）。
+       */
+      function bldShadowLayers() {
+        const s = THEME && THEME.look && THEME.look.shadow;
+        if (LOOK !== 2 || !s || BLD_LOW) return [];
+        return [
+          {
+            id: "bld-shadow", type: "fill", source: "bld",
+            paint: {
+              "fill-color": s.color,
+              "fill-opacity": s.opacity,
+              /* 屏幕空间偏移（不随 zoom 变 —— 太阳的位置不该因为放大而变） */
+              "fill-translate": [s.dx, s.dy],
+            },
+          },
+          {
+            id: "bld-ao", type: "line", source: "bld",
+            paint: {
+              "line-color": s.color,
+              "line-opacity": Math.min(1, s.opacity + 0.15),
+              "line-width": s.width,
+              /* 模糊 = "接触阴影"那种软边（硬边会像描边，不是影子） */
+              "line-blur": s.blur,
+            },
+          },
+        ];
+      }
+
       function bldLayerSpecs() {
         /* 色阶/描边/平涂开关**全部跟着主题走**（和产品组件同源，见 `wsMapTheme.ts`）。
            兜底值 = 本页原来那套暗色配方（与「一页一主题」原则一致：只在 `FALLBACK_RAMP` 写一份）。 */
@@ -321,25 +424,28 @@
         const stops = [];
         for (const [h, c] of ramp) stops.push(h, c);
         /* 🏢 `?bld=2` 走"拆件"那套图层（颜色读要素自带的 `color3d`、底座读 `h_base`） */
-        if (BLD === 2) return bldLayerSpecsDetail(outline, vgrad, opacity, stops);
-        return [
+        if (BLD === 2) return bldShadowLayers().concat(bldLayerSpecsDetail(outline, vgrad, opacity, stops, ramp));
+        return bldShadowLayers().concat([
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
             paint: {
               /* 按**渲染高度**上色：矮的沉下去、高的亮起来 ⇒ 一眼看出天际线的高低起伏。
-                 （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。） */
-              "fill-extrusion-color": ["interpolate", ["linear"], ["get", "h3d"], ...stops],
+                 （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。）
+                 🎮 `?look=2`：同一张色阶，但换成**硬边分档**（cel）。 */
+              "fill-extrusion-color": rampExpr(stops, ramp),
               "fill-extrusion-height": ["get", "h3d"],
               "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
               "fill-extrusion-opacity": opacity,
               /* 墙面竖向渐变：楼顶比楼底亮一点，体块才有"立起来"的感觉；
-                 二次元的**平涂**要关掉它（楼是一块纯色板才"动画"）。 */
+                 二次元的**平涂**要关掉它（楼是一块纯色板才"动画"）。
+                 🎮 `?look=2` 把主题的 `verticalGradient` 打开了（受光面/背光面 + 落地感）。 */
               "fill-extrusion-vertical-gradient": vgrad,
             },
           },
           {
             /* 轮廓线。暗色里它只是淡淡一圈；**二次元里它是主角** ——
-               BA 风的地面(0.919)和矮楼(0.87)亮度几乎一样，全靠这条深藏青细线把楼"勾"出来。 */
+               BA 风的地面(0.919)和矮楼(0.87)亮度几乎一样，全靠这条深藏青细线把楼"勾"出来。
+               🎮 `?look=2` 地面压暗之后，这条线**翻成亮线**（深底亮线），颜色同样来自主题。 */
             id: "bld-line", type: "line", source: "bld",
             paint: {
               "line-color": outline.color,
@@ -348,7 +454,7 @@
               "line-width": ART >= 2 ? outlineWidthExpr() : outline.width,
             },
           },
-        ];
+        ]);
       }
 
       /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
@@ -372,7 +478,7 @@
        *  · `bld-ext`：`win != 1` → 走色阶（与基准版同一张色阶，逐要素取 `color3d`）。
        * 互补由**要素上的 0/1 标记**保证（不是在图层的 filter 里拼表达式 —— 表达式报错是静默的）。
        */
-      function bldLayerSpecsDetail(outline, vgrad, opacity, stops) {
+      function bldLayerSpecsDetail(outline, vgrad, opacity, stops, ramp) {
         const paintCommon = {
           "fill-extrusion-height": ["get", "h3d"],
           /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
@@ -384,8 +490,9 @@
           id: "bld-ext", type: "fill-extrusion", source: "bld",
           paint: {
             ...paintCommon,
-            /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深） */
-            "fill-extrusion-color": ["coalesce", ["get", "color3d"], ["interpolate", ["linear"], ["get", "h3d"], ...stops]],
+            /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）。
+               🎮 `?look=2` 时兜底那条换成硬边分档（`color3d` 缺席的要素才走它）。 */
+            "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpr(stops, ramp)],
           },
         };
         if (WINS) colorLayer.filter = ["!=", ["get", "win"], 1]; // 与窗格层互补
@@ -654,6 +761,52 @@
       const ROADSON = (function () { try { return !/[?&]roads=0\b/.test(location.search); } catch (e) { return true; } })();
       let roadN = 0;
 
+      /**
+       * 🎮 路网在观感下的**加粗 + 霓虹辉光**（`?look=2`）。
+       *
+       * 抄的是 dev.to 那篇「把曼哈顿变成游戏过场」里**真写了**的做法：**一条 source、两层线** ——
+       * 下面一条宽而模糊的辉光，上面一条细而亮的路芯（霓虹感）。
+       * 加粗的理由是机主那句「道路偏细弱」：casing 与 fill **一起**加（只加一层会变成"边比路粗"）。
+       *
+       * 🔴 数字**全部取自 `THEME.look.road`**；每档的原宽度取自 `TF.roadStyleOf(rank).w`
+       * （`wsRoads.ts` 的唯一真源）⇒ 页面里没有第二张宽度表。
+       * 返回**新的 spec 数组**（不就地改传进来的对象 —— 免得同一份规格被改两次）。
+       */
+      function lookRoadSpecs(specs) {
+        const lr = THEME && THEME.look && THEME.look.road;
+        if (LOOK !== 2 || !lr) return { specs: specs, changed: 0 };
+        const TFr = window.__TF__;
+        if (!TFr || !TFr.roadStyleOf) return { specs: specs, changed: 0 };
+        const out = [];
+        let changed = 0;
+        for (const l of specs) {
+          const m = /^road-(casing|line)-(\d+)$/.exec(String(l.id || ""));
+          if (!m) { out.push(l); continue; }
+          const rank = Number(m[2]);
+          const w = Number(TFr.roadStyleOf(rank).w) || 1;
+          const paint = Object.assign({}, l.paint);
+          paint["line-width"] = m[1] === "casing" ? +(w + lr.casingAdd).toFixed(2) : +(w * lr.widthScale).toFixed(2);
+          changed++;
+          /* 辉光压在**同档 casing 之下**（插在它前面 ⇒ 画在地面之上、路之下） */
+          const glow = lr.glow;
+          if (m[1] === "casing" && glow && glow.ranks.indexOf(rank) >= 0) {
+            out.push({
+              id: "road-glow-" + rank, type: "line", source: "roads",
+              minzoom: l.minzoom, filter: l.filter, layout: l.layout,
+              paint: {
+                /* 辉光用**路芯的亮色**（用 casing 的暗色 = 一条看不见的黑晕） */
+                "line-color": (THEME.road && THEME.road.rankColors && THEME.road.rankColors[rank]) || paint["line-color"],
+                "line-width": +(w * glow.widthScale).toFixed(2),
+                "line-blur": glow.blur,
+                "line-opacity": glow.opacity,
+              },
+            });
+          }
+          out.push(Object.assign({}, l, { paint: paint }));
+        }
+        return { specs: out, changed: changed };
+      }
+
       async function applyRoads() {
         const TF2 = window.__TF__;
         if (!TF2) { $("m-msg").textContent = "路网：生成物未加载（/vendor/wsScene.mjs）"; return; }
@@ -672,11 +825,15 @@
           if (map.getSource("roads")) map.getSource("roads").setData(data);
           else map.addSource("roads", { type: "geojson", data });
           const specs = TF2.roadLayerSpecs((THEME && THEME.road) || undefined);
+          /* 🎮 `?look=2`：在**建层之前**就把宽度改好 + 插入辉光层（事后 setPaintProperty 也行，
+             但那会多一条"改没改到"的疑问；建层用同一份规格 = 屏幕上和回证里是同一份数据）。 */
+          const lk = lookRoadSpecs(specs);
+          window.__LOOK_ROAD_CHANGED__ = lk.changed;
           /* 🎬 before 来自**计划**（`wsScene.sceneLayerPlan()`）；拿不到才退回本地判断 */
           const before = planBefore("roads") !== undefined
             ? planBefore("roads")
             : (map.getLayer("bld-ext") ? "bld-ext" : (map.getLayer("ref") ? "ref" : undefined));
-          for (const l of specs) if (!map.getLayer(l.id)) map.addLayer(l, before);
+          for (const l of lk.specs) if (!map.getLayer(l.id)) map.addLayer(l, before);
         } catch (e) { errs.push("roadLayers " + e); }
         const stat = (roads && roads.stats) || null;
         window.__ROAD_N__ = roadN;
@@ -896,6 +1053,180 @@
           }).join("");
         } catch (e) { /* 徽标画不出来不影响页面 */ }
       }
+
+      /* ══ 🎮 观感 `?look=2`：暗角（DOM 叠加）+ 逐项回证 ≐════════════════════════════════════
+         为什么暗角走 DOM：MapLibre **没有屏幕空间后处理**（style-spec 里没有 vignette 这类字段，
+         `fill-extrusion-ambient-occlusion-*` / 根级 `fog` 都是 Mapbox 的，我们的构建不认）
+         ⇒ 只能叠一层 CSS 径向渐变。**这是近似，不是渲染管线里的暗角** —— 徽标里如实标。 */
+      let vigEl = null;
+      /** `#rrggbb` + alpha → `rgba()`（只对**主题给的颜色**做换算，不是第二套配色） */
+      function hexA(hex, a) {
+        const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+        if (!m) return String(hex || "transparent"); // 认不出就原样用（不抛）
+        const n = parseInt(m[1], 16);
+        return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + Math.max(0, Math.min(1, a)) + ")";
+      }
+      function applyLookVignette() {
+        try {
+          const v = THEME && THEME.look && THEME.look.vignette;
+          if (LOOK !== 2 || !v) { if (vigEl) vigEl.style.display = "none"; return; }
+          if (!vigEl) {
+            vigEl = document.createElement("div");
+            vigEl.id = "look-vig";
+            vigEl.setAttribute("aria-hidden", "true");
+            /* 只在地图之上、**不接手势**（pointer-events:none）—— 否则又把拖动吃掉了（老坑） */
+            vigEl.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2;";
+            document.body.appendChild(vigEl);
+          }
+          const c = hexA(v.color, v.opacity);
+          vigEl.style.background =
+            "radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 0%, rgba(0,0,0,0) " + v.inner + "%, " + c + " " + v.outer + "%)";
+          vigEl.style.display = "block";
+          window.__LOOK_VIG__ = { color: v.color, opacity: v.opacity, inner: v.inner, outer: v.outer };
+        } catch (e) { /* 暗角画不出来不影响地图 */ }
+      }
+
+      /** HUD 上的一句"这一版观感是什么"（**自证**，别让人猜） */
+      function lookHud() {
+        if (LOOK !== 2) return "look=1（基准）";
+        const m = THEME && THEME.metrics;
+        return "look=2 " + (m ? ("楼/地 " + m.bldGroundRatio + " · 描边/地 " + m.outlineGroundRatio + ":1") : "（无数）");
+      }
+
+      /**
+       * 🎮 **观感回证表**：逐项读**地图上真实的** paint 值（不是读我自己的变量）与主题期望值对照。
+       * 命中 ✅ / 未命中 ❌ / **跳过 ⏭**（跳过 = 如实记"没做/做不了"，不是失败）+ **对比度数值**。
+       * 低于阈值的那一行**标红**（`artb__bad`）—— 机主一眼能看出"是不是又看不清了"。
+       */
+      function lookReadback() {
+        try { return lookReadbackInner(); }
+        catch (e) { return [{ id: "回证", key: "取值抛错", now: String(e).slice(0, 90), want: null, hit: false, why: "回证表本身出错 ⇒ 如实报出来（不许把页面/probe 一起弄崩）" }]; }
+      }
+      function lookReadbackInner() {
+        if (LOOK !== 2) return null;
+        const look = THEME && THEME.look;
+        const rows = [];
+        const J = (v) => JSON.stringify(v);
+        const live = function (id, key) {
+          try { return { has: !!(map && map.getLayer && map.getLayer(id)), v: map && map.getPaintProperty ? map.getPaintProperty(id, key) : null }; }
+          catch (e) { return { has: false, v: "(取值抛错)" }; }
+        };
+        /** 一行：把"地图上的实际值"和"主题里期望的值"对上（缺图层 ⇒ `no-layer`，别当成"值不对"） */
+        const row = function (id, key, want, why) {
+          const g = live(id, key);
+          rows.push({
+            id: id, key: key, now: g.v, want: want,
+            hit: !g.has ? "no-layer" : J(g.v) === J(want), why: why,
+          });
+        };
+        /* ⚠️ 两个命名空间别混：`THEME.*` = 整套主题（ramp/outline/verticalGradient/extrudOpacity），
+           `look.*` = **观感专有的**那几个结构性旋钮（shadow/vignette/road/skipped）。混了就是静默读 undefined。 */
+        if (!look) {
+          rows.push({ id: "look", key: "派生主题", now: "没拿到", want: "looks.game." + THEME_ID, hit: false, why: lookState });
+          return rows;
+        }
+        /* ① 尺寸/结构：三层新图层在不在（阴影/接触阴影/暗角） */
+        row("bld-shadow", "fill-color", look.shadow.color, "楼脚印的深色薄层（近似阴影；MapLibre 不投阴影）");
+        row("bld-shadow", "fill-translate", [look.shadow.dx, look.shadow.dy], "影子往右下偏（太阳在左上）");
+        row("bld-ao", "line-blur", look.shadow.blur, "贴边模糊线 = 接触阴影（硬边会像描边）");
+        const order = (map.getStyle().layers || []).map(function (l) { return l.id; });
+        const below = order.indexOf("bld-shadow") >= 0 && order.indexOf("bld-ext") >= 0 && order.indexOf("bld-shadow") < order.indexOf("bld-ext");
+        rows.push({ id: "层序", key: "bld-shadow 在 bld-ext 之下", now: below ? "是" : "否（或层不在）", want: "是", hit: below, why: "影子和地面同层，必须在楼体之下" });
+        rows.push({ id: "暗角", key: "DOM 叠加层", now: window.__LOOK_VIG__ ? "已画" : "未画", want: "已画", hit: !!window.__LOOK_VIG__, why: "MapLibre 无屏幕空间后处理 ⇒ CSS 径向渐变近似（不是渲染管线里的暗角）" });
+        /* ② 主题层面：地面/描边/色阶/渐变 —— 全从**地图上的实时 paint** 读。
+           地面/底色/底图这三条的**期望值也从主题的样式层**里取（`THEME.layers`，和喂给地图的是同一份对象）
+           —— 快照里没有第二份 `tint`/`bg`/`raster` 字段可抄，也就抄不出错。 */
+        const lay = function (id, key) {
+          const l = (THEME.layers || []).filter(function (x) { return x.id === id; })[0];
+          return l && l.paint ? l.paint[key] : undefined;
+        };
+        row("tint", "background-color", lay("tint", "background-color"), "地面色罩 = 派生主题的地面色（整屏近白就是这一条在治）");
+        row("bg", "background-color", lay("bg", "background-color"), "底色（天空之外那圈）");
+        row("base", "raster-brightness-max", lay("base", "raster-brightness-max"), "底图压暗（不压 ⇒ 地面比楼亮，楼会消失）");
+        row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "受光面/背光面（基准平涂是 false）");
+        row("bld-ext", "fill-extrusion-opacity", THEME.extrudOpacity, "大气透视：远景更淡");
+        row("bld-line", "line-color", THEME.outline.color, "描边翻成亮线（深底上深描边会看不见）");
+        const cel = (function () { const p = live("bld-ext", "fill-extrusion-color"); return p.v; })();
+        const isCel = Array.isArray(cel) && cel[0] === "step";
+        rows.push({
+          id: "bld-ext", key: "fill-extrusion-color", now: isCel ? ("step（" + THEME.ramp.length + " 档）") : (Array.isArray(cel) ? cel[0] : cel),
+          want: "step（" + THEME.ramp.length + " 档）", hit: isCel, why: "cel 分档：硬边三档（受光/中间/背光），基准版是 8 档平滑插值",
+        });
+        /* ③ 路网：casing/fill 加粗 + 霓虹辉光 */
+        const lr = look.road;
+        const rs = (map.getStyle().layers || []).map(function (l) { return l.id; }).filter(function (id) { return /^road-(casing|line|glow)-/.test(id); });
+        const glowIds = rs.filter(function (id) { return id.indexOf("road-glow-") === 0; });
+        const w0 = (function () { try { return map.getPaintProperty("road-casing-0", "line-width"); } catch (e) { return null; } })();
+        row("road-casing-0", "line-width", (function () { const T2 = window.__TF__; return T2 && T2.roadStyleOf ? +(T2.roadStyleOf(0).w + lr.casingAdd).toFixed(2) : null; })(), "casing 与路芯一起加粗（只加一层 = 边比路粗）");
+        rows.push({
+          id: "霓虹辉光", key: "road-glow-*",
+          now: glowIds.length ? (glowIds.join(",") + "（casing-0 现在 " + w0 + "px）") : "没建（road-glow-* 一个都没有）",
+          want: ">0 层", hit: glowIds.length > 0, why: "一条 source 两层线（宽而模糊的辉光 + 细而亮的路芯）—— 抄 dev.to 那篇真写了的做法",
+        });
+        /* ④ 🔴 对比度（**低于阈值标红**）—— 数值由模块算好放进快照，页面**不再自己算第二遍**
+              （两把尺子的老坑：`gammaLuma` 与 `relativeLuminance` 不是一回事） */
+        const m = THEME.metrics;
+        if (m) {
+          rows.push({
+            id: "对比度", key: "楼/地（明度比）", now: m.bldGroundRatio + "（地面 " + m.groundHex + " 亮度 " + m.groundLuma + "）",
+            want: "≥ " + m.minGroundContrast, hit: m.bldGroundRatio >= m.minGroundContrast,
+            why: "🔴 楼亮于地 —— 这条不变量**基准版是放弃的**（`separation=outline`），派生版把它拿回来了",
+            red: m.bldGroundRatio < m.minGroundContrast,
+          });
+          rows.push({
+            id: "对比度", key: "描边/地（WCAG）", now: m.outlineGroundRatio + ":1",
+            want: "≥ 4.5:1", hit: m.outlineGroundRatio >= 4.5,
+            why: "非文字图形的 WCAG AA（描边在深底上够不够显眼）",
+            red: m.outlineGroundRatio < 4.5,
+          });
+          /* 基准值也列一行（"改了多少"要有个参照，不然只有绝对值看不出差别） */
+          const bm = THEME_BASE && THEME_BASE.metrics;
+          if (bm) rows.push({
+            id: "对比度", key: "基准版对照", now: "楼/地 " + bm.bldGroundRatio + " · 描边/地 " + bm.outlineGroundRatio + ":1 · 地面 " + bm.groundHex,
+            want: null, hit: null, why: "A/B 的参照（`?look=1` 那一版）",
+          });
+        } else {
+          rows.push({ id: "对比度", key: "—", now: "数不出来（快照里没有 metrics）", want: null, hit: null, why: "老 /wstheme.json 没有这一块 ⇒ 重新生成即可" });
+        }
+        /* ⑤ ⏭ 如实跳过（**不是失败**）：没做/做不了的项，逐条列出来 */
+        for (const s of look.skipped || []) rows.push({ id: "跳过", key: s.k, now: "未做", want: null, hit: null, skip: true, why: s.why });
+        return rows;
+      }
+
+      /** 把观感回证画到徽标里（点击展开/收起）—— 三种标记：✅ 命中 / ❌ 未命中 / ⏭ 跳过 */
+      function renderLookBadge() {
+        try {
+          const head = $("lookb-head");
+          const body = $("lookb-body");
+          const box = $("lookb");
+          if (!head || !body || !box) return;
+          const rows = lookReadback();
+          if (!rows) {
+            head.textContent = "🎮 观感 look=1（基准）";
+            body.innerHTML = '<div class="artb__row">· 想看新观感：URL 加 <b>?look=2</b>（深底亮线 / 三档 cel / 接触阴影 / 霓虹路 / 暗角）</div>' +
+              '<div class="artb__row">· 与 ?bld=2、?wstheme=night 可叠加（观感属于主题，形体属于几何）</div>';
+            head.onclick = function () { box.classList.toggle("is-open"); };
+            return;
+          }
+          const hitN = rows.filter(function (r) { return r.hit === true; }).length;
+          const missN = rows.filter(function (r) { return r.hit === false || r.hit === "no-layer"; }).length;
+          const skipN = rows.filter(function (r) { return r.skip; }).length;
+          const redN = rows.filter(function (r) { return r.red; }).length;
+          head.textContent = (missN || redN ? "⚠️ " : "") + "🎮 look=2（游戏过场） ✅" + hitN + " ❌" + missN + " ⏭" + skipN +
+            (redN ? (" 🔴对比度不足 " + redN) : "") + (lookState.indexOf("回退") === 0 ? (" · " + lookState) : "");
+          head.onclick = function () { box.classList.toggle("is-open"); };
+          body.innerHTML = rows.map(function (r) {
+            const mark = r.skip ? '<span class="artb__skip">⏭</span>'
+              : r.hit === true ? '<span class="artb__ok">✅</span>'
+                : (r.hit === false || r.hit === "no-layer") ? '<span class="artb__bad">❌</span>' : '<span>·</span>';
+            return "<div class=\"artb__row\"" + (r.red ? ' style="color:#ff7b72"' : "") + ">" + mark + " " + r.id + "." + r.key +
+              " = " + String(r.now) +
+              (r.hit === false || r.hit === "no-layer" ? (" 期望 " + String(r.want)) : "") +
+              " <i>" + r.why + "</i></div>";
+          }).join("");
+        } catch (e) { /* 徽标画不出来不影响页面 */ }
+      }
+
 
       /**
        * 🔴 侧视角（近地平线）**倍率爆炸**的护栏（机主 2026-09-21：「一下划不见」）。
@@ -1195,6 +1526,10 @@
           renderBldBadge();
           /* 🛣 路网先画（**在最下**），交通设施后画（**贴在路之上**） */
           if (ROADSON) { try { await applyRoads(); } catch (e) { errs.push("applyRoads " + e); } }
+          /* 🎮 观感回证放在**路网之后**（`road-casing-*` 是 applyRoads 建的，早了读不到它）：
+             暗角叠加 + 逐项回证（含对比度数值，低于阈值标红） */
+          applyLookVignette();
+          renderLookBadge();
           /* 🚌 `?tf=1`：楼到齐之后再摆交通设施（要用到楼栋轮廓） */
           if (TFON) { try { await applyTransport(window.__LASTFC__ || { features: [] }); } catch (e) { errs.push("transport " + e); } }
           /* 🔴 顺序**以事后断言为准**（机主真机回归：?tf=1 时路网不见了 ⇒ 不靠"先插的那一次"） */
@@ -1469,6 +1804,19 @@
           },
           sky: window.__SKY_GEO__ || null,
           contrast: window.__CONTRAST__ || null,
+          /* 🎮 观感自证（`?look=2`）：档位 + 用的是哪一份主题 + 逐项回证 + 对比度数值。
+             三态：`rows:null` ⇒ look=1（**未开**，不是失败）；`state` 里写清"已用派生主题"还是"回退：原因"。 */
+          look: {
+            mode: LOOK, id: LOOK_ID, state: lookState,
+            theme: THEME ? THEME.label : null,
+            themeBase: THEME_BASE ? THEME_BASE.label : null,
+            metrics: (THEME && THEME.metrics) || null,
+            metricsBase: (THEME_BASE && THEME_BASE.metrics) || null,
+            roadChanged: typeof window.__LOOK_ROAD_CHANGED__ === "number" ? window.__LOOK_ROAD_CHANGED__ : null,
+            vignette: window.__LOOK_VIG__ || null,
+            layers: (map.getStyle().layers || []).filter(function (l) { return /^(bld-(shadow|ao)|road-glow-)/.test(l.id); }).map(function (l) { return l.id; }),
+            rows: lookReadback(),
+          },
           /* 🎬 场景装配自证（主会话要求：等于公共模块 ⇒ ✅；页面自带 ⇒ 判"判不了"并写明还没换源） */
           scene: (function () {
             const TFx = window.__TF__;

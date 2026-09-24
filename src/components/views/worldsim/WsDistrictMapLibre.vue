@@ -1784,12 +1784,34 @@
       sawRender: boolean;
     };
     const layers = rep.layers.ids.map((id) => ({ id, type: rep.layers.types[id] || "?" }));
-    /* "主题期望的图层" —— 与当前档位同一份来源（`themeStyleParts`），少一条就能当场看出来 */
+    /* "主题期望的图层" —— 与当前档位**同一份来源、同一档位**（`themeStyleParts`），
+       少一条就能当场看出来。
+
+       🔴 2026-09-24 修掉一次**假报**（机主真机截图："主题图层齐：实际 8 条 / 期望 4 条 · 缺 tint"）：
+       这里原来写死 `low = false`（高档）去算期望，而**实际渲染按当前档位**——
+       低档下 `themeForTier()` 会把 `tint` 甚至 `sky` 摘掉（`dropTint`）⇒ 期望里带着 `tint`、
+       实际没有 ⇒ 面板年年报"缺 tint"，**而装配其实是正确的**。
+       ⇒ 现在两边都用 `perf.low.value`，并**如实标出档位**（差值就是"低档本来就少的那几层"）。 */
     let expected: string[] = [];
     try {
       expected = (themeStyleParts(theme.value, !!perf.low.value, 0).layers || []).map((l: { id?: string }) => String(l.id || ""));
     } catch {
       expected = [];
+    }
+    if (perf.low.value) {
+      const high = (() => {
+        try {
+          return (themeStyleParts(theme.value, false, 0).layers || []).map((l: { id?: string }) => String(l.id || ""));
+        } catch {
+          return [];
+        }
+      })();
+      const droppedByTier = high.filter((id) => !expected.includes(id));
+      if (droppedByTier.length) {
+        /* 记账（HUD 的 note 通道）：**"低档按设计摘掉了这几层"** —— 不是缺装配，别让人去查半天 */
+        const msg = `低档按设计摘掉图层：${droppedByTier.join(",")}（不是缺装配）`;
+        stats.note = stats.note && stats.note.includes(msg) ? stats.note : stats.note ? `${stats.note} · ${msg}` : msg;
+      }
     }
     return {
       kind: renderKind.value,
@@ -1798,6 +1820,11 @@
       fallbackWhy: fallbackWhy.value,
       fallbackKind: renderKind.value === "fallback2d" ? fallbackKind.value : "none",
       recovered: recovered.value,
+      /* ⚠️ 这一条是**读的那一刻**的原始值（`map.isStyleLoaded()`）：
+         它在"瓦片还在下"时会**长时间为 false**，而地图**可能早就画出内容了**
+         （本会话真机截图就出现过 `样式已加载=false` 与 `出过首帧=true` **同屏**）。
+         ⇒ 不粉饰原值，但在后面把 `sawRender` 一起写出来：**出过帧 = 这份 style 校验通过、
+         图层也建起来了**（样式若非法，`load` 永不触发，一帧都不会有）。 */
       isStyleLoaded: rep.isStyleLoaded,
       sawRender: rep.sawRender,
       layers,
@@ -2338,6 +2365,68 @@
     ]);
   }
 
+  /* ── 🔴 取数超时与重试（2026-09-24，父会话定的下一刀）──────────────────────────
+     为什么必须动：同一台后端实测**冷查 27~33s**（渝中 600m：buildings 27.3s / roads 32.5s），
+     而原来 App 侧一刀切 **20s / 25s 且不重试** ⇒ **冷启动那次几乎必然整批丢**，
+     屏幕上就是"一栋楼都没有 / 一条路都没有"，人只会以为"这一带没数据"。
+     口径：**等够 + 重试 + 失败必须可见**（三态：失败 / 空数据 / 成功，不许混）。
+     ⚠️ 这里只放宽"等多久"，**不改任何观感数值**；代价是冷启动那一次要等更久
+        （loading 动画一直在转，且 HUD 会写等了多久）。 */
+  const BLD_FETCH_MS = 55_000; // 单次上限（冷查实测最长 33s，留一倍余量）
+  const BLD_RETRIES = 2; // 最多再试 2 次（第 2 次起后端多半已在写缓存 ⇒ 命中是毫秒级）
+  /** 楼房取数试了几次（HUD/面板如实报 —— 只报"失败"看不出我们为此做了什么） */
+  let bldTries = 0;
+  /** 楼房取数失败的原因原文（超时/HTTP 码/后端 error） */
+  let bldFailedWhy = "";
+
+  /** 带重试的取楼：**失败必须能把原因带出去**（返回 null = 三次都没成） */
+  async function fetchBuildingsWithRetry(
+    lat: number | undefined,
+    lng: number | undefined,
+    r: number
+  ): Promise<unknown | null> {
+    let lastErr: unknown = null;
+    for (let i = 0; i <= BLD_RETRIES; i++) {
+      bldTries++;
+      try {
+        return await withTimeout(worldMapApi.buildings({ lat, lng, r }), BLD_FETCH_MS);
+      } catch (e) {
+        lastErr = e;
+        /* 每次失败都写进 HUD 的 note 通道（`stats.note`）—— 面板展开就能看到"第几次、为什么" */
+        const msg = String((e as Error)?.message || e || "").slice(0, 60);
+        bldFailedWhy = msg;
+        if (i < BLD_RETRIES) {
+          stats.note = stats.note ? `${stats.note} · 取楼失败重试中（${i + 1}/${BLD_RETRIES}）` : `取楼失败重试中（${i + 1}/${BLD_RETRIES}）：${msg}`;
+          /* 等 1.2s 再试：冷查那次后端往往正在写缓存，立刻重试会再排一次队 */
+          await new Promise<void>((res) => window.setTimeout(res, 1200));
+        }
+      }
+    }
+    throw (lastErr as Error) || new Error("取楼失败（原因未知）");
+  }
+
+  /** 路网取数试了几次（HUD/面板如实报） */
+  let roadTries = 0;
+
+  /** 带重试的取路：与 `fetchBuildingsWithRetry` **同一口径**（等够 + 重试 + 失败带原因） */
+  async function fetchRoadsWithRetry(lat: number, lng: number, r: number): Promise<unknown | null> {
+    let lastErr: unknown = null;
+    for (let i = 0; i <= BLD_RETRIES; i++) {
+      roadTries++;
+      try {
+        return await withTimeout(worldMapApi.roads({ lat, lng, r }), BLD_FETCH_MS);
+      } catch (e) {
+        lastErr = e;
+        const msg = String((e as Error)?.message || e || "").slice(0, 60);
+        if (i < BLD_RETRIES) {
+          stats.note = stats.note ? `${stats.note} · 路网取不到重试中（${i + 1}/${BLD_RETRIES}）` : `路网取不到重试中（${i + 1}/${BLD_RETRIES}）：${msg}`;
+          await new Promise<void>((res) => window.setTimeout(res, 1200));
+        }
+      }
+    }
+    throw (lastErr as Error) || new Error("取路失败（原因未知）");
+  }
+
   /**
    * **第二数据源补缺**（Overture Maps Buildings，ODbL）—— 「换源」那一刀。
    *
@@ -2458,7 +2547,10 @@
     if (key === lastRoadKey) return;
     lastRoadKey = key;
     try {
-      const geo = await withTimeout(worldMapApi.roads({ lat: c.lat, lng: c.lng, r }), 25000);
+      /* 🔴 2026-09-24：与取楼同一口径 —— **放宽上限（25s → 55s）+ 重试 2 次 + 失败可见**。
+         实测 `/api/roads` 渝中 600m **冷查 32.5s**（缓存命中 0.03s）⇒ 25s 那一刀必然砍掉冷查。
+         路网是"地图的骨架"，它丢了比楼丢了更明显（父会话的诊断里 App 面板曾有 🛣118，那是缓存命中时）。 */
+      const geo = (await fetchRoadsWithRetry(c.lat, c.lng, r)) as { type?: string; features?: unknown[] } | null;
       if (!alive) return;
       const fc = geo as { type?: string; features?: unknown[] } | null;
       const feats = (fc?.features || []) as BldFeature[];
@@ -2483,8 +2575,9 @@
          统计在**原始信封**里 ⇒ 这里显式放宽类型读一次；拿不到就给 null（HUD 会少一行统计，
          但**不会**编一个数字出来）。 */
       stats.roadNote = roadStatsLine((geo as { stats?: Record<string, unknown> } | null)?.stats ?? null);
-    } catch {
-      stats.note = stats.note ? `${stats.note} · 路网取不到` : "路网取不到（后端没响应或超时）";
+    } catch (e) {
+      const why = String((e as Error)?.message || e || "后端没响应").slice(0, 60);
+      stats.note = stats.note ? `${stats.note} · 路网取不到（${why}，已试 ${roadTries} 次）` : `路网取不到（${why}，已试 ${roadTries} 次）`;
     }
   }
 
@@ -3003,14 +3096,24 @@
       } catch {
         /* 定位拿不到：保持 undefined，让后端兜底（与原来行为一致） */
       }
-      let geo = districtWide ? null : await withTimeout(worldMapApi.buildings({ lat, lng, r: props.radius }), 20000);
+      let geo: { features?: unknown[] } | null = null;
+      if (!districtWide) {
+        /* 🔴 2026-09-24 取数超时重做（机主「有时矢量层不出现」→ 父会话定的下一刀）：
+           原来这里一把 **20s** 硬超时、**不重试**。而同一台后端实测**冷查 27~33s**
+           （`/api/buildings` 渝中 600m 冷 27.3s / `/api/roads` 32.5s；缓存命中 0.03~0.05s）
+           ⇒ **冷启动那次几乎必然超时** ⇒ `fc=null` ⇒ 屏幕上**一栋楼都没有**，
+           而人看到的只是"这一带没楼"（真因却是"我们没等够"）。
+           现在：**放宽到 55s** + **最多重试 2 次**（第 2 次开始后端多半已在写缓存 ⇒ 命中很快），
+           并把"超时/失败 + 试了几次 + 原文"如实写进 HUD（**三态：失败/空数据/成功，不许混**）。 */
+        geo = (await fetchBuildingsWithRetry(lat, lng, props.radius)) as { features?: unknown[] } | null;
+      }
       /* OSM 楼栋覆盖**极不均匀**（2026-09-19 实测同一个后端：涪陵区中心 400m→**0 栋**、600m→3 栋、
          1500m→29 栋；渝中区中心 400m→**152 栋**）。所以第一把太少时**自动放大一次**半径
          （只放一次、封顶 2500m，免得把 Overpass 打爆），并把这件事写进 HUD —— 不假装"没有楼房"。 */
       if (!districtWide && (geo?.features?.length ?? 0) < 5) {
         const r2 = Math.min(2500, Math.max(1500, props.radius * 3));
         triedRs.push(r2);
-        const geo2 = await withTimeout(worldMapApi.buildings({ lat, lng, r: r2 }), 20000);
+        const geo2 = (await fetchBuildingsWithRetry(lat, lng, r2)) as { features?: unknown[] } | null;
         if ((geo2?.features?.length ?? 0) > (geo?.features?.length ?? 0)) {
           geo = geo2;
           usedR = r2;
@@ -3018,9 +3121,11 @@
         }
       }
       fc = geo ? { features: geo.features as BldgFeat[] } : null;
-    } catch {
+    } catch (e) {
       fc = null;
       fetchFailed = true;
+      /* 失败原因**原样留下**（HUD/面板都要写它 —— 原来只有一句"后端没响应"，看不出是超时还是 500） */
+      bldFailedWhy = String((e as Error)?.message || e || "未知原因").slice(0, 60);
     }
     /* 记下**这次**的真实耗时：下一次进来它就成了"约还需"的依据（没有记忆就不画进度条） */
     const fetchMs = Math.round(performance.now() - tFetch);
@@ -3038,7 +3143,7 @@
     if (!fc || fc.error || !fc.features?.length) {
       /* 如实区分三种情况：请求失败 / 后端报错 / 真的这一带没有楼（别再把失败说成"没有数据"） */
       const base = fetchFailed
-        ? "楼房数据请求失败（后端没响应）"
+        ? `楼房取不到（${bldFailedWhy || "后端没响应"}，已试 ${bldTries} 次 · 半径 ${triedRs.join("m 与 ")}m）`
         : fc?.error
           ? String(fc.error).slice(0, 40)
           : districtWide

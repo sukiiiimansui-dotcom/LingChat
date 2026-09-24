@@ -24,7 +24,7 @@
       @toggle="verifyOpen = $event"
     />
     <!-- ── 顶栏 ─────────────────────────────────────────────────────── -->
-    <header class="ws-top">
+    <header v-if="!sceneOnly" class="ws-top">
       <button class="ws-btn ws-btn--ghost" type="button" title="回主菜单" @click="goMenu">←</button>
       <div class="ws-brand">
         <span class="ws-brand__ico" aria-hidden="true">🌏</span>
@@ -52,7 +52,7 @@
     </header>
 
     <!-- ── 定位来源 / 上次位置：如实告诉用户「这个位置是怎么来的」──────── -->
-    <div v-if="locLabel || restored" class="ws-srcbar">
+    <div v-if="!sceneOnly && (locLabel || restored)" class="ws-srcbar">
       <span class="ws-tag">{{ locLabel || "—" }}</span>
       <span v-if="areaLabel" class="ws-srcbar__now">当前：{{ areaLabel }}</span>
       <span v-if="restored" class="ws-srcbar__hint">（首次引导已走过，直接进上次位置）</span>
@@ -235,10 +235,11 @@
            ↑ 这些元素在代拍页 `ws3dshow.html` 那一屏里**一个都没有** —— 机主要的就是那一屏。
            恢复：`git revert <本 commit>`；备份 tag `attic/pre-sceneview2-20260924`。 -->
 
-      <!-- 悬浮手机（T5-1）：**保留**。
-           ⚠️ 它与上面那批"叠加"不同：它不在小区级那一屏里（`fixed` 定位、只在世界模拟的菜单/引导里出现），
-           而且机主 2026-09-18 明确要过「手机是**仅在地图里**的功能」。删它不在本轮授权范围。 -->
-      <WsPhone @open-app="onPhoneApp" />
+      <!-- 悬浮手机（T5-1）：**引导主线里保留**（机主 2026-09-18：「手机是**仅在地图里**的功能」），
+           但**小区级不显示** —— 机主 2026-09-24 真机截图把右下那两个浮动按钮列为"多余 UI"，
+           其中一个就是它（`.wsphone-fab`，fixed right/bottom）。
+           ⚠️ 这是"按级别显示"而不是删功能：国/省/市/区县那几级照旧有它。 -->
+      <WsPhone v-if="!sceneOnly" @open-app="onPhoneApp" />
 
       <!-- 🗄 2026-09-24 已移除（机主：「App 页现在只准保留代拍页代码」）：
            ⑦.6 事件流面板 `WsEventFeed`、⑧ `WsCharPanel`/`WsMePanel`、天气角标 `WsWeatherBadge`、
@@ -1470,13 +1471,25 @@
     return last2.join("·") || targetName.value;
   });
 
+  /**
+   * 🗄 2026-09-24 机主定位「**App 页才是最终结构**」+ 真机截图「**App 页有多余 UI**」：
+   * 走到小区级（`neighborhood`）之后，**只留那一屏**（地图 + 交通设施 + 🔬）。
+   * ⇒ 下面这些**页面外壳**在小区级一律不渲染：顶栏（标题/"小区" chip/回退/⋯）、
+   *   定位来源行（"上次位置 当前：…"）、底部动作条（下钻已退役，"回到区县/进入这个世界"
+   *   改由 `WsSceneView` 自己那一条负责）。
+   * ⚠️ 引导主线（国→省→市→区县）**照旧**保留顶栏与底栏 —— 那几级还需要它们。
+   */
+  const sceneOnly = computed(() => sim.step.value === "neighborhood");
+
   /** 主按钮「进入 X」只在国/省/市三级出现；区县阶段给的是「生成小区地图」 */
   const canEnter = computed(
     () => ["country", "province", "city"].includes(sim.step.value) && !!targetAd.value
   );
 
   const showFoot = computed(() =>
-    ["country", "province", "city", "district", "neighborhood"].includes(sim.step.value)
+    /* 🗄 2026-09-24：**去掉 `neighborhood`** —— 机主截图里"左下仍有回到区县/进入这个世界按钮条"，
+       而下钻已退役 ⇒ 小区级不再有这条底栏（那一屏自己的两个动作在 `WsSceneView` 里）。 */
+    ["country", "province", "city", "district"].includes(sim.step.value)
   );
 
   const footHint = computed(() => {

@@ -161,7 +161,7 @@
          `aedf87a` 给 `wsScene` 加了 3 个 LOD 导出但**没换戳**，`?v14` 的 vendor URL 被浏览器
          immutable 缓存占住 ⇒ LOD ❌0/✗2「模块里没有 lodPlan（重取后仍旧）」。
          本版：① 换戳；② `ensureVendor()` 加**一次性 token 强取**兜底（见下面那段注释）。 */
-      const BUILD = "ws3dshow-2026-09-25-v16";
+      const BUILD = "ws3dshow-2026-09-25-v17";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -831,10 +831,17 @@
        *     以前这里写 `stats.r || 600`，首屏取楼还没回来时就退到 **600m** ⇒ 楼铺 2km、路只画 600m，
        *     画面就是"楼成片、路只有中心一小撮"。现在由调用方传**同一个半径**，并且返回体带
        *     `cached/radius/count`（后端本身就有这些字段）⇒ HUD 能如实写"命中缓存"。 */
-      async function fetchRoads(r) {
+      async function fetchRoads(wantR) {
         const c = map.getCenter();
+        /* 🔴 半径**必须**夹到源实测上限（600m）：>600m 后端要跑 ~94s 才回 0 条 ⇒ 等于把路弄没了。
+           夹住时**如实报出**"本想要多少"（`capped/wanted/why` 进 fetchStat 与 HUD）。 */
+        const TF2r = window.__TF__;
+        const cap = (TF2r && typeof TF2r.roadsRadiusFor === "function")
+          ? TF2r.roadsRadiusFor(wantR)
+          : { radius: 600, wanted: wantR, capped: (wantR || 0) > 600, why: "模块缺 roadsRadiusFor（旧 vendor）" };
+        const r = cap.radius;
         const t0 = Date.now();
-        const res = await fetchWithTimeout(`${API}/api/roads?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`, FETCH_TIMEOUT_MS);
+        const res = await fetchWithTimeout(`${API}/api/roads?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`, ROADS_TIMEOUT_MS);
         const body = await res.json();
         const ms = Date.now() - t0;
         if (!body.ok) throw new Error((body.error || "ok=false") + (body.hint ? "（" + body.hint + "）" : ""));
@@ -842,6 +849,7 @@
           r: Number(body.radius) || r,
           n: Number(body.count) || ((body.geojson && body.geojson.features) || []).length,
           cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "",
+          capped: cap.capped, wanted: cap.wanted, why: cap.why,
         };
         renderFetchHud();
         return body;
@@ -927,20 +935,33 @@
         /* 🔴 半径**跟取楼同一个**（机主 2026-09-25：「剩下的路线也没画」）。
            取楼还没回来（`stats.r` 为 0）时，退到**策略半径**而不是旧的 600m ——
            否则首屏永远是"楼 2km / 路 600m"的错配。 */
+        /* 半径：**独立于楼**（两条源的能力不是一个数）+ 封顶 600m（见 wsScene.WS_ROADS_R_MAX 的实测） */
         const rRoads = stats.r || radiusForView();
+        const TFr = window.__TF__;
+        const capR = (TFr && typeof TFr.roadsRadiusFor === "function") ? TFr.roadsRadiusFor(rRoads) : { radius: 600, capped: (rRoads || 0) > 600, wanted: rRoads, why: null };
+        const vtext = (st, extra) => (TFr && typeof TFr.roadsVerdictText === "function")
+          ? TFr.roadsVerdictText(Object.assign({ state: st, radius: capR.radius, capped: capR.capped, wanted: capR.wanted, why: capR.why }, extra || {}))
+          : "🛣 " + st;
+        const roadEl = () => document.getElementById("m-roads");
+        fetchStat.road = { r: capR.radius, n: null, cached: null, ms: null, err: null, pending: true,
+                           capped: capR.capped, wanted: capR.wanted, why: capR.why };
+        renderFetchHud();
+        if (roadEl()) roadEl().textContent = vtext("pending");
         let roads = { features: [] };
         try { roads = await fetchRoads(rRoads); } catch (e) {
-          errs.push("roads r=" + rRoads + " " + e);
-          fetchStat.road = { r: rRoads, n: null, cached: null, ms: null, err: String(e).slice(0, 90) };
+          errs.push("roads r=" + capR.radius + " " + e);
+          fetchStat.road = { r: capR.radius, n: null, cached: null, ms: null, err: String(e).slice(0, 90),
+                             capped: capR.capped, wanted: capR.wanted, why: capR.why };
           renderFetchHud();
+          if (roadEl()) roadEl().textContent = vtext("failed", { err: String(e).slice(0, 60) });
+          return;   // ⚠️ 取不到**不建层**，但已经把原因写在 HUD 上（与"没数据"分开说）
         }
         const feats = (roads && roads.geojson && roads.geojson.features) || [];
         roadN = TF2.visibleRoadCount({ features: feats }, map.getZoom());
         if (!feats.length) {
-          /* 空结果**必须说出来**（同 App 的纪律：静默 = 让人以为"这里没路"） */
-          const el = document.getElementById("m-roads");
-          const why = fetchStat.road && fetchStat.road.err ? ("取数失败：" + fetchStat.road.err) : "这一带没有路网数据";
-          if (el) el.textContent = `🛣 0 条 · ${why}（${rRoads}m）`;
+          /* 空结果**必须说出来**（同 App 的纪律：静默 = 让人以为"这里没路"）。
+             ⚠️ 但"后端回 0 条" ≠ "这一带没有路" —— 用 `empty` 那一态，把口径写清。 */
+          if (roadEl()) roadEl().textContent = vtext("empty", { n: 0, cached: fetchStat.road && fetchStat.road.cached, ms: fetchStat.road && fetchStat.road.ms });
           return;
         }
         const data = { type: "FeatureCollection", features: feats };
@@ -1244,6 +1265,7 @@
        */
       async function applyLod() {
         if (!LOD_ON) { updateLodHud(); return; }
+        lodState = "建层中…";     // 别让徽标停在初值「待建层」——那读起来像"没人管"
         const plan = lodPlanOf();
         if (!plan) { updateLodHud(); return; }
         /* 清单：**只用于回证**（哪些键真的存在）—— 取不到不影响地图，但 HUD 会写清"清单没取到" */
@@ -1275,6 +1297,26 @@
           errs.push("lodLayer " + e);
         }
         updateLodHud();
+      }
+
+      /**
+       * 🛰 **把预渲染层摆回它该在的位置**（在矢量层之上、注记之下，取自 `wsScene` 的层序计划）。
+       *
+       * 为什么需要这一手：2026-09-25 真机回归后 LOD 改到**链首**建（否则会被慢取数堵住），
+       * 而楼体/路网是**之后**才加的 ⇒ 它们会盖在预渲染层上面（远景本该由瓦片盖住矢量层，反了就穿帮）。
+       * ⇒ 矢量层就位后调一次 `moveLayer`（幂等），并让 LOD 徽标的事后断言继续盯着它。
+       */
+      function applyLodOrder() {
+        const plan = lodPlanCache;
+        if (!plan || !map.getLayer(plan.layerId)) return false;
+        try {
+          const before = plan.beforeId && map.getLayer(plan.beforeId) ? plan.beforeId : undefined;
+          map.moveLayer(plan.layerId, before);
+          const order = (map.getStyle().layers || []).map(function (l) { return l.id; });
+          const TFx = window.__TF__;
+          if (TFx && TFx.sceneOrderViolations) window.__LOD_ORDER_VIOLATIONS__ = TFx.sceneOrderViolations(order);
+          return true;
+        } catch (e) { errs.push("lodOrder " + e); return false; }
       }
 
       /** 生成 + 画（**路网之上、楼体之下**：`before="bld-ext"`） */
@@ -1731,7 +1773,10 @@
             本页只做两件事：把"视野有多大"量出来喂进去、把结果**如实写到 HUD**。
          ⚠️ 代价如实报：半径翻倍 ⇒ Overpass 更慢、要素更多（实测见 HUD 的秒数与栋数）。
             所以每一步都有**超时**（AbortController）+ 失败可见（写 errs 与 HUD），绝不静默空着。 */
-      const FETCH_TIMEOUT_MS = 45000; // 单次取数上限（冷查 27~33s 是常态；45s 留冗余，超了**说出来**）
+      const FETCH_TIMEOUT_MS = 45000; // 单次**取楼**上限（冷查 27~33s 是常态；45s 留冗余，超了**说出来**）
+      /* 🛣 取路单独一个更短的上限：600m 命中缓存 1s、冷查十几秒；而**>600m 后端要跑 ~94s 才回 0 条**
+         （2026-09-25 实测）⇒ 路的超时给 12s：慢的立刻放弃并**可见地**说失败，绝不拖着整条初始化链。 */
+      const ROADS_TIMEOUT_MS = 12000;
       /** 最近一次取楼/取路的实况（HUD 只显示它，不自己编数字） */
       const fetchStat = {
         bld: null,   // {r, n, cached, ms, err}
@@ -1758,12 +1803,16 @@
         const v = viewHalfMeters();
         const zoom = map.getZoom();
         if (!TFv || typeof TFv.fetchRadiusForView !== "function") {
-          /* 模块旧（缺符号）时**如实退回**旧口径（350~2000），并让 HUD 说清楚——不静默换算法 */
-          fetchStat.view = { halfM: v, decidedBy: "模块缺 fetchRadiusForView", ladder: null };
-          return Math.max(350, Math.min(2000, Math.round(((v || 0) * 0.95) / 50) * 50));
+          /* 模块旧（缺符号）时**如实退回**到与源上限一致的口径，并让 HUD 说清楚——不静默换算法 */
+          fetchStat.view = { halfM: v, decidedBy: "模块缺 fetchRadiusForView", ladder: null,
+                             limitWhy: "模块里没有 fetchRadiusForView（多半是浏览器缓存了旧的 /vendor/wsScene.mjs）" };
+          return Math.max(500, Math.min(2000, Math.round(((v || 0) * 0.95) / 50) * 50));
         }
         const p = TFv.fetchRadiusForView(zoom, v);
-        fetchStat.view = { halfM: v, decidedBy: p.decidedBy, ladder: null, zoomRadius: p.zoomRadius, viewRadius: p.viewRadius };
+        /* ⚠️ `want`/`limitWhy` 必须一起带上：HUD 靠它们说清"策略要多少 / 为什么给不了"
+           （少带这两个字段，页面就只会干说一个 2000m —— 那正是机主说的"不许撒谎"） */
+        fetchStat.view = { halfM: v, decidedBy: p.decidedBy, ladder: null, zoomRadius: p.zoomRadius,
+                           viewRadius: p.viewRadius, want: p.want, limitWhy: p.limitWhy || null };
         return p.radius;
       }
 
@@ -1849,20 +1898,32 @@
         const v = fetchStat.view;
         const tag = (s) => {
           if (!s) return "未取";
-          if (s.err) return `失败：${s.err}${s.want && s.want > s.r ? `（策略要 ${s.want}m）` : ""}`;
+          if (s.err) return `失败：${s.err}`;
           const n = s.n === null || s.n === undefined ? "数不出来" : (s.n === 0 ? "0（已量）" : String(s.n));
           const secs = s.ms === null || s.ms === undefined ? "?" : (s.ms / 1000).toFixed(1) + "s";
           const ch = s.cached === true ? "缓存命中" : (s.cached === false ? "实时取数" : "缓存：数不出来");
-          return `R=${s.r}m${s.want && s.want > s.r ? `（策略 ${s.want}）` : ""} ${n} · ${ch} · ${secs}`;
+          const want = s.wanted || s.want;
+          return `R=${s.r}m${want && want > s.r ? `（策略要 ${want}，源给不了）` : ""} ${n} · ${ch} · ${secs}`;
         };
-        const zoomR = v && v.decidedBy ? `（${v.decidedBy === "view" ? "视野更大" : v.decidedBy === "cap" ? "撞 8km 上限" : "按 zoom 档位"}）` : "";
-        el.textContent = `🔭 取数 楼 ${tag(fetchStat.bld)} / 路 ${tag(fetchStat.road)}${zoomR}`;
+        const zoomR = v && v.decidedBy
+          ? `（${v.decidedBy === "view" ? "视野更大" : v.decidedBy === "cap" ? "撞可用上限" : "按 zoom 档位"}）`
+          : "";
+        /* 被源上限夹住时**明说**：策略要多少 / 源给不了多少 / 远景改走预渲染瓦片。
+           为什么必须在正文里说（不能只藏在 title）：机主的判词纪律是"如实报"，而这一格是他在
+           真机上唯一能看到的取数证据。 */
+        const clampNote = (v && v.decidedBy === "cap" && v.limitWhy)
+          ? `　⚠️ 策略要 ${v.want}m ⇒ 源上限 ${(window.__TF__ && window.__TF__.wsFetchRadiusMax) ? window.__TF__.wsFetchRadiusMax() : "?"}m，**远景不取数**（看预渲染瓦片）`
+          : "";
+        el.textContent = `🔭 取数 楼 ${tag(fetchStat.bld)} / 路 ${tag(fetchStat.road)}${zoomR}${clampNote}`;
+        const lim = (window.__TF__ && window.__TF__.wsFetchRadiusMax) ? window.__TF__.wsFetchRadiusMax() : null;
         el.title = [
           "取楼与取路用**同一个半径**（以前路固定 600m ⇒ 楼成片、路只有中心一小撮）",
-          "半径规则来自 wsScene.fetchRadiusForView：视野中心→角 与 zoom 档位取大者，夹到 [2km, 8km]",
+          "半径规则来自 wsScene.fetchRadiusForView：视野中心→角 与 zoom 档位取大者，夹到 [2km, 可用上限]",
           v ? `视野半对角线 ${v.halfM === null ? "数不出来" : v.halfM + "m"} · zoom 档位 ${v.zoomRadius || "?"}m` : "还没量视野",
           v && v.ladder ? "加档序列 " + v.ladder.join(" → ") + "m（够 25 栋即停）" : "",
-          "后端单查上限 2000m（`r ∈ (0,2000]`）：请求更大时后端回 `半径非法` ⇒ 这里会如实写失败，不假装取到了",
+          `可用上限 ${lim === null ? "数不出来" : lim + "m"}` + (v && v.limitWhy ? "：" + v.limitWhy : ""),
+          "远景**不靠实时取数**（源扛不住）：看预渲染瓦片（`?lod=1`）",
+          "🛣 取路另有更严的源上限 600m（实测 >600m 后端 94s 后回 0 条）—— 所以路的半径**不与楼共用**",
         ].filter(Boolean).join("\n");
       }
 
@@ -2042,25 +2103,43 @@
 
         let busy = false;
         map.on("load", async () => {
+          /* 🛰 **LOD 层排在最前**：它**不依赖任何取数**（栅格层只用瓦片 URL）。
+             🔴 2026-09-25 真机回归「道路全没了 + LOD 层压根没建」的真因就是**顺序**：
+             它原排在 `applyRoads()` 之后，而那次取路（r=2000，源扛不住）卡了 ~94s
+             ⇒ 面板停在 `待建层`、徽标 `路网 —`。**不是模块坏了，是链被一条慢请求堵住了。**
+             ⇒ 两条规矩：① LOD 在链首；② **慢取数一律不 await**（见下面路网那一段）。 */
+          try { await applyLod(); } catch (e) { errs.push("applyLod " + e); }
           await refresh();
           /* 🎨 回证表要在**楼体图层加完之后**读（`bld-line` 是 addLayer 加的）⇒ 放在 refresh 之后 */
           renderArtBadge();
           /* 🏢 形体回证（`?bld=2` 时最有信息量；bld=1 时如实写"未开"） */
           renderBldBadge();
-          /* 🛣 路网先画（**在最下**），交通设施后画（**贴在路之上**） */
-          if (ROADSON) { try { await applyRoads(); } catch (e) { errs.push("applyRoads " + e); } }
-          /* 🎮 观感回证放在**路网之后**（`road-casing-*` 是 applyRoads 建的，早了读不到它）：
-             暗角叠加 + 逐项回证（含对比度数值，低于阈值标红） */
-          applyLookVignette();
-          renderLookBadge();
+          /* 🛣 路网：**不 await**（取路可能慢到分钟级/直接失败，绝不许堵住后面的回证与交通设施）。
+             依赖它的两步（观感回证要读 `road-casing-*`、层序自愈要在层建好之后）挂在它自己的
+             `then` 里 ⇒ 顺序照样对，但链不会被它拖住。 */
+          if (ROADSON) {
+            const roadsTail = applyRoads().then(function () {
+              try { applyLookVignette(); renderLookBadge(); } catch (e) { errs.push("look " + e); }
+              /* 🔴 顺序**以事后断言为准**（机主真机回归：?tf=1 时路网不见了 ⇒ 不靠"先插的那一次"） */
+              try { ensureRoadOrder(); window.__ROAD_HEALS__ = roadHeals; } catch (e) { errs.push("roadOrder " + e); }
+              try { applyLodOrder(); scheduleLodHud(); } catch (e) { /* 忽略 */ }
+              try { renderRoadHud(); } catch (e) { /* 忽略 */ }
+            }).catch(function (e) { errs.push("applyRoads " + e); });
+            /* **最多等 1.5s**（不是 await 到底）：
+               · 缓存命中时取路 ~1s ⇒ 正常情况路与回证都就位再放行；
+               · 慢的（几十秒那种）**不阻塞**链尾的 `ready`，它在后台照样补上并刷新 HUD。
+               ⚠️ 为什么不干脆全不等：`?look=2` 的回证要读 `road-casing-*`（applyRoads 建的），
+                  `__w3d.ready` 早置位的话，自动拍照/自检会在"回证还没画"的瞬间取图（本次实测）。 */
+            await Promise.race([roadsTail, new Promise(function (res) { setTimeout(res, 1500); })]);
+          } else {
+            applyLookVignette();
+            renderLookBadge();
+          }
           /* 🚌 `?tf=1`：楼到齐之后再摆交通设施（要用到楼栋轮廓） */
           if (TFON) { try { await applyTransport(window.__LASTFC__ || { features: [] }); } catch (e) { errs.push("transport " + e); } }
-          /* 🔴 顺序**以事后断言为准**（机主真机回归：?tf=1 时路网不见了 ⇒ 不靠"先插的那一次"） */
-          ensureRoadOrder();
-          window.__ROAD_HEALS__ = roadHeals;
-          /* 🛰 LOD：预渲染层**最后插**（要在楼体/路网之上、注记之下 ⇒ 此刻矢量层都已就位）。
-             没开 `?lod` 时它只写一行 HUD 文案，**一个源/图层都不建**（默认观感逐字节不变）。 */
-          try { await applyLod(); } catch (e) { errs.push("applyLod " + e); }
+          /* 🛰 LOD 已在链首建过（见上）；这里**把它摆回层序计划里的位置**（矢量层此刻才齐），
+             再用事件驱动刷新回证 —— 不再重复建层。 */
+          try { applyLodOrder(); scheduleLodHud(); } catch (e) { /* 忽略 */ }
           /* ☁️ 天空叠加放在最后（它在最上层，但低 alpha 且只在地平线以上） */
           try { drawSky(); } catch (e) { errs.push("sky " + e); }
           window.__w3d.ready = true;

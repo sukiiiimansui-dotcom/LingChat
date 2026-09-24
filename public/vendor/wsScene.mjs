@@ -817,6 +817,29 @@ function lodPlan(src = "real") {
 var WS_FETCH_R_MIN = 2e3;
 var WS_FETCH_R_MAX = 8e3;
 var WS_FETCH_R_BACKEND_MAX = 2e3;
+var WS_FETCH_R_SOURCE_MAX = 2e3;
+var WS_ROADS_R_MAX = 600;
+var WS_ROADS_LIMIT_WHY = "后端实测：取路 r≥800m 会跑 79~100s 后返回空（800→0/99s、1200→0/79s、2000→0/94s；600 才有 197 条）⇒ 单次封顶 600m，远处的路看预渲染瓦片";
+function roadsRadiusFor(buildingsRadius) {
+  const want = Number.isFinite(buildingsRadius) ? Math.max(0, Number(buildingsRadius)) : WS_ROADS_R_MAX;
+  const capped = want > WS_ROADS_R_MAX;
+  return { radius: WS_ROADS_R_MAX, wanted: capped ? want : WS_ROADS_R_MAX, capped, why: capped ? WS_ROADS_LIMIT_WHY : null };
+}
+function roadsVerdictText(input) {
+  const r = input.radius === null || input.radius === void 0 ? "?" : String(Math.round(input.radius));
+  const cap = input.capped ? `（半径已封顶；本想要 ${Math.round(Number(input.wanted) || 0)}m —— ${input.why || ""}）` : "";
+  if (input.state === "off") return "🛣 未开（?roads=0）";
+  if (input.state === "pending") return `🛣 取数中…（r=${r}m${cap}）`;
+  if (input.state === "failed") return `🛣 取数**失败**：${input.err || "原因未知"}（r=${r}m${cap}）—— 不是「这一带没有路」`;
+  const n = input.n === null || input.n === void 0 ? "数不出来" : input.n === 0 ? "0（已量：后端返回 0 条）" : String(input.n);
+  const ch = input.cached === true ? " · 缓存命中" : input.cached === false ? " · 实时取数" : "";
+  const secs = Number.isFinite(input.ms) ? ` · ${(Number(input.ms) / 1e3).toFixed(1)}s` : "";
+  return `🛣 ${n} 条（r=${r}m${cap}${ch}${secs}）`;
+}
+var WS_FETCH_R_LIMIT_WHY = "Overpass 公共实例实测：R=2000 起常 504、R=8000 会静默截断 ⇒ 远景改用预渲染瓦片";
+function wsFetchRadiusMax() {
+  return Math.min(WS_FETCH_R_MAX, WS_FETCH_R_SOURCE_MAX, WS_FETCH_R_BACKEND_MAX);
+}
 var WS_FETCH_R_LADDER = [
   [15, 2e3],
   [14, 3e3],
@@ -843,16 +866,18 @@ function fetchRadiusForZoom(zoom) {
 function fetchRadiusForView(zoom, viewHalfMeters) {
   const zoomRadius = fetchRadiusForZoom(zoom);
   const viewRadius = Number.isFinite(viewHalfMeters) ? fetchRadiusRound(Number(viewHalfMeters)) : null;
+  const hardMax = wsFetchRadiusMax();
   const want = Math.max(zoomRadius, viewRadius === null ? 0 : viewRadius);
-  const radius = Math.min(WS_FETCH_R_MAX, Math.max(WS_FETCH_R_MIN, want));
-  const decidedBy = want > WS_FETCH_R_MAX ? "cap" : viewRadius !== null && viewRadius > zoomRadius ? "view" : "zoom";
-  return { radius, decidedBy, zoomRadius, viewRadius };
+  const radius = Math.min(hardMax, Math.max(WS_FETCH_R_MIN, want));
+  const decidedBy = want > hardMax ? "cap" : viewRadius !== null && viewRadius > zoomRadius ? "view" : "zoom";
+  return { radius, decidedBy, zoomRadius, viewRadius, want, limitWhy: want > hardMax ? WS_FETCH_R_LIMIT_WHY : null };
 }
 function fetchRadiusLadder(zoom, viewHalfMeters) {
+  const hardMax = wsFetchRadiusMax();
   const r0 = fetchRadiusForView(zoom, viewHalfMeters).radius;
   const out = [r0];
-  while (out[out.length - 1] < WS_FETCH_R_MAX) {
-    const next = Math.min(WS_FETCH_R_MAX, fetchRadiusRound(out[out.length - 1] * 2));
+  while (out[out.length - 1] < hardMax) {
+    const next = Math.min(hardMax, fetchRadiusRound(out[out.length - 1] * 2));
     if (next === out[out.length - 1]) break;
     out.push(next);
   }
@@ -1735,8 +1760,12 @@ export {
   WIN_PATTERN_SIZE,
   WS_FETCH_R_BACKEND_MAX,
   WS_FETCH_R_LADDER,
+  WS_FETCH_R_LIMIT_WHY,
   WS_FETCH_R_MAX,
   WS_FETCH_R_MIN,
+  WS_FETCH_R_SOURCE_MAX,
+  WS_ROADS_LIMIT_WHY,
+  WS_ROADS_R_MAX,
   WS_SCENE_SOURCE,
   applyPitchGuard,
   art3Summary,
@@ -1803,6 +1832,8 @@ export {
   roadLayersOf,
   roadStatsLine,
   roadStyleOf,
+  roadsRadiusFor,
+  roadsVerdictText,
   sceneGroupOf,
   sceneLayerPlan,
   sceneOrderViolations,
@@ -1815,5 +1846,6 @@ export {
   transportHudLine,
   viewHalfMetersOf,
   visibleRoadCount,
-  windowPatternSpec
+  windowPatternSpec,
+  wsFetchRadiusMax
 };

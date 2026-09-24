@@ -250,6 +250,14 @@ export interface WsMapLookSpec {
   };
   /** **如实**记录这一版没做/做不了的项（三态纪律：不许假装做过） */
   skipped: Array<{ k: string; why: string }>;
+  /**
+   * **如实**记录"做过又撤掉"的项（与 `skipped` 分开：一个是没做，一个是做了发现不对再撤）。
+   *
+   * 为什么要有这一栏（机主 2026-09-24 拍板后的返工）：第一版照"深底亮线"做了三件
+   * 事后被判定为**改美术方向**的东西（压暗地面 / 霓虹辉光 / 远景淡出）。
+   * 撤掉必须**留痕** —— 否则下一个人还会照同一个方向再试一遍。
+   */
+  reverted?: Array<{ k: string; why: string }>;
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -531,51 +539,52 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
 /* ══════════════════════════════════════════════════════════════════════════
  * 🎮 「游戏过场」观感：**由基准主题派生**出来的第二版（代拍页 `?look=2`）
  * ══════════════════════════════════════════════════════════════════════════
- * 机主原话：「**这个好难看，去网上学**」—— 当时的样子是"整屏近白 + 楼像薄板 +
- * 只有细描边"，读起来像**石膏模型/蓝图**，没有游戏感。
+ * 机主原话（2026-09-24 早）：「**这个好难看，去网上学**」⇒ 第一版做成了"深底亮线"。
  *
- * ## 抄了谁（都是公开参照；抄的是**做法**不是素材。每条都对着我**真取到**的内容写）
- * · **Mini Tokyo 3D**（`nagix/mini-tokyo-3d` 的 `assets/style.json`，157 层，逐字段读的）：
- *   **深底 + 高饱和强调线**；道路是 **casing/fill 一对**（同色系、亮度低一档、casing 只有 1~2px
- *   的"描边"）；楼体挤出**只有一档纯色**，纵深感靠 `fill-extrusion-vertical-gradient`
- *   （默认就是 true）而不是靠色阶 —— 这两条直接进了本版。
- *   ⚠️ 事实更正：MT3D **地面也是近白**（`hsl(20,20%,98%)`），它的"游戏感"来自**纵深**不是"深底"。
- *   我们这一版两个都做（地面压暗 **+** 纵深），A/B 才看得出"深底亮线"到底值不值。
- * · **cel shading**（Flax 引擎的 cel-shading 文档 + `buggzeth/three-js-toon-shader`）：
- *   平涂块面只要**三档**（Highlight / Key / Shadow），档与档之间是**硬边**。
- *   ⚠️ Flax 那两个阈值（0.9 / 0.4）是 **NoL 空间**的，不能照抄到"米"上 ——
- *   我们只抄"三档"这个数量，档位按楼高（3 / 12 / 45 m）自己定。
+ * 🔴 **机主当天真机点开后的裁定（本文件最重要的一段）**：
+ *    原话「**代拍页的地图底都看不清了，还有就是配色为什么把 BA 风格改喵了！**」
+ *    ⇒ 处理方式 = **保留结构、配色拉回 BA**：地面恢复亮底，只留接触阴影 / cel 硬边 / **弱**暗角。
+ *
+ * ## 🩸 教训（写死在代码里，免得下一个人照同一个方向再试一遍）
+ * **派生观感只能"加结构"，不许改机主拍板的美术方向。**
+ * BA 的"亮底 + 深藏青描边 + 平涂"是机主拍板并已验收过的美术（见 `ART-STUDY.md`）；
+ * 我把地面明度从 0.924 压到 0.361，属于**擅自改美术方向** —— 更讽刺的是，
+ * **我自己的调研里就写着**：Mini Tokyo 3D 的地面**也是近白**（`hsl(20,20%,98%)`），
+ * 它的游戏感来自**纵深**，不是"深底"。我拿"深底亮线"当 MT3D 的事实，方向一开始就选错了。
+ * ⇒ 派生件只准动两处：`ramp`（**分档形式**）与 `look`（**新增的结构层**）；
+ *    颜色类字段一律**逐字段等于基准**，并由自检守着（"低于基准即红"）。
+ *
+ * ## 这一版到底改了什么（只有两项，别再多）
+ * ① `ramp`：8 档平滑 → **3 档硬边（cel）**，而且**三档色全部从基准色阶里挑**
+ *    （`base.ramp` 的第 1 / 3 / 6 档，停靠点也跟着基准走）⇒ **一个新色号都没有**，
+ *    最暗档也**不低于**基准的最暗档（楼体不许被压暗）；
+ * ② `look`：**新增的结构层** —— 楼脚印接触阴影（面 + 贴边线）/ **弱**暗角 / 道路 casing+路芯加粗；
+ *    它们的取色全部由**基准色**派生（阴影 = 基准暗锚点往基准底色提一点，暗角 = 基准暗锚点）。
+ * 其余字段（`bg`/`tint`/`raster`/`sky`/`outline`/`road`/`canvas`/`baseFade`/`verticalGradient`/
+ * `extrudOpacity`/`low`/`separation`/`minGroundContrast`/`measuredLuma`）**逐字段原样**
+ * —— 代码上就是"只覆盖 ramp/label/hud/look 四个键"，自检里另有逐字段断言。
+ *
+ * ## 抄了谁（抄的是**做法**不是素材；每条都对着我真取到的内容写）
+ * · **cel shading**（Flax 的 cel-shading 文档 + `buggzeth/three-js-toon-shader`）：平涂块面只要
+ *   **三档**（Highlight / Key / Shadow）+ 档与档之间**硬边**。⚠️ Flax 的 0.9 / 0.4 是 **NoL 空间**的
+ *   阈值，**不能照抄到"米"上** ⇒ 只抄"三档"这个数量，档位用基准色阶自己的楼高停靠点。
+ * · **Mini Tokyo 3D**（`assets/style.json`，157 层逐字段读的）：楼体挤出**只有一档纯色**，
+ *   道路是 **casing/fill 一对**（同色系、亮度低一档）—— 后者对应本版的"路加粗"。
+ *   ⚠️ 它的 `fill-extrusion-vertical-gradient` 那条**没采纳**：BA 是机主拍板的**平涂**（渐变关），
+ *   受光/背光改用 **cel 分档**表达（同一需求，结构手段，不动美术方向）。
  * · **Mapbox cartography 指南**（官方 skill 文档；那份 PDF 取不到，**不以它为依据**）：
- *   层次分 4 级、非文字图形 **WCAG 4.5:1**、层级顺序（background→building→road→label）。
- * · **dev.to「把曼哈顿变成游戏过场」**：只抄了两件**它真写了**的 ——
- *   ① 霓虹路是**同一份 source 画两层**（下面宽而模糊的辉光 + 上面细而亮的路芯）；
- *   ② 相机（pitch 73~79）是过场感的大头 —— ⚠️ **相机不归这一版管**（`wsScene.cameraDefaults()`
- *   是唯一真源、机主已拍板 bearing -18 / maxPitch 70）。它**没有**讲竖向渐变/雾/暗角，
- *   所以本版不拿它当那些做法的依据。
+ *   非文字图形 **WCAG 4.5:1**、层级顺序（background→building→road→label）。
+ * · **dev.to「把曼哈顿变成游戏过场」**：它**真写了**的只有相机（pitch 73~79；⚠️ 相机不归这版管）
+ *   与"霓虹路 = 同一份 source 两层线"。⚠️ **霓虹辉光已撤**（见 `look.reverted`）。
  *
- * ⚠️ 一条**能力边界**（从 MapLibre 的 style-spec 逐字段核过）：MapLibre **没有**根级 `fog`、
- *    没有 `fill-extrusion-ambient-occlusion-*`、没有屏幕空间后处理 ⇒
+ * ⚠️ **能力边界**（style-spec 逐字段核过）：MapLibre **没有**根级 `fog`、
+ *    没有 `fill-extrusion-ambient-occlusion-*`、**没有屏幕空间后处理** ⇒
  *    真阴影 / 真暗角**做不了**，本版用"楼脚印薄层 + DOM 径向渐变"**近似**，徽标里如实标。
  *
  * ## 🔴 为什么是"派生"而不是"再写一套色板"
- * 项目纪律：**配色只有一个真源**（本文件）。手抄第二份色板 = 迟早和基准漂开
- * （这一页原来就是手抄的，见过）。所以这里的每一个颜色都是
- * `mixHex(基准色, 基准色, 系数)` 或 `shade(基准色, 系数)` ——
- * **两个输入都取自基准主题自己**（暗锚点 = `outline.color` 那个深藏青，
- * 亮锚点 = `sky["sky-color"]` 那个亮青蓝），一个**新色号都没引入**。
- * 自检里有一条专门钉它（改基准色 ⇒ 派生色必须跟着变）。
- *
- * ## 五条真因 → 五个旋钮（每一条都能在页面上 A/B 看出来）
- * | 真因 | 旋钮 |
- * |---|---|
- * | ① 缺影调（全白） | 地面往暗锚点压 + 楼体色阶**分 3 档**（`celBands`）+ 竖向渐变（受光/背光面） |
- * | ② 缺落地感 | `look.shadow`（楼脚印深色薄层 + 贴边模糊线）+ `look.vignette`（远楼暗角） |
- * | ③ 缺大气透视 | `extrudOpacity` 远景更淡 + `sky["fog-color"]` 往地面的蓝灰靠 |
- * | ④ 色相单一 | 底/地/水一体压向**青蓝**（暗锚点本身是藏青，不是灰） |
- * | ⑤ 道路没层次 | `look.road` 加粗 casing/fill + 暗 casing 配亮路芯 |
- *
- * ⚠️ **水体**（"渐变或高光边"）这一条**没做成** —— 页面上没有水系矢量源，
- *    如实写进 `look.skipped`，徽标里也照列（三态纪律：不许假装做过）。
+ * 项目纪律：**配色只有一个真源**（本文件）。所以派生件里出现的每个颜色，要么**就是**基准色，
+ * 要么是**基准色之间的混合**（`mixHex(基准色, 基准色, 系数)`）。自检用两条钉它：
+ * ① 配色类字段逐字段等于基准；② 把基准色换成探针色 ⇒ 派生色必须跟着变。
  */
 export type WsMapLookId = "base" | "game";
 
@@ -604,16 +613,28 @@ export function mixHex(a: string, b: string, t: number): string {
 export const WS_GAME_LOOK_ID: WsMapLookId = "game";
 
 /**
+ * 🔴 **地面明度的允许偏差 ε**（自检与徽标共用这一个数，别在两处各写一个）。
+ *
+ * 机主 2026-09-24 拍板："派生观感**不许降低地面明度**、不许换色系"。
+ * 判据两条（都在 `ws_map_theme_selftest.mjs` 里）：① `|派生 − 基准| ≤ ε`；
+ * ② **派生 < 基准 ⇒ 红**（哪怕只低一点点）。ε 留一点余量只是为了将来"想提亮一点点"这种正当改动，
+ * **绝不允许**用它来合法化"压暗地面"。
+ */
+export const WS_GAME_LOOK_GROUND_EPS = 0.02;
+
+/**
  * 🎮 由**基准主题**派生"游戏过场"观感（纯函数：同一个输入永远同一个输出，无随机、无时间）。
  *
- * @param base 基准主题（`ANIME` / `NIGHT` / 夜色变体都行 —— 颜色全部从它身上取）
+ * 只覆盖 4 个键：`label` / `hud`（文案）、`ramp`（分档形式）、`look`（结构层）。
+ * **颜色类字段一个都不覆盖** —— 见文件头那段教训。
+ *
+ * @param base 基准主题（`ANIME` / `NIGHT` / 夜色变体都行）
  */
 export function wsGameLook(base: WsMapTheme): WsMapTheme {
-  /* 两个锚点**都来自基准主题自己**（这就是"不写第二套配色"的字面含义）：
-     · 暗锚点 = 这套主题里**最暗**的那个纯色（anime 是描边那个深藏青 `#1B3550`）；
-     · 亮锚点 = 天顶色够亮就用它（anime 的 `#72C8F7`），不够亮（night 的天顶是近黑）
-       才退到"这套主题里最亮的那个色"（night 的 `#cfe8f5`）。
-     两个都是"从基准里挑"，而且**按亮度挑**（不是按字段位置）⇒ 换主题不会挑出一个暗的当亮线。 */
+  /* 结构色的**锚点**（从基准主题里按亮度挑，不新写色号）：
+     · 暗锚点 = 这套主题里最暗的纯色（anime 是描边那个深藏青 `#1B3550`）—— 亮底上的阴影必须够暗；
+     · 亮锚点 = 天顶色够亮就用它，不够亮（night 的天顶近黑）退到"主题里最亮的色"。
+     两个都按**亮度**挑（不是按字段位置）⇒ 换主题不会挑出一个暗的当亮线。 */
   const hexes = (...cs: unknown[]): string[] =>
     cs.filter((c) => /^#[0-9a-fA-F]{6}$/.test(String(c || ""))) as string[];
   /** 候选里**最暗**的一个（空表退回 `base.bg`，绝不抛） */
@@ -627,89 +648,26 @@ export function wsGameLook(base: WsMapTheme): WsMapTheme {
   const glow = gammaLuma(glowTop) >= 0.5 ? glowTop : brightest(hexes(base.antennaFallback, base.ramp[base.ramp.length - 1]?.[1], glowTop));
   const white = brightest(hexes(base.antennaFallback, base.ramp[base.ramp.length - 1]?.[1], base.roofFallback));
 
-  /* ① 影调：地面整体往暗锚点压。**楼亮于地**这条不变量这一版是**满足**的
-     （基准版靠描边、明度差是负的；这里把地压下去 ⇒ 明度差重新变成正的，见 `minGroundContrast`）。 */
-  const bg = mixHex(base.bg, deep, 0.86);
-  const ground = base.tint ? mixHex(base.tint.color, deep, 0.78) : mixHex(base.bg, deep, 0.72);
-  const tint = base.tint ? { color: ground, opacity: 0.82 } : null;
+  /* 🧱 ① cel 三档：**档位色与停靠点全部取自基准色阶**（第 1 / 3 / 6 档）——
+     一个色号都没新造，而且"最暗档"必然 ≥ 基准色阶的最暗档（楼体只会更亮，不会更暗）。 */
+  const pick = (i: number): [number, string] => base.ramp[Math.max(0, Math.min(base.ramp.length - 1, i))]!;
+  const ramp: Array<[number, string]> = [pick(0), pick(2), pick(5)];
 
-  /* ② 楼体色阶：**3 档**（背光面 / 中间调 / 受光面）。档位色全部从基准色阶里挑 + 往锚点混。
-     为什么要"挑"而不是"重排"：色阶顺序本身是美术结论（BA 的楼越高越白），别在这里改口径。 */
-  const low = mixHex(base.ramp[0]![1], deep, 0.28); // 背光面（矮楼）
-  const mid = base.ramp[Math.min(2, base.ramp.length - 1)]![1]; // 中间调（基准主题的主蓝，原样用）
-  const hi = mixHex(base.ramp[base.ramp.length - 2]![1], white, 0.5); // 受光面（近白）
-  const ramp: Array<[number, string]> = [
-    [3, low],
-    [12, mid],
-    [45, hi],
-  ];
-
-  /* ③ 亮线：地面压暗之后，**深色描边就看不见了** ⇒ 描边翻成"亮线"（这正是 MT3D 的深底+亮线）。
-     质量要求不变（WCAG 对非文字图形 ≥ 3:1，我们守 4.5:1），自检两套主题都算。 */
-  const outline = { color: mixHex(glow, white, 0.45), width: base.outline.width };
-
-  /* ④ 天空：天顶压深、地平线保持亮（黄昏/过场的"天光"，远景才有地方"化开"） */
-  const sky: Record<string, unknown> | null = base.sky
-    ? Object.assign({}, base.sky, {
-        "sky-color": mixHex(glow, deep, 0.55),
-        "horizon-color": mixHex(String(base.sky["horizon-color"] || base.bg), glow, 0.35),
-        "fog-color": mixHex(String(base.sky["fog-color"] || base.bg), ground, 0.45),
-        "atmosphere-blend": 0.9,
-      })
-    : null;
-
-  /* ⑤ 路网：casing 压到**比地面还暗**（路的"边"）、路芯保持亮 ⇒ 地面上一张亮线网 */
-  const road = {
-    casing: mixHex(deep, ground, 0.35),
-    casingOpacity: 0.95,
-    rankColors: Object.fromEntries(
-      Object.keys(base.road.rankColors).map((k) => {
-        const r = Number(k);
-        const c = base.road.rankColors[r]!;
-        /* 步道（rank 5）在基准里就是那条**亮青**强调线 —— 派生版保留它（这就是"高饱和强调线"） */
-        return [r, r === 5 ? mixHex(c, glow, 0.5) : mixHex(c, deep, [0, 0.06, 0.3, 0.48, 0.6][r] ?? 0.4)];
-      })
-    ) as Record<number, string>,
-  };
+  /* 🧱 ② 结构层的取色（都是**基准色之间的混合**）：
+     · 接触阴影：基准暗锚点往基准底色提一点（亮底上纯黑的影子会像第二圈描边）；
+     · 弱暗角：就用基准暗锚点本身，**强度靠 opacity 压到 0.18**（第一版 0.5 被机主判"底都看不清了"）。 */
+  const shadowColor = mixHex(deep, base.bg, 0.18);
 
   return Object.assign({}, base, {
-    id: base.id, // ⚠️ id **保持不变**：这是"同一套主题的另一个观感"，不是第三套主题（切换/存储口径不动）
     label: base.label + " · 游戏过场",
-    hud: base.hud + " · 游戏过场（深底亮线）",
-    separation: "luminance", // 地面压暗之后，楼/地重新靠**明度**分得开（这条不变量回来了）
-    sky,
-    bg,
-    raster: {
-      ...base.raster,
-      /* 底图也压暗：地面不能比楼还亮（一亮就把楼"吃"掉）。系数与 `tint` 是一组，别单独动。 */
-      base: { ...base.raster.base, "raster-saturation": 0.34, "raster-contrast": 0.1, "raster-brightness-max": 0.45 },
-    },
-    tint,
+    hud: base.hud + " · 游戏过场（cel 三档 + 接触阴影）",
     ramp,
-    roofFallback: mixHex(base.roofFallback, deep, 0.35),
-    antennaFallback: white,
-    outline,
-    baseFade: base.baseFade,
-    road,
-    canvas: {
-      ...base.canvas,
-      bg: ground, // 2D 降级路的底色 = 3D 地面色（两条路必须像同一座城）
-      bldStroke: outline.color,
-      aiShadow: "rgba(0,0,0,.35)",
-      aiStroke: "rgba(0,0,0,.5)",
-    },
-    /* ⑥ 受光面/背光面：竖向渐变**开**（基准的"平涂"关了它）——
-       档与档之间是硬边（cel 的色阶分档），同一面墙上还有从上到下的一点落差 ⇒ 体块感。 */
-    verticalGradient: true,
-    /* ⑦ 大气透视：远景楼更淡（和天色/雾色化在一起）。这就是"距离感"在没有 shadow/fog 的
-       地图库里的可行近似 —— **不是**真的按距离，是按 zoom（相机越远 ⇒ 楼越淡）。 */
-    extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.55, 15, 0.8, 17, 1],
-    low: { ...base.low, outlineWidth: base.low.outlineWidth },
-    minGroundContrast: 1.35,
     look: {
-      shadow: { color: shade(ground, 0.35), opacity: 0.45, blur: 5, dx: 3, dy: 4, width: 1.1 },
-      vignette: { color: shade(bg, 0.6), opacity: 0.5, inner: 42, outer: 100 },
-      road: { casingAdd: 2.2, widthScale: 1.25, glow: { ranks: [0, 1, 2], blur: 9, opacity: 0.4, widthScale: 2.4 } },
+      shadow: { color: shadowColor, opacity: 0.42, blur: 6, dx: 3, dy: 4, width: 1.1 },
+      vignette: { color: deep, opacity: 0.18, inner: 55, outer: 100 },
+      /* 路：**只加粗**（casing 与路芯一起加，取色仍走基准 `road` 调色板）；
+         霓虹辉光 = `null`（撤了，原因见下面 `reverted`）。 */
+      road: { casingAdd: 2.2, widthScale: 1.25, glow: null },
       skipped: [
         {
           k: "水体（渐变 / 高光边）",
@@ -723,8 +681,84 @@ export function wsGameLook(base: WsMapTheme): WsMapTheme {
           why: "MapLibre 的 fill-extrusion **不投阴影**（无 shadow map）⇒ 本版用楼脚印深色薄层 + 贴边模糊线**近似**，不是真阴影。",
         },
       ],
+      reverted: [
+        {
+          k: "压暗地面（第一版的「深底亮线」）",
+          why:
+            "**机主 2026-09-24 裁定**：「代拍页的地图底都看不清了」⇒ 地面回到 BA 亮底" +
+            "（`bg`/`tint`/`raster` 逐字段等于基准）。而且我自己的调研就写着 MT3D 地面**也是近白** " +
+            "⇒「深底」不是 MT3D 的事实，是我选错了方向。**派生件不许改机主拍板的美术方向。**",
+        },
+        {
+          k: "霓虹辉光（`road-glow-*`）",
+          why:
+            "**撤了**：它在「深底」前提成立时才有意义 —— BA 亮底上白色辉光与地面**同明度** ⇒ " +
+            "既看不见、又把路缘糊掉（**降低可读性**）。机制仍在数据里（`look.road.glow`，" +
+            "`null` = 不建层），要开只需改数据；页面那条路有自检守着（注入 glow 数据 ⇒ 层必须建出来）。",
+        },
+        {
+          k: "远景淡出（大气透视）",
+          why:
+            "**撤回基准值**（`extrudOpacity` 逐字段等于基准）：亮底上把远景楼调透明 = 楼「化」进地面，" +
+            "与机主「底要看得清」的诉求相反；它也不在机主的保留清单里（清单 = 接触阴影 / cel 硬边 / 路 casing）。",
+        },
+        {
+          k: "楼体竖向渐变（受光面/背光面）",
+          why:
+            "**撤回基准值**（`verticalGradient` 保持 false）：BA 的**平涂**是机主拍板的美术方向，" +
+            "「受光/背光」改用 **cel 分档**表达（结构手段），不再动渐变。",
+        },
+      ],
     },
   });
+}
+
+/**
+ * 🛰 **预渲染瓦片的调色板**（机主 2026-09-24：「采用近距离渲染，**远距离预渲染**的方式…」）。
+ *
+ * 为什么放在主题文件里：LOD 的"远处"是一张张**烘焙好的图**，颜色一旦写死在生成脚本里，
+ * 就变成了**第二套配色** —— 改主题时它会静默留在旧色上（这个项目为"两份"付过代价）。
+ * ⇒ 调色板**派生**自主题本身（和 `wsGameLook()` 同一套做法：挑锚点、不新写色号）。
+ *
+ * 🔴 口径（**改主题 ⇒ 瓦片跟着变**）：`world_map/make_prerender_tiles.mjs` 用本函数取色，
+ *    改完主题**必须重跑它**；`ws_lod_selftest.mjs` 会拿清单里的指纹与"现在从模块算出来的"
+ *    逐字节对拍 ⇒ 忘了重跑就红（不是靠人记得）。
+ *
+ * ⚠️ 骨架阶段这套色画的是**示意**瓦片（假几何），只为证明"切换/过渡/回证"成立；
+ *    真实楼脚印 + 路网的离线管线是**第 2 步**（另一张卡）。
+ */
+export interface WsPrerenderPalette {
+  /** 地面（= 色罩合成后的那个色，与 `metrics.groundHex` 同一把尺子） */
+  ground: string;
+  /** 楼块的几档（从主题高度色阶里挑：矮 / 中 / 高） */
+  blocks: string[];
+  /** 楼轮廓（主题描边色；可能是 `#rrggbb` 也可能是 `rgba()` —— 生成器两种都认） */
+  outline: string;
+  /** 路芯（按等级从高到低，取主题 `road.rankColors` 的 0~3 档） */
+  roadCore: string[];
+  /** 路描边（主题 `road.casing`） */
+  roadCasing: string;
+  casingOpacity: number;
+}
+
+export function wsPrerenderPalette(theme: WsMapTheme): WsPrerenderPalette {
+  const hex = (c: unknown): string | null => (/^#[0-9a-fA-F]{6}$/.test(String(c || "")) ? String(c) : null);
+  const rampHex = theme.ramp.map(([, c]) => hex(c)).filter((c): c is string => !!c);
+  /** 按"在色阶里的位置"挑一档（挑不到就退回主题的屋顶/兜底色 —— 派生件绝不抛） */
+  const at = (k: number): string => {
+    if (!rampHex.length) return hex(theme.roofFallback) || theme.bg;
+    const i = Math.max(0, Math.min(rampHex.length - 1, Math.round(k * (rampHex.length - 1))));
+    return rampHex[i]!;
+  };
+  const ranks = [0, 1, 2, 3].map((r) => hex(theme.road.rankColors[r])).filter((c): c is string => !!c);
+  return {
+    ground: groundHex(theme),
+    blocks: [at(0.3), at(0.55), at(0.85)],
+    outline: String(theme.outline.color || "#000000"),
+    roadCore: ranks.length ? ranks : [theme.bg],
+    roadCasing: String(theme.road.casing || theme.bg),
+    casingOpacity: theme.road.casingOpacity,
+  };
 }
 
 /**

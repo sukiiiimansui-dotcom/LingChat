@@ -745,9 +745,10 @@ var KIND_HEIGHT_M = {
   mosque: 15,
   museum: 18,
   construction: 12,
-  yes: 12
+  yes: 16.5
 };
-var FALLBACK_HEIGHT_M = 12;
+var UNKNOWN_KIND_BAND_M = [15, 18];
+var FALLBACK_HEIGHT_M = 16.5;
 function hash32(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -766,8 +767,15 @@ function renderHeight(props) {
     if (src === "height") return { h: Math.min(MAX_RENDER_H, raw), from: "real" };
     if (src === "levels") return { h: Math.min(MAX_RENDER_H, raw), from: "levels" };
   }
-  const base = KIND_HEIGHT_M[String(p.kind || "yes").toLowerCase()] ?? FALLBACK_HEIGHT_M;
-  const k = hash32(String(p.osm_id || p.name || "x")) % 31;
+  const seed = String(p.osm_id || p.name || "x");
+  const kind = String(p.kind || "yes").toLowerCase();
+  if (kind === "yes" || !Object.prototype.hasOwnProperty.call(KIND_HEIGHT_M, kind)) {
+    const k2 = hash32(seed + "#unk") % 101;
+    const h2 = UNKNOWN_KIND_BAND_M[0] + (UNKNOWN_KIND_BAND_M[1] - UNKNOWN_KIND_BAND_M[0]) * k2 / 100;
+    return { h: Math.min(MAX_RENDER_H, Math.max(3, Math.round(h2 * 10) / 10)), from: "kind" };
+  }
+  const base = KIND_HEIGHT_M[kind] ?? FALLBACK_HEIGHT_M;
+  const k = hash32(seed) % 31;
   const jitter = 1 - KIND_JITTER + 2 * KIND_JITTER * k / 30;
   const h = Math.max(3, Math.round(base * jitter * 10) / 10);
   return { h: Math.min(MAX_RENDER_H, h), from: "kind" };
@@ -1304,6 +1312,7 @@ export {
   TF_LOW_TIER_KINDS,
   TF_RULES,
   TOWER_MIN_H,
+  UNKNOWN_KIND_BAND_M,
   WIN_MIN_H,
   WIN_PATTERN_SIZE,
   WS_SCENE_SOURCE,

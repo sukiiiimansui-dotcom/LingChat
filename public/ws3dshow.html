@@ -129,12 +129,16 @@
       const KIND_H = {
         /* OSM 建筑类型 → 合理层高（米）。**这张表是"估算"，HUD 里单独计数，不混进真数据。**
            依据：中国城区最常见的形态（6~7 层住宅 ≈ 18~21m、临街商业 4~5 层 ≈ 15m、
-           写字楼/酒店 20 层起 ≈ 60m）。宁可保守，也别把老城区画成曼哈顿。 */
+           写字楼/酒店 20 层起 ≈ 60m）。宁可保守，也别把老城区画成曼哈顿。
+           🔧 2026-09-24 机主拍板：**裸 `building=yes`（说不清是什么楼的）12m → 15~18m**。
+           ⇒ 估算档位的**单一真源在 `wsBuildingLook.ts`**（`KIND_HEIGHT_M` + `UNKNOWN_KIND_BAND_M`）：
+             模块加载后 `renderHeight()` 直接走模块（见下面那个函数），这份小表只在**模块还没到**时兜底
+             （`yes` 取区间中点 16.5，与模块一致）—— 免得两处各写一份、慢慢漂。 */
         house: 7, detached: 7, semidetached_house: 7, bungalow: 4, hut: 3, shed: 3, garage: 3, garages: 3, roof: 3, carport: 3,
         residential: 18, dormitory: 15, apartments: 21, terrace: 9, commercial: 15, retail: 12,
         office: 45, hotel: 40, tower: 90, hospital: 24, school: 12, university: 15, kindergarten: 9,
         industrial: 10, warehouse: 9, factory: 10, church: 18, temple: 10, mosque: 15, museum: 18,
-        construction: 12, yes: 12,
+        construction: 12, yes: 16.5,
       };
 
       /** 稳定的字符串哈希（同一条 id 永远同一个数）—— 用来给"估算高度"加一点确定性抖动。
@@ -147,8 +151,16 @@
         return (h >>> 0);
       }
 
-      /** 渲染用高度：真高 → 层数×3（后端已折好）→ 按 OSM 类型估。返回 [米, 来源] */
+      /** 渲染用高度：真高 → 层数×3（后端已折好）→ 按 OSM 类型估。返回 [米, 来源]
+       *  🔧 **估算档位的单一真源在 `wsBuildingLook.ts`**（`KIND_HEIGHT_M` + `UNKNOWN_KIND_BAND_M`，
+       *  机主 2026-09-24 把裸 `building=yes` 从 12m 提到 15~18m）：模块到了就走模块的 `renderHeight()`，
+       *  没到才退回本页那份同值小表。**真高/层数两档不受影响**（它们本来就优先）。 */
       function renderHeight(p) {
+        const TFk = window.__TF__;
+        if (TFk && typeof TFk.renderHeight === "function") {
+          const r = TFk.renderHeight(p);
+          return [r.h, r.from];
+        }
         const h = Number(p.height);
         if (p.height_src === "height" && h > 0) return [h, "real"];
         if (p.height_src === "levels" && h > 0) return [h, "levels"];
@@ -867,6 +879,13 @@
             why: "打叉的就是缺的 ⇒ `?bld=2` 会退化；多半是浏览器缓存了旧的 /vendor/wsScene.mjs（服务端 immutable、URL 无内容哈希）⇒ 强刷/清缓存，或让主会话重建预览包",
           });
           rows.push({ k: "vendor", v: tfState + (window.__TF_FRESH__ ? "（重取版本 " + window.__TF_FRESH__ + "）" : ""), why: "静态 import 的模块可能与页面不同版；这条是自愈记录（「缺符号」不等于「产物里没有」）" });
+          /* 🔧 估算档位（**估算值，非事实**）：机主 2026-09-24 把裸 building=yes 从 12m 提到 15~18m */
+          const band = TFb && TFb.UNKNOWN_KIND_BAND_M ? TFb.UNKNOWN_KIND_BAND_M : null;
+          rows.push({
+            k: "估算档",
+            v: band ? (band[0] + "~" + band[1] + "m（building=yes / 未登记类型）") : "数不出来",
+            why: "**估算值，非事实**：没有高度数据时的兜底（HUD 单列「按类型估」，绝不并进「真高」）；真高与层数两档一律优先",
+          });
           if (window.__BLD_FALLBACK__) rows.push({ k: "回退", v: String(window.__BLD_FALLBACK__), why: "取不到形体生成 ⇒ 如实退回基准版（回退必须有回执）" });
           rows.push({ k: "未验", v: "真机观感", why: "本机无头无 WebGL ⇒ 这里只能回证「生成了什么、多少」；像不像真楼要机主真机刷新看" });
           const bad = BLD === 2 && (!count || winState.indexOf("失败") === 0 || tfMissing(window.__TF__).length > 0);

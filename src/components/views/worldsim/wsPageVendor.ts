@@ -48,6 +48,11 @@ export {
   shade,
   renderHeight,
   hash32,
+  /* 🔧 估算档位（裸 `building=yes` / 未登记类型 = **15~18m**；机主 2026-09-24 定）：页面徽标要显示它 */
+  KIND_HEIGHT_M,
+  FALLBACK_HEIGHT_M,
+  UNKNOWN_KIND_BAND_M,
+  KIND_JITTER,
   /* 几何工具（自检与将来的 App 侧接线都要用） */
   footprintMetrics,
   insetRing,

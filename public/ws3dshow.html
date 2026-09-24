@@ -161,7 +161,12 @@
          `aedf87a` 给 `wsScene` 加了 3 个 LOD 导出但**没换戳**，`?v14` 的 vendor URL 被浏览器
          immutable 缓存占住 ⇒ LOD ❌0/✗2「模块里没有 lodPlan（重取后仍旧）」。
          本版：① 换戳；② `ensureVendor()` 加**一次性 token 强取**兜底（见下面那段注释）。 */
-      const BUILD = "ws3dshow-2026-09-25-v17";
+      /* v18（2026-09-25）：🔑 **把「动 vendor 必须换戳」从纪律变成机制** ——
+         缓存键改用**产物自身的内容哈希**（`/vendor/wsScene.ver`，由 `scripts/build-ws-vendor.sh`
+         每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
+         为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
+         `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
+      const BUILD = "ws3dshow-2026-09-25-v18";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -632,9 +637,23 @@
           （`lodTileStatesOf`/`lodLiveVerdictOf`/`lodLiveLayerIds`）**却没换 BUILD 戳** ⇒ `?v14` 这个 URL
           早被浏览器 immutable 缓存占住（内容是旧的一份）⇒ 原来那句"带版本号重取"取到的**还是旧的**，
           页面于是如实报 `重取后仍缺`，LOD 就永远建不出层。
-          ⇒ 两条规矩：① **动 vendor 就必须换 BUILD 戳**；② 下面再加一层兜底——带版本号仍缺时用
+          ⇒ 两条规矩：① **动 vendor 就必须换 BUILD 戳**（v18 起**自动**了，见下）；② 下面再加一层兜底——带版本号仍缺时用
           **一次性 token** 强取（`?t=<时间戳>`，必然绕过任何缓存）。 */
-      const VENDOR_VER = BUILD;
+      let VENDOR_VER = BUILD;
+      /**
+       * 🔑 缓存键 = **vendor 产物自己的内容哈希**（`/vendor/wsScene.ver`，构建脚本每次生成时写入）。
+       * ⇒ 内容一变 URL 必换，**不依赖任何人记得换戳**（今天为此栽过三次）；取不到或格式不对就退回 `BUILD`。
+       * ⚠️ 只在"现有模块缺符号、准备重取"时才请求它（正常路径**零额外请求**）。
+       */
+      async function loadVendorVer() {
+        try {
+          const r = await fetch("/vendor/wsScene.ver", { cache: "no-store" });
+          if (!r.ok) return;
+          const t = String(await r.text()).trim();
+          /* 只认 8~64 位十六进制（防桩/防 404 页把版本号污染成 HTML） */
+          if (/^[0-9a-f]{8,64}$/.test(t)) VENDOR_VER = t;
+        } catch (e) { /* 取不到就用 BUILD —— 兜底不许制造新故障 */ }
+      }
       let tfState = "未取";
       /** 缺失的符号名（全在就是空数组） */
       function tfMissing(mod) {
@@ -651,6 +670,8 @@
         const have = window.__TF__;
         const miss0 = tfMissing(have);
         if (!miss0.length) { tfState = "完整"; return have; }
+        /* 🔑 重取前先取"内容版本"（模块缺符号才走这里 ⇒ 正常路径零额外请求） */
+        await loadVendorVer();
         try {
           const fresh = await import(/* @vite-ignore */ VENDOR_URL + "?" + encodeURIComponent(VENDOR_VER));
           const miss1 = tfMissing(fresh);

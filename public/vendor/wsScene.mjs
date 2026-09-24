@@ -919,6 +919,78 @@ function lodNum(n, measuredZero = "0（已量）") {
   if (n === 0) return measuredZero;
   return String(n);
 }
+var LOD_LIVE_LAYER_PREFIXES = ["bld-", "road-casing-", "road-line-", "road-glow-"];
+var LOD_LIVE_SOURCE_IDS = ["bld", "roads"];
+function lodLiveLayerIds(layerIds) {
+  return (layerIds || []).filter((id) => LOD_LIVE_LAYER_PREFIXES.some((p) => String(id).startsWith(p)));
+}
+function lodTileStatesOf(map, sourceId = PRERENDER_SOURCE_ID) {
+  try {
+    const tm = map && map.style && map.style.tileManagers ? map.style.tileManagers[sourceId] : null;
+    const cache = tm && tm._inViewTiles;
+    if (!cache || typeof cache.getTileByID !== "function") return null;
+    const ids = typeof cache.getAllIds === "function" ? cache.getAllIds() : typeof cache.getRenderableIds === "function" ? cache.getRenderableIds() : null;
+    if (!ids) return null;
+    const out = { loaded: 0, errored: 0, loading: 0, total: 0 };
+    for (const id of ids) {
+      const t = cache.getTileByID(id);
+      const s = t && t.state;
+      out.total++;
+      if (s === "loaded") out.loaded++;
+      else if (s === "errored") out.errored++;
+      else if (s === "loading" || s === "reloading") out.loading++;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+function lodLiveVerdictOf(map) {
+  if (!map || typeof map.getStyle !== "function") return null;
+  let layers = [];
+  try {
+    const st = map.getStyle();
+    layers = lodLiveLayerIds((st && st.layers || []).map((l) => String(l && l.id || "")));
+  } catch {
+    layers = [];
+  }
+  let rendered = null;
+  let source = null;
+  let tilesLoaded = null;
+  try {
+    if (layers.length && typeof map.queryRenderedFeatures === "function") {
+      const r = map.queryRenderedFeatures({ layers });
+      rendered = Array.isArray(r) ? r.length : null;
+    }
+  } catch {
+    rendered = null;
+  }
+  try {
+    if ((rendered === null || rendered === 0) && typeof map.querySourceFeatures === "function") {
+      let n = 0;
+      let anyOk = false;
+      for (const sid of LOD_LIVE_SOURCE_IDS) {
+        try {
+          const f = map.querySourceFeatures(sid);
+          if (Array.isArray(f)) {
+            n += f.length;
+            anyOk = true;
+          }
+        } catch {
+        }
+      }
+      source = anyOk ? n : null;
+    }
+  } catch {
+    source = null;
+  }
+  try {
+    if (typeof map.areTilesLoaded === "function") tilesLoaded = !!map.areTilesLoaded();
+  } catch {
+    tilesLoaded = null;
+  }
+  return lodLiveVerdict({ layerCount: layers.length, rendered, source, tilesLoaded });
+}
 function lodHudLine(input) {
   if (!input.enabled) return "🛰 LOD 未启用（URL 加 `?lod=1`；当前未建预渲染层）";
   const t = lodTierOf(input.zoom);
@@ -1521,6 +1593,8 @@ export {
   KIND_HEIGHT_M,
   KIND_JITTER,
   LOD_FAR_ZOOM,
+  LOD_LIVE_LAYER_PREFIXES,
+  LOD_LIVE_SOURCE_IDS,
   LOD_NEAR_ZOOM,
   LOD_VIEW_TILE_CAP,
   MAX_RENDER_H,
@@ -1593,7 +1667,9 @@ export {
   lodEventTileKey,
   lodHudLine,
   lodLayerSpec,
+  lodLiveLayerIds,
   lodLiveVerdict,
+  lodLiveVerdictOf,
   lodNum,
   lodOpacityAt,
   lodOpacityExpression,
@@ -1602,6 +1678,7 @@ export {
   lodTierLabel,
   lodTierOf,
   lodTileKey,
+  lodTileStatesOf,
   lodTileVerdict,
   lodTileX,
   lodTileY,

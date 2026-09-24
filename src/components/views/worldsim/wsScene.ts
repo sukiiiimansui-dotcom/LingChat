@@ -323,7 +323,13 @@ export interface LodTileVerdict {
   hitGauge: "cache" | "events" | "unknown";
   /** **加载失败**的瓦片数；`null` = 数不出来 */
   fail: number | null;
-  /** 失败数的口径（同上）。⚠️ 这个构建里 **404 不抛 error 事件**（读 vendored 源码确认）⇒ 真缺图看 `absent` */
+  /**
+   * 失败数的口径（同上）。
+   * 🔴 两个口径**看到的东西不一样**（读 vendored 源码确认）：
+   *   · `cache` = 瓦片 `state === "errored"` —— **含 404**（`_loadTile` 的 catch 里先置状态）⇒ 这才是"真缺图"；
+   *   · `events` = `map.on("error")` —— **收不到 404**（404 走的是 `this.update(...)`，不 fire）⇒ 会少报。
+   * ⇒ 页面优先用 `cache`；拿不到 cache 时如实标 `events`，并另有 `absent`（清单对拍，确定性）。
+   */
   failGauge: "cache" | "events" | "unknown";
   /** 当前视野**应有**多少张（按 zoom 夹到瓦片层算）；`null` = 数不出来（拿不到视野/zoom） */
   view: number | null;
@@ -511,6 +517,124 @@ export function lodNum(n: number | null, measuredZero = "0（已量）"): string
   if (n === null || n === undefined) return "数不出来";
   if (n === 0) return measuredZero;
   return String(n);
+}
+
+/* ── 读地图（宿主无关）：**回证要的证据**只在真源里取一次 ────────────────────────
+   为什么放这里（PR 标准①：运行期逻辑只在共享真源）：这两件事**代拍页与将来的 App 都要做**
+   （瓦片状态、实时层要素数）。放在页面里 ⇒ App 接线时必然抄第二份。
+   两个函数都只要求"有个地图对象"（不 import maplibre 类型）⇒ 页面、App、自检的假地图都能用。 */
+
+/** 「实时矢量层」= 楼体 + 路网 —— 这两类正是 LOD 远景要用瓦片替身的东西（前缀只有这一份） */
+export const LOD_LIVE_LAYER_PREFIXES: readonly string[] = ["bld-", "road-casing-", "road-line-", "road-glow-"];
+/** 这两个 geojson 源是场景里"实时矢量"的数据来源（与页面/App 的现有约定一致） */
+export const LOD_LIVE_SOURCE_IDS: readonly string[] = ["bld", "roads"];
+
+export function lodLiveLayerIds(layerIds: readonly string[]): string[] {
+  return (layerIds || []).filter((id) => LOD_LIVE_LAYER_PREFIXES.some((p) => String(id).startsWith(p)));
+}
+
+/** 地图对象里"瓦片缓存"那一小块（只要这几个方法；真 map 与假 map 都满足） */
+export interface LodTileCacheMapLike {
+  style?: {
+    tileManagers?: Record<string, { _inViewTiles?: {
+      getAllIds?: () => string[];
+      getRenderableIds?: () => string[];
+      getTileByID?: (id: string) => { state?: string } | undefined;
+    } } | undefined>;
+  } | null;
+}
+
+/**
+ * 读**瓦片状态**（只读诊断口径，最硬的那条证据）。
+ * 🔴 用 `getAllIds()`（视野里**全部**瓦片，含 `errored`）而不是 `getRenderableIds()`：
+ *    读 vendored 源码确认后者只返回 `isRenderable()` 的瓦片 ⇒ **errored 会被漏掉**，
+ *    那样"缺图数"永远是 0（把"数不出来"变成"确实没有"—— 判词纪律最防的那种误报）。
+ *    404 的瓦片同样是 `state="errored"`（`_loadTile` 的 catch 里先置状态）⇒ 这一条能数出真缺图。
+ * 拿不到（字段形状变了/早期版本）⇒ **返回 null**，调用方据此判"数不出来"。
+ */
+export function lodTileStatesOf(map: LodTileCacheMapLike | null | undefined, sourceId = PRERENDER_SOURCE_ID): LodTileStates | null {
+  try {
+    const tm = map && map.style && map.style.tileManagers ? map.style.tileManagers[sourceId] : null;
+    const cache = tm && tm._inViewTiles;
+    if (!cache || typeof cache.getTileByID !== "function") return null;
+    const ids = typeof cache.getAllIds === "function" ? cache.getAllIds()
+      : typeof cache.getRenderableIds === "function" ? cache.getRenderableIds() : null;
+    if (!ids) return null;
+    const out: LodTileStates = { loaded: 0, errored: 0, loading: 0, total: 0 };
+    for (const id of ids) {
+      const t = cache.getTileByID(id);
+      const s = t && t.state;
+      out.total++;
+      if (s === "loaded") out.loaded++;
+      else if (s === "errored") out.errored++;
+      else if (s === "loading" || s === "reloading") out.loading++;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** 地图对象里"查询要素"那一小块 */
+export interface LodQueryMapLike {
+  getStyle?: () => { layers?: Array<{ id?: string }> } | null;
+  queryRenderedFeatures?: (opts: { layers: string[] }) => unknown[] | null;
+  querySourceFeatures?: (sourceId: string) => unknown[] | null;
+  areTilesLoaded?: () => boolean;
+}
+
+/**
+ * 「实时层要素数」：**在这一个函数里**走完"屏幕可见 → 数据源 → 数不出来"三级口径
+ * （页面/App 都只调它 ⇒ 口径不会两边漂）。拿不到地图 ⇒ `null`（调用方写"还没查"）。
+ */
+export function lodLiveVerdictOf(map: LodQueryMapLike | null | undefined): LodLiveVerdict | null {
+  if (!map || typeof map.getStyle !== "function") return null;
+  let layers: string[] = [];
+  try {
+    const st = map.getStyle();
+    layers = lodLiveLayerIds(((st && st.layers) || []).map((l) => String((l && l.id) || "")));
+  } catch {
+    layers = [];
+  }
+  let rendered: number | null = null;
+  let source: number | null = null;
+  let tilesLoaded: boolean | null = null;
+  try {
+    if (layers.length && typeof map.queryRenderedFeatures === "function") {
+      const r = map.queryRenderedFeatures({ layers });
+      rendered = Array.isArray(r) ? r.length : null;
+    }
+  } catch {
+    rendered = null;
+  }
+  try {
+    /* 退路：数据源要素（⚠️ 瓦片没加载完时会数出 0 ⇒ 不能当"没有"）
+       一个源都查不到（还没建）⇒ 给 `null`（"数不出来"），**不是 0**。 */
+    if ((rendered === null || rendered === 0) && typeof map.querySourceFeatures === "function") {
+      let n = 0;
+      let anyOk = false;
+      for (const sid of LOD_LIVE_SOURCE_IDS) {
+        try {
+          const f = map.querySourceFeatures(sid);
+          if (Array.isArray(f)) {
+            n += f.length;
+            anyOk = true;
+          }
+        } catch {
+          /* 该源还没建：这一路没数到，但不算结论 */
+        }
+      }
+      source = anyOk ? n : null;
+    }
+  } catch {
+    source = null;
+  }
+  try {
+    if (typeof map.areTilesLoaded === "function") tilesLoaded = !!map.areTilesLoaded();
+  } catch {
+    tilesLoaded = null;
+  }
+  return lodLiveVerdict({ layerCount: layers.length, rendered, source, tilesLoaded });
 }
 
 /** HUD 那一行（页面只调它 ⇒ 文案口径也只有一份） */

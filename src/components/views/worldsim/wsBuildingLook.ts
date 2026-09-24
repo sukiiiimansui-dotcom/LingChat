@@ -38,8 +38,9 @@ export interface RenderHeight {
  *   · 6~7 层住宅（最常见的"老小区"）：≈ 18m
  *   · 临街商业 4~5 层：≈ 15m
  *   · 写字楼/酒店：40m 起；`tower` 是 OSM 里明确标的高塔，给 90m
- * ⚠️ 没匹配上的（含中国 OSM 里最多的裸 `building=yes`）用 **12m**：约 4 层，
- *    是"城区里最不容易出错"的一档（矮了像平房、高了像 CBD，都更假）。
+ * ⚠️ **说不清是什么楼的**（裸 `building=yes` / 未登记类型）走 `UNKNOWN_KIND_BAND_M` 那一档（**15~18m**）；
+ *    这张表里的 `yes` 只写该档的中点，作用有二：① 让读表的人一眼看到量级；
+ *    ② 模块还没加载时（代拍页 inline 兜底）用它。**真正的取值为区间 + 确定性哈希**，见 `renderHeight()`。
  */
 export const KIND_HEIGHT_M: Record<string, number> = {
   house: 7,
@@ -73,11 +74,31 @@ export const KIND_HEIGHT_M: Record<string, number> = {
   mosque: 15,
   museum: 18,
   construction: 12,
-  yes: 12,
+  yes: 16.5,
 };
 
-/** 兜底高度（米）：类型不认识时用（见 `KIND_HEIGHT_M` 的说明） */
-export const FALLBACK_HEIGHT_M = 12;
+/**
+ * 🔧 **估算档位**（`building=yes` / 未登记类型 ⇒ 没有任何高度数据时的兜底区间，米）。
+ *
+ * **这是估算值，不是事实** —— 只在后端 `height_src` 既不是 `height` 也不是 `levels` 时生效；
+ * HUD 上永远单列成「按类型估 N」，绝不混进「真高 N」。
+ *
+ * ## 为什么从 12m 提到 15~18m（机主 2026-09-24 拍板）
+ * 机主真机反馈「**大量楼像薄板/纸片平躺**」。用他那一屏的真数据量了一下
+ * （渝中区 `29.5567/106.5629`、r=800m、**378 栋**）：
+ *   · 高度中位数 **11.8m**、≥24m 只有 **25 栋**、≥60m **16 栋**；
+ *   · 平均脚印 **653m²**；**179 栋（47%）** 落在「h<15m 且脚印≥300m²」= 视觉上的薄板；
+ *   · 无高度的那批里 `building=yes` **141 栋**（占估算类 219 栋的 2/3）。
+ * ⇒ 薄板的根因是**估算值偏低 + 大脚印**，不是渲染路径。
+ * 中国城区的裸 `building=yes` 实测多为 4~6 层（≈15~18m），12m（≈4 层）偏矮；
+ * 取 15~18 还能让这批楼**跨过屋顶细节的 15m 门槛**（女儿墙/设备箱跟着出现，屋顶不再是一块平板）。
+ *
+ * ⚠️ 改这个区间就会改变**全站**（App 与代拍页共用本函数）的估算楼高 —— 改之前先看 HUD 的「按类型估 N」。
+ */
+export const UNKNOWN_KIND_BAND_M: [number, number] = [15, 18];
+
+/** 兜底高度（米）：类型不认识时用 = **估算档的中点**（见 `UNKNOWN_KIND_BAND_M`） */
+export const FALLBACK_HEIGHT_M = 16.5;
 
 /**
  * 稳定的 32 位哈希（FNV-1a）。**同一个 osm_id 永远得到同一个数**。
@@ -115,9 +136,19 @@ export function renderHeight(props: Record<string, unknown> | undefined | null):
     /* `levels` 档：后端已经按 levels×3 折好写进 height，直接用；它仍是 OSM 自己写的数 */
     if (src === "levels") return { h: Math.min(MAX_RENDER_H, raw), from: "levels" };
   }
-  const base = KIND_HEIGHT_M[String(p.kind || "yes").toLowerCase()] ?? FALLBACK_HEIGHT_M;
+  const seed = String(p.osm_id || p.name || "x");
+  const kind = String(p.kind || "yes").toLowerCase();
+  /* 🔧 「说不清是什么楼」那一档（裸 `building=yes` / 未登记类型）：**15~18m 区间**，
+     区间内位置由 `hash32(seed + "#unk")` 决定 ⇒ 同一栋楼每次一样、整片看又有参差（**不是随机数**）。
+     见 `UNKNOWN_KIND_BAND_M` 上方的依据（机主 2026-09-24：12m 太低 ⇒ 大脚印的楼像薄板）。 */
+  if (kind === "yes" || !Object.prototype.hasOwnProperty.call(KIND_HEIGHT_M, kind)) {
+    const k = hash32(seed + "#unk") % 101; // 0..100
+    const h = UNKNOWN_KIND_BAND_M[0] + ((UNKNOWN_KIND_BAND_M[1] - UNKNOWN_KIND_BAND_M[0]) * k) / 100;
+    return { h: Math.min(MAX_RENDER_H, Math.max(3, Math.round(h * 10) / 10)), from: "kind" };
+  }
+  const base = KIND_HEIGHT_M[kind] ?? FALLBACK_HEIGHT_M;
   /* 抖动只跟 osm_id 有关 ⇒ 同一条街每次刷新长得一样（随机会闪，别用随机） */
-  const k = hash32(String(p.osm_id || p.name || "x")) % 31; // 0..30
+  const k = hash32(seed) % 31; // 0..30
   const jitter = 1 - KIND_JITTER + (2 * KIND_JITTER * k) / 30; // 0.85 ~ 1.15
   const h = Math.max(3, Math.round(base * jitter * 10) / 10);
   return { h: Math.min(MAX_RENDER_H, h), from: "kind" };

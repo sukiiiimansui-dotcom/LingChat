@@ -410,18 +410,29 @@
 
 <style scoped>
   .wsv {
+    /* 🔴 2026-09-24：容器改成**铺满宿主**，由下面两条分别定位"面板"与"🔬 按钮"——
+       为什么：机主真机截图说"**右下两个浮动按钮**（多余 UI）"、面板一开就占右半屏。
+       面板本身仍是右上角那个；但**收起时的 🔬 挪到左下角**（不跟地图上的 HUD/手机按钮抢右上）。 */
     position: absolute;
-    right: 8px;
-    top: 8px;
+    inset: 0;
     z-index: 40;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
     font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* 容器铺满但**不吃指针**：只有它自己的按钮/面板可点（否则整屏都点不动地图） */
+    pointer-events: none;
+  }
+  .wsv__box {
+    pointer-events: auto;
+    margin: 8px 8px 0 0;
   }
   .wsv__fab {
-    position: relative;
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    pointer-events: auto;
     width: 40px;
     height: 36px;
     border: none;

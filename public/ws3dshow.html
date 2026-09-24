@@ -605,7 +605,9 @@
       const TF_NEEDED = ["decorateBuildings", "shapeCountsLine", "shapeCountRows", "windowPatternSpec", "rampColorOf", "shade"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
-        "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine"];
+        "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",
+        /* 读地图的那两件（宿主无关，App 侧接 LOD 时同样只调它们） */
+        "lodTileStatesOf", "lodLiveVerdictOf"];
       const VENDOR_URL = "/vendor/wsScene.mjs";
       /** vendor 的"内容版本" = 页面版本戳（同源 ⇒ 换版就换 URL，不会再撞 immutable 缓存） */
       const VENDOR_VER = BUILD;
@@ -1002,41 +1004,6 @@
         }
       }
 
-      /** 读只读诊断：源里各瓦片的状态（**MapLibre 内部字段，只读**，拿不到就返回 null ⇒ 判"数不出来"） */
-      function lodTileStates() {
-        try {
-          const plan = lodPlanCache || lodPlanOf();
-          const st = map && map.style;
-          const tm = st && st.tileManagers && plan && st.tileManagers[plan.sourceId];
-          const cache = tm && tm._inViewTiles;
-          if (!cache || typeof cache.getRenderableIds !== "function" || typeof cache.getTileByID !== "function") return null;
-          const out = { loaded: 0, errored: 0, loading: 0, other: 0, total: 0 };
-          for (const id of cache.getRenderableIds()) {
-            const t = cache.getTileByID(id);
-            const s = t && t.state;
-            out.total++;
-            if (s === "loaded") out.loaded++;
-            else if (s === "errored") out.errored++;
-            else if (s === "loading" || s === "reloading") out.loading++;
-            else out.other++;
-          }
-          return out;
-        } catch (e) { return null; }
-      }
-
-      /** 实时矢量层的要素数（口径：屏幕可见 → 数据源 → 数不出来）*/
-      function queryLiveVerdict() {
-        const TFx = window.__TF__;
-        if (!TFx || typeof TFx.lodLiveVerdict !== "function") return null;
-        const ids = (map.getStyle().layers || []).map(function (l) { return l.id; })
-          .filter(function (id) { return /^bld-|^road-(casing|line|glow)-/.test(id); });
-        let rendered = null, source = null, tilesLoaded = null;
-        try { if (ids.length) rendered = map.queryRenderedFeatures({ layers: ids }).length; } catch (e) { errs.push("lodQRendered " + e); }
-        try { if (rendered === null || rendered === 0) source = map.querySourceFeatures("bld").length + map.querySourceFeatures("roads").length; } catch (e) { /* 数据源可能还没建 */ }
-        try { if (map.areTilesLoaded) tilesLoaded = !!map.areTilesLoaded(); } catch (e) { tilesLoaded = null; }
-        return TFx.lodLiveVerdict({ layerCount: ids.length, rendered: rendered, source: source, tilesLoaded: tilesLoaded });
-      }
-
       /** 判定一次并把结论写进 HUD/徽标（**纯函数在模块里，页面只喂证据**） */
       function updateLodHud() {
         const el = $("m-lod");
@@ -1056,8 +1023,11 @@
         }
         let view = null;
         try { view = TFx.lodViewTiles(map.getBounds(), map.getZoom(), (lodPlanCache && lodPlanCache.tileMaxzoom) || 13); } catch (e) { view = null; }
-        const states = lodTileStates();
-        lodLive = queryLiveVerdict();
+        /* 🧩 证据的**读取**也在单一真源里（`wsScene.lodTileStatesOf` / `lodLiveVerdictOf`）——
+           页面只负责"调它 + 把结论写到 DOM"。App 接 LOD 时也是这两行，不需要第二份实现
+           （PR 标准①：运行期逻辑只在共享真源，页面只是试验台）。 */
+        const states = TFx.lodTileStatesOf ? TFx.lodTileStatesOf(map) : null;
+        lodLive = TFx.lodLiveVerdictOf ? TFx.lodLiveVerdictOf(map) : null;
         lodVerdict = TFx.lodTileVerdict({
           enabled: true,
           view: view,
@@ -1111,7 +1081,7 @@
         const v = lodVerdict;
         const num = function (n, zero) { return n === null || n === undefined ? "数不出来" : n === 0 ? (zero || "0（已量）") : String(n); };
         rows.push({ id: "瓦片", key: "命中（已载入）", now: num(v ? v.hit : null), want: null, hit: null, why: "口径：瓦片状态=loaded 的个数（MapLibre 内部只读诊断）；拿不到就写「数不出来」" });
-        rows.push({ id: "瓦片", key: "加载失败", now: num(v ? v.fail : null), want: null, hit: null, why: "口径：状态=errored。⚠️ 实测这个构建里 **404 不抛 error 事件**（读 vendored 源码确认）⇒ 真缺图看下一行" });
+        rows.push({ id: "瓦片", key: "加载失败", now: num(v ? v.fail : null), want: null, hit: null, why: "口径：瓦片状态=errored（含 404 —— `_loadTile` 的 catch 里先置状态）⇒ 这一格能数出**真缺图**；⚠️ 而 `map.on(\"error\")` **收不到 404**（读 vendored 源码确认），所以别只信事件" });
         rows.push({ id: "瓦片", key: "清单缺（视野内）", now: num(v ? v.absent : null), want: null, hit: null, why: "视野需要的键里、`/prerender/manifest.json` **没有**的那些 ⇒ 必然会取不到（确定性证据，不依赖事件）" });
         rows.push({ id: "瓦片", key: "本区应有", now: v && v.capped ? "被上限截断（数不全）" : num(v ? v.view : null), want: null, hit: null, why: "视野 + 当前 zoom 夹到瓦片层算出来的键数" });
         rows.push({ id: "清单", key: "manifest", now: lodManifest ? (lodManifest.tileCount + " 张 · 主题 " + lodManifest.themeId + " · 指纹 " + String(lodManifest.themeFingerprint).slice(0, 12) + "…") : ("数不出来：" + (lodManifestErr || "还没取")), want: null, hit: null, why: "生成物清单；**指纹**由 ws_lod_selftest 对拍 wsMapTheme（改了主题没重跑生成脚本 ⇒ 那边会红）" });
@@ -1836,12 +1806,15 @@
           } catch (err) { /* 计数失败不该影响地图 */ }
           errs.push(String(e?.error?.message || e));
         });
-        /* 🛰 瓦片陆续到达 ⇒ 计数 + 刷新回证（节流 250ms） */
+        /* 🛰 瓦片陆续到达 ⇒ 计数 + 刷新回证（节流 250ms）。
+           ⚠️ 判据是"**有没有坐标**"（`tile` 或 `coord` 任一），不是"有没有 tile" ——
+           读 vendored 源码：瓦片事件带 `{tile, coord}` 两个，但换个形状（将来升级/别的构建）
+           可能只带一个；两种都认，就少一处"静默不计数"（那会让命中数永远是 0 = 误报）。 */
         map.on("sourcedata", (e) => {
           if (!LOD_ON) return;
           try {
             const plan = lodPlanCache;
-            if (!plan || !e || e.sourceId !== plan.sourceId || !e.tile) return;
+            if (!plan || !e || e.sourceId !== plan.sourceId || (!e.tile && !e.coord)) return;
             const k = (window.__TF__ && window.__TF__.lodEventTileKey) ? window.__TF__.lodEventTileKey(e) : null;
             if (k) lodLoadedKeys.add(k); else lodNoKey++;
             scheduleLodHud();

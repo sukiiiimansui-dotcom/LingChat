@@ -15,6 +15,64 @@ export * from "./wsLayerOrder"; // 层序保证（事后断言式自愈）
 export * from "./wsArtSky"; // art=3 天空几何（云/山影/雾带，纯函数）
 export * from "./wsScene"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
 /* 🏢 楼房**形体细化**（2026-09-24）：代拍页 `?bld=2` 用 `decorateBuildings(fc, ramp, {mode:"detail"})`
-   生成裙楼/塔楼/退台/女儿墙/设备箱，并拿 `shapeCountsLine()` 做回证；`windowPatternSpec()` 供 `?win=1`。
-   ⚠️ 这里只是**让页面能拿到同一份纯函数**（不在页面里抄第二份几何/计数逻辑）。 */
+   生成裙楼/塔楼/退台/女儿墙/设备箱，并拿 `shapeCountsLine()`/`shapeCountRows()` 做回证；
+   `windowPatternSpec()` 供 `?win=1` 的窗格层。
+   ⚠️ 这里只是**让页面能拿到同一份纯函数**（不在页面里抄第二份几何/计数逻辑）。
+
+   🔴 **2026-09-24 复盘**（机主真机上 `?bld=2` 回退成基准版、截图写着"模块里没有 decorateBuildings"）：
+   查下来**不是 tree-shaking** —— 这 20 个符号**本来就在产物里**（`git show HEAD:public/vendor/wsScene.mjs`
+   逐个 grep 命中、`import()` 后 `typeof` 全绿、`dist-webdev` 那份同样在，字节数 48694 三份一致）。
+   真因是**浏览器缓存**：代拍页用**静态** `import "/vendor/wsScene.mjs"`（URL 无内容哈希），
+   而预览服务给它的响应头是 `Cache-Control: public, max-age=31536000, immutable`
+   ⇒ `&v=10` 只顶掉了 HTML，**模块仍是旧的**。
+   ⇒ 页面侧加了自愈：缺符号就用**带版本号的 URL** 重取一次（`ws3dshow.html` 的 `tfModule()`），
+   并把**逐符号在场情况**写进徽标 —— 下次一眼看出是"模块旧"还是"真没有"。
+
+   `export *` 与下面这张显式清单**并存**：前者保证"以后新加的导出自动进产物"，
+   后者是**页面依赖契约**（`ws_transport_selftest` 的漂移守卫 + `ws_bld_page_selftest` 会逐个核对，少一个就红）。 */
 export * from "./wsBuildingLook";
+export {
+  /* 页面/HUD 直接调用的（`?bld=2` 全靠它们） */
+  decorateBuildings,
+  buildingPartSet,
+  buildingParts,
+  shapeCountsLine,
+  shapeCountRows,
+  fmtCount,
+  windowPatternSpec,
+  /* 配色（与 App 同一张色阶；页面用它给窗格层派生颜色，不写第二套配色） */
+  HEIGHT_COLOR_RAMP,
+  heightColorExpression,
+  rampColorOf,
+  buildingColor,
+  shade,
+  renderHeight,
+  hash32,
+  /* 几何工具（自检与将来的 App 侧接线都要用） */
+  footprintMetrics,
+  insetRing,
+  insetRingMeters,
+  ringBand,
+  pointInRing,
+  buildingMasses,
+  equipBoxes,
+  /* 阈值常量（HUD 文案与自检都从这一份取，别在页面里写第二遍） */
+  PODIUM_MIN_AREA_M2,
+  PODIUM_MIN_H,
+  PODIUM_INSET,
+  SETBACK_MIN_H,
+  SETBACK_TIERS_3_H,
+  SETBACK_INSET,
+  PARAPET_MIN_H,
+  PARAPET_H,
+  PARAPET_THICK_M,
+  EQUIP_MIN_AREA_M2,
+  SLIVER_AREA_M2,
+  SLIVER_ASPECT,
+  WIN_MIN_H,
+  WIN_PATTERN_SIZE,
+  ROOF_MIN_H,
+  ANTENNA_MIN_H,
+  ANTENNA_M,
+  MAX_RENDER_H,
+} from "./wsBuildingLook";

@@ -866,6 +866,7 @@ function lodTileVerdict(input) {
   const why = [];
   if (inv === null) why.push("清单没取到 ⇒ 「本区应有/清单缺」数不出来");
   if (hit === null) why.push("拿不到瓦片状态、事件里也没有 tile 坐标 ⇒ 命中数不出来");
+  if (absent !== null && absent > 0) why.push(`视野里有 ${absent} 张**清单里没有** ⇒ 它们必然取不到（这是确定性证据，不依赖事件）`);
   if (view.capped) why.push(`视野瓦片数超过上限 ${LOD_VIEW_TILE_CAP} ⇒ 只数了一部分（不能说"共 N 张"）`);
   if (keys.length === 0) why.push("视野里一张都算不出来（边界异常？）");
   const state = absent !== null && absent > 0 ? "missing" : hit === null || inv === null || keys.length === 0 ? "unknown" : "ok";

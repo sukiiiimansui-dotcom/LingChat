@@ -819,6 +819,7 @@ var WS_FETCH_R_MAX = 8e3;
 var WS_FETCH_R_BACKEND_MAX = 2e3;
 var WS_FETCH_R_SOURCE_MAX = 2e3;
 var WS_ROADS_R_MAX = 600;
+var WS_ROADS_CHUNKING_VERDICT = "分块实测不划算：冷块 17.6~56.2s、4 块里 1 块 ok:false；只有缓存命中那块 0.13s（视野一平移就换冷格子） ⇒ 不做分块，live 层一个 600m 圆，远处的路靠预渲染瓦片";
 var WS_ROADS_LIMIT_WHY = "后端实测：取路 r≥800m 会跑 79~100s 后返回空（800→0/99s、1200→0/79s、2000→0/94s；600 才有 197 条）⇒ 单次封顶 600m，远处的路看预渲染瓦片";
 function roadsRadiusFor(buildingsRadius) {
   const want = Number.isFinite(buildingsRadius) ? Math.max(0, Number(buildingsRadius)) : WS_ROADS_R_MAX;
@@ -1764,6 +1765,7 @@ export {
   WS_FETCH_R_MAX,
   WS_FETCH_R_MIN,
   WS_FETCH_R_SOURCE_MAX,
+  WS_ROADS_CHUNKING_VERDICT,
   WS_ROADS_LIMIT_WHY,
   WS_ROADS_R_MAX,
   WS_SCENE_SOURCE,

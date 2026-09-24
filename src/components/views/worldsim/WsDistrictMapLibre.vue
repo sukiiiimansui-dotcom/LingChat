@@ -46,16 +46,16 @@
       :hint="'首次要现取真楼栋（Overpass），几十秒也可能；取到就立刻画，不用一直盯着'"
     />
 
-    <!-- 缩放控件（机主 2026-09-19 实测：浏览器会抢走手势 ⇒ 只靠捏合没法缩放，
+    <!-- 🔴 **这段被移除的按钮曾经是"缩放"的唯一可靠入口**（原文如下，备份里可查）：
+         「缩放控件（机主 2026-09-19 实测：浏览器会抢走手势 ⇒ 只靠捏合没法缩放，
          而"放大到街区才取楼"就永远不触发 ⇒ 看起来"楼房压根不显示"。
-         所以给一对按钮，**不依赖手势**也能缩放。高德/百度也都有这对按钮。 -->
-    <div v-if="mapAvailable" class="ws-dml__zoom">
-      <!-- 保险：click 之外再挂 pointerup（有些国产内核在 canvas 上 preventDefault 后
-           会吃掉同层邻居的 click 合成事件）—— 150ms 节流避免一次点击跳两级 -->
-      <button type="button" title="放大（到街道级别就会取真楼房）" @click="zoomOnce(1)" @pointerup="zoomOnce(1)">＋</button>
-      <button type="button" title="缩小" @click="zoomOnce(-1)" @pointerup="zoomOnce(-1)">－</button>
-      <button type="button" title="看整个区（整区铺满；这一档不取楼栋）" @click="fitDistrict()" @pointerup="fitDistrict()">全区</button>
-    </div>
+         所以给一对按钮，**不依赖手势**也能缩放。高德/百度也都有这对按钮。）」
+         🗄 2026-09-24 机主裁定：「App 页现在只准保留代拍页代码」+「现在 App 页有多余 UI」
+         ⇒ `＋ / － / 全区` 三个按钮**整块移除**（代拍页 `ws3dshow.html` 那一屏没有它们）。
+         ⚠️ **未验**：真机手势能不能独立完成缩放（无头环境没有多点触控）——
+            这正是机主报的「缩放像整屏图片被放大缩小」要一并查清的那条线；
+            若真机缩不了，恢复方式：`git revert <本 commit>`。
+         备份：tag `attic/pre-sceneview2-20260924`、`~/chk/removed-backup-20260924-sceneview2/`。 -->
 
     <!-- 🔬 验证面板（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
          长在**出问题的那一页**上：渲染路 / 降级原因原文 / 地图库错误原文 / 图层与 key paint /
@@ -324,6 +324,21 @@
       worldTime: "",
     }
   );
+
+  /**
+   * 🎬 **场景就绪**（2026-09-24）：地图实例 + **已经画上去的那批真楼栋** 一起交给外层。
+   *
+   * 为什么需要这个口子（而不是让外层自己再取一遍）：交通设施（代拍页 `?tf=1`）要按**楼脚印**
+   * 算停车场/出入口 —— 楼栋是这个组件取的（带 adcode/驻地/半径爬梯那一整套），
+   * 外层重取一遍 = **同一件事两份实现**（本项目反复栽的坑），还会把 Overpass 打第二遍。
+   * ⇒ 组件在"楼真的画上去了"那一刻把 `fc` **原样**递出去（不做 dress/decorate，那是渲染用的副本）。
+   *
+   * ⚠️ 只发一个事件、不导出内部状态：`map` 只给"要在它上面加图层"的调用方用（如 `WsSceneView`），
+   *    它自己**不**修改相机/层序以外的东西。
+   */
+  const emit = defineEmits<{
+    (e: "scene-ready", payload: { map: unknown; buildings: { features?: unknown[] } | null }): void;
+  }>();
 
   const host = ref<HTMLElement | null>(null);
   const cv = ref<HTMLCanvasElement | null>(null);
@@ -1528,7 +1543,8 @@
       : "✅ 地图库出帧了 ⇒ 已自动切回 WebGL（手势可用）";
     try {
       syncPins();
-      syncAiLayers();
+      /* 🗄 2026-09-24：AI 示意层不再挂（机主：App 页是最终结构，但**去掉多余叠加**）
+         —— `syncAiLayers()` 留在文件里，两个调用点与两个 watcher 都关掉。 */
     } catch {
       /* 同步失败不影响"画面已经切回 WebGL"这件事 */
     }
@@ -2170,19 +2186,12 @@
     });
   }
 
-  /* AI 产出变了就同步（流式生成时每来一批都会调） */
-  watch(
-    () => props.aiItems,
-    () => syncAiLayers()
-  );
-
-  /**
-   * 真楼数变了 ⇒ `aiOn` 可能翻转 ⇒ 自动叠上 / 摘掉示意层。
-   *
-   * 这条 watcher 是整刀的**因果**所在：示意层不是"用户打开的开关"，
-   * 而是"真数据稀疏"这个**被动发现的事实**的结果 —— 谁也别去手动同步它。
-   */
-  watch(aiOn, () => syncAiLayers());
+  /* 🗄 2026-09-24 机主裁定「App 页现在只准保留代拍页代码」⇒ **AI 示意层两个 watcher 都关掉**
+     （`syncAiLayers()` 本身留在文件里，随时可恢复）。原文如下，恢复时按它改回：
+       · 「AI 产出变了就同步（流式生成时每来一批都会调）」→ `watch(() => props.aiItems, …)`
+       · 「真楼数变了 ⇒ `aiOn` 可能翻转 ⇒ 自动叠上 / 摘掉示意层」→ `watch(aiOn, …)`
+     ⚠️ 只关"画到地图上"这一半：`aiOn` 这个 computed 仍然照旧（HUD 那句"真楼 N 栋（稀疏）…"
+        读的就是它 —— 别把"计数"和"上屏"混为一谈）。 */
 
   /**
    * 把"示意位置"吸附到**真实路网**上（`wsSnap.snapToRoad`）。
@@ -3229,9 +3238,11 @@
           /* 收不了相机就保持默认视野 */
         }
       }
-      /* 区县边界（"整区铺满"的可读性）：淡填充 + 主色描边，**压在楼房之下**。
-         没有它，整区视野下用户看不出"这块就是我所在的区"（高德那套也是这么做的）。 */
-      if (districtFeat) {
+      /* 🗄 2026-09-24 已移除：区县边界（`dist-fill` / `dist-line`，"整区铺满"的可读性）。
+         代拍页那一屏没有它；机主要"只留代拍页代码"⇒ 这一层不挂。
+         `districtFeat` 仍然照旧取（相机中心/驻地/取楼半径都靠它），只是不再画边界。
+         恢复：`git revert <本 commit>`。 */
+      if (false && districtFeat) {
         try {
           m.addSource("dist", {
             type: "geojson",
@@ -3256,14 +3267,18 @@
         }
       }
 
-      /* 楼房就位后再画等高线（要 beforeId="bld-ext"，顺序不能反） */
-      void drawContours(m as unknown as Parameters<typeof drawContours>[0]);
-      // 首帧真的画出来了才收起加载态（画不出来就让它继续转，别假装好了）
-      /* 地图就绪 + 区界已知 ⇒ 把"人"和"AI 画的街区"摆上去 */
+      /* 🗄 2026-09-24 机主裁定「App 页现在只准保留代拍页代码」⇒ 三样不再挂：
+         ① **等高线**（`drawContours`，代拍页没有这一层）；② **AI 示意层**（`syncAiLayers`，
+         楼栋稀疏时叠的暖色示意图元）；③ 下面的**区县边界**（`dist-fill`/`dist-line`）。
+         ⚠️ `syncPins()` **保留**：它是地图上的人（`markers`），代拍页之外但属"同一屏"的地图图层，
+            机主没点它；要停就传 `:markers="[]"`（`WorldSim` 那边一行的事）。
+         恢复：`git revert <本 commit>`（备份 tag `attic/pre-sceneview2-20260924`）。 */
       syncPins();
-      syncAiLayers();
       phase.value = "done";
       stopTimer();
+      /* 🎬 场景就绪 ⇒ 把地图与**真楼栋**交给外层（交通设施要用楼脚印；见 `emit` 的说明）。
+         放在 `phase` 之后：这时 loading 已收起、楼体图层已 addLayer，外层加图层不会插进加载态。 */
+      emit("scene-ready", { map: m, buildings: (fc as { features?: unknown[] } | null) || null });
       /* 代拍：`?autoshot=1` 开了开关才跑，没开就是一次 boolean 判断（零开销） */
       if (selfShotArmed()) void runSelfShot(m as unknown as Parameters<typeof runSelfShot>[0]);
       /* 🧪 App 自拍（`?selfshot=1`）：这是 **WebGL 路**的触发点（降级路的在 `fallback2d` 末尾） */

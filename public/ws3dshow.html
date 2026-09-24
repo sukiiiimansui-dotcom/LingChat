@@ -70,6 +70,8 @@
       .bldb { position: static; left: auto; right: auto; max-width: 62vw; }
       .bldb .artb__h { color: #ffd479; }
       #lookb .artb__h { color: #9ef7c4; }
+      /* 🛰 LOD 徽标（`?lod=1`）：颜色与另外两枚区分开，点开是逐项回证 */
+      #lodb .artb__h { color: #8fd3ff; }
       .artb__skip { color: #d0b6ff; }
     </style>
   </head>
@@ -94,6 +96,12 @@
         <div id="lookb-head" class="artb__h">🎮 观感 —</div>
         <div id="lookb-body" class="artb__b"></div>
       </div>
+      <!-- 🛰 LOD 回证（`?lod=1`）：当前走哪条路（预渲染/过渡/实时）+ 瓦片命中/缺图 + 实时层要素数。
+           计数口径是**三态**：正数 / `0（已量）` / `数不出来`（取不到就写"数不出来"+原因，**绝不裸写 0**）。 -->
+      <div id="lodb" class="artb bldb">
+        <div id="lodb-head" class="artb__h">🛰 LOD —</div>
+        <div id="lodb-body" class="artb__b"></div>
+      </div>
     </div>
     <div class="hud">
       <span><b id="m-n">0</b> 栋</span>
@@ -108,6 +116,9 @@
       <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
            三态判词：正数 / `0（已量）` / `数不出来` —— 绝不裸写 0。 -->
       <span class="w" id="m-bld">形体 —</span>
+      <!-- 🛰 LOD 的**一行回证**（`?lod=1` 时写：走哪条路 / 瓦片命中 / 缺图 / 实时层要素数）。
+           三态判词：正数 / `0（已量）` / `数不出来` —— 取不到就如实写，**绝不裸写 0**。 -->
+      <span class="w" id="m-lod">🛰 LOD —</span>
       <span class="w" id="m-msg"></span>
       <span id="m-build" style="opacity:.55"></span>
     </div>
@@ -132,7 +143,13 @@
        */
       /* v12（2026-09-24 晚）：🎮 `?look=2`「游戏过场」观感（派生主题 + 接触阴影 + 霓虹路 + 暗角 + 回证徽标）。
          ⚠️ `VENDOR_VER` 取的就是这个戳 ⇒ **换版必换模块 URL**，不会再撞 immutable 缓存。 */
-      const BUILD = "ws3dshow-2026-09-24-v12";
+      /* v13（2026-09-24 深夜）：🛰 **LOD 第 1 步**（`?lod=1`：远处预渲染瓦片 / 近处实时矢量 / 中间交叉过渡 + 回证）。
+         ⚠️ `VENDOR_VER` 取的就是这个戳 ⇒ **换版必换模块 URL**，不会再撞 immutable 缓存。 */
+      /* v14（2026-09-25）：🎮 `?look=2` **返工 —— 结构留、配色回 BA**（机主 2026-09-24 原话：
+         「代拍页的地图底都看不清了，还有就是配色为什么把 BA 风格改喵了！」）。
+         只留结构（接触阴影 / cel 三档硬边 / 路 casing 加粗 / 弱暗角 0.18）；地面/底色/描边/路色**逐字段回基准**；
+         红线"派生地面明度不许低于基准"写进自检。⚠️ 同版含 **LOD 第 1 步**（`?lod=1`）的页面 hunk（另一代理）。 */
+      const BUILD = "ws3dshow-2026-09-25-v14";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -192,9 +209,16 @@
          `looks.game.<主题 id>`（和 `themes.<id>` **逐字段同构**）⇒ 页面只是**换一个对象**读。
          页面自己只做**结构性**的三件事（颜色全从 `THEME.look` 取）：接触阴影两层、霓虹路两层、暗角一层。
 
+         🔴 **v13 返工（机主真机看过第一版之后的原话）**：「**代拍页的地图底都看不清了，还有就是
+         配色为什么把 BA 风格改喵了！**」⇒ 他拍板 **保留结构、配色拉回 BA**：地面恢复亮底，
+         只留**接触阴影 / cel 三档硬边 / 路 casing 加粗 / 弱暗角（0.18）**。
+         派生件不许多覆盖任何颜色类字段（`wsGameLook` 现在只覆盖 `label`/`hud`/`ramp`/`look`），
+         且**派生地面明度不许低于基准**（`metrics.groundEps` 是那根尺子，徽标里会算给你看）。
+         撤掉的项（压暗地面 / 霓虹辉光 / 远景淡出 / 竖向渐变）逐条写在 `look.reverted` 里，徽标用 ⏪ 列出来。
+
          A/B（**不加参数 = 这一页原来的行为，一字不改**）：
-           · （无参数）基准版：近白地面 + 平涂色阶 + 细描边；
-           · `?look=2`：深底亮线（地面压暗 + 描边翻亮）+ 楼体 3 档 cel + 竖向渐变 + 接触阴影 + 霓虹路 + 暗角；
+           · （无参数）基准版：BA 亮底 + 8 档平滑色阶 + 深藏青细描边；
+           · `?look=2`：**同一套 BA 配色** + 楼体 3 档 cel（档位色取自 BA 色阶）+ 接触阴影 + 路加粗 + 弱暗角；
            · 可与 `?bld=2` / `?wstheme=night` 叠加（观感是**主题的**属性，形体是**几何的**属性，两者独立）。
          ⚠️ 快照里没有 `looks.game`（老 `/wstheme.json` 被缓存 / 没重新生成）⇒ **如实回退基准主题**
          并把原因写进徽标 —— 不许"开了却什么都没变"。 */
@@ -535,6 +559,38 @@
       const BLD_LOW = (function () { try { return !!(window.__PERF_LOW__ || /[?&]low=1\b/.test(location.search)); } catch (e) { return false; } })();
       /** 窗格层的状态（**三态判词**：未开 / 已开 / 失败：原因）—— 徽标如实显示，别让人以为是开了 */
       let winState = WINS ? "待建图" : "未开（要 ?win=1）";
+
+      /* ══ 🛰 LOD 第 1 步（机主 2026-09-24：「采用近距离渲染，远距离预渲染的方式加载全国楼房数据和道路喵！」）══
+         本页只做**切换骨架**：远处（z≤12）铺**预渲染瓦片**、近处（z≥14）走**实时矢量**，中间按 zoom 交叉过渡；
+         真数据管线（重庆全市、真实楼脚印+路网）是**第 2 步**，不在这里。
+
+         🔴 开关：`?lod=1` 开、`?lod=0` 显式关、**不写 = 关**（默认一个字节都不改现有观感）。
+         🔴 阈值/层 id/不透明度表达式/瓦片键算法**全部取自 `wsScene`**（经 `/vendor/wsScene.mjs`），
+            本页**不写第二份** —— 抄一份就一定会和 App 侧漂（项目反复踩过）。
+         🔴 颜色也不在本页：着色在**瓦片像素**里，取自 `wsMapTheme.wsPrerenderPalette()`
+            （生成脚本 `world_map/make_prerender_tiles.mjs`；清单里的指纹由自检对拍）。 */
+      const LOD_PARAM = (function () {
+        try {
+          if (/[?&]lod=1\b/.test(location.search)) return 1;
+          if (/[?&]lod=0\b/.test(location.search)) return 0;
+          return null; // 没写 = 关（**不改变现有观感**）
+        } catch (e) { return null; }
+      })();
+      const LOD_ON = LOD_PARAM === 1;
+      /** LOD 那一支的状态（**三态判词**：未启用 / 已建层 / 失败：原因）—— HUD 与徽标都读它 */
+      let lodState = LOD_ON ? "待建层" : (LOD_PARAM === 0 ? "显式关闭（?lod=0）" : "未启用（要 ?lod=1）");
+      /** 地图事件里数到的瓦片键（Set ⇒ 同一张不重复计数） */
+      const lodLoadedKeys = new Set();
+      const lodFailedKeys = new Set();
+      /** 事件里**拿不到瓦片坐标**的次数（>0 ⇒ 命中数按"数不出来"处理，绝不写 0） */
+      let lodNoKey = 0;
+      /** `/prerender/manifest.json`（`null` = 没取到 ⇒ 相关数字一律"数不出来"+原因） */
+      let lodManifest = null;
+      let lodManifestErr = "";
+      /** 最近一次判定的结果（probe/徽标读它） */
+      let lodVerdict = null;
+      let lodLive = null;
+      let lodPlanCache = null;
       /** 窗格贴图在 `map.addImage()` 里的 id（图由 `windowPatternSpec()` 现产，**不引 sprite 服务器**） */
       const WIN_IMAGE_ID = "ws-win";
       /**
@@ -547,13 +603,19 @@
        *    ② 把**逐符号在场情况**与自愈结果写进徽标 ⇒ 下次一眼看出是"模块旧"还是"真没有"。
        */
       const TF_NEEDED = ["decorateBuildings", "shapeCountsLine", "shapeCountRows", "windowPatternSpec", "rampColorOf", "shade"];
+      /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
+      const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
+        "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine"];
       const VENDOR_URL = "/vendor/wsScene.mjs";
       /** vendor 的"内容版本" = 页面版本戳（同源 ⇒ 换版就换 URL，不会再撞 immutable 缓存） */
       const VENDOR_VER = BUILD;
       let tfState = "未取";
       /** 缺失的符号名（全在就是空数组） */
       function tfMissing(mod) {
-        return !mod ? TF_NEEDED.slice() : TF_NEEDED.filter(function (k) { return typeof mod[k] !== "function"; });
+        /* ⚠️ 常量（如 `LOD_FAR_ZOOM`）**不能进这张表** —— 判据是 `typeof === "function"`，
+           常量会被永远判成"缺"，把好模块说成坏的（假报和漏报一样贵）。 */
+        const need = LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED;
+        return !mod ? need.slice() : need.filter(function (k) { return typeof mod[k] !== "function"; });
       }
       /**
        * 拿到"能用的" vendor 模块：够用就用现有的；缺符号就用**带版本号的 URL** 重取一次。
@@ -911,6 +973,223 @@
         } catch (e) { /* HUD 失败不影响地图 */ }
       }
 
+      /* ══ 🛰 LOD 第 1 步：预渲染瓦片层（`?lod=1`）═══════════════════════════════════════
+         目标（机主原话）：「**近距离渲染，远距离预渲染**」。本页只做**切换骨架**：
+           · `z ≤ Z_FAR`(12) → 预渲染瓦片独占；`z ≥ Z_NEAR`(14) → 实时矢量独占；中间按 zoom 交叉过渡；
+           · 过渡**复用**既有那套机制（照片底图 `base` 的 `raster-opacity` 随 zoom 淡出，见 `wsMapTheme.baseFade`）
+             —— 预渲染层用**同一个形状**的表达式，铺在矢量层**之上**淡出，不新造一套动画；
+           · 阈值/层 id/表达式/瓦片键算法**全部取自 `wsScene`**（`/vendor/wsScene.mjs`）；
+           · 颜色在**瓦片像素**里，取自 `wsMapTheme.wsPrerenderPalette()`（生成脚本 + 清单指纹兜漂移）。
+
+         🔴 回证（**三态判词**）：当前档位 / 瓦片命中·失败·清单缺 / 实时层要素数；
+            「数不出来」一律带原因，**绝不裸写 0**（`AUDIT-STINK.md` 的判词纪律）。
+         🔴 **默认不启用**：`?lod` 不写 = 一个源一个图层都不建（现有观感逐字节不变）。 */
+
+      /** 取"能用的" LOD 计划；模块缺符号 ⇒ **如实回退**并把原因写进 `lodState` */
+      function lodPlanOf() {
+        if (lodPlanCache) return lodPlanCache;
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.lodPlan !== "function") {
+          lodState = "失败：模块里没有 lodPlan（" + tfState + "）—— 多半是浏览器缓存了旧的 /vendor/wsScene.mjs（强刷或让主会话重建预览包）";
+          return null;
+        }
+        try {
+          lodPlanCache = TFx.lodPlan();
+          return lodPlanCache;
+        } catch (e) {
+          lodState = "失败：lodPlan() 抛错 " + String(e).slice(0, 60);
+          return null;
+        }
+      }
+
+      /** 读只读诊断：源里各瓦片的状态（**MapLibre 内部字段，只读**，拿不到就返回 null ⇒ 判"数不出来"） */
+      function lodTileStates() {
+        try {
+          const plan = lodPlanCache || lodPlanOf();
+          const st = map && map.style;
+          const tm = st && st.tileManagers && plan && st.tileManagers[plan.sourceId];
+          const cache = tm && tm._inViewTiles;
+          if (!cache || typeof cache.getRenderableIds !== "function" || typeof cache.getTileByID !== "function") return null;
+          const out = { loaded: 0, errored: 0, loading: 0, other: 0, total: 0 };
+          for (const id of cache.getRenderableIds()) {
+            const t = cache.getTileByID(id);
+            const s = t && t.state;
+            out.total++;
+            if (s === "loaded") out.loaded++;
+            else if (s === "errored") out.errored++;
+            else if (s === "loading" || s === "reloading") out.loading++;
+            else out.other++;
+          }
+          return out;
+        } catch (e) { return null; }
+      }
+
+      /** 实时矢量层的要素数（口径：屏幕可见 → 数据源 → 数不出来）*/
+      function queryLiveVerdict() {
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.lodLiveVerdict !== "function") return null;
+        const ids = (map.getStyle().layers || []).map(function (l) { return l.id; })
+          .filter(function (id) { return /^bld-|^road-(casing|line|glow)-/.test(id); });
+        let rendered = null, source = null, tilesLoaded = null;
+        try { if (ids.length) rendered = map.queryRenderedFeatures({ layers: ids }).length; } catch (e) { errs.push("lodQRendered " + e); }
+        try { if (rendered === null || rendered === 0) source = map.querySourceFeatures("bld").length + map.querySourceFeatures("roads").length; } catch (e) { /* 数据源可能还没建 */ }
+        try { if (map.areTilesLoaded) tilesLoaded = !!map.areTilesLoaded(); } catch (e) { tilesLoaded = null; }
+        return TFx.lodLiveVerdict({ layerCount: ids.length, rendered: rendered, source: source, tilesLoaded: tilesLoaded });
+      }
+
+      /** 判定一次并把结论写进 HUD/徽标（**纯函数在模块里，页面只喂证据**） */
+      function updateLodHud() {
+        const el = $("m-lod");
+        if (!el) return;
+        if (!LOD_ON) {
+          el.textContent = "🛰 LOD 未启用（URL 加 `?lod=1`；当前未建预渲染层）";
+          lodVerdict = null;
+          lodLive = null;
+          renderLodBadge();
+          return;
+        }
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.lodTileVerdict !== "function" || typeof TFx.lodHudLine !== "function") {
+          el.textContent = "🛰 LOD 数不出来：" + lodState;
+          renderLodBadge();
+          return;
+        }
+        let view = null;
+        try { view = TFx.lodViewTiles(map.getBounds(), map.getZoom(), (lodPlanCache && lodPlanCache.tileMaxzoom) || 13); } catch (e) { view = null; }
+        const states = lodTileStates();
+        lodLive = queryLiveVerdict();
+        lodVerdict = TFx.lodTileVerdict({
+          enabled: true,
+          view: view,
+          inventory: lodManifest && lodManifest.tiles ? Object.keys(lodManifest.tiles) : null,
+          /* 事件口径（可能一张都没到：那时是空数组 = **真的量到 0**，与"拿不到坐标"不同） */
+          loaded: lodNoKey && !lodLoadedKeys.size ? null : Array.from(lodLoadedKeys),
+          failed: lodFailedKeys.size ? Array.from(lodFailedKeys) : (lodNoKey ? null : []),
+          /* 只读诊断口径（**最硬**的证据：瓦片状态 loaded/errored）——拿不到就是 null ⇒ 判"数不出来" */
+          states: states,
+        });
+        el.textContent = TFx.lodHudLine({ enabled: true, zoom: map.getZoom(), tiles: lodVerdict, live: lodLive }) +
+          (lodState.indexOf("失败") === 0 ? " · " + lodState : "") +
+          (lodManifestErr ? " · 清单没取到：" + lodManifestErr : "");
+        window.__LOD_VERDICT__ = lodVerdict;
+        window.__LOD_LIVE__ = lodLive;
+        window.__LOD_TILE_STATES__ = states;
+        renderLodBadge();
+      }
+      let lodHudTimer = null;
+      function scheduleLodHud() {
+        if (!LOD_ON || lodHudTimer) return;
+        try {
+          lodHudTimer = setTimeout(function () { lodHudTimer = null; try { updateLodHud(); } catch (e) { /* 忽略 */ } }, 250);
+        } catch (e) { lodHudTimer = null; }
+      }
+
+      /** 逐项回证表（徽标用）—— 三态：✅命中 / ❌未命中 / ⏭跳过（跳过 = 如实记"没做/做不了"） */
+      function lodReadback() {
+        if (!LOD_ON) return null;
+        const TFx = window.__TF__;
+        const rows = [];
+        const on = function (id, key, now, want, why) {
+          const hit = want === null ? null : JSON.stringify(now) === JSON.stringify(want);
+          rows.push({ id: id, key: key, now: now, want: want, hit: hit, why: why });
+        };
+        const plan = lodPlanCache;
+        on("开关", "?lod", LOD_ON ? "1（已开）" : "未开", 1, "`?lod=0` 显式关 / 不写 = 关（默认不改现有观感）");
+        on("图层", "prerender 在", map.getLayer("prerender") ? "在" : "**不在**", "在", "由 lodPlan() 建；缺了就是没建成（看 errs/lodState）");
+        on("数据源", "prerender 源在", map.getSource("prerender") ? "在" : "**不在**", "在", "我们**自己的**瓦片源（`" + ((plan && plan.tilePath) || "?") + "`），不是 Esri");
+        /* 层序：预渲染层必须在矢量层**之上**（远景要盖住实时层），否则过渡一淡就露出实时层 */
+        const order = (map.getStyle().layers || []).map(function (l) { return l.id; });
+        const iPre = order.indexOf("prerender");
+        const above = ["bld-ext", "road-line-0", "tf-bus"].every(function (id) {
+          const i = order.indexOf(id);
+          return i < 0 || (iPre >= 0 && iPre > i);
+        });
+        rows.push({ id: "层序", key: "预渲染层在矢量层之上", now: iPre < 0 ? "层不在" : (above ? "是（" + order.slice(Math.max(0, iPre - 2), iPre + 1).join("<") + "）" : "**否**"), want: "是", hit: iPre < 0 ? "no-layer" : above, why: "远景靠它盖住实时层；反过来放就得给每条路/楼写一份淡入（= 新造一套机制）" });
+        const op = (function () { try { return map.getPaintProperty("prerender", "raster-opacity"); } catch (e) { return "(取值抛错)"; } })();
+        const isExpr = Array.isArray(op);
+        rows.push({ id: "不透明度", key: "raster-opacity", now: isExpr ? ("zoom 表达式 " + JSON.stringify(op)) : String(op), want: "zoom 表达式", hit: isExpr, why: "与照片底图淡出**同一形状**（`[\"interpolate\",[\"linear\"],[\"zoom\"], 12,1, 14,0]`）⇒ 复用同一机制" });
+        const v = lodVerdict;
+        const num = function (n, zero) { return n === null || n === undefined ? "数不出来" : n === 0 ? (zero || "0（已量）") : String(n); };
+        rows.push({ id: "瓦片", key: "命中（已载入）", now: num(v ? v.hit : null), want: null, hit: null, why: "口径：瓦片状态=loaded 的个数（MapLibre 内部只读诊断）；拿不到就写「数不出来」" });
+        rows.push({ id: "瓦片", key: "加载失败", now: num(v ? v.fail : null), want: null, hit: null, why: "口径：状态=errored。⚠️ 实测这个构建里 **404 不抛 error 事件**（读 vendored 源码确认）⇒ 真缺图看下一行" });
+        rows.push({ id: "瓦片", key: "清单缺（视野内）", now: num(v ? v.absent : null), want: null, hit: null, why: "视野需要的键里、`/prerender/manifest.json` **没有**的那些 ⇒ 必然会取不到（确定性证据，不依赖事件）" });
+        rows.push({ id: "瓦片", key: "本区应有", now: v && v.capped ? "被上限截断（数不全）" : num(v ? v.view : null), want: null, hit: null, why: "视野 + 当前 zoom 夹到瓦片层算出来的键数" });
+        rows.push({ id: "清单", key: "manifest", now: lodManifest ? (lodManifest.tileCount + " 张 · 主题 " + lodManifest.themeId + " · 指纹 " + String(lodManifest.themeFingerprint).slice(0, 12) + "…") : ("数不出来：" + (lodManifestErr || "还没取")), want: null, hit: null, why: "生成物清单；**指纹**由 ws_lod_selftest 对拍 wsMapTheme（改了主题没重跑生成脚本 ⇒ 那边会红）" });
+        rows.push({ id: "实时层", key: "要素数", now: lodLive ? (lodLive.state === "missing" ? "0（已量：图层没建）" : num(lodLive.n)) : "数不出来（还没查）", want: null, hit: null, why: lodLive ? lodLive.why : "还没查（移动地图后刷新）" });
+        rows.push({ id: "档位", key: "当前 zoom", now: map.getZoom().toFixed(2) + " ⇒ " + (TFx && TFx.lodTierLabel ? TFx.lodTierLabel(TFx.lodTierOf(map.getZoom())) : "数不出来"), want: null, hit: null, why: "预渲染 / 过渡中 / 实时矢量（阈值与标签都来自 wsScene）" });
+        rows.push({ id: "跳过", key: "真数据（重庆全市）", now: "未做", want: null, hit: null, skip: true, why: "本卡 = 第 1 步骨架；**真实楼脚印+路网的离线管线是第 2 步**（另一张卡），现在这些瓦片是**示意**的" });
+        rows.push({ id: "跳过", key: "真机画面 / 帧率", now: "未验", want: null, hit: null, skip: true, why: "本机无头**没有 WebGL** ⇒ 「远处清不清楚、过渡跳不跳」只能机主真机看，我不下结论" });
+        return rows;
+      }
+
+      function renderLodBadge() {
+        try {
+          const head = $("lodb-head");
+          const body = $("lodb-body");
+          const box = $("lodb");
+          if (!head || !body || !box) return;
+          const rows = lodReadback();
+          head.onclick = function () { box.classList.toggle("is-open"); };
+          if (!rows) {
+            head.textContent = "🛰 LOD 未启用（?lod=1）";
+            body.innerHTML = '<div class="artb__row">· 开法：URL 加 <b>?lod=1</b>（远处铺预渲染瓦片、近处走实时矢量、中间交叉过渡）</div>' +
+              '<div class="artb__row">· 不加参数 = **现有观感一字不改**（一个源/图层都不建）</div>' +
+              '<div class="artb__row">· 骨架阶段的瓦片是**示意**瓦片（假几何）；真数据管线是第 2 步</div>';
+            return;
+          }
+          const hitN = rows.filter(function (r) { return r.hit === true; }).length;
+          const missN = rows.filter(function (r) { return r.hit === false || r.hit === "no-layer"; }).length;
+          const skipN = rows.filter(function (r) { return r.skip; }).length;
+          head.textContent = (missN ? "⚠️ " : "") + "🛰 LOD ✅" + hitN + " ❌" + missN + " ⏭" + skipN + " · " + lodState;
+          body.innerHTML = rows.map(function (r) {
+            const mark = r.skip ? '<span class="artb__skip">⏭</span>'
+              : r.hit === true ? '<span class="artb__ok">✅</span>'
+                : (r.hit === false || r.hit === "no-layer") ? '<span class="artb__bad">❌</span>' : '<span>·</span>';
+            return "<div class=\"artb__row\">" + mark + " " + r.id + "." + r.key + " = " + String(r.now) +
+              (r.hit === false || r.hit === "no-layer" ? (" 期望 " + String(r.want)) : "") +
+              " <i>" + r.why + "</i></div>";
+          }).join("");
+        } catch (e) { /* 徽标画不出来不影响地图 */ }
+      }
+
+      /**
+       * 建层：源 + 图层（**spec 全部来自 `wsScene.lodPlan()`**，页面只负责"插在哪里"）。
+       * 插在 `ref`（注记）之前 ⇒ 在楼体/路网**之上**、注记之下；`ref` 不在才退回最上。
+       * 清单（`/prerender/manifest.json`）在这里取：拿不到就**如实记原因**，相关数字判"数不出来"。
+       */
+      async function applyLod() {
+        if (!LOD_ON) { updateLodHud(); return; }
+        const plan = lodPlanOf();
+        if (!plan) { updateLodHud(); return; }
+        /* 清单：**只用于回证**（哪些键真的存在）—— 取不到不影响地图，但 HUD 会写清"清单没取到" */
+        try {
+          const r = await fetch(plan.manifestPath, { cache: "no-store" });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          lodManifest = await r.json();
+          lodManifestErr = "";
+        } catch (e) {
+          lodManifest = null;
+          lodManifestErr = String(e).slice(0, 60) + "（跑 node world_map/make_prerender_tiles.mjs 生成）";
+        }
+        try {
+          if (!map.getSource(plan.sourceId)) map.addSource(plan.sourceId, plan.source);
+          const before = plan.beforeId && map.getLayer(plan.beforeId) ? plan.beforeId : undefined;
+          if (!map.getLayer(plan.layerId)) map.addLayer(plan.layer, before);
+          lodState = "已建层（" + plan.layerId + " @ " + (before || "最上") + " · z≤" + plan.far + " 瓦片 / z≥" + plan.near + " 矢量）";
+          /* 🔎 事后断言：层序对不对（`wsScene` 那份规则，页面不自己判一套） */
+          const TFx = window.__TF__;
+          if (TFx && TFx.sceneOrderViolations) {
+            const vio = TFx.sceneOrderViolations((map.getStyle().layers || []).map(function (l) { return l.id; }));
+            window.__LOD_ORDER_VIOLATIONS__ = vio;
+            if (vio.length) errs.push("lodOrder: " + vio.join("；"));
+          }
+        } catch (e) {
+          lodState = "失败：建层抛错 " + String(e).slice(0, 60);
+          errs.push("lodLayer " + e);
+        }
+        updateLodHud();
+      }
+
       /** 生成 + 画（**路网之上、楼体之下**：`before="bld-ext"`） */
       async function applyTransport(fc) {
         const TF = window.__TF__;
@@ -1086,11 +1365,17 @@
         } catch (e) { /* 暗角画不出来不影响地图 */ }
       }
 
-      /** HUD 上的一句"这一版观感是什么"（**自证**，别让人猜） */
+      /** HUD 上的一句"这一版观感是什么"（**自证**，别让人猜）。
+       *  🔴 口径 = 机主 2026-09-24 返工后定的三件：**地面 Δ（不许变暗）/ cel 档数 / 暗角强度**。 */
       function lookHud() {
         if (LOOK !== 2) return "look=1（基准）";
         const m = THEME && THEME.metrics;
-        return "look=2 " + (m ? ("楼/地 " + m.bldGroundRatio + " · 描边/地 " + m.outlineGroundRatio + ":1") : "（无数）");
+        const b = THEME_BASE && THEME_BASE.metrics;
+        if (!m) return "look=2（无数）";
+        const d = b ? (m.groundLuma - b.groundLuma) : null;
+        return "look=2 地面" + (d === null ? "?" : (d >= 0 ? "+" : "") + d.toFixed(4)) +
+          " · cel " + (THEME.ramp || []).length + " 档 · 描边/地 " + m.outlineGroundRatio + ":1" +
+          " · 暗角 " + m.vignetteOpacity;
       }
 
       /**
@@ -1143,9 +1428,9 @@
         row("tint", "background-color", lay("tint", "background-color"), "地面色罩 = 派生主题的地面色（整屏近白就是这一条在治）");
         row("bg", "background-color", lay("bg", "background-color"), "底色（天空之外那圈）");
         row("base", "raster-brightness-max", lay("base", "raster-brightness-max"), "底图压暗（不压 ⇒ 地面比楼亮，楼会消失）");
-        row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "受光面/背光面（基准平涂是 false）");
-        row("bld-ext", "fill-extrusion-opacity", THEME.extrudOpacity, "大气透视：远景更淡");
-        row("bld-line", "line-color", THEME.outline.color, "描边翻成亮线（深底上深描边会看不见）");
+        row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "BA 的**平涂**（机主拍板的美术方向）⇒ 渐变保持关；受光/背光改由 cel 分档表达");
+        row("bld-ext", "fill-extrusion-opacity", THEME.extrudOpacity, "远景淡出**已撤回基准值**（亮底上把远景调透明 = 楼化进地面，与「底要看得清」相反）");
+        row("bld-line", "line-color", THEME.outline.color, "描边 = BA 的深藏青（**没有翻成亮线** —— 那是第一版改错的，已撤）");
         const cel = (function () { const p = live("bld-ext", "fill-extrusion-color"); return p.v; })();
         const isCel = Array.isArray(cel) && cel[0] === "step";
         rows.push({
@@ -1159,37 +1444,56 @@
         const w0 = (function () { try { return map.getPaintProperty("road-casing-0", "line-width"); } catch (e) { return null; } })();
         row("road-casing-0", "line-width", (function () { const T2 = window.__TF__; return T2 && T2.roadStyleOf ? +(T2.roadStyleOf(0).w + lr.casingAdd).toFixed(2) : null; })(), "casing 与路芯一起加粗（只加一层 = 边比路粗）");
         rows.push({
-          id: "霓虹辉光", key: "road-glow-*",
-          now: glowIds.length ? (glowIds.join(",") + "（casing-0 现在 " + w0 + "px）") : "没建（road-glow-* 一个都没有）",
-          want: ">0 层", hit: glowIds.length > 0, why: "一条 source 两层线（宽而模糊的辉光 + 细而亮的路芯）—— 抄 dev.to 那篇真写了的做法",
+          id: "霓虹辉光", key: "road-glow-*", now: glowIds.length ? (glowIds.join(",")) : "没建（road-glow-* 一个都没有）",
+          want: "0 层（**已撤**）", hit: null, reverted: true,
+          why: "**撤了**：亮底上白色辉光与地面**同明度** ⇒ 既看不见又把路缘糊掉（降低可读性）；" +
+               "机制仍在数据里（`look.road.glow=null` = 不建层，改数据即可开），有自检守着这条数据",
         });
-        /* ④ 🔴 对比度（**低于阈值标红**）—— 数值由模块算好放进快照，页面**不再自己算第二遍**
-              （两把尺子的老坑：`gammaLuma` 与 `relativeLuminance` 不是一回事） */
+        /* ④ 🔴 **对比度 / 明度**（**低于阈值标红**）—— 口径按机主 2026-09-24 返工后的裁定改：
+              第一版那行「楼/地 1.88 ≥ 1.35」在 BA 亮底下**本来就不成立**（BA 是 楼/地 0.877、
+              描边/地 10.61:1，靠**深藏青描边**把楼勾出来）⇒ 那行是"自己给自己定的指标"，
+              已删。现在的硬指标是：**派生地面明度不许低于基准**。
+              数值由模块算好放进快照（`metrics`），页面**不再自己算第二遍**
+              （两把尺子的老坑：`gammaLuma` 与 `relativeLuminance` 不是一回事）。 */
         const m = THEME.metrics;
+        const bm = THEME_BASE && THEME_BASE.metrics;
         if (m) {
-          rows.push({
-            id: "对比度", key: "楼/地（明度比）", now: m.bldGroundRatio + "（地面 " + m.groundHex + " 亮度 " + m.groundLuma + "）",
-            want: "≥ " + m.minGroundContrast, hit: m.bldGroundRatio >= m.minGroundContrast,
-            why: "🔴 楼亮于地 —— 这条不变量**基准版是放弃的**（`separation=outline`），派生版把它拿回来了",
-            red: m.bldGroundRatio < m.minGroundContrast,
-          });
+          if (bm) {
+            const d = +(m.groundLuma - bm.groundLuma).toFixed(6);
+            const eps = typeof m.groundEps === "number" ? m.groundEps : 0.02;
+            rows.push({
+              id: "地面明度", key: "派生 − 基准（🔴 不许为负）",
+              now: (d >= 0 ? "+" : "") + d + "（" + m.groundHex + " " + m.groundLuma + " vs 基准 " + bm.groundHex + " " + bm.groundLuma + "）",
+              want: "≥ 0 且 |Δ| ≤ " + eps, hit: d >= 0 && Math.abs(d) <= eps, red: d < 0,
+              why: "**派生观感只能加结构，不许改机主拍板的美术方向** —— 地面被压暗就是这条红了（第一版 -0.563 就是这么来的）",
+            });
+          }
           rows.push({
             id: "对比度", key: "描边/地（WCAG）", now: m.outlineGroundRatio + ":1",
-            want: "≥ 4.5:1", hit: m.outlineGroundRatio >= 4.5,
-            why: "非文字图形的 WCAG AA（描边在深底上够不够显眼）",
-            red: m.outlineGroundRatio < 4.5,
+            want: "≥ 4.5:1", hit: m.outlineGroundRatio >= 4.5, red: m.outlineGroundRatio < 4.5,
+            why: "非文字图形的 WCAG AA —— **BA 靠这条描边把楼从亮底上勾出来**（这才是它的分隔手段）",
           });
-          /* 基准值也列一行（"改了多少"要有个参照，不然只有绝对值看不出差别） */
-          const bm = THEME_BASE && THEME_BASE.metrics;
           if (bm) rows.push({
-            id: "对比度", key: "基准版对照", now: "楼/地 " + bm.bldGroundRatio + " · 描边/地 " + bm.outlineGroundRatio + ":1 · 地面 " + bm.groundHex,
-            want: null, hit: null, why: "A/B 的参照（`?look=1` 那一版）",
+            id: "对比度", key: "楼/地（BA 口径，不判失败）", now: m.bldGroundRatio,
+            want: null, hit: null,
+            why: "BA 的地本来就比矮楼亮（基准 " + bm.bldGroundRatio + "）⇒ 这条**不是**阈值，只是如实报数（分隔靠描边）",
+          });
+          const celRow = rows.filter(function (r) { return r.key === "fill-extrusion-color"; })[0];
+          if (celRow) celRow.why = "cel 分档：硬边三档，档位色**取自 BA 色阶**（基准版是 8 档平滑插值）";
+          rows.push({
+            id: "暗角", key: "强度 opacity",
+            now: m.vignetteOpacity === null ? "数不出来（不是基准主题）" : m.vignetteOpacity,
+            want: "0 < opacity ≤ 0.25", hit: m.vignetteOpacity !== null && m.vignetteOpacity > 0 && m.vignetteOpacity <= 0.25,
+            red: m.vignetteOpacity !== null && m.vignetteOpacity > 0.25,
+            why: "**弱**暗角：第一版 0.5 被机主判「底都看不清了」⇒ 现在只压边角（阈值 0.25 写死在自检里）",
           });
         } else {
           rows.push({ id: "对比度", key: "—", now: "数不出来（快照里没有 metrics）", want: null, hit: null, why: "老 /wstheme.json 没有这一块 ⇒ 重新生成即可" });
         }
         /* ⑤ ⏭ 如实跳过（**不是失败**）：没做/做不了的项，逐条列出来 */
         for (const s of look.skipped || []) rows.push({ id: "跳过", key: s.k, now: "未做", want: null, hit: null, skip: true, why: s.why });
+        /* ⑥ ⏪ **如实记"做过又撤"**：撤掉必须留痕，否则下一个人还会照同一个方向再试一遍 */
+        for (const r of look.reverted || []) rows.push({ id: "撤回", key: r.k, now: "已撤", want: null, hit: null, reverted: true, why: r.why });
         return rows;
       }
 
@@ -1203,7 +1507,7 @@
           const rows = lookReadback();
           if (!rows) {
             head.textContent = "🎮 观感 look=1（基准）";
-            body.innerHTML = '<div class="artb__row">· 想看新观感：URL 加 <b>?look=2</b>（深底亮线 / 三档 cel / 接触阴影 / 霓虹路 / 暗角）</div>' +
+            body.innerHTML = '<div class="artb__row">· 想看新观感：URL 加 <b>?look=2</b>（**同一套 BA 配色** + cel 三档硬边 + 接触阴影 + 路加粗 + 弱暗角）</div>' +
               '<div class="artb__row">· 与 ?bld=2、?wstheme=night 可叠加（观感属于主题，形体属于几何）</div>';
             head.onclick = function () { box.classList.toggle("is-open"); };
             return;
@@ -1211,14 +1515,17 @@
           const hitN = rows.filter(function (r) { return r.hit === true; }).length;
           const missN = rows.filter(function (r) { return r.hit === false || r.hit === "no-layer"; }).length;
           const skipN = rows.filter(function (r) { return r.skip; }).length;
+          const revN = rows.filter(function (r) { return r.reverted; }).length;
           const redN = rows.filter(function (r) { return r.red; }).length;
-          head.textContent = (missN || redN ? "⚠️ " : "") + "🎮 look=2（游戏过场） ✅" + hitN + " ❌" + missN + " ⏭" + skipN +
-            (redN ? (" 🔴对比度不足 " + redN) : "") + (lookState.indexOf("回退") === 0 ? (" · " + lookState) : "");
+          head.textContent = (missN || redN ? "⚠️ " : "") + "🎮 look=2（结构留·配色回 BA） ✅" + hitN + " ❌" + missN +
+            " ⏭" + skipN + " ⏪" + revN + (redN ? (" 🔴红线 " + redN + " 条") : "") +
+            (lookState.indexOf("回退") === 0 ? (" · " + lookState) : "");
           head.onclick = function () { box.classList.toggle("is-open"); };
           body.innerHTML = rows.map(function (r) {
-            const mark = r.skip ? '<span class="artb__skip">⏭</span>'
-              : r.hit === true ? '<span class="artb__ok">✅</span>'
-                : (r.hit === false || r.hit === "no-layer") ? '<span class="artb__bad">❌</span>' : '<span>·</span>';
+            const mark = r.reverted ? '<span class="artb__skip">⏪</span>'
+              : r.skip ? '<span class="artb__skip">⏭</span>'
+                : r.hit === true ? '<span class="artb__ok">✅</span>'
+                  : (r.hit === false || r.hit === "no-layer") ? '<span class="artb__bad">❌</span>' : '<span>·</span>';
             return "<div class=\"artb__row\"" + (r.red ? ' style="color:#ff7b72"' : "") + ">" + mark + " " + r.id + "." + r.key +
               " = " + String(r.now) +
               (r.hit === false || r.hit === "no-layer" ? (" 期望 " + String(r.want)) : "") +
@@ -1515,7 +1822,31 @@
           preserveDrawingBuffer: true, // 截图用（无头/代拍都要它）
         });
         window.__w3d = { ok: true, map, stats, probe: () => probe(), spot: SPOT };
-        map.on("error", (e) => errs.push(String(e?.error?.message || e)));
+        map.on("error", (e) => {
+          /* 🛰 预渲染瓦片的加载失败**单独计数**（HUD 的回证要它），同时保留一条到 errs（可见性优先）。
+             ⚠️ 读 vendored 源码确认：**404 不抛 error 事件**（TileManager `_loadTile` 里 404 只 update）
+             ⇒ 真缺图靠清单对拍（`lodTileVerdict` 的 `absent`），不指望这里。 */
+          try {
+            if (LOD_ON && e && e.sourceId === (lodPlanCache && lodPlanCache.sourceId)) {
+              const k = (window.__TF__ && window.__TF__.lodEventTileKey) ? window.__TF__.lodEventTileKey(e) : null;
+              if (k) lodFailedKeys.add(k); else lodNoKey++;
+              scheduleLodHud();
+              return; // 瓦片级失败不进 errs（否则一屏缺图会把 errs 淹掉）
+            }
+          } catch (err) { /* 计数失败不该影响地图 */ }
+          errs.push(String(e?.error?.message || e));
+        });
+        /* 🛰 瓦片陆续到达 ⇒ 计数 + 刷新回证（节流 250ms） */
+        map.on("sourcedata", (e) => {
+          if (!LOD_ON) return;
+          try {
+            const plan = lodPlanCache;
+            if (!plan || !e || e.sourceId !== plan.sourceId || !e.tile) return;
+            const k = (window.__TF__ && window.__TF__.lodEventTileKey) ? window.__TF__.lodEventTileKey(e) : null;
+            if (k) lodLoadedKeys.add(k); else lodNoKey++;
+            scheduleLodHud();
+          } catch (err) { /* 忽略 */ }
+        });
 
         let busy = false;
         map.on("load", async () => {
@@ -1535,11 +1866,16 @@
           /* 🔴 顺序**以事后断言为准**（机主真机回归：?tf=1 时路网不见了 ⇒ 不靠"先插的那一次"） */
           ensureRoadOrder();
           window.__ROAD_HEALS__ = roadHeals;
+          /* 🛰 LOD：预渲染层**最后插**（要在楼体/路网之上、注记之下 ⇒ 此刻矢量层都已就位）。
+             没开 `?lod` 时它只写一行 HUD 文案，**一个源/图层都不建**（默认观感逐字节不变）。 */
+          try { await applyLod(); } catch (e) { errs.push("applyLod " + e); }
           /* ☁️ 天空叠加放在最后（它在最上层，但低 alpha 且只在地平线以上） */
           try { drawSky(); } catch (e) { errs.push("sky " + e); }
           window.__w3d.ready = true;
         });
         map.on("moveend", () => { if (window.__w3d.ready) void refresh(); });
+        /* 🛰 LOD 回证随视野更新（换档 / 换瓦片 ⇒ HUD 那一行与徽标要跟着变） */
+        map.on("moveend", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });
         /* ☁️ art=3：天空叠加重画（moveend 时重画一次即可 —— 几何是确定性的，不会抖） */
         map.on("moveend", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });
         map.on("pitch", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });
@@ -1571,8 +1907,15 @@
 
         /* 两个档位就是"一近一远"两张证据图的机位 */
         $("b-near").onclick = () => { map.easeTo({ zoom: 17.4, pitch: 50, duration: 600 }); };
-        /* 「远」= 看天空/地平线的机位（和代拍第二张同角度，手点/代拍可比对） */
-        $("b-far").onclick = () => { map.easeTo({ zoom: 14.6, pitch: 26, duration: 600 }); };
+        /* 「远」= 看天空/地平线的机位（和代拍第二张同角度，手点/代拍可比对）。
+           🛰 `?lod=1` 时**再退一档到预渲染区**（`LOD_FAR_ZOOM - 1`）—— 否则这一页根本看不到远处那条路
+           （原来的 14.6 已经进了"实时矢量"区）。阈值取自 `wsScene`，页面不写字面量。 */
+        $("b-far").onclick = () => {
+          const TFx = window.__TF__;
+          const z = LOD_ON && TFx && TFx.lodPlan ? TFx.lodPlan().far - 1 : 14.6;
+          map.easeTo({ zoom: z, pitch: 26, duration: 600 });
+          if (LOD_ON) { try { $("b-far").title = "远景（预渲染瓦片区 z" + z + "）"; } catch (e) { /* 忽略 */ } }
+        };
         $("b-spin").onclick = () => { map.easeTo({ bearing: map.getBearing() - 45, duration: 600 }); };
         /* 「星」：z16 以上到底用卫星影像还是把暗色底放大。
            留这个按钮是因为"哪个更好看"**只能看真机图**决定 ——
@@ -1831,6 +2174,25 @@
           roadHeals: (typeof window.__ROAD_HEALS__ === "number" ? window.__ROAD_HEALS__ : null),
           roadStat: window.__ROAD_STAT__ || null,
           tf: window.__TF_RES__ ? { n: (window.__TF_RES__.features || []).length, counts: window.__TF_RES__.counts, notes: window.__TF_RES__.notes, hud: (window.__TF && window.__TF.transportHudLine ? window.__TF.transportHudLine(window.__TF_RES__) : null) } : null,
+          /* 🛰 LOD 自证（`?lod=1`）：状态 + 档位 + 瓦片命中/缺图（三态）+ 实时层要素数 + 层序违规。
+             `lod: null` ⇒ **未启用**（不是失败）；`tiles.hit: null` ⇒ **数不出来**（不许读成 0）。 */
+          lod: LOD_ON ? {
+            param: LOD_PARAM, on: LOD_ON, state: lodState,
+            tier: (window.__TF__ && window.__TF__.lodTierOf ? window.__TF__.lodTierOf(map.getZoom()) : null),
+            tierLabel: (window.__TF__ && window.__TF__.lodTierLabel ? window.__TF__.lodTierLabel(window.__TF__.lodTierOf(map.getZoom())) : null),
+            opacityExpr: (function () { try { return map.getPaintProperty("prerender", "raster-opacity"); } catch (e) { return "(取值抛错)"; } })(),
+            layer: !!map.getLayer("prerender"), source: !!map.getSource("prerender"),
+            before: (lodPlanCache && lodPlanCache.beforeId) || null,
+            layerIds: (map.getStyle().layers || []).map(function (l) { return l.id; }).filter(function (id) { return id.indexOf("prerender") === 0; }),
+            orderViolations: window.__LOD_ORDER_VIOLATIONS__ || null,
+            tiles: lodVerdict,
+            tileStates: window.__LOD_TILE_STATES__ || null,
+            loadedKeys: lodLoadedKeys.size, failedKeys: lodFailedKeys.size, noKey: lodNoKey,
+            manifest: lodManifest ? { tileCount: lodManifest.tileCount, themeId: lodManifest.themeId, fingerprint: lodManifest.themeFingerprint, zoomRange: lodManifest.zoomRange, palette: lodManifest.palette } : null,
+            manifestErr: lodManifestErr || null,
+            live: lodLive,
+            hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })(),
+          } : { on: false, param: LOD_PARAM, state: lodState, hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })() },
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
         };
       }

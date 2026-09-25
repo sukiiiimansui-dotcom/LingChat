@@ -729,6 +729,15 @@
          ② 可见区绝大多数楼落在同一高度档 ⇒ 同色；③ 低 pitch 下挤出体块=平面方块、没有接触阴影。
          颜色仍然**全部取自主题**（ramp/outline 的派生），**不新增第二套配色**。 */
       const BST = (function () { try { return /[?&]bst=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; } })();
+      /* 🏙 **近景画多少栋**（机主 2026-09-25：「楼房过于密集…**上限 100 栋根据视野来显示**」）。
+         `?bldn=N` 可调（A/B 用）；`?bldn=0` = 近景一栋不画（只剩路/标签/瓦片）。规则在共享真源 `wsBuildingPick`。 */
+      const BLDN = (function () {
+        try {
+          const m = /[?&]bldn=(\d+)/.exec(location.search);
+          return m ? Math.max(0, Math.min(5000, parseInt(m[1], 10))) : 100;
+        } catch (e) { return 100; }
+      })();
+      const BLDN_NEAR_ZOOM = 14;   // 与 LOD 的"近景"分界一致（远景由预渲染瓦片负责，挑它没意义）
       /** 小楼阈值：脚印面积 < 这个（m²）就**只填充不描边**（≈15×15m；z16 下约 38px²） */
       const BST_SMALL_M2 = 220;
       let WINS = BLD === 2 && (function () { try { return /[?&]win=1\b/.test(location.search); } catch (e) { return false; } })();
@@ -2227,7 +2236,26 @@
       function flushBld(why) {
         const st = bldStoreOf();
         if (!st) return;
-        const data = { type: "FeatureCollection", features: st.features() };
+        const all = { type: "FeatureCollection", features: st.features() };
+        /* 🏙 **近景按视野挑楼**（机主口径：上限 100 栋、随视野刷新；小区/基础设施自然浮出来）。
+           ⚠️ 挑的只是"画哪些"：**仓库仍是全量真数据**，HUD 的「仓库 N 栋」照旧报全量，另加一行挑楼口径。
+           规则全在共享真源 `wsBuildingPick.pickBuildingsForView`（纯函数，自检 30/0），页面只给视野与上限。 */
+        let data = all, pickWhy = "";
+        try {
+          const TFp = window.__TF__;
+          const z = map.getZoom();
+          if (TFp && typeof TFp.pickBuildingsForView === "function" && BLDN > 0 && z >= BLDN_NEAR_ZOOM) {
+            const r = TFp.pickBuildingsForView(all.features, { bounds: map.getBounds(), center: map.getCenter(), cap: BLDN });
+            data = { type: "FeatureCollection", features: r.features };
+            pickWhy = r.stats.why;
+            window.__BLD_PICK__ = r.stats;
+            try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", r.stats.why, r.stats); } catch (e2) { /* 忽略 */ }
+          } else {
+            window.__BLD_PICK__ = { skipped: true, why: BLDN === 0 ? "?bldn=0：近景不画楼" : ("zoom " + z.toFixed(1) + " < " + BLDN_NEAR_ZOOM + "：远景走瓦片，不挑") };
+            pickWhy = "（未挑：" + window.__BLD_PICK__.why + "）";
+          }
+        } catch (e) { errs.push("pick " + e); }
+        window.__BLD_PICK_WHY__ = pickWhy;
         try {
           if (BLD_OFF) { window.__BLD_BUNDLE_FC__ = data.features.length; return; }  // ?bld=0：数据备好但不画
           if (map.getSource("bld")) map.getSource("bld").setData(data);
@@ -2260,7 +2288,8 @@
           }
           window.__BLD_BUNDLE__ = facts ? { n: facts.n, have: facts.have, missing: facts.missing, failed: facts.failed,
                                             cap: s2 ? s2.cap : null, dropped: s2 ? s2.dropped : null } : null;
-          el.textContent = txt + (line ? " · " + line.replace(/^🏢 /, "") : "");
+          const pk = window.__BLD_PICK_WHY__ ? " · 🏙 " + window.__BLD_PICK_WHY__ : "";
+          el.textContent = txt + (line ? " · " + line.replace(/^🏢 /, "") : "") + pk;
           el.title = [
             "🏢 离线楼房包：`/bldbundle/<格>.json`（静态文件，**不打 /api/buildings**）",
             "由 `world_map/export_bld_bundle.py` 从**已缓存的 Overture 盘**导出：55 盘 → 720,087 栋 → 373 格 / 102.6MB",

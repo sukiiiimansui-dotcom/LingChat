@@ -2165,6 +2165,123 @@ function envSnapshot(extra = {}) {
   };
 }
 
+// src/components/views/worldsim/wsBuildingPick.ts
+var WS_BLD_VIEW_CAP = 100;
+function bboxArea(f) {
+  const g = f.geometry;
+  if (!g || !g.coordinates) return 0;
+  const rings = g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
+  for (const ring of rings) {
+    for (const pt of ring || []) {
+      const x = Number(pt?.[0]), y = Number(pt?.[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      n += 1;
+    }
+  }
+  if (!n) return 0;
+  return Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
+}
+function hasName(f) {
+  const p = f.properties || {};
+  const nm = p.name ?? p["name:zh"] ?? p.n ?? p.ref;
+  return typeof nm === "string" ? nm.trim().length > 0 : nm != null && String(nm).trim().length > 0;
+}
+function firstPoint(f) {
+  const g = f.geometry;
+  if (!g || !g.coordinates) return null;
+  const c = g.type === "Polygon" ? g.coordinates[0]?.[0] : g.type === "MultiPolygon" ? (g.coordinates[0] || [])[0]?.[0] : void 0;
+  const x = Number(c?.[0]), y = Number(c?.[1]);
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+}
+function pickBuildingsForView(feats, input) {
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_VIEW_CAP));
+  const nb = Math.max(1, Math.min(32, Math.floor(input.buckets ?? 8)));
+  const considered = feats.length;
+  const b = input.bounds;
+  const hasBounds = !!(b && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
+  const west = hasBounds ? b.getWest() : 0;
+  const south = hasBounds ? b.getSouth() : 0;
+  const east = hasBounds ? b.getEast() : 0;
+  const north = hasBounds ? b.getNorth() : 0;
+  const spanX = east - west;
+  const spanY = north - south;
+  const items = [];
+  let inView = 0;
+  let noPoint = 0;
+  for (const f of feats) {
+    const pt = firstPoint(f);
+    let bucket = -1;
+    if (hasBounds && !pt) {
+      noPoint += 1;
+      continue;
+    }
+    if (hasBounds && pt) {
+      const inside = pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
+      if (!inside) continue;
+      inView += 1;
+      const bx = spanX > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[0] - west) / spanX * nb))) : 0;
+      const by = spanY > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[1] - south) / spanY * nb))) : 0;
+      bucket = by * nb + bx;
+    } else {
+      bucket = 0;
+    }
+    items.push({
+      f,
+      bucket,
+      named: hasName(f) ? 1 : 0,
+      area: bboxArea(f),
+      key: String(f.id ?? "")
+    });
+  }
+  const byBucket = /* @__PURE__ */ new Map();
+  for (const it of items) {
+    const arr = byBucket.get(it.bucket);
+    if (arr) arr.push(it);
+    else byBucket.set(it.bucket, [it]);
+  }
+  for (const arr of byBucket.values()) {
+    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+  }
+  const buckets = [...byBucket.keys()].sort((a, z) => a - z);
+  const chosen = [];
+  const perBucket = hasBounds ? new Array(nb * nb).fill(0) : [];
+  for (let round = 0; chosen.length < cap; round++) {
+    let tookAny = false;
+    const order = buckets.slice().sort((b1, b2) => {
+      const x = byBucket.get(b1), y = byBucket.get(b2);
+      if (round >= x.length) return round >= y.length ? b1 - b2 : 1;
+      if (round >= y.length) return -1;
+      const a1 = x[round], a2 = y[round];
+      return a2.named - a1.named || a2.area - a1.area || b1 - b2;
+    });
+    for (const bk of order) {
+      const arr = byBucket.get(bk);
+      if (round >= arr.length) continue;
+      if (chosen.length >= cap) break;
+      chosen.push(arr[round].f);
+      if (hasBounds && perBucket[bk] !== void 0) perBucket[bk] += 1;
+      tookAny = true;
+    }
+    if (!tookAny) break;
+  }
+  const stats = {
+    considered,
+    inView: hasBounds ? inView : null,
+    noPoint,
+    chosen: chosen.length,
+    cap,
+    buckets: nb,
+    byBucket: hasBounds ? perBucket : null,
+    why: `显示 ${chosen.length} / ${hasBounds ? "视野内 " + inView : "视野内 **数不出来**（没有 bounds）"} 栋（仓库 ${considered} · 上限 ${cap} · ${nb}×${nb} 分桶轮转：有名字优先、底面大的优先` + (noPoint ? ` · **定位不到点 ${noPoint} 栋未画**` : "") + `）`
+  };
+  return { features: chosen, stats };
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -2805,6 +2922,7 @@ export {
   WIN_PATTERN_SIZE,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
+  WS_BLD_VIEW_CAP,
   WS_FETCH_R_BACKEND_MAX,
   WS_FETCH_R_LADDER,
   WS_FETCH_R_LIMIT_WHY,
@@ -2897,6 +3015,7 @@ export {
   metersBetween,
   nearestOnLine,
   panDamping,
+  pickBuildingsForView,
   pickLabels,
   pitchGuardParams,
   pixelRatioForTier,

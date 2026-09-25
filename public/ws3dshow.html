@@ -184,7 +184,7 @@
       #lc-char.hide { display: none; }
       /* 🧭 角色在视野外时的**边缘指示牌**（不编位置：只把"真实站位"的方向与距离说出来，点了把镜头带过去） */
       #lc-off { position: absolute; z-index: 27; display: none; align-items: center; gap: 4px;
-        transform: translate(-50%, -50%); padding: 2px 8px; border-radius: 999px; cursor: pointer;
+        transform: translateX(-50%); padding: 2px 8px; border-radius: 999px; cursor: pointer;
         font-size: 11px; font-weight: 700; white-space: nowrap; color: #fff;
         background: rgba(13, 71, 161, 0.92); border: 1px solid rgba(255, 255, 255, 0.5);
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
@@ -337,7 +337,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v50";
+      const BUILD = "ws3dshow-2026-09-25-v51";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3411,6 +3411,12 @@
         let lcPosSource = "scatter"; /* 三档之一：runtime / schedule / scatter（与 App 同名） */
         let lcPosNote = "还没算（等地图与片区名包就绪）";
         let lcChar = null, lcAff = null, lcMem = null, lcBusy = false;
+        /* 🔴 显示名 = **角色设定名**（机主 2026-09-25：「角色名字就用角色设定名」）。
+           来源：资产目录 `settings.yml` 的 `ai_name`（`/char/index.json` 已读出来，实测
+           DeepSeek / 钦灵 / 风雪）。取不到才退回 LingChat 角色卡的名字 —— 两个都留出口，
+           **不混着写**（角色卡是 "SYuki"、设定名是 "DeepSeek" 这种差异必须看得见）。 */
+        let lcSettingsName = "";
+        function lcDisplayName() { return lcSettingsName || (lcChar && lcChar.name) || "角色"; }
         const lcEl = { stat: null, msgs: null, input: null };
         try {
           lcEl.stat = document.getElementById("lc-stat");
@@ -3434,7 +3440,7 @@
           const ev = lcEmotion && lcEmotion.values
             ? (" · 😊喜" + lcEmotion.values.joy + " 近" + lcEmotion.values.closeness + " 羞" + lcEmotion.values.shy + " 烦" + lcEmotion.values.frustration + " 力" + lcEmotion.values.energy)
             : "";
-          return "💬 " + lcChar.name + " · 🎭" + (lcFace || "数不出来") + ev
+          return "💬 " + lcDisplayName() + " · 🎭" + (lcFace || "数不出来") + ev
             + " · 好感 " + (lcAff === null ? "数不出来" : lcAff)
             + " · 记忆 " + (lcMem === null ? "数不出来" : lcMem) + " 条"
             /* 📍 **位置要如实**：说清是"LingChat 说的"还是"本地散点"（机主：「位置是固定的」那次就是没写） */
@@ -3488,7 +3494,7 @@
         }
         function wsDeps() {
           const TFd = window.__TF__;
-          const residents = lcChar ? [{ id: "char:" + (lcChar.id ?? "0"), name: lcChar.name }] : [];
+          const residents = lcChar ? [{ id: "char:" + (lcChar.id ?? "0"), name: lcDisplayName() }] : [];
           /* 「去一个地方」的候选：只用**真实**的东西（家 / 页面默认机位所在区）——不编地点 */
           const spots = [];
           if (wsHome) spots.push({ id: "home", name: wsHome.name });
@@ -3650,7 +3656,8 @@
             lcFolder = hit || names[0] || null;
             lcAssetNote = hit ? "" : ("「" + (want || "选定角色") + "」在 LingChat 里**没有立绘资产**（DB 里 avatar 为空、也没有同名目录）⇒ 现在显示的是「" + lcFolder + "」的立绘，可在下面换");
             lcFaces = (lcFolder && idx[lcFolder]) ? (idx[lcFolder].faces || idx[lcFolder]).map((f) => String(f).replace(/\.webp$/i, "")) : [];
-            window.__LC_ASSETS__ = { folders: names.map((n) => ({ folder: n, ai: (idx[n] && idx[n].ai_name) || "" })), picked: lcFolder, want: want, note: lcAssetNote };
+            lcSettingsName = String((idx[lcFolder] && idx[lcFolder].ai_name) || "").trim();
+            window.__LC_ASSETS__ = { folders: names.map((n) => ({ folder: n, ai: (idx[n] && idx[n].ai_name) || "" })), picked: lcFolder, want: want, note: lcAssetNote, settingsName: lcSettingsName };
             if (lcAssetNote) lcLog("warn", lcAssetNote, { want: want, picked: lcFolder });
             lcLog("info", "立绘资产已接（LingChat 目录）", { folder: lcFolder, faces: lcFaces.length });
           } catch (e) { lcLog("warn", "立绘清单取不到（/char/index.json）", { err: String(e).slice(0, 80) }); }
@@ -3685,7 +3692,7 @@
           try {
             const m = document.getElementById("lc-char");
             const tag = m && m.querySelector(".tag");
-            if (tag) tag.textContent = "💬 " + ((lcChar && lcChar.name) || "角色");
+            if (tag) tag.textContent = "💬 " + lcDisplayName();
           } catch (e) { /* 忽略 */ }
           try { lcUpdateMarker(); } catch (e2) { /* 忽略 */ }
           return lcChar;
@@ -3831,7 +3838,7 @@
               lcMarker.id = "lc-char";
               /* 形态 = App 既定设计：2.1em 圆头像 + 状态环 + 名字（立绘只在抽屉里） */
               lcMarker.innerHTML = '<span class="ring"><img alt="" /></span>'
-                + '<span class="tag">💬 ' + ((lcChar && lcChar.name) || "角色") + '</span>';
+                + '<span class="tag">💬 ' + lcDisplayName() + '</span>';
               lcMarker.title = "点我和她说话（走 LingChat 本身的对话）";
               lcMarker.onclick = function () {
                 /* 点地图上的角色 ⇒ 开**对话**抽屉（不是诊断抽屉） */
@@ -3849,7 +3856,7 @@
             /* 名字标签：角色名单晚于标记到达时补上 */
             try {
               const tag = lcMarker.querySelector(".tag");
-              if (tag) tag.textContent = "💬 " + ((lcChar && lcChar.name) || "角色");
+              if (tag) tag.textContent = "💬 " + lcDisplayName();
             } catch (e3) { /* 忽略 */ }
             if (!lcAnchor) lcResolveAnchor();
             if (!lcAnchor) { lcMarker.classList.add("hide"); return; }
@@ -3870,22 +3877,26 @@
               (document.getElementById("map") || document.body).appendChild(lcOffEl);
             }
             if (outside) {
-              /* 边距按**指示牌自身宽度**算：固定 22px 会让药丸被屏幕边缘裁掉一半（v49 实测） */
-              const mw = Math.max(24, Math.round((lcOffEl.offsetWidth || 130) / 2) + 8);
-              const mh = Math.max(16, Math.round((lcOffEl.offsetHeight || 22) / 2) + 6);
-              const cx = Math.min(w - mw, Math.max(mw, p.x));
-              const cy = Math.min(h - mh, Math.max(mh, p.y));
+              /* 🔴 机主 2026-09-25：「那个一直在角色下方显示的…当角色是在下面，地图上看不到任何信息」
+                 ⇒ **不再贴着地图边缘放**（会压住地图/底部信息），改成**固定槽位**：底部居中，
+                    只用一个方向箭头说清她在哪边（右下是缩放按钮、左下是抽屉把手 ⇒ 中间最干净）。 */
+              const c = map.getCenter();
+              const dx = lcAnchor.lng - c.lng, dy = lcAnchor.lat - c.lat;
+              const A = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
+              const ang = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;   /* 0°=正东，逆时针 */
+              const arrow = A[Math.round(((450 - ang) % 360) / 45) % 8];
               let distM2 = null;
               try {
                 const c = map.getCenter();
                 const d = (window.__TF__ && typeof window.__TF__.distM === "function") ? window.__TF__.distM : null;
                 if (d) distM2 = Math.round(d({ lng: c.lng, lat: c.lat }, lcAnchor));
               } catch (e5) { distM2 = null; }
-              lcOffEl.textContent = "💬 " + ((lcChar && lcChar.name) || "角色") + " 在视野外"
-                + (distM2 === null ? "" : " · " + distM2 + "m") + " →";
+              lcOffEl.textContent = "💬 " + lcDisplayName() + " 在视野外"
+                + (distM2 === null ? "" : " · " + distM2 + "m") + " " + arrow;
               lcOffEl.title = "点一下把镜头带过去（她的位置来自" + lcPosSource + "：" + lcPosNote + "）";
-              lcOffEl.style.left = cx + "px";
-              lcOffEl.style.top = cy + "px";
+              lcOffEl.style.left = "50%";
+              lcOffEl.style.top = "auto";
+              lcOffEl.style.bottom = "14px";
             }
             if (lcOffEl) lcOffEl.classList.toggle("on", !!outside);
           } catch (e) { /* 标记失败不许影响地图 */ }
@@ -3912,6 +3923,7 @@
                             /* 站位如实出口：位置 / **来源档位** / 一句为什么（无头自检与真机都能读） */
                             pos: function () { return lcAnchor; }, posSource: function () { return lcPosSource; },
                             posNote: function () { return lcPosNote; }, posReal: function () { return lcAnchorReal; }, offscreen: function () { return lcOffscreen; },
+                            name: function () { return lcDisplayName(); }, settingsName: function () { return lcSettingsName; },
                             resolvePos: function (force) { return lcResolveAnchor(force); } };
         } catch (e) { errs.push("char " + e); }
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });

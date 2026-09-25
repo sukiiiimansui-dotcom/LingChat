@@ -123,6 +123,9 @@
       <span><b id="m-n">0</b> 栋</span>
       <!-- 🛣 路网**独立一格**：交通设施那行会覆盖 m-msg ⇒ 路数必须有自己的位置（否则"看不见路"没人知道是没插还是没数） -->
       <span id="m-roads" class="w">路网 —</span>
+      <!-- 🏢 离线**楼房**包那一格（机主 2026-09-25：「楼房只有中间一块」）：
+           可数口径 = 仓库栋数 / 已取格 / 包外格 / 失败格；**包外如实写「包外」**，绝不冒充"这里没有楼"。 -->
+      <span id="m-bldb" class="w">🏢 离线格 —</span>
       <span>真高 <b id="m-h">0</b></span>
       <span>层数 <b id="m-l">0</b></span>
       <span class="w">按类型估 <b id="m-e">0</b></span>
@@ -188,7 +191,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v23";
+      const BUILD = "ws3dshow-2026-09-25-v24";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1014,7 +1017,7 @@
         fetchStat.road = {
           r: Number(body.radius) || r,
           n: Number(body.count) || ((body.geojson && body.geojson.features) || []).length,
-          cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "",
+          cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "", kind: "road",
           capped: cap.capped, wanted: cap.wanted, why: cap.why, live: true, skipped: false,
         };
         renderFetchHud();
@@ -1109,7 +1112,7 @@
           ? TFr.roadsVerdictText(Object.assign({ state: st, radius: capR.radius, capped: capR.capped, wanted: capR.wanted, why: capR.why }, extra || {}))
           : "🛣 " + st;
         const roadEl = () => document.getElementById("m-roads");
-        fetchStat.road = { r: capR.radius, n: null, cached: null, ms: null, err: null, pending: true,
+        fetchStat.road = { kind: "road", r: capR.radius, n: null, cached: null, ms: null, err: null, pending: true,
                            capped: capR.capped, wanted: capR.wanted, why: capR.why };
         renderFetchHud();
         window.__ROAD_HUD_PREFIX__ = "";
@@ -1131,7 +1134,7 @@
           window.__ROADS_OVERPASS_N__ = 0;
           const stb = roadsStoreOf();
           const nb = stb ? stb.stats().n : null;
-          fetchStat.road = { r: capR.radius, n: nb, cached: null, ms: null, err: null,
+          fetchStat.road = { kind: "road", r: capR.radius, n: nb, cached: null, ms: null, err: null,
                              capped: capR.capped, wanted: capR.wanted, why: capR.why,
                              live: false, skipped: true, liveWhy: dec.why };
           renderFetchHud();
@@ -1146,7 +1149,7 @@
         let roads = { features: [] };
         try { roads = await fetchRoads(rRoads); } catch (e) {
           errs.push("roads r=" + capR.radius + " " + e);
-          fetchStat.road = { r: capR.radius, n: null, cached: null, ms: null, err: String(e).slice(0, 90),
+          fetchStat.road = { kind: "road", r: capR.radius, n: null, cached: null, ms: null, err: String(e).slice(0, 90),
                              capped: capR.capped, wanted: capR.wanted, why: capR.why };
           renderFetchHud();
           window.__ROAD_HUD_PREFIX__ = vtext("failed", { err: String(e).slice(0, 60) });
@@ -2132,8 +2135,161 @@
          🔴 上限（帧率护栏）：`ROADS_STORE_CAP` 条；超了按离视野中心距离淘汰（可数的口径，HUD 报出来）。 */
       const ROADS_STORE_CAP = 6000;
       const ROADS_BUNDLE_PER_REFRESH = 2;   // 一次 moveend 最多取几格（后台、不阻塞）
+      /* ══ 🏢 **离线楼房包**（父代理 2026-09-25：「离线楼房包，照离线路面包复制一遍思路」）══════════
+         为什么：现场 `/api/buildings` 一次只有视野中心 R≤2000m（后端硬闸）且冷查 27~33s
+         ⇒ 机主看到的就是"**只有中间一块**"。楼改从**离线楼房包**来（`/bldbundle/<格>.json`，静态文件）：
+         实测 **55 盘 → 720,087 栋 → 373 格 / 102.6MB**，单格中位 205KB / 最大 1.9MB。
+         🔴 铁律不变：包里全是 **Overture 真脚印（real，ODbL 署名）**；**sketch 只在预渲染 PNG 的像素里**。 */
+      const BLD_BUNDLE_PER_REFRESH = 2;     // 一次 moveend 最多取几格（后台、串行）
+      /* 帧率护栏：累积仓库上限（超了按"离视野中心距离"淘汰）。12,000 是**保守值**：
+         实测渝中一格 10,852 栋（1.78MB），而 `retainNear` 本来就只保留"视野外一圈"内的
+         ⇒ 上限很少真的用满；真要画得动多少**只有真机能判**（本机无头无 WebGL，我们不写 fps 结论）。 */
+      const BLD_STORE_CAP = 12000;
       let roadsStore = null;
       const bundleState = { have: new Set(), missing: new Set(), failed: new Set(), pending: 0, asked: 0 };
+
+      /* 🏢 离线楼房包的状态（与路同一套：have / missing=包外 / failed / pending） */
+      const bldBundleState = { have: new Set(), missing: new Set(), failed: new Set(), pending: 0 };
+      /* 可数口径的计数器：**页面加载时归零**（自检每个场景都是新的页面 ⇒ 不跨场景泄漏） */
+      window.__BLD_SRC_LIVE__ = 0;
+      window.__BLD_SRC_BUNDLE__ = 0;
+      window.__BLD_OVERPASS_N__ = 0;
+      let bldStore = null;
+
+      /** 取/建**楼房**累积仓库（与路共用 `createFeatureStore` 纯逻辑，不写第二套合并/淘汰） */
+      function bldStoreOf() {
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.createFeatureStore !== "function") return null;
+        if (!bldStore) {
+          bldStore = TFx.createFeatureStore({
+            cap: BLD_STORE_CAP,
+            /* 🔴 去重键优先 `store_id`：`?bld=2` 会把一栋楼**拆成多个要素**（裙楼/塔楼/女儿墙/设备箱…），
+               它们共用同一个 `osm_id` —— 若按 `osm_id` 去重，拆件会被**互相顶掉**，形体就"生成完看不见"
+               （自检 ws_bld_page ①那里抓到过：3 栋楼只剩 3 个要素、podium 只剩 1 个）。 */
+            idOf: (f) => (f && f.properties && (f.properties.store_id || f.properties.osm_id || f.properties.id)) || (f && f.id) || null,
+            /* 代表点：外环质心（淘汰按"离视野中心多远"）——取不到就 null（不参与淘汰，也不丢） */
+            pointOf: (f) => {
+              try {
+                const r = ((f.geometry || {}).coordinates || [])[0] || [];
+                if (!r.length) return null;
+                let x = 0, y = 0;
+                for (const q of r) { x += q[0]; y += q[1]; }
+                return [x / r.length, y / r.length];
+              } catch (e) { return null; }
+            },
+          });
+        }
+        return bldStore;
+      }
+
+      /** 把楼房仓库的并集一次性写进地图（**不每格一次 setData**） */
+      function flushBld(why) {
+        const st = bldStoreOf();
+        if (!st) return;
+        const data = { type: "FeatureCollection", features: st.features() };
+        try {
+          if (BLD_OFF) { window.__BLD_BUNDLE_FC__ = data.features.length; return; }  // ?bld=0：数据备好但不画
+          if (map.getSource("bld")) map.getSource("bld").setData(data);
+          else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
+        } catch (e) { errs.push("bld.setData " + e); }
+        window.__BLD_BUNDLE_FC__ = data.features.length;
+        stats.parts = data.features.length;
+        renderBldBundleHud();
+        try { refreshLabels("bundle-bld"); } catch (e) { /* 标签失败不影响地图 */ }
+        if (why) window.__BLD_FLUSH_WHY__ = why;
+      }
+
+      /** 🏢 离线楼房包那一行的口径（可数：仓库栋数 / 已取格 / 包外格 / 失败格 / 上限） */
+      function renderBldBundleHud() {
+        try {
+          const el = document.getElementById("m-bldb");
+          if (!el) return;
+          const TF2 = window.__TF__;
+          const st = bldStoreOf();
+          const s2 = st ? st.stats() : null;
+          const n = s2 ? s2.n : null;
+          const have = bldBundleState.have.size;
+          const miss = bldBundleState.missing.size;
+          const fail = bldBundleState.failed.size;
+          window.__BLD_BUNDLE__ = n === null ? null : { n: n, have: have, missing: miss, failed: fail,
+                                                        cap: s2 ? s2.cap : null, dropped: s2 ? s2.dropped : null };
+          let txt;
+          if (TF2 && typeof TF2.bldVerdictText === "function") {
+            /* 包外且仓库空 ⇒ **如实写「包外」**（这是"我们没这个包"，不是"这里没有楼"） */
+            const outside = (n === null || n === 0) && miss > 0 && have === 0;
+            txt = TF2.bldVerdictText({ state: outside ? "outside" : "bundle", n: n, cells: have, cap: s2 ? s2.cap : null });
+          } else {
+            txt = "🏢 离线格 已取 " + have + " / 包外 " + miss + " / 失败 " + fail + "（模块缺 bldVerdictText ⇒ 只报计数）";
+          }
+          el.textContent = txt + " · 已取 " + have + " / 包外 " + miss + " / 失败 " + fail
+            + (bldBundleState.pending ? " / 待取 " + bldBundleState.pending : "")
+            + " · 仓库 " + (n === null ? "数不出来" : n) + " 栋"
+            + (window.__BLD_BUNDLE_CAPPED__ ? "（视野共需 " + window.__BLD_BUNDLE_CAPPED__ + " 格，只取了最近的）" : "");
+          el.title = [
+            "🏢 离线楼房包：`/bldbundle/<格>.json`（静态文件，**不打 /api/buildings**）",
+            "由 `world_map/export_bld_bundle.py` 从**已缓存的 Overture 盘**导出：实测 55 盘 → 720,087 栋 → 373 格 / 102.6MB",
+            "🔴 包里全是 **Overture 真脚印（real · ODbL）**；**sketch 只在预渲染 PNG 的像素里**，绝不进数据",
+            "现场取数（R≤2000m、冷查 27~33s）只在 `?live=1` 时打；默认 0 条",
+            "包外 = 这一带**没有离线格**（如实写，不冒充「这里没有楼」）",
+          ].join("\n");
+        } catch (e) { /* HUD 失败不影响地图 */ }
+      }
+
+      /**
+       * 🏢 按视野取**离线楼房格**（静态文件 ⇒ 不打 Overpass）。
+       * · 一次 moveend 最多 `BLD_BUNDLE_PER_REFRESH` 格（后台、串行）；404 = **包外**（记 missing）；
+       * · 合并进**累积仓库**（不整份替换 —— 机主：「之前的没了」）； · 取完**一次** setData。
+       */
+      async function refreshBldBundle() {
+        const TFx = window.__TF__;
+        const st = bldStoreOf();
+        if (!st || !TFx || typeof TFx.bldBundleCellsForView !== "function") return;
+        const plan = TFx.bldBundleCellsForView(map.getBounds(), map.getCenter(), 6);
+        if (!plan) return;
+        if (plan.capped) window.__BLD_BUNDLE_CAPPED__ = plan.wanted;
+        const todo = plan.cells.filter((c) => !st.has("bldbundle:" + c.key) && !bldBundleState.missing.has(c.key));
+        const batch = todo.slice(0, BLD_BUNDLE_PER_REFRESH);
+        if (!batch.length) return;
+        bldBundleState.pending += batch.length;
+        let got = 0;
+        for (const cell of batch) {
+          try {
+            const r = await fetchWithTimeout("/bldbundle/" + cell.key + ".json", BUNDLE_TIMEOUT_MS);
+            if (r.status === 404) { bldBundleState.missing.add(cell.key); continue; }
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const j = await r.json();
+            const feats = [];
+            for (const b of (j.bld || [])) {
+              /* 一格楼可能由多块组成（MultiPolygon）⇒ 一块一个要素，id 加 `#k` 后缀（**不是**编数据：
+                 几何/高度/来源全部原样，只是把一块拆成一个可渲染要素）。 */
+              const parts = b.p || [];
+              for (let k = 0; k < parts.length; k++) {
+                feats.push({
+                  type: "Feature", id: parts.length > 1 ? b.i + "#" + k : b.i,
+                  properties: { osm_id: parts.length > 1 ? b.i + "#" + k : b.i, src: "bundle", bsrc: "overture",
+                                height: b.h === undefined ? null : b.h, floors: b.f === undefined ? null : b.f,
+                                cls: b.c || null, name: b.n || "" },
+                  geometry: { type: "Polygon", coordinates: [parts[k]] },
+                });
+              }
+            }
+            st.merge(feats, "bldbundle:" + cell.key);
+            bldBundleState.have.add(cell.key);
+            got += feats.length;
+            window.__BLD_SRC_BUNDLE__ = (window.__BLD_SRC_BUNDLE__ || 0) + feats.length;
+          } catch (e) {
+            bldBundleState.failed.add(cell.key);
+            errs.push("bldbundle " + cell.key + " " + String(e).slice(0, 60));
+          } finally { bldBundleState.pending -= 1; }
+        }
+        /* 淘汰只在**超出保留半径/上限**时动手（保留视野外一圈 —— 来回挪不该重取） */
+        try {
+          const r0 = Math.max(2000, Math.round((viewHalfMeters() || 0) * 2.2));
+          st.retainNear([map.getCenter().lng, map.getCenter().lat], r0);
+        } catch (e) { /* 淘汰失败不影响显示 */ }
+        window.__BLD_BUNDLE_GOT__ = (window.__BLD_BUNDLE_GOT__ || 0) + got;
+        flushBld("bundle+" + batch.length);
+      }
 
       /** 建/取路网仓库（模块缺符号 ⇒ 如实退回"一次性 setData"，并在 HUD 说明） */
       function roadsStoreOf() {
@@ -2280,13 +2436,15 @@
       async function fetchBuildings(r) {
         const c = map.getCenter();
         const url = `${API}/api/buildings?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`;
+        /* 🧾 可数口径：live 取楼打了几条（默认应当是 0；`?live=1` 才非 0）—— 自检钉它 */
+        window.__BLD_OVERPASS_N__ = (window.__BLD_OVERPASS_N__ || 0) + 1;
         const t0 = Date.now();
         const res = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
         const body = await res.json();
         const ms = Date.now() - t0;
         if (!body.ok) throw new Error((body.error || "ok=false") + (body.hint ? "（" + body.hint + "）" : ""));
         /* 三态：后端没给 `cached` 就写 null（显示"数不出来"），**不许**默认成"实时取数"（那是撒谎） */
-        fetchStat.bld = { r: Number(body.radius) || r, n: Number(body.count) || (body.geojson && body.geojson.features || []).length, cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "" };
+        fetchStat.bld = { kind: "bld", r: Number(body.radius) || r, n: Number(body.count) || (body.geojson && body.geojson.features || []).length, cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "" };
         renderFetchHud();
         return body.geojson;
       }
@@ -2364,7 +2522,10 @@
              要写清"没发现场请求 + 路从哪来"—— 判词纪律：没取 ≠ 没有 ≠ 失败。 */
           if (s.skipped) {
             const nn = s.n === null || s.n === undefined ? "数不出来" : String(s.n);
-            return `离线包 offline-first（**未发 /api/roads**；仓库 ${nn} 条；要现场取数加 ?live=1）`;
+            /* ⚠️ 用**要素自己的 kind** 判断，别靠"猜"（第一版靠 `s.bld` 猜，结果把楼的格子写成路的文案）。 */
+            return s.kind === "bld"
+              ? `离线楼房包 offline-first（**未发 /api/buildings**；仓库 ${nn} 栋；要现场取数加 ?live=1）`
+              : `离线包 offline-first（**未发 /api/roads**；仓库 ${nn} 条；要现场取数加 ?live=1）`;
           }
           const n = s.n === null || s.n === undefined ? "数不出来" : (s.n === 0 ? "0（已量）" : String(s.n));
           const secs = s.ms === null || s.ms === undefined ? "?" : (s.ms / 1000).toFixed(1) + "s";
@@ -2483,8 +2644,53 @@
         $("m-e").textContent = String(stats.kind);
         $("m-r").textContent = String(r);
         $("m-msg").textContent = stats.n ? "" : "这一带 OSM 没登记楼房";
-        const data = { type: "FeatureCollection", features: feats };
+        let data = { type: "FeatureCollection", features: feats };
         fcCache = data;
+        /* 🏢 并进**累积仓库**（与离线包同一个仓库）——否则 live 一来就把包里的楼顶掉（机主：「之前的没了」）。
+           默认 offline-first 时这里是"离线包 + 可选 live 叠加"；仓库在，就一律以**并集**为准。 */
+        {
+          const stB = bldStoreOf();
+          if (stB) {
+            /* 拆件要素各自一个稳定 id（同输入 ⇒ 同 id ⇒ 重复取数照样去重） */
+            for (let k = 0; k < feats.length; k++) {
+              const pr = feats[k].properties || (feats[k].properties = {});
+              if (!pr.store_id) {
+                let b3 = String(pr.osm_id || feats[k].id || "");
+                if (!b3) {
+                  /* ⚠️ 连 id 都没有的拆件（`decorateBuildings` 的个别件）**也必须**有个稳定键：
+                     否则每次 merge 都会当"新要素"再加一遍（自检抓到：两次 refresh ⇒ 12 → 13）。
+                     用几何首点做一个**确定性**键（同一栋楼每次算出来一样 ⇒ 照样去重）。 */
+                  try {
+                    const r0 = ((feats[k].geometry || {}).coordinates || [])[0][0] || [];
+                    b3 = "g:" + Math.round(r0[0] * 1e5) + "," + Math.round(r0[1] * 1e5);
+                  } catch (e) { b3 = "k:" + k; }
+                }
+                pr.store_id = b3 + "#" + (pr.part || k);
+              }
+            }
+            const mrB = stB.merge(feats, "live:" + r);
+            window.__BLD_MERGE__ = mrB;
+            const union = { type: "FeatureCollection", features: stB.features() };
+            const base = new Set();
+            for (const f2 of union.features) {
+              const id2 = String((f2.properties && f2.properties.osm_id) || f2.id || "");
+              if (id2) base.add(id2.split("#")[0]);
+            }
+            if (base.size) stats.n = base.size;          // 「N 栋」= 去重后的**真楼栋数**（拆件不算多栋）
+            /* 🔴 **计数必须与画面同源**：仓库会按 `store_id` 去重（模块生成的 13 件里若有完全重复的
+               一件，画面上就是 12 件）⇒ 回证要报**画出来的那个数**，不能报"生成了多少件"。
+               去重掉了几件也如实留着（`probe.bldbundle.merge.dupes`），不静默。 */
+            stats.parts = union.features.length;
+            if (window.__BLD_COUNT__ && typeof window.__BLD_COUNT__ === "object") {
+              window.__BLD_COUNT__.parts = union.features.length;
+              window.__BLD_COUNT__.partsGenerated = mrB.added + mrB.dupes;
+            }
+            window.__BLD_SRC_LIVE__ = (window.__BLD_SRC_LIVE__ || 0) + feats.length;
+            data = union;
+            fcCache = union;
+            try { $("m-n").textContent = String(stats.n); } catch (e) { /* HUD 失败不影响地图 */ }
+          }
+        }
         if (BLD_OFF) {
           /* 🔘 `?bld=0`：**一个楼体图层都不建**，也不建源（省一次上传）。
              数据仍然准备好（`stats`/标签要用），只是不画 —— HUD 如实写"楼层已关"。 */
@@ -2668,6 +2874,8 @@
         map.on("moveend", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });
         /* 🛣 视野变了就补离线格（静态文件、后台、一次最多几格；live 那条**不**在这里打 —— 任务 A 否决） */
         map.on("moveend", () => { try { void refreshRoadsBundle(); } catch (e) { errs.push("bundle " + e); } });
+        /* 🏢 视野变了就补**楼房**离线格（静态文件、后台、一次最多几格；live 那条默认不在这里打） */
+        map.on("moveend", () => { try { void refreshBldBundle(); } catch (e) { errs.push("bldBundle " + e); } });
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
         map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } });
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
@@ -2689,7 +2897,41 @@
           $("m-z").textContent = z.toFixed(1);
           try {
             if (z < 12.5) { $("m-msg").textContent = "太远了不取楼（放大到街区）"; }
-            else { const { fc, r } = await loadForView(); await applyBuildings(fc, r); }
+            else {
+              /* ══ 🏢 **offline-first**（父代理 2026-09-25：「照离线路面包复制一遍思路」）══════════
+                 默认**不发** `/api/buildings`：现场一次只有 R≤2000m 且冷查 27~33s
+                 ⇒ 机主看到的就是"楼房只有中间一块"。楼从**离线楼房包**来（静态文件、按视野取格、并进仓库）。
+                 规则在真源 `wsScene.bldLiveDecision()`；`?live=1` 才现场取数（失败照旧可见）。 */
+              const TFb = window.__TF__;
+              const dec = (TFb && typeof TFb.bldLiveDecision === "function")
+                ? TFb.bldLiveDecision({ forceLive: LIVEON })
+                : { live: LIVEON, why: "模块缺 bldLiveDecision（旧 vendor）" };
+              window.__BLD_LIVE__ = !!dec.live;
+              window.__BLD_LIVE_WHY__ = String(dec.why || "");
+              const rView = radiusForView();
+              try { await refreshBldBundle(); } catch (e) { errs.push("bldBundle " + e); }
+              renderBldBundleHud();
+              if (!dec.live) {
+                window.__BLD_OVERPASS_N__ = 0;
+                stats.r = rView;
+                try { $("m-r").textContent = String(rView); } catch (e) { /* 忽略 */ }
+                const sB = bldStoreOf() ? bldStoreOf().stats() : null;
+                fetchStat.bld = { kind: "bld", r: rView, n: sB ? sB.n : null, cached: null, ms: null, err: "",
+                                  skipped: true, live: false, liveWhy: dec.why };
+                renderFetchHud();
+                renderBldBadge();
+                /* 包外**必须说出来**（这是"我们没这个包"，不是"这里没有楼"）——绝不静默空屏。
+                   ⚠️ `?bld=0` 优先：那时候"楼关着"才是这一格最该说的话（自检 ⑦a 钉着）。 */
+                if (BLD_OFF) $("m-msg").textContent = "楼层已关（?bld=0）—— 路网/设施/标签照常，去掉 ?bld=0 即回来";
+                else $("m-msg").textContent = (sB && sB.n)
+                  ? ""
+                  : "离线楼房包**包外**（这一带没有离线格）：不是「这里没有楼」；要现场取数加 ?live=1";
+              } else {
+                const { fc, r } = await loadForView();
+                await applyBuildings(fc, r);
+                try { await refreshBldBundle(); } catch (e) { errs.push("bldBundle " + e); }
+              }
+            }
           } catch (e) { errs.push("buildings " + e); $("m-msg").textContent = "取楼失败：" + String(e).slice(0, 40); }
           busy = false;
         }
@@ -3008,6 +3250,19 @@
             bundle: { have: bundleState.have.size, missing: bundleState.missing.size, failed: bundleState.failed.size, pending: bundleState.pending },
             capped: window.__ROADS_BUNDLE_CAPPED__ || null,
             hud: (function () { try { return $("m-roads").textContent; } catch (e) { return null; } })(),
+          },
+          /* 🏢 离线**楼房**包（默认数据面：机主「楼房只有中间一块」的修法） */
+          bldbundle: {
+            live: { param: LIVEON, on: window.__BLD_LIVE__ === undefined ? null : !!window.__BLD_LIVE__,
+                    overpass: (window.__BLD_OVERPASS_N__ === undefined ? null : window.__BLD_OVERPASS_N__),
+                    why: window.__BLD_LIVE_WHY__ || null },
+            src: { bundle: window.__BLD_SRC_BUNDLE__ || 0, live: window.__BLD_SRC_LIVE__ || 0 },
+            bundle: { have: bldBundleState.have.size, missing: bldBundleState.missing.size,
+                      failed: bldBundleState.failed.size, pending: bldBundleState.pending },
+            capped: window.__BLD_BUNDLE_CAPPED__ || null,
+            merge: window.__BLD_MERGE__ || null,
+            fc: (window.__BLD_BUNDLE_FC__ === undefined ? null : window.__BLD_BUNDLE_FC__),
+            hud: (function () { try { return $("m-bldb").textContent; } catch (e) { return null; } })(),
           },
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),
         };

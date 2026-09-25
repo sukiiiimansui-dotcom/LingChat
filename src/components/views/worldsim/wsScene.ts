@@ -439,6 +439,59 @@ export function roadsLiveDecision(input?: { forceLive?: boolean | null }): { liv
   return { live: false, why: WS_ROADS_LIVE_VERDICT };
 }
 
+/* ══ 🏢 live 取**楼**的开关策略（与路同一套思路；机主 2026-09-25 截图：「楼房只有中间一块」）════
+   证据与算术：
+     · `/api/buildings` 一次只覆盖视野中心 **R≤2000m**（后端硬闸 `r ∈ (0,2000]`；实测 r=2000 常 504）；
+     · 冷查 **27~33s**（最慢见过 91.7s）—— 与"路 超时 12s"同源的毛病；
+     · 而**已缓存的 Overture 盘**能导出**离线楼房包**（`world_map/export_bld_bundle.py`）：
+       实测 **55 盘 → 720,087 栋 → 373 格 / 102.6 MB**，单格中位 **205 KB** / 最大 **1.9 MB**（静态文件）。
+   ⇒ 结论：**默认不发 `/api/buildings`**，楼从**离线楼房包**来（按视野取最近的几格、并进累积仓库）；
+     现场取数只在 `?live=1` 时打（补新区域/调试），失败照旧**可见**。
+   🔴 包外（没有离线格的区域）**必须如实写「包外」** —— 不许让"我们没数据"看起来像"这里没有楼"。 */
+export const WS_BLD_LIVE_DEFAULT = false;
+export const WS_BLD_LIVE_VERDICT =
+  "默认不发 /api/buildings：现场一次只有 R≤2000m（后端硬闸）且冷查 27~33s（最慢 91.7s）"
+  + " ⇒ 默认 0 条，楼走离线楼房包（实测 373 格 / 720,087 栋 / 102.6MB，单格中位 205KB）；要现场取数加 ?live=1";
+
+/** live 取楼**要不要打**（规则在这里；页面只读结论 + 如实写 HUD） */
+export function bldLiveDecision(input?: { forceLive?: boolean | null }): { live: boolean; why: string } {
+  if (input && input.forceLive === true) {
+    return { live: true, why: "URL 显式 ?live=1 ⇒ 现场取数（R≤2000m、冷查可能几十秒，失败会如实报出来）" };
+  }
+  return { live: false, why: WS_BLD_LIVE_VERDICT };
+}
+
+/**
+ * 楼房那一格的**判词**（"没离线格/包外"与"这里没有楼"必须分得开）。
+ *
+ * 机主 2026-09-25 截图的现象是"楼房只有中间一块"——根因是**现场取数的半径上限**，
+ * 而不是"外面没有楼"。所以：
+ *   · `bundle`  = **离线包优先**（默认：仓库里有 N 栋，来自离线格）；
+ *   · `outside` = **包外**（这一带没有离线格，且没开 live ⇒ 如实写"包外"，不写 0、不写"没有楼"）；
+ *   · `pending` / `ok` / `empty` / `failed` / `off` 与路同一套语义。
+ */
+export function bldVerdictText(input: {
+  state: "bundle" | "outside" | "pending" | "ok" | "empty" | "failed" | "off";
+  n?: number | null;
+  have?: number | null;
+  missing?: number | null;
+  cells?: number | null;
+  cap?: number | null;
+  err?: string | null;
+}): string {
+  const n = input.n === null || input.n === undefined ? "数不出来" : String(input.n);
+  if (input.state === "off") return "🏢 未开（?bld=0）";
+  if (input.state === "pending") return "🏢 离线格取数中…";
+  if (input.state === "failed") return `🏢 取数**失败**：${input.err || "原因未知"} —— 不是「这一带没有楼」`;
+  if (input.state === "outside") {
+    return "🏢 **包外**（这一带没有离线楼房格；默认不发 /api/buildings ⇒ 要现场取数加 ?live=1）"
+      + " —— 这是「我们没这个包」，**不是**「这里没有楼」";
+  }
+  const cells = input.cells === null || input.cells === undefined ? "数不出来" : String(input.cells);
+  const cap = input.cap ? `，上限 ${input.cap}` : "";
+  return `🏢 离线包 offline-first（仓库 ${n} 栋${cap}；已取 ${cells} 格；**默认不发 /api/buildings** ⇒ 要现场取数加 ?live=1）`;
+}
+
 /**
  * 取路那一格的**判词**（"没取"与"没数据"必须分得开）。
  *

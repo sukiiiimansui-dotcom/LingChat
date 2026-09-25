@@ -213,3 +213,7 @@ public/prerender/**/*.png
 # 🛣 离线路面包（`world_map/export_roads_bundle.py` 生成物，页面按需取；**不入 git**）：
 #    由已取到的路网缓存导出，`index.json` 里有格数/条数/时间戳，可随时重生成。
 public/roadsbundle/
+# 🏢 离线楼房包（`world_map/export_bld_bundle.py` 生成物；**不入 git**）：
+#    由已缓存的 Overture 楼房盘导出（**真脚印 = real**，不含 sketch），index.json 里有格数/栋数/时间戳。
+#    ⚠️ 体积大（实测 373 格 / 72 万栋 / ~100MB）⇒ 只该在本地生成，**别提交**（预览包重建会一起拷过去）。
+public/bldbundle/

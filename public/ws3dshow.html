@@ -330,7 +330,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v44";
+      const BUILD = "ws3dshow-2026-09-25-v45";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -2726,6 +2726,8 @@
         window.__PLACES_RAW__ = placeItemsRaw.length;
         window.__PLACES_FLUSH_WHY__ = why || "";
         try { refreshLabels("places"); } catch (e) { errs.push("labels " + e); }
+        /* 🧍 角色站位：片区名到了 ⇒ 把"临时取视野中心"换成**真实片区名点**（已经是名点就自动不动） */
+        try { if (window.__LC_RESOLVE__) window.__LC_RESOLVE__(); } catch (e2) { /* 忽略 */ }
       }
 
       /** 三条管道的 HUD 行（**可数文案只有一份**：共享模块的 `bundleCountsLine`） */
@@ -3398,6 +3400,7 @@
               锚点取**真实片区名点**（`pickHome` 给的最近有名片区 —— 真数据，不是编的坐标），
               并在状态行/HUD/`window.__LC__` 里**如实写明是哪一级**（不冒充"LingChat 说她在这"）。 */
         let lcAnchor = null;         /* { lng, lat } —— 解析出来的站位（null = 还没解析出来） */
+        let lcAnchorReal = false;    /* 锚点是不是**真实片区名点**（"视野中心兜底"不算 ⇒ 允许继续重试替换） */
         let lcPosSource = "scatter"; /* 三档之一：runtime / schedule / scatter（与 App 同名） */
         let lcPosNote = "还没算（等地图与片区名包就绪）";
         let lcChar = null, lcAff = null, lcMem = null, lcBusy = false;
@@ -3740,11 +3743,14 @@
         /* 地图上的角色标记：DOM + `map.project`（零依赖），随地图移动更新 */
         let lcMarker = null;
         /**
-         * 解析站位（**只做一次**，之后不再变 —— 机主要「稳定显示」，不是每拖一下就换地方）。
-         * 第 ③ 级「本地散点」的锚点取**真实片区名点**：与「我的家」同一份 `pickHome` 数据，
+         * 解析站位：**真实名点一旦拿到就钉住**（机主要「稳定显示」，不是每拖一下就换地方）；
+         * 但**"视野中心兜底"不算数** —— 它只是"片区名包还没进仓库"时的临时值，
+         * 之后（`flushPlaces` 或 `moveend`）会拿**真实片区名点**换掉它。
+         * 第 ③ 级「本地散点」的锚点取真实片区名点：与「我的家」同一份 `pickHome` 数据，
          * 有名字才用；一条都没有 ⇒ 退到视野中心并**如实说明**（绝不编一个坐标）。
          */
-        function lcResolveAnchor() {
+        function lcResolveAnchor(force) {
+          if (lcAnchorReal && !force) return lcAnchor;   /* 已经是真实名点 ⇒ 不再动（稳定） */
           lcPosSource = "scatter";
           try {
             const c = map.getCenter();
@@ -3753,22 +3759,27 @@
               : { home: null, why: "vendor 缺 pickHome（旧产物？）" };
             if (ph.home && isFinite(ph.home.lng) && isFinite(ph.home.lat)) {
               lcAnchor = { lng: ph.home.lng, lat: ph.home.lat };
+              lcAnchorReal = true;
               lcPosNote = "本地散点：锚点 = 真实片区「" + ph.home.name + "」（" + (ph.home.kind || "片区")
                 + " · 距视野中心 " + Math.round(ph.distM || 0) + "m）· 浏览器预览没有运行时/日程 ⇒ 到不了前两级";
             } else {
               lcAnchor = { lng: c.lng, lat: c.lat };
-              lcPosNote = "本地散点：视野中心兜底（" + (ph.why || "附近没有有名字的片区") + "）";
+              lcAnchorReal = false;   /* 兜底：不钉住，等真名点到了再换 */
+              lcPosNote = "本地散点：**临时**取视野中心（" + (ph.why || "附近没有有名字的片区") + "）· 拿到片区名后会自动换成真实名点";
             }
           } catch (e) {
             lcAnchor = null;
+            lcAnchorReal = false;
             lcPosNote = "本地散点算不出来：" + String(e).slice(0, 80);
           }
           try {
-            window.__WSLOG__ && window.__WSLOG__.info("char", "角色站位（" + lcPosSource + "）", { note: lcPosNote, lng: lcAnchor && lcAnchor.lng, lat: lcAnchor && lcAnchor.lat });
+            window.__WSLOG__ && window.__WSLOG__.info("char", "角色站位（" + lcPosSource + (lcAnchorReal ? " · 真实名点" : " · 兜底") + "）", { note: lcPosNote, lng: lcAnchor && lcAnchor.lng, lat: lcAnchor && lcAnchor.lat });
           } catch (e2) { /* 忽略 */ }
           lcPaint();
           return lcAnchor;
         }
+        /* 让别处（`flushPlaces`：片区名并进仓库后）能触发一次"兜底→真实名点"的替换，且不引作用域坑 */
+        window.__LC_RESOLVE__ = function () { try { return lcResolveAnchor(); } catch (e) { return null; } };
         function lcUpdateMarker() {
           try {
             if (!lcMarker) {
@@ -3817,7 +3828,7 @@
           /* 🔴 角色站位**不跟着视野变**（机主要"稳定"）：只在还没解析出来时重试一次（片区名包可能刚到） */
           map.on("moveend", function () {
             try { wsBuildDaily(); } catch (e2) { /* 忽略 */ }
-            try { if (!lcAnchor) lcResolveAnchor(); } catch (e3) { /* 忽略 */ }
+            try { if (!lcAnchorReal) lcResolveAnchor(); } catch (e3) { /* 忽略 */ }
             try { lcUpdateMarker(); } catch (e4) { /* 忽略 */ }
           });
           /* 核验出口（无头/真机都能读；也便于以后接自动化） */
@@ -3827,7 +3838,8 @@
                             mem: function () { return lcMem; }, paint: lcPaint, base: LC_BASE,
                             /* 站位如实出口：位置 / **来源档位** / 一句为什么（无头自检与真机都能读） */
                             pos: function () { return lcAnchor; }, posSource: function () { return lcPosSource; },
-                            posNote: function () { return lcPosNote; }, resolvePos: lcResolveAnchor };
+                            posNote: function () { return lcPosNote; }, posReal: function () { return lcAnchorReal; },
+                            resolvePos: function (force) { return lcResolveAnchor(force); } };
         } catch (e) { errs.push("char " + e); }
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
         /* 🛰 LOD 那一格也要跟着 zoom 走（它是 zoom 的纯函数；只在 zoomend 刷一次，仍是"事件驱动"） */

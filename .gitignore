@@ -216,3 +216,7 @@ prev-build-*/
 #    gitignore 对**已跟踪**文件无效 ⇒ 骨架阶段那批示意瓦片 + 试点真瓦片仍在版本控制里（PR 样本），
 #    而全量新生成的瓦片（未跟踪路径）被这里挡住。
 public/prerender/**/*.png
+
+# 🛣 离线路面包（`world_map/export_roads_bundle.py` 生成物，页面按需取；**不入 git**）：
+#    由已取到的路网缓存导出，`index.json` 里有格数/条数/时间戳，可随时重生成。
+public/roadsbundle/

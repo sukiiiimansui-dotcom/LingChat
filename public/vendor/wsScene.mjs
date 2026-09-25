@@ -1138,6 +1138,134 @@ function applyPitchGuard(map) {
   }
 }
 
+// src/components/views/worldsim/wsFeatureStore.ts
+function metersBetween(a, b) {
+  const kx = 111320 * Math.cos((a[1] + b[1]) / 2 * Math.PI / 180);
+  const ky = 110540;
+  return Math.hypot((a[0] - b[0]) * kx, (a[1] - b[1]) * ky);
+}
+function createFeatureStore(opts) {
+  const cap = Math.max(1, Math.floor(opts.cap));
+  const byId = /* @__PURE__ */ new Map();
+  let noIdList = [];
+  let added = 0, dupes = 0, dropped = 0, merges = 0, lastMergeMs = null;
+  const sources = /* @__PURE__ */ new Set();
+  function all() {
+    return noIdList.length ? [...byId.values(), ...noIdList] : [...byId.values()];
+  }
+  return {
+    merge(features, sourceKey) {
+      const t0 = Date.now();
+      let a = 0, d = 0, nid = 0;
+      for (const f of features) {
+        const id = opts.idOf(f);
+        if (!id) {
+          noIdList.push(f);
+          nid++;
+          a++;
+          continue;
+        }
+        if (byId.has(id)) {
+          dupes++;
+          d++;
+          continue;
+        }
+        byId.set(id, f);
+        a++;
+      }
+      added += a;
+      merges++;
+      if (sourceKey) sources.add(sourceKey);
+      lastMergeMs = Date.now() - t0;
+      return { added: a, dupes: d, noId: nid, total: byId.size + noIdList.length, ms: lastMergeMs };
+    },
+    retainNear(center, keepRadiusM) {
+      let droppedFar = 0, droppedOverCap = 0;
+      const keep = [];
+      const far = [];
+      for (const f of all()) {
+        const pt = opts.pointOf(f);
+        if (!pt) {
+          keep.push([0, f]);
+          continue;
+        }
+        const dist2 = metersBetween(pt, center);
+        (dist2 <= keepRadiusM ? keep : far).push([dist2, f]);
+      }
+      droppedFar = far.length;
+      let over = [];
+      if (keep.length > cap) {
+        const sorted = [...keep].sort((x, y) => x[0] - y[0]);
+        over = sorted.slice(cap);
+        keep.length = 0;
+        keep.push(...sorted.slice(0, cap));
+        droppedOverCap = over.length;
+      }
+      const keepSet = new Set(keep.map(([, f]) => f));
+      const nextById = /* @__PURE__ */ new Map();
+      const nextNoId = [];
+      for (const [id, f] of byId) if (keepSet.has(f)) nextById.set(id, f);
+      for (const f of noIdList) if (keepSet.has(f)) nextNoId.push(f);
+      byId.clear();
+      for (const [id, f] of nextById) byId.set(id, f);
+      noIdList = nextNoId;
+      dropped += droppedFar + droppedOverCap;
+      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length };
+    },
+    features: all,
+    has: (k) => sources.has(k),
+    stats() {
+      return {
+        n: byId.size + noIdList.length,
+        noId: noIdList.length,
+        added,
+        dupes,
+        dropped,
+        merges,
+        sources: sources.size,
+        lastMergeMs,
+        cap
+      };
+    },
+    clear() {
+      byId.clear();
+      noIdList = [];
+    }
+  };
+}
+var ROADS_BUNDLE_CELL_DEG = 0.05;
+function roadsBundleCellOf(lng, lat, size = ROADS_BUNDLE_CELL_DEG) {
+  const w = Math.floor(lng / size) * size;
+  const s = Math.floor(lat / size) * size;
+  return { w: +w.toFixed(5), s: +s.toFixed(5) };
+}
+function roadsBundleCellKey(w, s, size = ROADS_BUNDLE_CELL_DEG) {
+  return `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+}
+function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUNDLE_CELL_DEG) {
+  if (!bounds || !center) return null;
+  const w0 = bounds.getWest(), e0 = bounds.getEast(), s0 = bounds.getSouth(), n0 = bounds.getNorth();
+  if (![w0, e0, s0, n0, center.lng, center.lat].every((v) => Number.isFinite(v))) return null;
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const i0 = Math.floor(w0 / size), i1 = Math.floor(e0 / size);
+  const j0 = Math.floor(s0 / size), j1 = Math.floor(n0 / size);
+  const steps = i1 - i0 + 1, stepn = j1 - j0 + 1;
+  if (steps * stepn > 4096) return null;
+  for (let i = 0; i < steps; i++) {
+    for (let j = 0; j < stepn; j++) {
+      const w = +((i0 + i) * size).toFixed(5), s = +((j0 + j) * size).toFixed(5);
+      const key = roadsBundleCellKey(w, s, size);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, w, s, d: metersBetween([w + size / 2, s + size / 2], [center.lng, center.lat]) });
+    }
+  }
+  out.sort((a, b) => a.d - b.d);
+  const capped = out.length > maxCells;
+  return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -1735,6 +1863,7 @@ export {
   PRERENDER_TILE_MAXZOOM,
   PRERENDER_TILE_PATH,
   PRERENDER_TILE_SIZE,
+  ROADS_BUNDLE_CELL_DEG,
   ROAD_LAYER_PREFIXES,
   ROAD_PALETTE_DARK,
   ROAD_RANK_STYLE,
@@ -1780,6 +1909,7 @@ export {
   cameraDefaults,
   contrastRatio,
   contrastReport,
+  createFeatureStore,
   decorateBuildings,
   equipBoxes,
   fetchRadiusForView,
@@ -1816,6 +1946,7 @@ export {
   lodTileX,
   lodTileY,
   lodViewTiles,
+  metersBetween,
   nearestOnLine,
   panDamping,
   pitchGuardParams,
@@ -1834,6 +1965,9 @@ export {
   roadLayersOf,
   roadStatsLine,
   roadStyleOf,
+  roadsBundleCellKey,
+  roadsBundleCellOf,
+  roadsBundleCellsForView,
   roadsRadiusFor,
   roadsVerdictText,
   sceneGroupOf,

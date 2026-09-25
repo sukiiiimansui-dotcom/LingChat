@@ -172,6 +172,10 @@ export const ROADS_BUNDLE_CELL_DEG = 0.05;
  *    一次取 1~6 格 ⇒ 手机能接受。真要再小，改这里 + 重跑导出脚本即可（口径同式）。 */
 export const BLD_BUNDLE_CELL_DEG = 0.05;
 
+/** 离线**片区名**包的格边长（度）。与路/楼**同款格子**（0.05° ≈ 5.5km）：一套公式三处用，
+ *  且片区点很稀（实测主城 56 块共几百个点）⇒ 单格只有几 KB。 */
+export const PLACES_BUNDLE_CELL_DEG = 0.05;
+
 /** 一个要素落在哪一格（格心取整；与两个导出脚本同式） */
 export function bundleCellOf(lng: number, lat: number, size: number): { w: number; s: number } {
   const w = Math.floor(lng / size) * size;
@@ -241,6 +245,16 @@ export function roadsBundleCellsForView(
   center: { lng: number; lat: number } | null,
   maxCells = 6,
   size = ROADS_BUNDLE_CELL_DEG,
+) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
+
+/** 🏘 视野需要哪些**片区名**离线格（同式；点很稀 ⇒ 一般一次 1~4 格就够） */
+export function placesBundleCellsForView(
+  bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
+  center: { lng: number; lat: number } | null,
+  maxCells = 6,
+  size = PLACES_BUNDLE_CELL_DEG,
 ) {
   return bundleCellsForView(bounds, center, maxCells, size);
 }

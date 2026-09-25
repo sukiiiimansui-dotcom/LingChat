@@ -145,10 +145,17 @@
       #lc-send { padding: 7px 12px; border-radius: 9px; border: 1px solid #0d47a1;
         background: rgba(13, 71, 161, 0.5); color: #fff; cursor: pointer; }
       /* 地图上的角色标记（DOM，按 `map.project` 定位；不引新依赖） */
+      /* 🧍 **地图上的角色 = 立绘本体**（机主 2026-09-25：「人物立绘**直接显示在地图上，可视可见**」
+         「要在地图上**稳定显示**」）：
+         · 用 `map.project` 定位，`translate(-50%,-100%)` 让脚底落在坐标点 ⇒ 与地图**一起移动、不漂**；
+         · `will-change: transform` + 只改 left/top（不重建元素）⇒ 拖动时不抖；
+         · 立绘随**情绪**变（与抽屉里那张同一个 `lcFace`）。 */
       #lc-char { position: absolute; z-index: 26; transform: translate(-50%, -100%); cursor: pointer;
-        padding: 3px 8px; border-radius: 12px; background: rgba(13, 71, 161, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.5); color: #fff; font-size: 11px; font-weight: 700;
-        white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+        display: flex; flex-direction: column; align-items: center; will-change: transform, left, top;
+        filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45)); }
+      #lc-char img { height: 84px; width: auto; max-width: 140px; object-fit: contain; display: block; }
+      #lc-char .tag { margin-top: -2px; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; font-weight: 700;
+        background: rgba(13, 71, 161, 0.86); border: 1px solid rgba(255, 255, 255, 0.45); color: #fff; white-space: nowrap; }
       #lc-char .pin { display: block; text-align: center; font-size: 14px; line-height: 1; }
       #lc-char.hide { display: none; }
     </style>
@@ -293,7 +300,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v41";
+      const BUILD = "ws3dshow-2026-09-25-v42";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3490,7 +3497,7 @@
           try { const m = /[?&]charfolder=([^&]+)/.exec(location.search); return m ? decodeURIComponent(m[1]) : null; }
           catch (e) { return null; }
         })();
-        let lcFolder = null, lcFaces = [], lcPortraitEl = null, lcFace = null;
+        let lcFolder = null, lcFaces = [], lcPortraitEl = null, lcFace = null, lcAssetNote = "";
         function lcAssetUrl(face) {
           return "/char/" + encodeURIComponent(lcFolder) + "/avatar/" + encodeURIComponent(face + ".webp");
         }
@@ -3550,9 +3557,15 @@
           return pick("平静") || pick("正常") || (lcFaces[0] || null);
         }
         function lcSetFace(face, why) {
-          if (!face || face === lcFace || !lcPortraitEl) { if (face) lcFace = face; return; }
+          if (!face || face === lcFace) { if (face) lcFace = face; return; }
           lcFace = face;
-          lcPortraitEl.src = lcAssetUrl(face);
+          const url = lcAssetUrl(face);
+          if (lcPortraitEl) lcPortraitEl.src = url;
+          /* 🧍 **地图上的立绘也跟着换**（同一个 face ⇒ 两处一致，不会"抽屉里害羞、地图上平静"） */
+          try {
+            const img = lcMarker && lcMarker.querySelector ? lcMarker.querySelector("img") : null;
+            if (img) img.src = url;
+          } catch (e2) { /* 忽略 */ }
           lcLog("info", "立绘切换：" + face, { reason: why || null, folder: lcFolder });
         }
         async function lcLoadAssets() {
@@ -3561,8 +3574,25 @@
             if (!r.ok) throw new Error("HTTP " + r.status);
             const idx = await r.json();
             const names = Object.keys(idx || {});
-            lcFolder = (LC_FOLDER_HINT && idx[LC_FOLDER_HINT]) ? LC_FOLDER_HINT : (names[0] || null);
-            lcFaces = (lcFolder && idx[lcFolder]) ? idx[lcFolder].map((f) => f.replace(/\.webp$/i, "")) : [];
+            /* ✅ **按选定角色的名字匹配资产目录**（机主 2026-09-25：「**人物显示不对喵！**」）：
+               以前我取"第一个目录" ⇒ 选定角色是 SYuki 时**显示的是别人（DeepSeek）的脸**，这是错的。
+               现在：目录名或 `ai_name` 命中选定角色名 ⇒ 用它；**配不上就如实说**（绝不冒充），
+               并给一个 `?charfolder=` / 下拉选择的口子（落盘记住）。 */
+            const want = (lcChar && lcChar.name) ? String(lcChar.name).trim() : "";
+            let hit = null;
+            if (LC_FOLDER_HINT && idx[LC_FOLDER_HINT]) hit = LC_FOLDER_HINT;
+            else if (want) {
+              hit = names.find((n) => n === want
+                || String((idx[n] && idx[n].ai_name) || "").trim() === want) || null;
+            }
+            let saved = null;
+            try { saved = localStorage.getItem("wsCharFolder"); } catch (e) { saved = null; }
+            if (!hit && saved && idx[saved]) hit = saved;
+            lcFolder = hit || names[0] || null;
+            lcAssetNote = hit ? "" : ("「" + (want || "选定角色") + "」在 LingChat 里**没有立绘资产**（DB 里 avatar 为空、也没有同名目录）⇒ 现在显示的是「" + lcFolder + "」的立绘，可在下面换");
+            lcFaces = (lcFolder && idx[lcFolder]) ? (idx[lcFolder].faces || idx[lcFolder]).map((f) => String(f).replace(/\.webp$/i, "")) : [];
+            window.__LC_ASSETS__ = { folders: names.map((n) => ({ folder: n, ai: (idx[n] && idx[n].ai_name) || "" })), picked: lcFolder, want: want, note: lcAssetNote };
+            if (lcAssetNote) lcLog("warn", lcAssetNote, { want: want, picked: lcFolder });
             lcLog("info", "立绘资产已接（LingChat 目录）", { folder: lcFolder, faces: lcFaces.length });
           } catch (e) { lcLog("warn", "立绘清单取不到（/char/index.json）", { err: String(e).slice(0, 80) }); }
           lcPortraitEl = document.getElementById("lc-portrait");
@@ -3667,9 +3697,8 @@
             if (!lcMarker) {
               lcMarker = document.createElement("div");
               lcMarker.id = "lc-char";
-              const av = lcFolder ? ('/char/' + encodeURIComponent(lcFolder) + '/avatar/' + encodeURIComponent("头像.webp")) : null;
-              lcMarker.innerHTML = (av ? '<img src="' + av + '" alt="" style="width:16px;height:16px;border-radius:50%;vertical-align:-3px;margin-right:3px" />' : '<span class="pin">💬</span>')
-                + ((lcChar && lcChar.name) || "角色");
+              lcMarker.innerHTML = '<img alt="立绘" />'
+                + '<span class="tag">💬 ' + ((lcChar && lcChar.name) || "角色") + '</span>';
               lcMarker.title = "点我和她说话（走 LingChat 本身的对话）";
               lcMarker.onclick = function () {
                 try { window.__WSDRAWER__ && window.__WSDRAWER__.open(); } catch (e) { /* 忽略 */ }
@@ -3677,6 +3706,10 @@
               };
               (document.getElementById("map") || document.body).appendChild(lcMarker);
             }
+            try {
+              const img0 = lcMarker.querySelector("img");
+              if (img0 && !img0.src && lcFolder) img0.src = lcAssetUrl(lcFace || (lcFaces.indexOf("平静") >= 0 ? "平静" : (lcFaces[0] || "头像")));
+            } catch (e2) { /* 忽略 */ }
             const p = map.project([LC_POS.lng, LC_POS.lat]);
             const w = map.getCanvas().clientWidth, h = map.getCanvas().clientHeight;
             const outside = p.x < -20 || p.y < -20 || p.x > w + 20 || p.y > h + 20;

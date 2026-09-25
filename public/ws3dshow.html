@@ -289,7 +289,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v38";
+      const BUILD = "ws3dshow-2026-09-25-v39";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3371,7 +3371,10 @@
         }
         function lcLine() {
           if (!lcChar) return "💬 角色对话 · 未连上 LingChat（" + (window.__LC_ERR__ || "原因见日志") + "）";
-          return "💬 " + lcChar.name + " · 🎭" + (lcFace || "数不出来")
+          const ev = lcEmotion && lcEmotion.values
+            ? (" · 😊喜" + lcEmotion.values.joy + " 近" + lcEmotion.values.closeness + " 羞" + lcEmotion.values.shy + " 烦" + lcEmotion.values.frustration + " 力" + lcEmotion.values.energy)
+            : "";
+          return "💬 " + lcChar.name + " · 🎭" + (lcFace || "数不出来") + ev
             + " · 好感 " + (lcAff === null ? "数不出来" : lcAff)
             + " · 记忆 " + (lcMem === null ? "数不出来" : lcMem) + " 条";
         }
@@ -3404,6 +3407,44 @@
          *   affection_value ≥ 40 → 高兴 · 否则 → 平静（没有平静就用 正常）
          * 取不到的键**跳过**（宁可用"正常"也不编情绪）；每张图**必须在 `/char/index.json` 里真实存在**才切。
          */
+        /**
+         * 🎭 **情绪真源 = LingChat 自己的 `/api/emotion/state`**（五维：joy/closeness/shy/frustration/energy，
+         * 带 low/medium/high 等级）。机主要求"完美融入"⇒ 立绘**不许**再按我拍的阈值切：
+         * 一律以它给的情绪为准，`/api/chat` 的好感量只作**兜底**。
+         * 映射（图名必须真实存在于 `/char/index.json`，否则往下退）：
+         *   frustration high → 生气 · shy high → 害羞 · joy high → 高兴 · closeness high → 心动
+         *   energy low → 无奈 · 其余 → 平静/正常
+         */
+        function lcFaceForEmotion(st) {
+          if (!st) return null;
+          const lv = (k) => (st.levels && st.levels[k]) || null;
+          const vl = (k) => (st.values && typeof st.values[k] === "number") ? st.values[k] : null;
+          const pick = (name) => (lcFaces.indexOf(name) >= 0 ? name : null);
+          const hi = (k) => lv(k) === "high" || (vl(k) !== null && vl(k) >= 65);
+          const lo = (k) => lv(k) === "low" || (vl(k) !== null && vl(k) <= 20);
+          if (hi("frustration")) { const f = pick("生气") || pick("厌恶"); if (f) return f; }
+          if (hi("shy")) { const f = pick("害羞") || pick("羞耻"); if (f) return f; }
+          if (hi("joy")) { const f = pick("高兴") || pick("兴奋"); if (f) return f; }
+          if (hi("closeness")) { const f = pick("心动") || pick("调皮"); if (f) return f; }
+          if (lo("energy")) { const f = pick("无奈") || pick("担心"); if (f) return f; }
+          return pick("平静") || pick("正常") || null;
+        }
+        let lcEmotion = null;
+        async function lcLoadEmotion() {
+          try {
+            const r = await fetch(LC_BASE + "/api/emotion/state", { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            lcEmotion = await r.json();
+            const f = lcFaceForEmotion(lcEmotion);
+            if (f) lcSetFace(f, "emotion");
+            lcLog("info", "LingChat 情绪状态", lcEmotion);
+            return lcEmotion;
+          } catch (e) {
+            lcLog("warn", "情绪状态取不到（/api/emotion/state）", { err: String(e).slice(0, 80) });
+            return null;
+          }
+        }
+
         function lcFaceFor(aff) {
           const g = (k) => (aff && typeof aff[k] === "number" ? aff[k] : null);
           const shy = g("shy_value"), fr = g("frustration_value") ?? g("frustration") ?? g("anger_value"), love = g("affection_value");
@@ -3442,7 +3483,14 @@
             if (!r.ok) throw new Error("HTTP " + r.status);
             const d = await r.json();
             const cs = Array.isArray(d) ? d : (d.characters || d.data || []);
-            lcChar = cs[0] || null;
+            /* ✅ **用 LingChat 里"选定"的那个角色**（机主要求：「人设用 lingchat 内选定的角色人设」）：
+               `/api/characters` 返回里 `current` = 当前选中角色 id（实测 =1）；没有 current 才退回 is_default，
+               最后才退回第一个。**角色决定人设**（`/api/chat` 内部就是按 current_role_id 拼人设 system prompt，
+               见 `lingchat-study/01-ai-service.md`：`sys_prompt_builder`/`role_manager.sync_memories`）。 */
+            const cur = (d && typeof d.current === "number") ? d.current : null;
+            lcChar = (cur !== null ? cs.find((c) => c.id === cur) : null)
+              || cs.find((c) => c.is_default) || cs[0] || null;
+            window.__LC_CUR__ = cur;
             window.__LC_ERR__ = lcChar ? null : "角色列表为空";
             lcLog("info", "角色已接入", { n: cs.length, name: lcChar && lcChar.name, id: lcChar && lcChar.id });
           } catch (e) {
@@ -3470,8 +3518,11 @@
             if (affV !== null) lcAff = affV;
             if (typeof d.memory_count === "number") lcMem = d.memory_count;
             lcPush("ta", String(d.reply || "（回复为空）"));
-            /* 🎭 按**真实情绪量**切立绘（取不到就保持原样，不编） */
-            try { lcSetFace(lcFaceFor(d.affection), "chat"); } catch (e2) { /* 忽略 */ }
+            /* 🎭 立绘：**先问 LingChat 自己的情绪状态**（真源），拿不到才退回好感阈值兜底（取不到就保持原样，不编） */
+            try {
+              const st = await lcLoadEmotion();
+              if (!st) lcSetFace(lcFaceFor(d.affection), "chat-fallback");
+            } catch (e2) { /* 忽略 */ }
             lcSys("好感 " + (affV === null ? "数不出来" : affV) + "（Δ" + (dltV === null ? "数不出来" : dltV) + "）"
               + " · 记忆 " + (d.memory_count ?? "数不出来") + " 条" + (d.memory_saved ? " · 已存档" : ""));
             lcPaint();
@@ -3517,7 +3568,9 @@
           map.on("zoom", lcUpdateMarker);
           void lcLoadAssets().then(lcLoadChar).then(function () { lcUpdateMarker(); lcPaint(); });
           /* 核验出口（无头/真机都能读；也便于以后接自动化） */
-          window.__LC__ = { send: lcSend, char: function () { return lcChar; }, aff: function () { return lcAff; },
+          void lcLoadEmotion();
+          window.__LC__ = { send: lcSend, char: function () { return lcChar; }, emotion: function () { return lcEmotion; },
+                            cur: function () { return window.__LC_CUR__; }, face: function () { return lcFace; }, aff: function () { return lcAff; },
                             mem: function () { return lcMem; }, paint: lcPaint, pos: LC_POS, base: LC_BASE };
         } catch (e) { errs.push("char " + e); }
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });

@@ -289,7 +289,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v39";
+      const BUILD = "ws3dshow-2026-09-25-v40";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3501,11 +3501,36 @@
           try { const m = document.getElementById("lc-char"); if (m) m.textContent = "💬 " + ((lcChar && lcChar.name) || "角色"); } catch (e) { /* 忽略 */ }
           return lcChar;
         }
+        /**
+         * 🗺 **给对话自动带上地图上下文**（"完美融入"的官方通道 = **消息文本**，不碰任何内部接口）。
+         * 依据（实测）：我说「我在渝中区楼下，你在吗？」→ 她回「听到主人说已经到楼下了…」
+         * ⇒ 她**本来就会把消息里的地点/情境读进人设与记忆**（`sync_memories` 那条链）。
+         * 这里只做一件事：把**真实**地图状态拼进消息（地点名、片区名、视野内楼/路计数），
+         * **数字全部来自我们已有的真源**（片区名来自 placesbundle、计数来自叠加仓库），取不到就不写。
+         * ⚠️ 不许写"我编的地点"：位置取自地图当前中心（SPOT 是渝中区驻地）。
+         */
+        function lcScenePrefix() {
+          try {
+            const bits = [];
+            const c = map.getCenter();
+            bits.push("我在重庆地图上，" + (SPOT && SPOT.name ? SPOT.name : "当前视野") + "一带（" + c.lng.toFixed(4) + "," + c.lat.toFixed(4) + "）");
+            try {
+              const z = map.getZoom();
+              const st = bldStoreOf() ? bldStoreOf().stats() : null;
+              if (st && typeof st.n === "number") bits.push("这一刻视野里的楼房仓库有 " + st.n + " 栋（我只画了其中一部分）");
+              bits.push("地图缩放 " + z.toFixed(1) + " 级");
+            } catch (e2) { /* 取不到就不写 */ }
+            return "【地图】" + bits.join("；") + "。";
+          } catch (e) { return ""; }
+        }
+        let lcUseScene = true;   /* `?scenectx=0` 可关（默认开：这就是"角色知道你在哪"的通路） */
         async function lcSend(text) {
-          const msg = String(text || "").trim();
-          if (!msg || lcBusy) return null;
+          const msg0 = String(text || "").trim();
+          if (!msg0 || lcBusy) return null;
+          const pre = lcUseScene ? lcScenePrefix() : "";
+          const msg = pre ? (pre + " " + msg0) : msg0;
           lcBusy = true;
-          lcPush("me", msg);
+          lcPush("me", msg0 + (pre ? "（已自动附上地图上下文）" : ""));
           if (lcEl.input) lcEl.input.value = "";
           try {
             const r = await fetch(LC_BASE + "/api/chat", {

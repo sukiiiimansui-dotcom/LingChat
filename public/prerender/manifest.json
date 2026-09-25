@@ -35,7 +35,7 @@
  },
  "tileSize": 512,
  "zoomRange": [
-  10,
+  8,
   12
  ],
  "bbox": [
@@ -237,7 +237,7 @@
   }
  ],
  "batchesNote": "分批跑的历史（每批一个 bbox；`--merge` 把各批并起来）。顶层 bbox/zoomRange 是**并集**，tiles 是**各批的并集**；顶层 cost/data 只是**最后一批**的，看历史请读 batches[]。",
- "tileCount": 187,
+ "tileCount": 191,
  "tileCountReal": 187,
  "totalBytes": 4008720,
  "bytesReal": 4008720,
@@ -324,15 +324,15 @@
    "data": "本清单里的 real 计数（sketch 只以计数出现，**不导出任何几何**）"
   },
   "tilesByTier": {
-   "blocks": 47,
-   "footprint": 128,
-   "mixed": 12
+   "blocks": 51,
+   "mixed": 12,
+   "footprint": 128
   },
-  "realBldDrawn": 4876147,
+  "realBldDrawn": 5013031,
   "sketchBldDrawn": 44262,
   "sketchIsDecorationOnly": true,
   "canonNote": "**AI 精绘并入库的小区**是 canon（世界模拟当它是真的，数据里带它自己的来源）；**渲染期 sketch 是装饰**（刷新可重画，不进数据）—— 两者在数据里可区分。",
-  "verdict": "real 4876147 栋（真脚印）· sketch 44262 栋（**只在像素里**）"
+  "verdict": "real 5013031 栋（真脚印）· sketch 44262 栋（**只在像素里**）"
  },
  "tiles": {
   "11/1629/847": {
@@ -2204,6 +2204,51 @@
    "tier": "footprint",
    "cov": 0.5,
    "covN": "8/16"
+  },
+  "8/203/105": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 3353,
+   "bld": 36896,
+   "sketch": null,
+   "tier": "blocks",
+   "engine": null,
+   "cov": 0.0,
+   "covN": "0/16"
+  },
+  "8/203/106": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2635,
+   "bld": 31546,
+   "sketch": null,
+   "tier": "blocks",
+   "engine": null,
+   "cov": 0.062,
+   "covN": "1/16"
+  },
+  "9/407/211": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5480,
+   "bld": 36896,
+   "sketch": null,
+   "tier": "blocks",
+   "engine": null,
+   "cov": 0.0,
+   "covN": "0/16"
+  },
+  "9/407/212": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 3544,
+   "bld": 31546,
+   "sketch": null,
+   "tier": "blocks",
+   "engine": null,
+   "cov": 0.062,
+   "covN": "1/16"
   }
- }
+ },
+ "_mergeNote": "2026-09-25 合并：z8/z9 是后补的 4 张（原来只有 z10~12）。**为什么合并**：管线写清单时只写'本轮计划'的瓦片 ⇒ 单跑 z8~z9 会把 187 张的清单覆盖成 4 张（溯源凭据丢失）；而按默认 bbox 重跑又只覆盖小范围。这里用 git 里那份（清单入 git）为底、并入新瓦片，并把聚合计数按合并后的瓦片重算（不留旧总数）。"
 }

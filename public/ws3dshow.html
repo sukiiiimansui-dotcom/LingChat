@@ -34,8 +34,12 @@
         position: fixed; left: 8px; bottom: 8px; z-index: 20;
         display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 62vw;
         padding: 5px 9px; border-radius: 10px;
-        background: rgba(7, 11, 17, 0.62);
-        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        /* 🔴 2026-09-25：原来这里是 `background: rgba(…,0.62)` + `backdrop-filter: blur(10px)`。
+           这两个面板**正浮在每帧重画的地图之上**，而 `backdrop-filter` 只要不是 `none` 就会建
+           backdrop 层、**每帧把底下像素读回来重新合成**（本项目当年量到 fps 17 的真凶就在这）。
+           机主要 60fps ⇒ 改成**不透明同色底**：观感几乎无差，每帧那一次读回归零。
+           （同一处上游也在治：PR #838「转场期摘除 backdrop-filter」。） */
+        background: rgba(7, 11, 17, 0.92);
         font-size: 11px; line-height: 1.7;
       }
       .hud b { color: #79d9ff; font-weight: 600; }
@@ -46,12 +50,24 @@
       }
       .ops button {
         width: 46px; height: 42px; border: none; border-radius: 12px;
-        background: rgba(7, 11, 17, 0.66); color: #eaf6ff; font-size: 12px;
-        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        /* 同上：这一排按钮也浮在地图上 ⇒ 去掉 backdrop-filter（不透明底） */
+        background: rgba(7, 11, 17, 0.9); color: #eaf6ff; font-size: 12px;
       }
       .ops button.on { background: #79d9ff; color: #06222e; font-weight: 700; }
       #fb { position: fixed; inset: 0; display: none; place-items: center; padding: 24px; z-index: 30;
             background: #070b11; text-align: center; }
+      /* 🔄 **加载态**（主题到位前那一屏）：复用同一个 #fb 全屏层，别新造一套。
+         2026-09-25 机主原话：「**把卫星降级去掉，改成加载动画等待主题到位**」——
+         他上一眼看到的是"自绘地图变成卫星图"，其实是主题卡住时走了兜底配方（那时才有 Esri World_Imagery）。 */
+      #fb.loading { display: grid; }
+      #fb .spin { width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 50%;
+                  border: 3px solid rgba(121, 217, 255, 0.25); border-top-color: #79d9ff;
+                  animation: ws-spin 0.9s linear infinite; }
+      @keyframes ws-spin { to { transform: rotate(360deg); } }
+      #fb .fbmsg { font-size: 13px; color: #cfe8ff; line-height: 1.7; max-width: 30em; }
+      #fb .fbretry { margin-top: 12px; padding: 8px 16px; border-radius: 10px; cursor: pointer;
+                     border: 1px solid rgba(121, 217, 255, 0.5); background: rgba(121, 217, 255, 0.16);
+                     color: #eaf6ff; font-size: 13px; }
       /* art 徽标 + 回证表：**只读的诊断件**（收起时只占一行小字） */
       .artb { position: fixed; right: 8px; top: 8px; z-index: 25; max-width: 46vw;
               padding: 5px 8px; border-radius: 10px; background: rgba(7, 11, 17, 0.72);
@@ -115,6 +131,9 @@
            显示的是**模块算出来的**半径与后端回的实例（`cached`/`count`/耗时）——页面不自己编。
            三态判词：正数 / `0（已量）` / `数不出来`。 -->
       <span class="w" id="m-fetch">取数 —</span>
+      <!-- 🎨 主题那一格：**主题没到位必须一眼看见**（2026-09-25 机主的误解就是"静默换了一套观感"）。
+           退化态（缓存 / 未加载）整格标红并可点重试。 -->
+      <span class="w" id="m-theme">🎨 主题 —</span>
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
       <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
@@ -166,7 +185,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v18";
+      const BUILD = "ws3dshow-2026-09-25-v19";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -254,8 +273,13 @@
 
       function fail(why) {
         const el = $("fb"); el.style.display = "grid";
+        if (el) el.className = "";                // 别让加载态的转圈盖在错误信息上
         el.textContent = "3D 调参台起不来：" + why + "（本机无头看不到 WebGL 是已知的，真机才有）";
         window.__w3d = { ok: false, why, errs: errs.slice(0, 5) };
+      }
+      /** 主题那句提示的安全取值（HUD 元素可能还没建） */
+      function themeNmSafe() {
+        return (typeof themeNote === "string" ? themeNote : "主题没到位");
       }
 
       /* ── 🎨 主题（2026-09-20）────────────────────────────────────────────────
@@ -279,13 +303,106 @@
         if (q === "night" || q === "anime") THEME_ID = q;
       } catch { /* 参数坏了就用默认，不因为一个开关把页面搞崩 */ }
 
-      async function loadTheme() {
+      /* 🔴 2026-09-25 机主事故：5212 的 runsv 监督进程死掉 ⇒ `/wstheme.json` 取不到 ⇒ 页面**静默**换成
+         另一套观感（兜底配方在 z16+ 是 Esri 卫星影像）⇒ 他以为"你把自绘地图换成卫星图了"。
+         ⇒ 三条规矩（本页从此遵守）：
+           ① **退避重试**（300/900/2000ms）—— 后端重启/重建期间的短暂不可用不该改变观感；
+           ② 仍失败就用**上次成功的主题**（localStorage 存快照 + 时间戳），并在 HUD **如实写"用上次缓存"**；
+           ③ 连缓存都没有 ⇒ **不建图**，显示**加载动画** + 可点重试（**绝不**再走"切卫星"那条路）。 */
+      const THEME_LS_KEY = "ws3dshow.theme.v1";
+      const THEME_RETRY_MS = [300, 900, 2000];
+      /** 主题状态（三态判词）：loading 加载中 / ok 真主题 / cached 上次缓存 / none 没到位 */
+      let themeState = "loading";
+      let themeNote = "加载中…";
+
+      function themeCacheRead() {
         try {
-          const r = await fetch("/wstheme.json", { cache: "no-store" });
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          const j = await r.json();
-          const t = j?.themes?.[THEME_ID];
-          if (!t) throw new Error("快照里没有主题 " + THEME_ID);
+          const raw = localStorage.getItem(THEME_LS_KEY);
+          if (!raw) return null;
+          const o = JSON.parse(raw);
+          return (o && o.json && o.json.themes) ? o : null;
+        } catch (e) { return null; }
+      }
+      function themeCacheWrite(j) {
+        try {
+          localStorage.setItem(THEME_LS_KEY, JSON.stringify({ ts: Date.now(), id: THEME_ID, json: j }));
+        } catch (e) { /* 存不下不影响本次使用（隐私模式/配额满都可能） */ }
+      }
+      function showLoading(msg) {
+        const el = $("fb");
+        if (!el) return;
+        el.className = "loading";
+        el.style.display = "grid";
+        el.innerHTML = '<div><div class="spin"></div><div class="fbmsg">' + msg + "</div></div>";
+      }
+      function hideLoading() {
+        const el = $("fb");
+        if (el && el.className === "loading") { el.style.display = "none"; el.className = ""; el.innerHTML = ""; }
+      }
+      /** 主题没到位时的**可见**兜底屏（复用 #fb）：大字说明 + 可点重试；**不建图**。 */
+      function showThemeGate(msg) {
+        const el = $("fb");
+        if (!el) return;
+        el.className = "loading";
+        el.style.display = "grid";
+        el.innerHTML = '<div><div class="fbmsg"><b>🎨 主题没到位，先不画地图</b><br>' + msg +
+          '<br><span style="opacity:.75">（不切卫星、不用别的观感兜底 —— 上一次"地图变成卫星图"就是这么来的）</span>' +
+          '</div><button class="fbretry" id="fb-retry">点这里重试</button></div>';
+        const b = $("fb-retry");
+        if (b) b.onclick = function () { b.textContent = "重试中…"; void bootMap(); };
+      }
+      /** 主题那一格的 HUD（退化态整格标红 + 可点重试） */
+      function renderThemeHud() {
+        const el = $("m-theme");
+        if (!el) return;
+        const bad = themeState === "cached" || themeState === "none";
+        el.style.color = bad ? "#ff7b72" : "";
+        el.style.fontWeight = bad ? "700" : "";
+        el.textContent = "🎨 主题 " + themeNote;
+        el.title = "主题快照 = /wstheme.json（唯一真源）。取不到时**退避重试**；仍失败用**上次缓存**那份；"
+          + "连缓存都没有就**不画地图**（显示加载态 + 可点重试）——绝不静默换成另一套观感。";
+        el.style.cursor = bad ? "pointer" : "";
+        el.onclick = bad ? function () { themeNote = "重试中…"; renderThemeHud(); void bootMap(); } : null;
+      }
+
+      async function loadTheme() {
+        let lastErr = null;
+        for (let i = 0; i <= THEME_RETRY_MS.length; i++) {
+          try {
+            const r = await fetch("/wstheme.json", { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const j = await r.json();
+            const t = j?.themes?.[THEME_ID];
+            if (!t) throw new Error("快照里没有主题 " + THEME_ID);
+            applyThemeSnapshot(j, t, i === 0 ? "真主题" : "重试 " + i + " 次后拿到真主题");
+            themeCacheWrite(j);
+            return true;
+          } catch (e) {
+            lastErr = e;
+            if (i < THEME_RETRY_MS.length) {
+              showLoading("🎨 主题加载中…（第 " + (i + 1) + " 次失败：" + String(e).slice(0, 40) +
+                "，<b>" + THEME_RETRY_MS[i] + "ms</b> 后重试）");
+              await new Promise((res) => setTimeout(res, THEME_RETRY_MS[i]));
+            }
+          }
+        }
+        const c = themeCacheRead();
+        if (c && c.json.themes[THEME_ID]) {
+          applyThemeSnapshot(c.json, c.json.themes[THEME_ID],
+            "**用上次缓存的主题**（" + new Date(c.ts).toLocaleString() + "）");
+          return true;
+        }
+        themeState = "none";
+        THEME = null;
+        themeNote = "未加载（" + String(lastErr).slice(0, 40) + "，本地也没有缓存）";
+        renderThemeHud();
+        try { document.getElementById("m-build").textContent = BUILD + " · 主题未加载（" + String(lastErr).slice(0, 24) + "）· " + lookHud(); } catch {}
+        return false;
+      }
+
+      /** 把一份主题快照套上去（真主题 / 上次缓存 都走这里 —— **观感只有这一条路**） */
+      function applyThemeSnapshot(j, t, note) {
+        try {
           /* 🎮 观感：`?look=2` 时**换成派生主题**（同一份快照、同一个形状）。
              拿不到就**如实回退基准**（回退 == 静默失效，这项目反复踩过）并把原因写进徽标。 */
           const g = LOOK === 2 ? j?.looks?.[LOOK_ID]?.[THEME_ID] : null;
@@ -299,11 +416,18 @@
           THEME_BASE = t; // 基准那一份永远留着（回证要能对比"改了什么"）
           window.__LOOK_DEBUG__ = { look: LOOK, id: LOOK_ID, themeKeys: Object.keys(THEME || {}), lookKeys: Object.keys((THEME && THEME.look) || {}), outline: (THEME && THEME.outline) || null, isGame: !!g };
           /* 版本戳带上主题名 —— 代拍回来的图一眼能看出"跑的是哪一套"（缓存坑踩过） */
+          themeState = /上次缓存/.test(String(note)) ? "cached" : "ok";
+          themeNote = String(note);
           try { document.getElementById("m-build").textContent = BUILD + " · " + t.label + " · " + artHud() + " · " + lookHud(); } catch {}
+          renderThemeHud();
         } catch (e) {
+          /* 快照形状坏了（不是"取不到"）—— 同样**如实**标出来，让 loadTheme 的下一档去兜 */
           THEME = null;
-          if (LOOK === 2) lookState = "回退：主题快照没取到（" + String(e).slice(0, 32) + "）";
-          try { document.getElementById("m-build").textContent = BUILD + " · 主题未加载(" + String(e).slice(0, 24) + ") · " + lookHud(); } catch {}
+          themeState = "none";
+          themeNote = "快照形状异常（" + String(e).slice(0, 40) + "）";
+          if (LOOK === 2) lookState = "回退：主题快照形状异常（" + String(e).slice(0, 32) + "）";
+          renderThemeHud();
+          throw e;
         }
       }
 
@@ -324,67 +448,10 @@
           }
           return st;
         }
-        return makeStyleFallback();
-      }
-
-      /** 取不到 `/wstheme.json` 时的兜底：本页原来那套暗色配方（一字不改，保证页面还能跑） */
-      function makeStyleFallback() {
-        return {
-          version: 8,
-          name: "ws-3d-show",
-          /* 大气透视：远处的楼往天色里化开。本 vendored 构建（v6.10.0）**不支持** `light`
-             与 fill-extrusion-ambient-occlusion，所以"光照"只能靠"高度色阶 + 竖向渐变 + 雾"凑。 */
-          sky: {
-            "sky-color": "#0a1119", "horizon-color": "#1b2a3a", "fog-color": "#0d1620",
-            "sky-horizon-blend": 0.6, "horizon-fog-blend": 0.4, "atmosphere-blend": 0.7,
-          },
-          sources: {
-            /* Esri 免 key。⚠️ 路径是 {z}/{y}/{x}（y 在前）—— 写错**不报错**，地图会跑到别处。 */
-            base: {
-              /* ⚠️ 暗色 Canvas 系列**最高只到 z16**（z17+ 是「Map data not yet available」占位图），
-                 所以限 16，让 MapLibre 放大复用；z16 以上由 `hi`（卫星）接手。 */
-              type: "raster", tileSize: 256, maxzoom: 16,
-              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
-              attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
-              /* 🔴 不写这行 ⇒ 跨域瓦片**污染画布** ⇒ toDataURL 抛 SecurityError ⇒ 代拍全废
-                 （而画面上一切正常，只有取图那一步失败，极其难查）。Esri 实测回 ACAO:* 。 */
-              crossOrigin: "anonymous",
-            },
-            /* 🛰 高分层（z16 以上）。机主 2026-09-20：「**地图太糊了**（放太大直接变成灰蒙蒙的）」
-               —— 根因是暗色 Canvas 系列**最高只到 z16**，z17~18 等于把 z16 放大 2~4 倍。
-               实测（逐块下载比对）：`Canvas/World_Dark_Gray_Base` z17 与 `World_Topo_Map` z16
-               的瓦片 **md5 完全相同**（都是 2521B 的「Map data not yet available」占位图）
-               ⇒ **Topo 在这片也是死路**；只有 `World_Imagery` z16/17/18 逐级有真细节
-               （15556/13291/9993B）。所以高分层用卫星影像，并**压进暗部**（白天亮照片
-               直接铺会白得刺眼、而且比楼还亮 ⇒ 3D 楼会消失在背景里）。 */
-            hi: {
-              type: "raster", tileSize: 256, maxzoom: 19, crossOrigin: "anonymous",
-              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-              attribution: "Sources: Esri, Maxar, Earthstar Geographics",
-            },
-            /* 注记层（街名/地名）：暗色底图 Base 是**不带字**的，只铺它看不出"这是哪条街"。 */
-            ref: {
-              type: "raster", tileSize: 256, maxzoom: 19, crossOrigin: "anonymous",
-              tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"],
-            },
-          },
-          layers: [
-            { id: "bg", type: "background", paint: { "background-color": "#0a1017" } },
-            /* 地面：压暗 + 去饱和，把"主角位"让给楼体（不压的话楼和地一个亮度，糊成一片） */
-            {
-              id: "base", type: "raster", source: "base",
-              /* z14.5 起往 0 淡出，把"地面"交给高分层（交叉过渡，不"咔"一下换底） */
-              paint: { "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0.92, 16.2, 0], "raster-saturation": -0.25, "raster-contrast": 0.04, "raster-brightness-max": 0.74 },
-            },
-            {
-              id: "hi", type: "raster", source: "hi", minzoom: 14.5,
-              paint: { "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0, 16.2, 0.95], "raster-saturation": -0.4, "raster-contrast": 0.12, "raster-brightness-min": 0.0, "raster-brightness-max": 0.34 },
-            },
-            /* 注记压在楼之上（和地图 App 一个口径：街名不该被楼挡住）。
-               楼房图层由 `addBldLayers()` 在**数据到了之后**插到它前面。 */
-            { id: "ref", type: "raster", source: "ref", paint: { "raster-opacity": 0.9 } },
-          ],
-        };
+        /* 🔴 主题没到位**不许建图**（机主 2026-09-25：「把卫星降级去掉，改成加载动画等待主题到位」）。
+           这条兜底原先在 z16+ 用 Esri `World_Imagery` ⇒ 他误以为"自绘地图被换成卫星图"。
+           ⇒ 直接抛：调用方（bootMap）只在主题到位后才建图；真走到这里说明有 bug，**宁可报错也不静默换观感**。 */
+        throw new Error("主题未到位：拒绝用兜底观感建图（那正是『变成卫星图』的来源）");
       }
 
       /**
@@ -2068,13 +2135,32 @@
         }
       }
 
-      void (async () => {
+      let booting = false;
+      /**
+       * 建图（**可重入**：主题没到位时那个"点这里重试"按钮会再调它一次）。
+       *
+       * 🔴 2026-09-25 机主原话：「**把卫星降级去掉，改成加载动画等待主题到位**」。
+       * ⇒ 顺序固定为：**加载动画 → 拿主题（退避重试 / 上次缓存）→ 才建图**。
+       *    拿不到主题就停在加载态 + 可点重试，**绝不用另一套观感把图建出来**。
+       */
+      async function bootMap() {
+        if (booting) return;
+        booting = true;
+        try {
+        showLoading("🎨 正在加载主题…（/wstheme.json）");
         try { const mod = await import(/* @vite-ignore */ "/vendor/maplibre/maplibre-gl.mjs"); maplibregl = mod?.default || mod; }
         catch (e) { errs.push("模块加载失败 " + e); return fail("地图库加载失败"); }
         if (!maplibregl?.Map) return fail("地图库形状不对");
         if (!hasWebGL()) return fail("这台设备没有 WebGL");
-        /* 主题必须在**建图之前**拿到 —— style 是一次性传进去的（换主题要重建 sources/layers） */
-        await loadTheme();
+        /* 主题必须在**建图之前**拿到 —— style 是一次性传进去的（换主题要重建 sources/layers）。
+           拿不到就**不建图**（见 showThemeGate）：机主明确要"加载动画等待主题到位"。 */
+        const themeOk = await loadTheme();
+        if (!themeOk) {
+          showThemeGate(themeNmSafe());
+          window.__w3d = { ok: false, why: "主题未到位（停在加载态，可点重试）", themeState, themeNote, errs: errs.slice(0, 5) };
+          return;
+        }
+        hideLoading();
 
         map = new maplibregl.Map({
           container: "map", style: makeStyle(),
@@ -2416,7 +2502,9 @@
           if (/[?&]autoshot=1\b/.test(location.search)) localStorage.setItem("wsm:v1:autoshot", String(Date.now()));
           if (localStorage.getItem("wsm:v1:autoshot")) void autoshot();
         } catch { /* 隐私模式读不到 localStorage 就不代拍，页面照常用 */ }
-      })();
+        } finally { booting = false; }
+      }
+      void bootMap();
 
       function probe() {
         const ls = (map?.getStyle()?.layers || []).map((l) => l.id);
@@ -2488,6 +2576,9 @@
             live: lodLive,
             hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })(),
           } : { on: false, param: LOD_PARAM, state: lodState, hud: (function () { try { return $("m-lod").textContent; } catch (e) { return null; } })() },
+          /* 🎨 主题状态（三态：真主题 / 上次缓存 / 未加载）—— "静默换观感"这条事故的回执 */
+          theme: { state: themeState, note: themeNote, label: (THEME && THEME.label) || null,
+                   hasTheme: !!THEME, loadingShown: (function () { try { return $("fb").className === "loading"; } catch (e) { return null; } })() },
           /* 🔭 取数回证（半径/要素数/是否命中缓存）—— 机主 2026-09-25 要求"如实报" */
           fetch: { view: fetchStat.view, bld: fetchStat.bld, road: fetchStat.road, hud: (function () { try { return $("m-fetch").textContent; } catch (e) { return null; } })() },
           bins: window.__w3d?.ready ? "ready" : "loading", errs: errs.slice(0, 3),

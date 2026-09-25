@@ -73,7 +73,9 @@
               padding: 5px 8px; border-radius: 10px; background: rgba(7, 11, 17, 0.72);
               font-size: 10.5px; line-height: 1.5; color: #eaf6ff; }
       .artb__h { font-weight: 700; color: #79d9ff; cursor: pointer; }
-      .artb__b { display: none; margin-top: 4px; }
+      /* ⚠️ 2026-09-25 机主：「加上这个太挡视野了喵」—— 展开的面板**必须有高度上限**：
+         内容一多就内部滚动，**永远不许把地图整个盖住**（以前没有上限，一张回证表就能铺满屏幕）。 */
+      .artb__b { display: none; margin-top: 4px; max-height: 38vh; overflow: auto; overscroll-behavior: contain; }
       .artb.is-open .artb__b { display: block; }
       .artb__row { white-space: nowrap; }
       .artb__ok { color: #7ee787; }
@@ -129,8 +131,9 @@
             <button id="logb-dl" type="button">下载 .txt</button>
             <button id="logb-clear" type="button">清空</button>
             <span id="logb-note" style="opacity:.75;align-self:center"></span>
+            <button id="logb-close" type="button">收起</button>
           </div>
-          <pre id="logb-pre" style="margin:0;max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.35"></pre>
+          <pre id="logb-pre" style="margin:0;max-height:26vh;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.35"></pre>
         </div>
       </div>
     </div>
@@ -206,7 +209,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v25";
+      const BUILD = "ws3dshow-2026-09-25-v26";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -784,6 +787,12 @@
        *    ② 把**逐符号在场情况**与自愈结果写进徽标 ⇒ 下次一眼看出是"模块旧"还是"真没有"。
        */
       const TF_NEEDED = ["decorateBuildings", "shapeCountsLine", "shapeCountRows", "windowPatternSpec", "rampColorOf", "shade"];
+      /* 🔌 **离线包管道那套**（2026-09-25 真机事故补）：机主真机上楼/路全判「**包外**」，
+         根因就是**这份"够用清单"里没有它们** —— 页面于是认为模块完好、**永远不去重取**，
+         浏览器缓存里那份旧模块就一直用着（HUD 写「模块缺 createBundleFeed（旧 vendor?）」，
+         而兜底逻辑自己却不知道要去找它）。
+         规矩：**凡页面真会调的符号，都必须进这张表**（漏一个 = 那次缓存永远修不回来）。 */
+      const FEED_NEEDED = ["createBundleFeed", "bundleCountsLine", "bundleCellUrl", "loadBundleIndex"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
         "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",
@@ -817,7 +826,7 @@
       function tfMissing(mod) {
         /* ⚠️ 常量（如 `LOD_FAR_ZOOM`）**不能进这张表** —— 判据是 `typeof === "function"`，
            常量会被永远判成"缺"，把好模块说成坏的（假报和漏报一样贵）。 */
-        const need = LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED;
+        const need = (LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED).concat(FEED_NEEDED);
         return !mod ? need.slice() : need.filter(function (k) { return typeof mod[k] !== "function"; });
       }
       /**
@@ -3583,6 +3592,7 @@
             note.textContent = "✅ 已下载";
           } catch (e) { note.textContent = "下载失败：" + e; }
         };
+        document.getElementById("logb-close").onclick = function () { setOpen(false); };
         document.getElementById("logb-clear").onclick = function () {
           try { window.__WSLOG__ && window.__WSLOG__.clear(); } catch (e) { /* 忽略 */ }
           paint();

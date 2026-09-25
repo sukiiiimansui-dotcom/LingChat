@@ -92,6 +92,23 @@ export interface VerifyCtx {
   counts?: { buildings: number; roads: number; facilities: number; pins: number };
   /** 主题给的路网图层规格条数（小区级才用得到）⇒ 没有就 `undefined` */
   roadSpecs?: number;
+  /**
+   * 🧱 **离线包 offline-first 的可数回证**（切片 A，2026-09-25）。
+   * 机主在 App 上的三条反馈（「楼只有一块 / 慢 / 路时有时无」）都源自"现场取数 + 整份替换"，
+   * 所以面板必须能回答：**默认到底发了几条 `/api/*`**、离线格取到几格、包外几格、失败几格、
+   * 仓库里有多少要素（**数不出来写 null，不写 0**），以及数据许可的**署名原句**。
+   * ⚠️ 本机无头无 WebGL ⇒ 这里只证"取数与落图通路接对了"，**真机观感/帧率只有机主能判**。
+   */
+  bundle?: {
+    bld: { have: number; missing: number; failed: number; pending: number; n: number | null; cap: number | null; verdict: string };
+    roads: { have: number; missing: number; failed: number; pending: number; n: number | null; verdict: string };
+    /** live 取数**打了几条**（默认应当都是 0；`?live=1` 才是 1）+ 最近一次的实况 */
+    live: { on: boolean; bldHits: number; roadHits: number; bldInfo: string; roadInfo: string };
+    /** 署名（**原句取自包里的 `index.json`**；取不到就是空串 ⇒ 面板写"取不到"，不编） */
+    attribution: string;
+    /** 远景预渲染的真源（路径/来源类型/署名**取自 `wsScene.prerenderSourceOf()`**，切片 C 才会真的挂层） */
+    prerender?: { src: string; tilePath: string; kind: string; attribution: string };
+  };
   /** 性能低档 */
   capsLow: boolean;
   /** 主题 id（`anime` / `night`）—— 面板要显示"我看到的是哪一版配色" */
@@ -335,6 +352,31 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
       "主题给出了路网规格",
       c.roadSpecs > 0,
       c.roadSpecs > 0 ? `${c.roadSpecs} 条规格` : "**0 条**：路网配色/线宽规格是空的（画不出来）"
+    );
+  }
+
+  /* ⑩.5 🧱🏢🛣 **离线包 offline-first**（切片 A）：默认**不发** `/api/buildings`·`/api/roads`，
+     楼/路从静态包来并进累积仓库。三态照实：包外 / 取数失败 / 正常；**数不出来不写 0**。 */
+  if (c.bundle) {
+    const b = c.bundle;
+    const nTxt = (v: number | null): string => (v === null ? "数不出来" : String(v));
+    const fail = b.bld.failed + b.roads.failed;
+    const okState = b.bld.n === null && b.roads.n === null ? null : fail === 0;
+    push(
+      "🏢🛣 离线包 offline-first（默认 0 条 /api/*）",
+      okState,
+      [
+        `楼：已取 ${b.bld.have} 格 / 包外 ${b.bld.missing} / 失败 ${b.bld.failed} · 仓库 ${nTxt(b.bld.n)} 栋（上限 ${nTxt(b.bld.cap)}）`,
+        `路：已取 ${b.roads.have} 格 / 包外 ${b.roads.missing} / 失败 ${b.roads.failed} · 仓库 ${nTxt(b.roads.n)} 条`,
+        `live 打了几条：楼 ${b.live.bldHits} / 路 ${b.live.roadHits}` + (b.live.on ? "（`?live=1` 显式开）" : "（默认，应当是 0）"),
+        `判词（真源）：${b.bld.verdict} ${b.roads.verdict}`,
+        b.live.bldInfo ? `最近一次 live 取楼：${b.live.bldInfo}` : "",
+        b.live.roadInfo ? `最近一次 live 取路：${b.live.roadInfo}` : "",
+        b.attribution ? `署名（取自包里 index.json 原句）：${b.attribution}` : "署名：**取不到**（index.json 没拿到）",
+        b.prerender ? `远景预渲染真源（切片 C 用）：${b.prerender.tilePath} · ${b.prerender.kind} · ${b.prerender.attribution}` : "",
+      ]
+        .filter(Boolean)
+        .join(" ｜ ")
     );
   }
 

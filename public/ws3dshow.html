@@ -204,7 +204,7 @@
       #ws-gennames svg.gn-lines line.is-stall { stroke: rgba(120, 230, 180, 0.75); }
       #ws-gennames .gn-dot { position: absolute; left: 0; top: 0; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; will-change: transform;
         border-radius: 50%; background: rgba(255, 214, 102, 0.95); }
-      #ws-gennames .gn-dot.is-stall { background: rgba(120, 230, 180, 0.95); }
+      #ws-gennames .gn-dot.is-stall { border-color: rgba(120, 230, 180, 0.95); }
     </style>
   </head>
   <body>
@@ -354,7 +354,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v57";
+      const BUILD = "ws3dshow-2026-09-26-v59";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1509,7 +1509,7 @@
       let genLayerEl = null, genShownBld = null, genShownStall = null;
       /** 当前画出来的生成名节点（带**地理坐标**）—— 拖动时只重投影它们，不重建、不重挑 */
       let genNodes = [];
-      const GEN_LIFT = 16;
+      const GEN_LIFT = 28;   /* 机主真机反馈：16px 太短，读不出"连到哪" */
       /**
        * **丝滑**的关键：`move`/`zoom` 每帧只更新位置（transform + SVG 属性），
        * 不重建 DOM、不重跑挑点 ⇒ 拖动过程中标签与引线**跟着地图连续走**，不会"等松手才跳一下"。
@@ -1589,9 +1589,19 @@
             let pt = null;
             try { if (TFx && typeof TFx.bldPointOf === "function") pt = TFx.bldPointOf(f); } catch (e3) { pt = null; }
             if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) {
-              let sx = 0, sy = 0, n2 = 0;
-              for (const c of ring) { if (Array.isArray(c)) { sx += Number(c[0]); sy += Number(c[1]); n2++; } }
-              pt = n2 ? [sx / n2, sy / n2] : null;
+              /* 🔴 机主「还是连不准」：MultiPolygon 的嵌套会让「取第一个环」取错（甚至取到 NaN）。
+                 这里**递归摊平**所有 [lng,lat]，取**顶点均值**当代表点 —— Polygon / MultiPolygon /
+                 GeometryCollection 都成立（小 footprint 上等价于质心）。 */
+              let coords = null;
+              if (Array.isArray(f.p)) coords = f.p;
+              else if (f.geometry && f.geometry.coordinates) coords = f.geometry.coordinates;
+              const acc = [0, 0, 0];
+              (function walk(c) {
+                if (!Array.isArray(c)) return;
+                if (typeof c[0] === "number" && typeof c[1] === "number") { acc[0] += Number(c[0]); acc[1] += Number(c[1]); acc[2]++; return; }
+                for (let i = 0; i < c.length; i++) walk(c[i]);
+              })(coords);
+              pt = acc[2] > 0 ? [acc[0] / acc[2], acc[1] / acc[2]] : null;
             }
             if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) { skipped++; return null; }
             return { id: String(id), lng: Number(pt[0]), lat: Number(pt[1]) };
@@ -1630,11 +1640,15 @@
           items.push({ x: p.x, y: p.y, lng: s.lng, lat: s.lat, text: s.name, stall: true });
         }
         genShownStall = items.filter(function (i) { return i.stall; }).length;
-        const kept = genThin(items, 48);
+        /* ⚠️ 试过用 `map.queryRenderedFeatures` 只在「屏幕真有楼」处挂名 —— **撤回**：
+           无头 / 无 WebGL 时它恒返回空（实测 8/8 被误拦），自定义 GL 层也查不到 ⇒ 假阴性机器。
+           准确性改由**代表点算对**来保证（见下）。 */
+        const items2 = items;
+        const kept = genThin(items2, 48);
         layer.textContent = "";
         /* 🔴 机主：「给名字和楼**连上线**，不然分辨不了具体在哪」⇒ 标签从楼顶点**上抬**，
            再用一条虚线**指回那栋楼**，并在楼的顶点打一个小点（连的是哪栋，一眼看出）。 */
-        const LIFT = 16;
+        const LIFT = GEN_LIFT;
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.setAttribute("class", "gn-lines");
         genNodes = [];

@@ -209,7 +209,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v29";
+      const BUILD = "ws3dshow-2026-09-25-v30";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -2312,13 +2312,26 @@
             if (!glBldLayer) {
               glBldLayer = TFg.createBldGlLayer({ boxes });
               map.addLayer(glBldLayer);
-              /* 藏掉样式层（只藏不删：关掉 ?glbld=1 重开即回到原样） */
-              for (const id of ["bld-ext", "bld-line", "bld-roof", "bld-antenna"]) {
-                try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none"); } catch (e2) { /* 忽略 */ }
-              }
             } else {
               glBldLayer.update(boxes);
             }
+            /* 🔴 **只在 GL 真的画出来了才藏样式层**（2026-09-25 机主「光有路线没建筑」的真凶）：
+               以前是"建层就立刻藏" ⇒ GL 一旦没画成（我这边是无头上下文丢失），
+               实验档就变成"**只有路线没有楼**"。现在的规矩：**没画成就不藏**，
+               宁可两层重叠（看得出来有问题），也不许静默变成没楼。 */
+            try {
+              const gs0 = glBldLayer.glStats ? glBldLayer.glStats() : null;
+              if (gs0 && gs0.draws > 0) {
+                for (const id of ["bld-ext", "bld-line", "bld-roof", "bld-antenna"]) {
+                  try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none"); } catch (e2) { /* 忽略 */ }
+                }
+              } else {
+                for (const id of ["bld-ext", "bld-line"]) {
+                  try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible"); } catch (e2) { /* 忽略 */ }
+                }
+                try { window.__WSLOG__ && window.__WSLOG__.warn("bld-gl", "GL 还没画出来（draw 0）⇒ 保留原楼图层，不做替换"); } catch (e2) { /* 忽略 */ }
+              }
+            } catch (e2) { /* 忽略 */ }
             const gs = glBldLayer.glStats ? glBldLayer.glStats() : null;
             window.__BLD_GL__ = { boxes: boxes.stats, gl: gs };
             try { $("m-n").textContent = String(boxes.count); } catch (e2) { /* 忽略 */ }
@@ -2389,6 +2402,23 @@
         } catch (e) { errs.push("bld.setData " + e); }
         window.__BLD_BUNDLE_FC__ = data.features.length;
         stats.parts = data.features.length;
+        /* 🔎 **楼房图层自检**（2026-09-25 机主「光有路线没建筑」）：图层只在"源不存在"的首刷才创建，
+           而每条 `addLayer` 失败**只被吞进 errs**（没回执 = 静默失效，这项目反复踩）。
+           ⇒ 每次刷完都**如实点名**：哪几条 bld 图层在/不在、源里几个要素、errs 有几条（附前 3 条）。
+           这行同时进 wsLog（面板里能看、能复制）与 `window.__BLD_LAYERS__`（核验工具能读）。 */
+        try {
+          const want = ["bld-shadow", "bld-ext", "bld-line"];
+          const have = want.filter(function (id) { return !!map.getLayer(id); });
+          const miss = want.filter(function (id) { return !map.getLayer(id); });
+          const info = { have: have, missing: miss, srcFeatures: data.features.length,
+                         src: !!map.getSource("bld"), errs: errs.length, errsHead: errs.slice(0, 3) };
+          window.__BLD_LAYERS__ = info;
+          const L = window.__WSLOG__;
+          if (L) {
+            if (miss.length) L.error("bld-layers", "缺图层 " + miss.join("/") + "（addLayer 失败会被吞进 errs）", info);
+            else L.info("bld-layers", "图层齐（" + have.join("/") + " · 源要素 " + data.features.length + "）", info);
+          }
+        } catch (e2) { /* 自检失败不许影响落图 */ }
         renderBldBundleHud();
         try { refreshLabels("bundle-bld"); } catch (e) { /* 标签失败不影响地图 */ }
         if (why) window.__BLD_FLUSH_WHY__ = why;

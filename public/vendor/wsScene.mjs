@@ -863,6 +863,11 @@ function bldLiveDecision(input) {
 function bldVerdictText(input) {
   const n = input.n === null || input.n === void 0 ? "数不出来" : String(input.n);
   if (input.state === "off") return "🏢 未开（?bld=0）";
+  if (input.state === "sizemismatch") {
+    const pkg = input.pkgCell === null || input.pkgCell === void 0 ? "?" : input.pkgCell + "°";
+    const fe = input.feCell === null || input.feCell === void 0 ? "?" : input.feCell + "°";
+    return `🏢 ❌ **格尺寸口径不符**（包 ${pkg} / 前端 ${fe}）⇒ 拒绝取数 —— **不是「包外」、不是「取数失败」、更不是「这里没有楼」**（修包或改前端常量后重试）`;
+  }
   if (input.state === "pending") return "🏢 离线格取数中…";
   if (input.state === "failed") return `🏢 取数**失败**：${input.err || "原因未知"} —— 不是「这一带没有楼」`;
   if (input.state === "outside") {
@@ -1501,6 +1506,7 @@ function roadsPointOf(f) {
 var SPECS = {
   bld: {
     dir: "bldbundle",
+    cellDeg: BLD_BUNDLE_CELL_DEG,
     plan: (b, c, maxCells) => bldBundleCellsForView(b, c, maxCells),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
@@ -1510,6 +1516,7 @@ var SPECS = {
   },
   places: {
     dir: "placesbundle",
+    cellDeg: PLACES_BUNDLE_CELL_DEG,
     plan: (b, c, maxCells) => placesBundleCellsForView(b, c, maxCells),
     parse: bundlePlacesOf,
     perRefresh: PLACES_BUNDLE_PER_REFRESH,
@@ -1519,6 +1526,7 @@ var SPECS = {
   },
   roads: {
     dir: "roadsbundle",
+    cellDeg: ROADS_BUNDLE_CELL_DEG,
     plan: (b, c, maxCells) => roadsBundleCellsForView(b, c, maxCells),
     parse: bundleRoadsOf,
     perRefresh: ROADS_BUNDLE_PER_REFRESH,
@@ -1539,6 +1547,7 @@ function createBundleFeed(opts) {
   let asked = false;
   let busy = false;
   let queued = false;
+  let refused = false;
   let indexFact = null;
   let indexState = "未读";
   let indexWhy = null;
@@ -1548,14 +1557,27 @@ function createBundleFeed(opts) {
     indexState = "读取中";
     indexPromise = loadBundleIndex(opts.fetchCell, opts.kind).then((f) => {
       indexFact = f;
-      if (f.cells) {
-        indexState = "已读";
-        indexWhy = null;
-      } else {
+      if (!f.cells) {
         indexState = "失败";
         indexWhy = "索引没读到（退回试格子）";
         opts.onError?.(`index ${spec.dir} 没读到，退回试格子`);
+        return f;
       }
+      const pkg = f.cellSize;
+      if (pkg === null) {
+        indexState = "已读";
+        indexWhy = "包里没有 cellSize 字段（对拍不了口径）";
+        return f;
+      }
+      if (Math.abs(pkg - spec.cellDeg) > 1e-9) {
+        indexState = "口径不符";
+        refused = true;
+        indexWhy = `包按 ${pkg}° 分格、前端按 ${spec.cellDeg}° 算 ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+        opts.onError?.(`${spec.dir} 格尺寸口径不符：包 ${pkg}° / 前端 ${spec.cellDeg}° ⇒ 本轮一个格都不取`);
+        return f;
+      }
+      indexState = "已读";
+      indexWhy = null;
       return f;
     });
     return indexPromise;
@@ -1581,8 +1603,11 @@ function createBundleFeed(opts) {
       capped,
       got,
       asked,
+      refused,
+      cellDeg: spec.cellDeg,
       index: {
         state: indexState,
+        cellSize: indexFact ? indexFact.cellSize : null,
         cells: indexFact && indexFact.cellCount !== null ? indexFact.cellCount : null,
         keys: indexFact && indexFact.cells ? indexFact.cells.size : null,
         why: indexWhy,
@@ -1605,6 +1630,7 @@ function createBundleFeed(opts) {
     wanted = p.wanted;
     capped = p.capped;
     const idx = await ensureIndex();
+    if (refused) return { planned: true, batch: 0, got: 0, capped: p.capped, refused: true };
     const todo = [];
     for (const c of p.cells) {
       if (opts.store.has(spec.sourceKey(c.key))) continue;
@@ -1689,15 +1715,20 @@ async function loadBundleIndex(fetchCell, kind) {
       cellCount: num(j?.cellCount),
       cells: rawCells ? new Set(rawCells) : null,
       attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
-      real: typeof j?.real === "boolean" ? j.real : null
+      real: typeof j?.real === "boolean" ? j.real : null,
+      cellSize: num(j?.cellSize)
     };
   } catch {
-    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null };
+    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
   }
 }
 function bundleCountsLine(f, icon, unit) {
   if (!f.asked && f.have === 0 && f.missing === 0 && f.failed === 0) {
     return `${icon} 离线格 未取（还没要数据）`;
+  }
+  if (f.refused) {
+    const pkgC = f.index && f.index.cellSize !== null && f.index.cellSize !== void 0 ? f.index.cellSize + "°" : "?";
+    return `${icon} ❌ **格尺寸口径不符**（包 ${pkgC} / 前端 ${f.cellDeg}°）⇒ **本轮一个格都不取**（取格会把有数据的格说成「包外」；修包或改前端常量后重试）`;
   }
   const idx = f.index ? f.index.state === "已读" ? `（索引 ${f.index.cells === null ? "?" : f.index.cells} 格）` : f.index.state === "失败" ? "（索引失败：退回试格子）" : `（索引${f.index.state}）` : "";
   const head = `${icon} 离线格 已取 ${f.have} / 包外 ${f.missing} / 失败 ${f.failed}${idx}`;
@@ -1707,6 +1738,7 @@ function bundleCountsLine(f, icon, unit) {
   return `${head}${pend} · 仓库 ${store} ${unit}${cap}`;
 }
 function bldVerdictState(f) {
+  if (f.refused) return "sizemismatch";
   if (f.pending > 0 && f.n === 0 && f.have === 0) return "pending";
   if (f.n === 0 && f.have === 0 && f.missing > 0) return "outside";
   if (f.n === 0 && f.have === 0 && f.failed > 0 && f.missing === 0) return "failed";

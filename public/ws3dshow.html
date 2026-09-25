@@ -191,7 +191,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v24";
+      const BUILD = "ws3dshow-2026-09-25-v25";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -375,7 +375,10 @@
         let lastErr = null;
         for (let i = 0; i <= THEME_RETRY_MS.length; i++) {
           try {
-            const r = await fetch("/wstheme.json", { cache: "no-store" });
+            /* 🔑 缓存：**带指纹的 URL + 允许缓存**（别再 `cache:"no-store"` 硬顶 ——
+               服务端给它发 `max-age=31536000, immutable`，硬顶等于每次刷新白下一份）。
+               指纹用页面戳 `BUILD`（与 vendor 的 `.ver` 同一套思路：内容/构建变了 URL 必换）。 */
+            const r = await fetch("/wstheme.json?v=" + encodeURIComponent(BUILD));
             if (!r.ok) throw new Error("HTTP " + r.status);
             const j = await r.json();
             const t = j?.themes?.[THEME_ID];
@@ -1240,7 +1243,8 @@
             （**绝不在 render 循环里做布局** —— 那是 fps 杀手）。
          🔴 铁律：**缺名字不显示、不编名字**；每个标签带 `source`，喂判断的只有 real。 */
       const LABELS_ON = (function () { try { return !/[?&]labels=0\b/.test(location.search); } catch (e) { return true; } })();
-      let labelItems = { admin: [], road: [], bld: [] };
+      /* 🏘 `place` = **片区/小区名**（离线包 `/placesbundle` 来的；机主问过「区域名字喵」） */
+      let labelItems = { admin: [], road: [], bld: [], place: [] };
       let labelShown = [];
       let labelStat = { shown: 0, dropped: 0, cap: 0, capped: false, ms: null, err: "" };
 
@@ -1269,6 +1273,10 @@
           const fc = window.__LASTFC__;
           labelItems.bld = fc && fc.features ? TFx.buildingLabelsFrom(fc.features) : [];
         }
+        /* 🏘 片区/小区名：来自**离线包**（`placeLabelsFrom` 会丢掉没名字/不认得的类型 —— 红线双保险） */
+        if (typeof TFx.placeLabelsFrom === "function") {
+          labelItems.place = TFx.placeLabelsFrom(placeItemsRaw);
+        }
         if (!labelItems.admin.length && SPOT && Number.isFinite(SPOT.lng) && typeof TFx.adminLabelsFrom === "function") {
           /* ⚠️ **只用真名字**：`SPOT.name` 是页面里那份定位/默认落点的名字（DataV 口径），不是编的；
              没拿到就空着 —— HUD 如实写"行政名 0（还没取到）"，绝不造一个。 */
@@ -1292,7 +1300,7 @@
         const cv = map.getCanvas ? map.getCanvas() : null;
         const size = { width: (cv && cv.clientWidth) || 400, height: (cv && cv.clientHeight) || 400 };
         const r = TFx.pickLabels(
-          labelItems.admin.concat(labelItems.road, labelItems.bld),
+          labelItems.admin.concat(labelItems.road, labelItems.place, labelItems.bld),
           (lng, lat) => map.project([lng, lat]),
           size, plan, {},
         );
@@ -1304,10 +1312,17 @@
         };
         renderLabelDom();
         if (el) {
+          const pn = labelItems.place.length;
           el.textContent = `🏷 标签 ${r.shown.length} 显示 / ${r.droppedByCollision} 丢弃（避让）`
             + (r.droppedByCap ? ` / ${r.droppedByCap} 超上限` : "")
-            + `（候选 ${r.candidates} · 上限 ${plan.cap} · 无名字跳过 ${r.skippedNoName} · 视野外 ${r.skippedOffscreen} · ${labelStat.ms}ms）`;
-          el.title = "分层：z≤10 只行政名 / z11~12 +主干路名 / z13+ +次干道·楼名·片区名（阈值在 wsLabels.labelPlanFor）\n"
+            + `（候选 ${r.candidates} · 上限 ${plan.cap} · 无名字跳过 ${r.skippedNoName} · 视野外 ${r.skippedOffscreen} · ${labelStat.ms}ms）`
+            + (function () {
+              const fl = bundleFeedLine(placesFeedOf(), "🏘", "个");
+              return fl ? " · " + fl.replace(/^🏘 /, "") : " · 片区格 数不出来（模块缺 bundleCountsLine）";
+            })()
+            + ` · 片区名 ${pn} 个（区片 ${labelItems.place.filter((x) => x.placeType !== "neighbourhood").length} · 小区 ${labelItems.place.filter((x) => x.placeType === "neighbourhood").length}）`
+            + (function () { const e = placesErrText(); return e ? ` · ⚠ ${e}` : ""; })();
+          el.title = "分层：z≤10 只行政名 + **区片**名 / z11~12 +主干路名 + **小区/街区**名 / z13+ +次干道·楼名（片区名同层竞争；优先级 行政>主干>次干>片区>楼名 —— 阈值在 wsLabels.labelPlanFor）\n"
             + "**只在 moveend/zoomend 更新**（不在 render 循环里做布局）\n"
             + "铁律：缺名字不显示、不编名字；标签带 source，喂判断的只有 real";
         }
@@ -1340,10 +1355,10 @@
         const st = roadsStoreOf();
         if (!st) return "";
         const s2 = st.stats();
+        /* 可数口径**只有共享模块一份**（`bundleCountsLine`：已取/包外/失败 + 索引 + 仓库 + 上限） */
+        const fl = bundleFeedLine(roadsFeedOf(), "🛣", "条");
         return ` · 仓库 ${s2.n} 条（合并 ${s2.merges} 次 · 去重 ${s2.dupes} · 淘汰 ${s2.dropped} · 上限 ${s2.cap}）`
-          + ` · 离线格 已取 ${bundleState.have.size} / 包外 ${bundleState.missing.size} / 失败 ${bundleState.failed.size}`
-          + (bundleState.pending ? ` / 待取 ${bundleState.pending}` : "")
-          + (window.__ROADS_BUNDLE_CAPPED__ ? `（视野共需 ${window.__ROADS_BUNDLE_CAPPED__} 格，只取了最近的）` : "");
+          + (fl ? " · " + fl.replace(/^🛣 /, "") : " · 离线格 数不出来（模块缺 bundleCountsLine）");
       }
 
       function renderRoadHud() {
@@ -1529,8 +1544,12 @@
           const el = $("m-attr");
           if (!el) return;
           if (!LOD_ON) { el.textContent = ""; return; }
+          /* 🗂 离线包（路/楼/片区）各自的 `attribution`（来自各自 index.json）——**逐字追加**，
+             不自己改写文案；取不到就空着（下面会如实说"数不出来"）。 */
+          const bAtText = bundleAttributionText();   // **取自三张 index.json 的原句**（共享模块读的）
           const at = lodManifest && lodManifest.attribution;
-          if (at) { el.textContent = String(at); return; } // **逐字显示**清单里那句（不自己加前缀/改写）
+          if (at) { el.textContent = String(at) + (bAtText ? " · " + bAtText : ""); return; } // **逐字显示**（不改写）
+          if (!LOD_ON && bAtText) { el.textContent = bAtText; return; }   // 没开 LOD 也要署名（用了离线包就得署）
           /* 三态：清单没取到 / 取到了但**没有** attribution 字段（`?lod=demo` 那批示意瓦片就没有署名，
              因为里面没有真实数据）—— 两种都**可见地写出来**，不许静默不显示（署名是 ODbL 的硬要求）。 */
           el.textContent = lodManifest
@@ -1602,7 +1621,9 @@
         if (!plan) { updateLodHud(); return; }
         /* 清单：**只用于回证**（哪些键真的存在）—— 取不到不影响地图，但 HUD 会写清"清单没取到" */
         try {
-          const r = await fetch(plan.manifestPath, { cache: "no-store" });
+          /* 🔑 同主题那一条：清单是**静态且带指纹**的（`manifestPath` 里已有主题指纹），
+             用 `BUILD` 再钉一层版本 ⇒ 可以走缓存，不必每次刷新白下 61,887B。 */
+          const r = await fetch(plan.manifestPath + (plan.manifestPath.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(BUILD));
           if (!r.ok) throw new Error("HTTP " + r.status);
           lodManifest = await r.json();
           lodManifestErr = "";
@@ -2146,10 +2167,6 @@
          ⇒ 上限很少真的用满；真要画得动多少**只有真机能判**（本机无头无 WebGL，我们不写 fps 结论）。 */
       const BLD_STORE_CAP = 12000;
       let roadsStore = null;
-      const bundleState = { have: new Set(), missing: new Set(), failed: new Set(), pending: 0, asked: 0 };
-
-      /* 🏢 离线楼房包的状态（与路同一套：have / missing=包外 / failed / pending） */
-      const bldBundleState = { have: new Set(), missing: new Set(), failed: new Set(), pending: 0 };
       /* 可数口径的计数器：**页面加载时归零**（自检每个场景都是新的页面 ⇒ 不跨场景泄漏） */
       window.__BLD_SRC_LIVE__ = 0;
       window.__BLD_SRC_BUNDLE__ = 0;
@@ -2205,90 +2222,160 @@
           const el = document.getElementById("m-bldb");
           if (!el) return;
           const TF2 = window.__TF__;
-          const st = bldStoreOf();
-          const s2 = st ? st.stats() : null;
-          const n = s2 ? s2.n : null;
-          const have = bldBundleState.have.size;
-          const miss = bldBundleState.missing.size;
-          const fail = bldBundleState.failed.size;
-          window.__BLD_BUNDLE__ = n === null ? null : { n: n, have: have, missing: miss, failed: fail,
-                                                        cap: s2 ? s2.cap : null, dropped: s2 ? s2.dropped : null };
+          const feed = bldFeedOf();
+          const facts = feed ? feed.facts() : null;
+          const s2 = bldStoreOf() ? bldStoreOf().stats() : null;
+          const line = bundleFeedLine(feed, "🏢", "栋");
           let txt;
-          if (TF2 && typeof TF2.bldVerdictText === "function") {
-            /* 包外且仓库空 ⇒ **如实写「包外」**（这是"我们没这个包"，不是"这里没有楼"） */
-            const outside = (n === null || n === 0) && miss > 0 && have === 0;
-            txt = TF2.bldVerdictText({ state: outside ? "outside" : "bundle", n: n, cells: have, cap: s2 ? s2.cap : null });
+          if (TF2 && typeof TF2.bldVerdictText === "function" && facts) {
+            const state = (typeof TF2.bldVerdictState === "function") ? TF2.bldVerdictState(facts) : "bundle";
+            txt = TF2.bldVerdictText({ state: state, n: facts.n, cells: facts.have, cap: facts.cap });
           } else {
-            txt = "🏢 离线格 已取 " + have + " / 包外 " + miss + " / 失败 " + fail + "（模块缺 bldVerdictText ⇒ 只报计数）";
+            txt = "🏢 离线格 数不出来（模块缺 bldVerdictText / createBundleFeed）";
           }
-          el.textContent = txt + " · 已取 " + have + " / 包外 " + miss + " / 失败 " + fail
-            + (bldBundleState.pending ? " / 待取 " + bldBundleState.pending : "")
-            + " · 仓库 " + (n === null ? "数不出来" : n) + " 栋"
-            + (window.__BLD_BUNDLE_CAPPED__ ? "（视野共需 " + window.__BLD_BUNDLE_CAPPED__ + " 格，只取了最近的）" : "");
+          window.__BLD_BUNDLE__ = facts ? { n: facts.n, have: facts.have, missing: facts.missing, failed: facts.failed,
+                                            cap: s2 ? s2.cap : null, dropped: s2 ? s2.dropped : null } : null;
+          el.textContent = txt + (line ? " · " + line.replace(/^🏢 /, "") : "");
           el.title = [
             "🏢 离线楼房包：`/bldbundle/<格>.json`（静态文件，**不打 /api/buildings**）",
-            "由 `world_map/export_bld_bundle.py` 从**已缓存的 Overture 盘**导出：实测 55 盘 → 720,087 栋 → 373 格 / 102.6MB",
+            "由 `world_map/export_bld_bundle.py` 从**已缓存的 Overture 盘**导出：55 盘 → 720,087 栋 → 373 格 / 102.6MB",
             "🔴 包里全是 **Overture 真脚印（real · ODbL）**；**sketch 只在预渲染 PNG 的像素里**，绝不进数据",
-            "现场取数（R≤2000m、冷查 27~33s）只在 `?live=1` 时打；默认 0 条",
-            "包外 = 这一带**没有离线格**（如实写，不冒充「这里没有楼」）",
+            "为什么默认不发：现场一次只覆盖视野中心 **R≤2000m**（后端硬闸 `r ∈ (0,2000]`）且**冷查 27~33s**（最慢 91.7s）",
+            "取数/计数/索引/署名**都走共享模块** `wsOfflineFeed.createBundleFeed`（页面里没有第二份实现）",
+            "包外 = 这一带**没有离线格**（索引里没有 = 读来的事实，不试 404）；要现场取数加 `?live=1`",
           ].join("\n");
         } catch (e) { /* HUD 失败不影响地图 */ }
       }
 
-      /**
-       * 🏢 按视野取**离线楼房格**（静态文件 ⇒ 不打 Overpass）。
-       * · 一次 moveend 最多 `BLD_BUNDLE_PER_REFRESH` 格（后台、串行）；404 = **包外**（记 missing）；
-       * · 合并进**累积仓库**（不整份替换 —— 机主：「之前的没了」）； · 取完**一次** setData。
-       */
-      async function refreshBldBundle() {
+      const BUILDINGS_VIEW_MARGIN = 2.2;    // 保留"视野外一圈"：来回挪地图不该反复重取
+      const ROADS_VIEW_MARGIN = 2.5;
+
+      /** 视野（共享模块要的形状：`{bounds:{getWest…}, center:{lng,lat}}`；与 App 侧同一份口径） */
+      function bundleView() {
+        const b = map.getBounds();
+        return {
+          bounds: {
+            getWest: function () { return b.getWest(); }, getSouth: function () { return b.getSouth(); },
+            getEast: function () { return b.getEast(); }, getNorth: function () { return b.getNorth(); },
+          },
+          center: { lng: map.getCenter().lng, lat: map.getCenter().lat },
+        };
+      }
+
+      /** 取一格（把 `fetch` 适配成共享模块要的 `BundleFetch`；超时用**共享模块那个常数**） */
+      async function bundleFetchCell(url, ms) {
+        const r = await fetchWithTimeout(url, ms);
+        return { ok: !!r.ok, status: Number(r.status) || 0, json: function () { return r.json(); } };
+      }
+
+      let roadsFeed = null, bldFeed = null, placesFeed = null;
+
+      function feedsReady() {
         const TFx = window.__TF__;
+        return !!(TFx && typeof TFx.createBundleFeed === "function" && typeof TFx.bundleCountsLine === "function");
+      }
+
+      /** 三条管道的**共同装配**（少一处能写歪的地方）：store / 视野 / fetch / flush / 淘汰半径 */
+      function makeFeed(kind, store, flush, margin) {
+        const TFx = window.__TF__;
+        return TFx.createBundleFeed({
+          kind: kind, store: store, view: bundleView, fetchCell: bundleFetchCell, flush: flush,
+          retainRadiusM: function () { return Math.max(2000, Math.round((viewHalfMeters() || 0) * margin)); },
+          onError: function (why) { errs.push(why); },
+        });
+      }
+
+      function roadsFeedOf() {
+        const st = roadsStoreOf();
+        if (!st || !feedsReady()) return null;
+        if (!roadsFeed) roadsFeed = makeFeed("roads", st, function (why) { flushRoads(why); }, ROADS_VIEW_MARGIN);
+        return roadsFeed;
+      }
+
+      function bldFeedOf() {
         const st = bldStoreOf();
-        if (!st || !TFx || typeof TFx.bldBundleCellsForView !== "function") return;
-        const plan = TFx.bldBundleCellsForView(map.getBounds(), map.getCenter(), 6);
-        if (!plan) return;
-        if (plan.capped) window.__BLD_BUNDLE_CAPPED__ = plan.wanted;
-        const todo = plan.cells.filter((c) => !st.has("bldbundle:" + c.key) && !bldBundleState.missing.has(c.key));
-        const batch = todo.slice(0, BLD_BUNDLE_PER_REFRESH);
-        if (!batch.length) return;
-        bldBundleState.pending += batch.length;
-        let got = 0;
-        for (const cell of batch) {
-          try {
-            const r = await fetchWithTimeout("/bldbundle/" + cell.key + ".json", BUNDLE_TIMEOUT_MS);
-            if (r.status === 404) { bldBundleState.missing.add(cell.key); continue; }
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const j = await r.json();
-            const feats = [];
-            for (const b of (j.bld || [])) {
-              /* 一格楼可能由多块组成（MultiPolygon）⇒ 一块一个要素，id 加 `#k` 后缀（**不是**编数据：
-                 几何/高度/来源全部原样，只是把一块拆成一个可渲染要素）。 */
-              const parts = b.p || [];
-              for (let k = 0; k < parts.length; k++) {
-                feats.push({
-                  type: "Feature", id: parts.length > 1 ? b.i + "#" + k : b.i,
-                  properties: { osm_id: parts.length > 1 ? b.i + "#" + k : b.i, src: "bundle", bsrc: "overture",
-                                height: b.h === undefined ? null : b.h, floors: b.f === undefined ? null : b.f,
-                                cls: b.c || null, name: b.n || "" },
-                  geometry: { type: "Polygon", coordinates: [parts[k]] },
-                });
-              }
-            }
-            st.merge(feats, "bldbundle:" + cell.key);
-            bldBundleState.have.add(cell.key);
-            got += feats.length;
-            window.__BLD_SRC_BUNDLE__ = (window.__BLD_SRC_BUNDLE__ || 0) + feats.length;
-          } catch (e) {
-            bldBundleState.failed.add(cell.key);
-            errs.push("bldbundle " + cell.key + " " + String(e).slice(0, 60));
-          } finally { bldBundleState.pending -= 1; }
+        if (!st || !feedsReady()) return null;
+        if (!bldFeed) bldFeed = makeFeed("bld", st, function (why) { flushBld(why); }, BUILDINGS_VIEW_MARGIN);
+        return bldFeed;
+      }
+
+      function placesFeedOf() {
+        const st = placesStoreOf();
+        if (!st || !feedsReady()) return null;
+        if (!placesFeed) placesFeed = makeFeed("places", st, function (why) { flushPlaces(why); }, BUILDINGS_VIEW_MARGIN);
+        return placesFeed;
+      }
+
+      /** 🏘 片区名的仓库（与路/楼共用 `createFeatureStore` 纯逻辑；id 用包里的 `i`） */
+      let placesStore = null;
+      /** 给标签层的那一份片区名原始点（`{n,k,p,i}`；由 `flushPlaces` 从仓库重建） */
+      let placeItemsRaw = [];
+      function placesStoreOf() {
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.createFeatureStore !== "function") return null;
+        if (!placesStore) {
+          placesStore = TFx.createFeatureStore({
+            cap: (typeof TFx.PLACES_STORE_CAP === "number" ? TFx.PLACES_STORE_CAP : 3000),
+            idOf: function (f) { return (TFx.placesIdOf ? TFx.placesIdOf(f) : (f && f.i) || null); },
+            pointOf: function (f) { return (TFx.placesPointOf ? TFx.placesPointOf(f) : (f && f.p) || null); },
+          });
         }
-        /* 淘汰只在**超出保留半径/上限**时动手（保留视野外一圈 —— 来回挪不该重取） */
-        try {
-          const r0 = Math.max(2000, Math.round((viewHalfMeters() || 0) * 2.2));
-          st.retainNear([map.getCenter().lng, map.getCenter().lat], r0);
-        } catch (e) { /* 淘汰失败不影响显示 */ }
-        window.__BLD_BUNDLE_GOT__ = (window.__BLD_BUNDLE_GOT__ || 0) + got;
-        flushBld("bundle+" + batch.length);
+        return placesStore;
+      }
+
+      /**
+       * 片区名"取不到"的**原因**（取到就 null）—— 判词纪律：不许写死 null，要能说出为什么。
+       * 三个来源各报各的：没接上共享模块 / 有格取数失败 / **索引没读到**（那会让"包外"变成猜的）。
+       */
+      function placesErrText() {
+        const fd = placesFeedOf();
+        if (!fd) return "模块缺 createBundleFeed/bundleCountsLine（旧 vendor？）";
+        const f = fd.facts();
+        if (f.failed > 0) return "有 " + f.failed + " 格取数失败（详见 errs 与 index）";
+        if (f.index.state === "失败") return "索引没读到：" + (f.index.why || "原因未知") + "（⇒ 包外只能靠试 404 猜）";
+        return null;
+      }
+
+      /** 片区名并进仓库后：重建"给标签层的那一份"并重排（**只在事件里**，不在 render 循环里） */
+      function flushPlaces(why) {
+        const st = placesStoreOf();
+        if (!st) return;
+        placeItemsRaw = st.features();
+        window.__PLACES_RAW__ = placeItemsRaw.length;
+        window.__PLACES_FLUSH_WHY__ = why || "";
+        try { refreshLabels("places"); } catch (e) { errs.push("labels " + e); }
+      }
+
+      /** 三条管道的 HUD 行（**可数文案只有一份**：共享模块的 `bundleCountsLine`） */
+      function bundleFeedLine(feed, icon, unit) {
+        const TFx = window.__TF__;
+        if (!feed || !TFx || typeof TFx.bundleCountsLine !== "function") return null;
+        return TFx.bundleCountsLine(feed.facts(), icon, unit);
+      }
+
+      /** 三条管道的 probe 快照（自检读它；页面不自己数） */
+      function bundleFeedProbe(feed) {
+        if (!feed) return null;
+        const f = feed.facts();
+        return {
+          n: f.n, have: f.have, missing: f.missing, failed: f.failed, pending: f.pending, cap: f.cap,
+          wanted: f.wanted, capped: f.capped, got: f.got, asked: f.asked,
+          index: { state: f.index.state, cells: f.index.cells, keys: f.index.keys, why: f.index.why,
+                   attribution: f.index.attribution, real: f.index.real },
+          plan: feed.plan(),
+        };
+      }
+
+      /** 🗂 署名（ODbL 硬要求）：**取自包里那张 index.json 的原句**（共享模块 loadBundleIndex），
+       *  三条管道各一句；取不到就**如实写取不到**，不自己编一句"© Overture"充数。 */
+      function bundleAttributionText() {
+        const parts = [];
+        for (const f of [bldFeed, roadsFeed, placesFeed]) {
+          if (!f) continue;
+          const at = f.facts().index.attribution;
+          if (at) parts.push(at);
+        }
+        return parts.length ? parts.join(" · ") : "";
       }
 
       /** 建/取路网仓库（模块缺符号 ⇒ 如实退回"一次性 setData"，并在 HUD 说明） */
@@ -2338,8 +2425,11 @@
       function roadsHunkStat() {
         const st = roadsStoreOf();
         if (!st) return null;
-        return { store: st.stats().n, bundleHave: bundleState.have.size, bundleMissing: bundleState.missing.size,
-                 bundleFailed: bundleState.failed.size, pending: bundleState.pending };
+        /* 离线格的三个计数**从管道读**（页面不自己数；管道在共享模块里） */
+        const fd = roadsFeedOf();
+        const f = fd ? fd.facts() : null;
+        return { store: st.stats().n, bundleHave: f ? f.have : 0, bundleMissing: f ? f.missing : 0,
+                 bundleFailed: f ? f.failed : 0, pending: f ? f.pending : 0 };
       }
       /** 建/补路网图层（离线包先到时也要能建起来） */
       function roadLayerSpecsAdd() {
@@ -2360,38 +2450,39 @@
        * · 网络/解析错 ⇒ 记 `failed`（可见）；
        * · 取到就并进仓库 + 一次 setData。
        */
+      /**
+       * 🛣🏢🏘 按视野补离线格 —— **三条管道各一行**，逻辑全在共享模块（见上面那段装配）。
+       * 页面这一层**只做接线 + HUD 刷新**：不自己算"取哪些格/包外几格/是不是失败"。
+       */
       async function refreshRoadsBundle() {
-        const TFx = window.__TF__;
-        const st = roadsStoreOf();
-        if (!st || !TFx || typeof TFx.roadsBundleCellsForView !== "function") return;
-        const plan = TFx.roadsBundleCellsForView(map.getBounds(), map.getCenter(), 8);
-        if (!plan) return;
-        if (plan.capped) window.__ROADS_BUNDLE_CAPPED__ = plan.wanted;
-        const todo = plan.cells.filter((c) => !st.has("bundle:" + c.key) && !bundleState.missing.has(c.key));
-        const batch = todo.slice(0, ROADS_BUNDLE_PER_REFRESH);
-        if (!batch.length) return;
-        bundleState.pending += batch.length;
-        for (const cell of batch) {
-          try {
-            const r = await fetchWithTimeout("/roadsbundle/" + cell.key + ".json", BUNDLE_TIMEOUT_MS);
-            if (r.status === 404) { bundleState.missing.add(cell.key); continue; }
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            const j = await r.json();
-            const feats = (j.roads || []).map(function (x) {
-              return {
-                type: "Feature", id: x.i,
-                properties: { osm_id: x.i, rank: x.r, name: x.n || "", src: "bundle" },
-                geometry: { type: "LineString", coordinates: x.p },
-              };
-            });
-            st.merge(feats, "bundle:" + cell.key);
-            bundleState.have.add(cell.key);
-          } catch (e) {
-            bundleState.failed.add(cell.key);
-            errs.push("bundle " + cell.key + " " + String(e).slice(0, 60));
-          } finally { bundleState.pending -= 1; }
-        }
-        flushRoads("bundle+" + batch.length);
+        const f = roadsFeedOf();
+        if (!f) return;
+        const rep = await f.refresh("view");
+        if (rep && rep.planned && rep.capped) window.__ROADS_BUNDLE_CAPPED__ = f.facts().wanted;
+        try { renderRoadHud(); } catch (e) { /* HUD 失败不影响地图 */ }
+        renderLodAttribution();
+        return rep;
+      }
+
+      async function refreshBldBundle() {
+        const f = bldFeedOf();
+        if (!f) return;
+        const rep = await f.refresh("view");
+        if (rep && rep.planned && rep.capped) window.__BLD_BUNDLE_CAPPED__ = f.facts().wanted;
+        try { renderBldBundleHud(); } catch (e) { /* HUD 失败不影响地图 */ }
+        renderLodAttribution();
+        return rep;
+      }
+
+      async function refreshPlacesBundle() {
+        if (!LABELS_ON) return null;                 // `?labels=0` 时不必取（省流量）
+        const f = placesFeedOf();
+        if (!f) return null;
+        const rep = await f.refresh("view");
+        if (rep && rep.planned && rep.capped) window.__PLACES_BUNDLE_CAPPED__ = f.facts().wanted;
+        try { refreshLabels("places-hud"); } catch (e) { /* 标签失败不影响地图 */ }
+        renderLodAttribution();
+        return rep;
       }
 
       /** 最近一次取楼/取路的实况（HUD 只显示它，不自己编数字） */
@@ -2794,7 +2885,32 @@
             return { zoom: c.zoom, pitch: c.pitch, bearing: c.bearing, maxPitch: c.maxPitch, minZoom: c.minZoom, maxZoom: c.maxZoom };
           })(),
           attributionControl: false, fadeDuration: 120,
-          preserveDrawingBuffer: true, // 截图用（无头/代拍都要它）
+          /* 🔴 **`preserveDrawingBuffer` 必须写在 `canvasContextAttributes` 里面**（2026-09-25 父代理逐字核
+             `public/vendor/maplibre/maplibre-gl.mjs`）：库里是
+               `defaultOptions.canvasContextAttributes = { antialias:!1, preserveDrawingBuffer:!1, … }`
+             然后 `canvasContextAttributes = {...默认, ...你传的}` → `getContext("webgl2", 它)`。
+             ⚠️ 写在**顶层**这个构建**不读** ⇒ 截图/代拍会拍到**空白**（代拍是机主唯一的验收通道）。
+             ⚠️ **别写"修好了"**：本机无头无 WebGL，只有机主真机代拍能确认。 */
+          canvasContextAttributes: { preserveDrawingBuffer: true, antialias: false },
+          /* 🌍 世界副本：库默认 `true`（源码里最多考察 7 份副本）——我们只画一个城市，
+             关掉省的是**同一屏的重复瓦片请求与绘制**。 */
+          renderWorldCopies: false,
+          /* 🧠 瓦片缓存：`maxTileCacheZoomLevels` 显式写成**库常量 5**（`MAX_TILE_CACHE_ZOOM_LEVELS`），
+             不靠默认；`maxTileCacheSize` 是"单个源最多缓存几张瓦片"的内存护栏 —— 512 是**保守值**，
+             真机是否够用/是否引发重取**未验**（本机无头无 WebGL）。 */
+          maxTileCacheZoomLevels: 5,
+          maxTileCacheSize: 512,
+          /* 📱 像素比：低档机收敛到 ≤1.5（复用 `wsCaps` 的性能档；规则在 `wsScene.pixelRatioForTier`） */
+          pixelRatio: (function () {
+            const TFp = window.__TF__;
+            try {
+              if (TFp && typeof TFp.pixelRatioForTier === "function") {
+                const caps = (typeof TFp.readCaps === "function") ? TFp.readCaps() : null;
+                return TFp.pixelRatioForTier(caps && caps.render ? caps.render.perf : null, window.devicePixelRatio);
+              }
+            } catch (e) { /* 模块旧 ⇒ 用保守值 */ }
+            return Math.min(1.5, Math.max(1, window.devicePixelRatio || 1));
+          })(),
         });
         window.__w3d = { ok: true, map, stats, probe: () => probe(), spot: SPOT };
         map.on("error", (e) => {
@@ -2876,6 +2992,10 @@
         map.on("moveend", () => { try { void refreshRoadsBundle(); } catch (e) { errs.push("bundle " + e); } });
         /* 🏢 视野变了就补**楼房**离线格（静态文件、后台、一次最多几格；live 那条默认不在这里打） */
         map.on("moveend", () => { try { void refreshBldBundle(); } catch (e) { errs.push("bldBundle " + e); } });
+        /* 🏘 视野变了就补**片区名**离线格（静态文件、很小；取到后重排一次标签） */
+        map.on("moveend", () => { try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); } });
+        /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */
+        try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
         map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } });
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
@@ -3247,18 +3367,64 @@
                     why: window.__ROADS_LIVE_WHY__ || null },
             store: (function () { try { const st = roadsStoreOf(); return st ? st.stats() : null; } catch (e) { return null; } })(),
             noStore: window.__ROADS_NO_STORE__ || null,
-            bundle: { have: bundleState.have.size, missing: bundleState.missing.size, failed: bundleState.failed.size, pending: bundleState.pending },
+            bundle: (function () {
+              const fd = roadsFeedOf();
+              if (!fd) return { have: 0, missing: 0, failed: 0, pending: 0 };
+              const f = fd.facts();
+              return { have: f.have, missing: f.missing, failed: f.failed, pending: f.pending };
+            })(),
             capped: window.__ROADS_BUNDLE_CAPPED__ || null,
             hud: (function () { try { return $("m-roads").textContent; } catch (e) { return null; } })(),
+          },
+          /* 🏘 离线**片区名**包（标签层的 `place` 档：机主「如何实现楼房及区域名字喵」） */
+          /* 🗂 三个离线包的**索引**（父代理体检：以前页面从不请求 index，靠 404 猜） */
+          pixelRatio: (function () { try { return map.getPixelRatio ? map.getPixelRatio() : null; } catch (e) { return null; } })(),
+          /* 🔌 三条离线包管道（**逻辑在共享模块**：`wsOfflineFeed.createBundleFeed`）的可数快照 */
+          feeds: {
+            shared: (window.__TF__ && typeof window.__TF__.createBundleFeed === "function") ? true : false,
+            roads: bundleFeedProbe(roadsFeedOf()),
+            bld: bundleFeedProbe(bldFeedOf()),
+            places: bundleFeedProbe(placesFeedOf()),
+            lines: { roads: bundleFeedLine(roadsFeedOf(), "🛣", "条"),
+                     bld: bundleFeedLine(bldFeedOf(), "🏢", "栋"),
+                     places: bundleFeedLine(placesFeedOf(), "🏘", "个") },
+            attribution: bundleAttributionText(),
+          },
+          places: {
+            raw: window.__PLACES_RAW__ === undefined ? null : window.__PLACES_RAW__,
+            items: labelItems.place.length,
+            area: labelItems.place.filter(function (x) { return x.placeType !== "neighbourhood"; }).length,
+            local: labelItems.place.filter(function (x) { return x.placeType === "neighbourhood"; }).length,
+            bundle: (function () {
+              const fd = placesFeedOf();
+              if (!fd) return { have: 0, missing: 0, failed: 0, pending: 0 };
+              const f = fd.facts();
+              return { have: f.have, missing: f.missing, failed: f.failed, pending: f.pending };
+            })(),
+            capped: window.__PLACES_BUNDLE_CAPPED__ || null,
+            err: placesErrText(),
+            shown: labelShown.filter(function (l) { return l.kind === "place"; }).map(function (l) { return l.name; }),
+            hud: (function () { try { return $("m-labels").textContent; } catch (e) { return null; } })(),
           },
           /* 🏢 离线**楼房**包（默认数据面：机主「楼房只有中间一块」的修法） */
           bldbundle: {
             live: { param: LIVEON, on: window.__BLD_LIVE__ === undefined ? null : !!window.__BLD_LIVE__,
                     overpass: (window.__BLD_OVERPASS_N__ === undefined ? null : window.__BLD_OVERPASS_N__),
                     why: window.__BLD_LIVE_WHY__ || null },
-            src: { bundle: window.__BLD_SRC_BUNDLE__ || 0, live: window.__BLD_SRC_LIVE__ || 0 },
-            bundle: { have: bldBundleState.have.size, missing: bldBundleState.missing.size,
-                      failed: bldBundleState.failed.size, pending: bldBundleState.pending },
+            /* ⚠️ 口径改了（父代理审查：**别在页面里再数一份**）：`storeN` 是仓库里的楼（离线包并进来的，
+               默认 live 不发 ⇒ 它就等于"包里的"）；`liveMerged` 是 `?live=1` 时**另外**并进来的要素数。
+               `bundleCells` = 已经取过的离线格数（共享管道的事实）。 */
+            src: (function () {
+              const fd = bldFeedOf();
+              const f = fd ? fd.facts() : null;
+              return { storeN: f ? f.n : null, bundleCells: f ? f.have : 0, liveMerged: window.__BLD_SRC_LIVE__ || 0 };
+            })(),
+            bundle: (function () {
+              const fd = bldFeedOf();
+              if (!fd) return { have: 0, missing: 0, failed: 0, pending: 0 };
+              const f = fd.facts();
+              return { have: f.have, missing: f.missing, failed: f.failed, pending: f.pending };
+            })(),
             capped: window.__BLD_BUNDLE_CAPPED__ || null,
             merge: window.__BLD_MERGE__ || null,
             fc: (window.__BLD_BUNDLE_FC__ === undefined ? null : window.__BLD_BUNDLE_FC__),

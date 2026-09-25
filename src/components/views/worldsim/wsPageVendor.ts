@@ -18,6 +18,12 @@ export * from "./wsScene";
    `createFeatureStore()` 去重/淘汰/统计 + `roadsBundleCellsForView()` 算"视野需要哪些离线格"。
    ⚠️ 纯逻辑，页面与 App 共用同一份（不许第二套合并/淘汰）。 */
 export * from "./wsFeatureStore";
+/* 🔌 **离线包管道**（`createBundleFeed` / `bundleCountsLine` / `bundleCellUrl` / `loadBundleIndex` …）：
+   **唯一真源**，App 宿主（`WsDistrictMapLibre.vue`）与代拍页都调它 —— 页面里**不许再写第二套**
+   "取哪些格 / 索引优先 / 已取·包外·失败怎么数 / 署名从哪来"。
+   ⚠️ 页面上一次就是因为没走这里、自己写了一套（`bundleIndexOf`/`splitBundleCells`），
+   被 `pr_standard_check.py` 的 C1（单一真源）逮住 —— 别再犯。 */
+export * from "./wsOfflineFeed";
 /* 🏷 **地名/楼名标签层**（机主 2026-09-25：「如何实现楼房及区域名字喵」）：分层规则 + 避让 + 优先级 + 只用真名字。
    ⚠️ 纯逻辑；页面只做 DOM 渲染与接线（MapLibre 的 glyphs 文字层在本项目是禁用项）。 */
 export * from "./wsLabels"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）

@@ -217,3 +217,6 @@ public/roadsbundle/
 #    由已缓存的 Overture 楼房盘导出（**真脚印 = real**，不含 sketch），index.json 里有格数/栋数/时间戳。
 #    ⚠️ 体积大（实测 373 格 / 72 万栋 / ~100MB）⇒ 只该在本地生成，**别提交**（预览包重建会一起拷过去）。
 public/bldbundle/
+# 🏷 片区名离线包（`world_map/fetch_places.py` + `export_places_bundle.py` 生成物；**不入 git**）：
+#    实测 32 格 / 145 个有名点 / 12.5 KB；以后补区县会变大 ⇒ 与另两个包同待遇，只留可复现的小样本。
+public/placesbundle/

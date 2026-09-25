@@ -887,6 +887,11 @@ function roadsVerdictText(input) {
   const secs = Number.isFinite(input.ms) ? ` · ${(Number(input.ms) / 1e3).toFixed(1)}s` : "";
   return `🛣 ${n} 条（r=${r}m${cap}${ch}${secs}）`;
 }
+function pixelRatioForTier(perfTier, dpr) {
+  const d = Number.isFinite(dpr) ? Number(dpr) : 1;
+  const base = Math.min(2, Math.max(1, d));
+  return String(perfTier) === "low" ? Math.min(1.5, base) : base;
+}
 var WS_FETCH_R_LIMIT_WHY = "Overpass 公共实例实测：R=2000 起常 504、R=8000 会静默截断 ⇒ 远景改用预渲染瓦片";
 function wsFetchRadiusMax() {
   return Math.min(WS_FETCH_R_MAX, WS_FETCH_R_SOURCE_MAX, WS_FETCH_R_BACKEND_MAX);
@@ -1285,6 +1290,7 @@ function createFeatureStore(opts) {
 }
 var ROADS_BUNDLE_CELL_DEG = 0.05;
 var BLD_BUNDLE_CELL_DEG = 0.05;
+var PLACES_BUNDLE_CELL_DEG = 0.05;
 function bundleCellOf(lng, lat, size) {
   const w = Math.floor(lng / size) * size;
   const s = Math.floor(lat / size) * size;
@@ -1331,19 +1337,409 @@ function bundleCellsForView(bounds, center, maxCells, size) {
 function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUNDLE_CELL_DEG) {
   return bundleCellsForView(bounds, center, maxCells, size);
 }
+function placesBundleCellsForView(bounds, center, maxCells = 6, size = PLACES_BUNDLE_CELL_DEG) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
 function bldBundleCellsForView(bounds, center, maxCells = 6, size = BLD_BUNDLE_CELL_DEG) {
   return bundleCellsForView(bounds, center, maxCells, size);
 }
 
+// src/components/views/worldsim/wsOfflineFeed.ts
+var BUNDLE_TIMEOUT_MS = 6e3;
+var BLD_BUNDLE_PER_REFRESH = 2;
+var ROADS_BUNDLE_PER_REFRESH = 2;
+var BLD_BUNDLE_MAX_CELLS = 6;
+var ROADS_BUNDLE_MAX_CELLS = 8;
+var PLACES_BUNDLE_PER_REFRESH = 4;
+var PLACES_BUNDLE_MAX_CELLS = 6;
+var PLACES_STORE_CAP = 3e3;
+var BLD_STORE_CAP = 12e3;
+var ROADS_STORE_CAP = 6e3;
+function bundleCellUrl(kind, cellKey) {
+  const spec = SPECS[kind];
+  if (!spec) throw new Error("未知的离线包类型：" + String(kind));
+  return `/${spec.dir}/${cellKey}.json`;
+}
+function bundleIndexUrl(kind) {
+  const spec = SPECS[kind];
+  if (!spec) throw new Error("未知的离线包类型：" + String(kind));
+  return `/${spec.dir}/index.json`;
+}
+async function fetchWithTimeout(fetchImpl, url, ms = BUNDLE_TIMEOUT_MS) {
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), ms) : null;
+  try {
+    return await fetchImpl(url, ctl ? { signal: ctl.signal } : void 0);
+  } catch (e) {
+    const why = e?.name === "AbortError" ? `超时 ${Math.round(ms / 1e3)}s` : String(e);
+    throw new Error(why);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function bundleBuildingsOf(json) {
+  const arr = json?.bld;
+  if (!Array.isArray(arr)) throw new Error("bldbundle 里没有 bld 数组");
+  const out = [];
+  for (const raw of arr) {
+    const b = raw;
+    if (!b) continue;
+    const id = String(b.i ?? "");
+    if (!id) continue;
+    const parts = Array.isArray(b.p) ? b.p : [];
+    for (let k = 0; k < parts.length; k++) {
+      const ring = parts[k];
+      if (!Array.isArray(ring) || ring.length < 4) continue;
+      const fid = parts.length > 1 ? `${id}#${k}` : id;
+      const h = num(b.h);
+      const floors = num(b.f);
+      const props = {
+        osm_id: fid,
+        /* 出处如实标：`src` = 来自离线包；`bsrc` = 上游是 Overture（ODbL，署名随数据走） */
+        src: "bundle",
+        bsrc: "overture",
+        kind: b.c === void 0 || b.c === null ? "yes" : String(b.c),
+        name: b.n === void 0 || b.n === null ? "" : String(b.n)
+      };
+      if (h !== null && h > 0) {
+        props.height = h;
+        props.height_src = "height";
+      } else if (floors !== null && floors > 0) {
+        props.height = Math.min(500, Math.round(floors * 3 * 10) / 10);
+        props.height_src = "levels";
+      } else {
+        props.height_src = "default";
+      }
+      if (floors !== null && floors > 0) props.levels = floors;
+      out.push({
+        type: "Feature",
+        id: fid,
+        properties: props,
+        geometry: { type: "Polygon", coordinates: [ring] }
+      });
+    }
+  }
+  return out;
+}
+function bundleRoadsOf(json) {
+  const arr = json?.roads;
+  if (!Array.isArray(arr)) throw new Error("roadsbundle 里没有 roads 数组");
+  const out = [];
+  for (const raw of arr) {
+    const x = raw;
+    if (!x || !Array.isArray(x.p) || x.p.length < 2) continue;
+    const id = String(x.i ?? "");
+    if (!id) continue;
+    out.push({
+      type: "Feature",
+      id,
+      properties: {
+        osm_id: id,
+        rank: num(x.r),
+        name: x.n === void 0 || x.n === null ? "" : String(x.n),
+        src: "bundle",
+        bsrc: "osm"
+      },
+      geometry: { type: "LineString", coordinates: x.p }
+    });
+  }
+  return out;
+}
+function bundlePlacesOf(json) {
+  const arr = json?.places;
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const it of arr) {
+    const o = it;
+    const name = String(o?.n ?? "").trim();
+    if (!name) continue;
+    const pt = o?.p;
+    if (!Array.isArray(pt) || !Number.isFinite(pt[0]) || !Number.isFinite(pt[1])) continue;
+    out.push({ n: name, k: String(o?.k ?? ""), p: [Number(pt[0]), Number(pt[1])], i: String(o?.i ?? name) });
+  }
+  return out;
+}
+function placesIdOf(f) {
+  return String(f?.i || (f?.k ? f.k + ":" + f.n : f?.n) || "") || null;
+}
+function placesPointOf(f) {
+  const p = f?.p;
+  return Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]) ? [p[0], p[1]] : null;
+}
+function bldIdOf(f) {
+  const p = f && f.properties || {};
+  const id = p.store_id || p.osm_id || p.id || f && f.id;
+  return id ? String(id) : null;
+}
+function bldPointOf(f) {
+  const ring = f?.geometry?.coordinates?.[0];
+  if (!Array.isArray(ring) || !ring.length) return null;
+  let x = 0, y = 0, n = 0;
+  for (const q of ring) {
+    if (Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1])) {
+      x += q[0];
+      y += q[1];
+      n++;
+    }
+  }
+  return n ? [x / n, y / n] : null;
+}
+function roadsIdOf(f) {
+  const p = f && f.properties || {};
+  const id = p.osm_id || p.id || f && f.id;
+  return id ? String(id) : null;
+}
+function roadsPointOf(f) {
+  const c = f?.geometry?.coordinates || [];
+  const m = c[Math.floor(c.length / 2)];
+  return m && Number.isFinite(m[0]) && Number.isFinite(m[1]) ? [m[0], m[1]] : null;
+}
+var SPECS = {
+  bld: {
+    dir: "bldbundle",
+    plan: (b, c, maxCells) => bldBundleCellsForView(b, c, maxCells),
+    parse: bundleBuildingsOf,
+    perRefresh: BLD_BUNDLE_PER_REFRESH,
+    maxCells: BLD_BUNDLE_MAX_CELLS,
+    sourceKey: (k) => `bldbundle:${k}`,
+    unit: "栋"
+  },
+  places: {
+    dir: "placesbundle",
+    plan: (b, c, maxCells) => placesBundleCellsForView(b, c, maxCells),
+    parse: bundlePlacesOf,
+    perRefresh: PLACES_BUNDLE_PER_REFRESH,
+    maxCells: PLACES_BUNDLE_MAX_CELLS,
+    sourceKey: (k) => `placesbundle:${k}`,
+    unit: "个"
+  },
+  roads: {
+    dir: "roadsbundle",
+    plan: (b, c, maxCells) => roadsBundleCellsForView(b, c, maxCells),
+    parse: bundleRoadsOf,
+    perRefresh: ROADS_BUNDLE_PER_REFRESH,
+    maxCells: ROADS_BUNDLE_MAX_CELLS,
+    sourceKey: (k) => `bundle:${k}`,
+    unit: "条"
+  }
+};
+function createBundleFeed(opts) {
+  const spec = SPECS[opts.kind];
+  const have = /* @__PURE__ */ new Set();
+  const missing = /* @__PURE__ */ new Set();
+  const failed = /* @__PURE__ */ new Set();
+  let pending = 0;
+  let got = 0;
+  let wanted = null;
+  let capped = false;
+  let asked = false;
+  let busy = false;
+  let queued = false;
+  let indexFact = null;
+  let indexState = "未读";
+  let indexWhy = null;
+  let indexPromise = null;
+  function ensureIndex() {
+    if (indexPromise) return indexPromise;
+    indexState = "读取中";
+    indexPromise = loadBundleIndex(opts.fetchCell, opts.kind).then((f) => {
+      indexFact = f;
+      if (f.cells) {
+        indexState = "已读";
+        indexWhy = null;
+      } else {
+        indexState = "失败";
+        indexWhy = "索引没读到（退回试格子）";
+        opts.onError?.(`index ${spec.dir} 没读到，退回试格子`);
+      }
+      return f;
+    });
+    return indexPromise;
+  }
+  function counters() {
+    let n = null;
+    let cap = null;
+    try {
+      const st = opts.store.stats();
+      n = Number.isFinite(st.n) ? st.n : null;
+      cap = Number.isFinite(st.cap) ? st.cap : null;
+    } catch {
+      n = null;
+    }
+    return {
+      n,
+      have: have.size,
+      missing: missing.size,
+      failed: failed.size,
+      pending,
+      cap,
+      wanted,
+      capped,
+      got,
+      asked,
+      index: {
+        state: indexState,
+        cells: indexFact && indexFact.cellCount !== null ? indexFact.cellCount : null,
+        keys: indexFact && indexFact.cells ? indexFact.cells.size : null,
+        why: indexWhy,
+        attribution: indexFact && (indexFact.attribution || indexFact.source) || null,
+        real: indexFact ? indexFact.real : null
+      }
+    };
+  }
+  function planned() {
+    const v = opts.view();
+    const p = spec.plan(v.bounds, v.center, spec.maxCells);
+    if (!p) return null;
+    return { keys: p.cells.map((c) => c.key), wanted: p.wanted, capped: p.capped };
+  }
+  async function runOnce(why) {
+    const v = opts.view();
+    const p = spec.plan(v.bounds, v.center, spec.maxCells);
+    if (!p) return { planned: false, batch: 0, got: 0, capped: false };
+    asked = true;
+    wanted = p.wanted;
+    capped = p.capped;
+    const idx = await ensureIndex();
+    const todo = [];
+    for (const c of p.cells) {
+      if (opts.store.has(spec.sourceKey(c.key))) continue;
+      if (missing.has(c.key)) continue;
+      if (idx.cells) {
+        if (idx.cells.has(c.key)) todo.push(c);
+        else missing.add(c.key);
+        continue;
+      }
+      todo.push(c);
+    }
+    const batch = todo.slice(0, spec.perRefresh);
+    if (!batch.length) return { planned: true, batch: 0, got: 0, capped: p.capped };
+    pending += batch.length;
+    let n = 0;
+    for (const cell of batch) {
+      try {
+        const r = await opts.fetchCell(bundleCellUrl(opts.kind, cell.key), BUNDLE_TIMEOUT_MS);
+        if (r.status === 404) {
+          missing.add(cell.key);
+          continue;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        const feats = spec.parse(j);
+        opts.store.merge(feats, spec.sourceKey(cell.key));
+        have.add(cell.key);
+        got += feats.length;
+        n += feats.length;
+      } catch (e) {
+        failed.add(cell.key);
+        const why0 = String(e?.message || e || "取数失败").slice(0, 60);
+        opts.onError?.(`${spec.dir} ${cell.key} ${why0}`);
+      } finally {
+        pending -= 1;
+      }
+    }
+    try {
+      const c = opts.view().center;
+      if (c && Number.isFinite(c.lng) && Number.isFinite(c.lat)) {
+        opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
+      }
+    } catch {
+    }
+    opts.flush(`${why}+${batch.length}`);
+    return { planned: true, batch: batch.length, got: n, capped: p.capped };
+  }
+  return {
+    async refresh(why = "view") {
+      if (busy) {
+        queued = true;
+        return { planned: false, batch: 0, got: 0, capped };
+      }
+      busy = true;
+      try {
+        const r = await runOnce(why);
+        if (queued) {
+          queued = false;
+          const r2 = await runOnce(why);
+          return { planned: r.planned || r2.planned, batch: r.batch + r2.batch, got: r.got + r2.got, capped: r2.capped || r.capped };
+        }
+        return r;
+      } finally {
+        busy = false;
+      }
+    },
+    facts: counters,
+    plan: planned
+  };
+}
+async function loadBundleIndex(fetchCell, kind) {
+  const url = bundleIndexUrl(kind);
+  try {
+    const r = await fetchCell(url, BUNDLE_TIMEOUT_MS);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const rawCells = j?.cells && typeof j.cells === "object" ? Object.keys(j.cells) : null;
+    return {
+      kind,
+      url,
+      source: typeof j?.source === "string" && j.source ? j.source : null,
+      cellCount: num(j?.cellCount),
+      cells: rawCells ? new Set(rawCells) : null,
+      attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
+      real: typeof j?.real === "boolean" ? j.real : null
+    };
+  } catch {
+    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null };
+  }
+}
+function bundleCountsLine(f, icon, unit) {
+  if (!f.asked && f.have === 0 && f.missing === 0 && f.failed === 0) {
+    return `${icon} 离线格 未取（还没要数据）`;
+  }
+  const idx = f.index ? f.index.state === "已读" ? `（索引 ${f.index.cells === null ? "?" : f.index.cells} 格）` : f.index.state === "失败" ? "（索引失败：退回试格子）" : `（索引${f.index.state}）` : "";
+  const head = `${icon} 离线格 已取 ${f.have} / 包外 ${f.missing} / 失败 ${f.failed}${idx}`;
+  const pend = f.pending > 0 ? ` / 待取 ${f.pending}` : "";
+  const store = f.n === null ? "数不出来" : String(f.n);
+  const cap = f.capped ? `（视野共需 ${f.wanted === null ? "?" : f.wanted} 格，只取了最近的）` : "";
+  return `${head}${pend} · 仓库 ${store} ${unit}${cap}`;
+}
+function bldVerdictState(f) {
+  if (f.pending > 0 && f.n === 0 && f.have === 0) return "pending";
+  if (f.n === 0 && f.have === 0 && f.missing > 0) return "outside";
+  if (f.n === 0 && f.have === 0 && f.failed > 0 && f.missing === 0) return "failed";
+  return "bundle";
+}
+function roadsVerdictState(f) {
+  if (f.pending > 0 && f.n === 0 && f.have === 0) return "pending";
+  if (f.n === 0 && f.have === 0 && f.failed > 0 && f.missing === 0) return "failed";
+  return "bundle";
+}
+
 // src/components/views/worldsim/wsLabels.ts
+var PLACE_AREA_TYPES = ["suburb", "quarter", "borough"];
+var PLACE_LOCAL_TYPES = ["neighbourhood"];
+function placeTierOf(placeType) {
+  const t = String(placeType || "").trim().toLowerCase();
+  if (PLACE_AREA_TYPES.indexOf(t) >= 0) return "area";
+  if (PLACE_LOCAL_TYPES.indexOf(t) >= 0) return "local";
+  return null;
+}
 function labelPlanFor(zoom) {
   const z = Number.isFinite(zoom) ? Number(zoom) : 14;
   return {
     zoom: z,
     admin: true,
     // 行政名任何 zoom 都要（它就是"这是哪儿"）
-    place: z >= 13,
-    // 片区/小区名：中近景才有意义
+    /* `place` = "这一档**有没有**片区名可见"。因为**区片**名任何 zoom 都显示 ⇒ 恒 true；
+       真正的**分档**在 `labelItemAllowed()` 里按类型判（区片=placeArea / 小区=placeLocal）。 */
+    place: true,
+    placeArea: true,
+    // **区片**名：任何 zoom 都显示（"这是哪一片"）
+    placeLocal: z >= 11,
+    // **小区/街区**名：z≥11 才显示
     roadTrunk: z >= 11,
     // 主干道名
     roadSecondary: z >= 13,
@@ -1361,13 +1757,24 @@ function labelPriorityOf(it) {
       return 60;
     case "road_secondary":
       return 40;
+    /* 片区：**区片**（suburb/quarter/borough）比**小区**（neighbourhood）高一点点 ——
+       两者同属 `place` 档，但视野里同时有"渝中区/上清寺街道"和"某某小区"时，先保大的。
+       注意仍然低于次干道（40）—— 父代理定的顺序：行政 > 主干 > 次干 > 片区 > 楼名。 */
     case "place":
-      return 30;
+      return placeTierOf(it.placeType) === "area" ? 34 : 30;
     case "building":
       return 20;
     default:
       return 0;
   }
+}
+function labelItemAllowed(it, plan) {
+  if (!labelKindAllowed(it.kind, plan)) return false;
+  if (it.kind !== "place") return true;
+  const tier = placeTierOf(it.placeType);
+  if (tier === "area") return plan.placeArea;
+  if (tier === "local") return plan.placeLocal;
+  return false;
 }
 function labelKindAllowed(kind, plan) {
   switch (kind) {
@@ -1418,7 +1825,7 @@ function pickLabels(items, project, viewport, plan, opts = {}) {
       out.skippedSketch++;
       continue;
     }
-    if (!labelKindAllowed(it.kind, plan)) continue;
+    if (!labelItemAllowed(it, plan)) continue;
     const pt = project(it.lng, it.lat);
     if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) {
       out.skippedOffscreen++;
@@ -1508,6 +1915,28 @@ function buildingLabelsFrom(features) {
       lng: sx / ring.length,
       lat: sy / ring.length,
       source: "real"
+    });
+  }
+  return out;
+}
+function placeLabelsFrom(list) {
+  const out = [];
+  for (const it of list || []) {
+    const name = String(it && (it.n !== void 0 ? it.n : it.name) || "").trim();
+    if (!name) continue;
+    const type = String(it && (it.k !== void 0 ? it.k : it.kind) || "").trim().toLowerCase();
+    if (placeTierOf(type) === null) continue;
+    const lng = it && it.p && Number.isFinite(it.p[0]) ? Number(it.p[0]) : Number((it || {}).lng);
+    const lat = it && it.p && Number.isFinite(it.p[1]) ? Number(it.p[1]) : Number((it || {}).lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    out.push({
+      id: "place:" + (it.i || it.id || type + ":" + name),
+      kind: "place",
+      name,
+      lng,
+      lat,
+      source: "real",
+      placeType: type
     });
   }
   return out;
@@ -2083,7 +2512,11 @@ export {
   ANTENNA_M,
   ANTENNA_MIN_H,
   BLD_BUNDLE_CELL_DEG,
+  BLD_BUNDLE_MAX_CELLS,
+  BLD_BUNDLE_PER_REFRESH,
+  BLD_STORE_CAP,
   BUILDING_LAYER_ID,
+  BUNDLE_TIMEOUT_MS,
   CAMERA_DEFAULTS,
   EQUIP_MIN_AREA_M2,
   EQUIP_SIDE_MIN,
@@ -2106,6 +2539,12 @@ export {
   PARAPET_MIN_H,
   PARAPET_THICK_M,
   PITCH_SOFT,
+  PLACES_BUNDLE_CELL_DEG,
+  PLACES_BUNDLE_MAX_CELLS,
+  PLACES_BUNDLE_PER_REFRESH,
+  PLACES_STORE_CAP,
+  PLACE_AREA_TYPES,
+  PLACE_LOCAL_TYPES,
   PODIUM_H_MAX,
   PODIUM_H_MIN,
   PODIUM_H_RATIO,
@@ -2123,6 +2562,9 @@ export {
   PRERENDER_TILE_PATH,
   PRERENDER_TILE_SIZE,
   ROADS_BUNDLE_CELL_DEG,
+  ROADS_BUNDLE_MAX_CELLS,
+  ROADS_BUNDLE_PER_REFRESH,
+  ROADS_STORE_CAP,
   ROAD_LAYER_PREFIXES,
   ROAD_PALETTE_DARK,
   ROAD_RANK_STYLE,
@@ -2167,7 +2609,10 @@ export {
   bldBundleCellKey,
   bldBundleCellOf,
   bldBundleCellsForView,
+  bldIdOf,
   bldLiveDecision,
+  bldPointOf,
+  bldVerdictState,
   bldVerdictText,
   buildSkyGeometry,
   buildTransport,
@@ -2176,12 +2621,19 @@ export {
   buildingMasses,
   buildingPartSet,
   buildingParts,
+  bundleBuildingsOf,
   bundleCellKey,
   bundleCellOf,
+  bundleCellUrl,
   bundleCellsForView,
+  bundleCountsLine,
+  bundleIndexUrl,
+  bundlePlacesOf,
+  bundleRoadsOf,
   cameraDefaults,
   contrastRatio,
   contrastReport,
+  createBundleFeed,
   createFeatureStore,
   decorateBuildings,
   equipBoxes,
@@ -2189,6 +2641,7 @@ export {
   fetchRadiusForZoom,
   fetchRadiusLadder,
   fetchRadiusRound,
+  fetchWithTimeout,
   fmtCount,
   footprintMetrics,
   hash32,
@@ -2199,10 +2652,12 @@ export {
   insetRingMeters,
   junctions,
   labelBox,
+  labelItemAllowed,
   labelKindAllowed,
   labelPlanFor,
   labelPriorityOf,
   layerOrderHud,
+  loadBundleIndex,
   lodEventTileKey,
   lodHudLine,
   lodLayerSpec,
@@ -2228,6 +2683,12 @@ export {
   panDamping,
   pickLabels,
   pitchGuardParams,
+  pixelRatioForTier,
+  placeLabelsFrom,
+  placeTierOf,
+  placesBundleCellsForView,
+  placesIdOf,
+  placesPointOf,
   planEnsureRoadOrder,
   pointInRing,
   prerenderSourceOf,
@@ -2247,8 +2708,11 @@ export {
   roadsBundleCellKey,
   roadsBundleCellOf,
   roadsBundleCellsForView,
+  roadsIdOf,
   roadsLiveDecision,
+  roadsPointOf,
   roadsRadiusFor,
+  roadsVerdictState,
   roadsVerdictText,
   sceneGroupOf,
   sceneLayerPlan,

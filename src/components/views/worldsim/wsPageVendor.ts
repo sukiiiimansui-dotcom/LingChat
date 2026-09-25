@@ -17,7 +17,10 @@ export * from "./wsScene";
 /* 🧱 **累积式要素仓库 + 离线路面包**（机主 2026-09-25：「之前的没了…必须保证视野内完整」）：
    `createFeatureStore()` 去重/淘汰/统计 + `roadsBundleCellsForView()` 算"视野需要哪些离线格"。
    ⚠️ 纯逻辑，页面与 App 共用同一份（不许第二套合并/淘汰）。 */
-export * from "./wsFeatureStore"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
+export * from "./wsFeatureStore";
+/* 🏷 **地名/楼名标签层**（机主 2026-09-25：「如何实现楼房及区域名字喵」）：分层规则 + 避让 + 优先级 + 只用真名字。
+   ⚠️ 纯逻辑；页面只做 DOM 渲染与接线（MapLibre 的 glyphs 文字层在本项目是禁用项）。 */
+export * from "./wsLabels"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
 /* 🏢 楼房**形体细化**（2026-09-24）：代拍页 `?bld=2` 用 `decorateBuildings(fc, ramp, {mode:"detail"})`
    生成裙楼/塔楼/退台/女儿墙/设备箱，并拿 `shapeCountsLine()`/`shapeCountRows()` 做回证；
    `windowPatternSpec()` 供 `?win=1` 的窗格层。

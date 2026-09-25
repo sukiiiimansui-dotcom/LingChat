@@ -134,6 +134,9 @@
       <!-- 🎨 主题那一格：**主题没到位必须一眼看见**（2026-09-25 机主的误解就是"静默换了一套观感"）。
            退化态（缓存 / 未加载）整格标红并可点重试。 -->
       <span class="w" id="m-theme">🎨 主题 —</span>
+      <!-- 🏷 标签层回证（机主 2026-09-25：「如何实现楼房及区域名字喵」）：
+           显示 N / 丢弃 M（避让）/ 上限 L —— 可数口径，便于对着 fps 判断。 -->
+      <span class="w" id="m-labels">🏷 标签 —</span>
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
       <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
@@ -185,7 +188,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v20";
+      const BUILD = "ws3dshow-2026-09-25-v21";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1121,6 +1124,110 @@
         if (ops.length) { try { renderRoadHud(); } catch (e) { /* 忽略 */ } }
       }
 
+      /* ══ 🏷 **标签层（DOM）** —— 机主 2026-09-25：「**如何实现楼房及区域名字喵**」══════════
+         🔴 **不用 MapLibre 的文字层**：我们的样式里 `glyphs` 是禁用项（`glyphs: undefined` ⇒
+            样式校验失败 ⇒ `load` 永不触发 ⇒ 整张地图全白且零报错，项目里栽过）；
+            要中文得自托管 glyphs PBF + 生成工具链 ⇒ 不值。⇒ **DOM 标签**（先例：domPins / 头像标签）。
+         🔴 分层/避让/优先级/上限**全在 `wsLabels.ts`**（纯函数，App 复用）；本页只负责
+            "取数据 → 调 pickLabels → 写 DOM"，且**只在 moveend/zoomend/新数据到达时**跑一次
+            （**绝不在 render 循环里做布局** —— 那是 fps 杀手）。
+         🔴 铁律：**缺名字不显示、不编名字**；每个标签带 `source`，喂判断的只有 real。 */
+      const LABELS_ON = (function () { try { return !/[?&]labels=0\b/.test(location.search); } catch (e) { return true; } })();
+      let labelItems = { admin: [], road: [], bld: [] };
+      let labelShown = [];
+      let labelStat = { shown: 0, dropped: 0, cap: 0, capped: false, ms: null, err: "" };
+
+      function labelContainer() {
+        let el = document.getElementById("ws-labels");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "ws-labels";
+          el.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:6;overflow:hidden";
+          const host = map.getContainer();
+          host.appendChild(el);
+        }
+        return el;
+      }
+
+      /** 取"有名字的真实名字"（路名来自仓库 / 楼名来自最近一次取楼的 FC / 行政名来自定位） */
+      function collectLabelItems() {
+        const TFx = window.__TF__;
+        if (!TFx) return;
+        const kindOfRank = (rank) => (rank <= 1 ? "road_trunk" : "road_secondary");
+        const st = roadsStoreOf();
+        if (st && typeof TFx.roadLabelsFrom === "function") {
+          labelItems.road = TFx.roadLabelsFrom(st.features(), kindOfRank);
+        }
+        if (typeof TFx.buildingLabelsFrom === "function") {
+          const fc = window.__LASTFC__;
+          labelItems.bld = fc && fc.features ? TFx.buildingLabelsFrom(fc.features) : [];
+        }
+        if (!labelItems.admin.length && SPOT && Number.isFinite(SPOT.lng) && typeof TFx.adminLabelsFrom === "function") {
+          /* ⚠️ **只用真名字**：`SPOT.name` 是页面里那份定位/默认落点的名字（DataV 口径），不是编的；
+             没拿到就空着 —— HUD 如实写"行政名 0（还没取到）"，绝不造一个。 */
+          labelItems.admin = SPOT.name ? TFx.adminLabelsFrom([{ id: "spot", name: SPOT.name, lng: SPOT.lng, lat: SPOT.lat, level: 3 }]) : [];
+        }
+      }
+
+      /** 布局 + 写 DOM（**只在事件里调**） */
+      function refreshLabels(why) {
+        const el = $("m-labels");
+        if (!LABELS_ON) { if (el) el.textContent = "🏷 标签 关（?labels=0）"; return; }
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.pickLabels !== "function" || typeof TFx.labelPlanFor !== "function") {
+          labelStat.err = "模块缺 pickLabels（" + tfState + "）";
+          if (el) el.textContent = "🏷 标签 数不出来：" + labelStat.err;
+          return;
+        }
+        const t0 = Date.now();
+        collectLabelItems();
+        const plan = TFx.labelPlanFor(map.getZoom());
+        const cv = map.getCanvas ? map.getCanvas() : null;
+        const size = { width: (cv && cv.clientWidth) || 400, height: (cv && cv.clientHeight) || 400 };
+        const r = TFx.pickLabels(
+          labelItems.admin.concat(labelItems.road, labelItems.bld),
+          (lng, lat) => map.project([lng, lat]),
+          size, plan, {},
+        );
+        labelShown = r.shown;
+        labelStat = {
+          shown: r.shown.length, dropped: r.droppedByCollision, cap: r.droppedByCap, capped: r.capped,
+          candidates: r.candidates, noName: r.skippedNoName, sketch: r.skippedSketch, offscreen: r.skippedOffscreen,
+          ms: Date.now() - t0, err: "",
+        };
+        renderLabelDom();
+        if (el) {
+          el.textContent = `🏷 标签 ${r.shown.length} 显示 / ${r.droppedByCollision} 丢弃（避让）`
+            + (r.droppedByCap ? ` / ${r.droppedByCap} 超上限` : "")
+            + `（候选 ${r.candidates} · 上限 ${plan.cap} · 无名字跳过 ${r.skippedNoName} · 视野外 ${r.skippedOffscreen} · ${labelStat.ms}ms）`;
+          el.title = "分层：z≤10 只行政名 / z11~12 +主干路名 / z13+ +次干道·楼名·片区名（阈值在 wsLabels.labelPlanFor）\n"
+            + "**只在 moveend/zoomend 更新**（不在 render 循环里做布局）\n"
+            + "铁律：缺名字不显示、不编名字；标签带 source，喂判断的只有 real";
+        }
+        window.__LABELS__ = labelStat;
+      }
+
+      /** 写 DOM（复用节点池；一次更新完，不逐条 insert） */
+      function renderLabelDom() {
+        try {
+          const box = labelContainer();
+          while (box.childNodes.length > labelShown.length) box.removeChild(box.lastChild);
+          for (let i = 0; i < labelShown.length; i++) {
+            const l = labelShown[i];
+            let node = box.childNodes[i];
+            if (!node) { node = document.createElement("div"); box.appendChild(node); }
+            node.textContent = l.name;
+            node.style.cssText = "position:absolute;transform:translate(-50%,-50%);white-space:nowrap;"
+              + "font-size:" + (l.kind === "admin" ? "12px" : "11px") + ";"
+              + "color:" + (l.kind === "admin" ? "#0d2a3a" : l.kind === "building" ? "#274156" : "#1d3b52") + ";"
+              + "text-shadow:0 1px 0 rgba(255,255,255,.75);"
+              + "font-weight:" + (l.kind === "admin" ? "700" : "500") + ";"
+              + "left:" + l.x + "px;top:" + l.y + "px";
+            node.title = l.kind + " · " + l.source;
+          }
+        } catch (e) { errs.push("labels " + e); }
+      }
+
       /** 🛣 离线包那一行的口径（可数：已取格 / 待取格 / 包里没有的格 / 失败的格） */
       function roadsBundleLine() {
         const st = roadsStoreOf();
@@ -1935,6 +2042,7 @@
         roadN = TF2visibleRoadCount(feats);
         window.__ROADS_STORE__ = Object.assign({ why: why, evicted: ev, hunks: roadsHunkStat() }, st.stats());
         renderRoadHud();
+        try { if (typeof refreshLabels === "function") refreshLabels("roads"); } catch (e) { /* 标签失败不影响地图 */ }
       }
       function TF2visibleRoadCount(feats) {
         const TF2 = window.__TF__;
@@ -2222,6 +2330,7 @@
         if (map.getSource("bld")) map.getSource("bld").setData(data);
         else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
         renderBldBadge(); // 🏢 回证（各细节生成了多少 + 档位）随每次取楼刷新
+        try { refreshLabels("buildings"); } catch (e) { /* 标签失败不影响地图 */ }   // 🏷 楼名到位后重排一次
       }
 
       /**
@@ -2392,6 +2501,9 @@
         map.on("moveend", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });
         /* 🛣 视野变了就补离线格（静态文件、后台、一次最多几格；live 那条**不**在这里打 —— 任务 A 否决） */
         map.on("moveend", () => { try { void refreshRoadsBundle(); } catch (e) { errs.push("bundle " + e); } });
+        /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
+        map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } });
+        map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
         /* ☁️ art=3：天空叠加重画（moveend 时重画一次即可 —— 几何是确定性的，不会抖） */
         map.on("moveend", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });
         map.on("pitch", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });

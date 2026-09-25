@@ -844,10 +844,22 @@ function roadsRadiusFor(buildingsRadius) {
   const capped = want > WS_ROADS_R_MAX;
   return { radius: WS_ROADS_R_MAX, wanted: capped ? want : WS_ROADS_R_MAX, capped, why: capped ? WS_ROADS_LIMIT_WHY : null };
 }
+var WS_ROADS_LIVE_DEFAULT = false;
+var WS_ROADS_LIVE_VERDICT = "默认不发 /api/roads：现场 Overpass 冷查是分钟级（分块实测 17.6~56.2s/块、4 块 1 失败），600m 只有**缓存命中**才 0.1~1s ⇒ 默认 0 条，路走离线路面包 + 预渲染瓦片；要现场取数加 ?live=1";
+function roadsLiveDecision(input) {
+  if (input && input.forceLive === true) {
+    return { live: true, why: "URL 显式 ?live=1 ⇒ 现场取数（明知冷查可能撞 12s 超时，失败会如实报出来）" };
+  }
+  return { live: false, why: WS_ROADS_LIVE_VERDICT };
+}
 function roadsVerdictText(input) {
   const r = input.radius === null || input.radius === void 0 ? "?" : String(Math.round(input.radius));
   const cap = input.capped ? `（半径已封顶；本想要 ${Math.round(Number(input.wanted) || 0)}m —— ${input.why || ""}）` : "";
   if (input.state === "off") return "🛣 未开（?roads=0）";
+  if (input.state === "bundle") {
+    const nb = input.n === null || input.n === void 0 ? "数不出来" : String(input.n);
+    return `🛣 离线包 offline-first（仓库 ${nb} 条；**默认不发 /api/roads**：冷查分钟级 ⇒ 要现场取数加 ?live=1）`;
+  }
   if (input.state === "pending") return `🛣 取数中…（r=${r}m${cap}）`;
   if (input.state === "failed") return `🛣 取数**失败**：${input.err || "原因未知"}（r=${r}m${cap}）—— 不是「这一带没有路」`;
   const n = input.n === null || input.n === void 0 ? "数不出来" : input.n === 0 ? "0（已量：后端返回 0 条）" : String(input.n);
@@ -2103,6 +2115,8 @@ export {
   WS_FETCH_R_SOURCE_MAX,
   WS_ROADS_CHUNKING_VERDICT,
   WS_ROADS_LIMIT_WHY,
+  WS_ROADS_LIVE_DEFAULT,
+  WS_ROADS_LIVE_VERDICT,
   WS_ROADS_R_MAX,
   WS_SCENE_SOURCE,
   adminLabelsFrom,
@@ -2183,6 +2197,7 @@ export {
   roadsBundleCellKey,
   roadsBundleCellOf,
   roadsBundleCellsForView,
+  roadsLiveDecision,
   roadsRadiusFor,
   roadsVerdictText,
   sceneGroupOf,

@@ -1,86 +1,76 @@
-import { ref, watch } from "vue";
+import { ref, watch } from 'vue'
 
 /** 世界地图叠加层的显示模式 */
-export type WorldLayerMode = "off" | "overlay" | "corner";
+export type WorldLayerMode = 'off' | 'overlay' | 'corner'
 
 export interface WorldLayerState {
   /** off=不显示 / overlay=全屏半透明背景层 / corner=右下角小窗 */
-  mode: WorldLayerMode;
+  mode: WorldLayerMode
   /** overlay 模式的不透明度 0-1 */
-  opacity: number;
+  opacity: number
   /** corner 模式的小窗位置（px，左上角） */
-  x: number;
-  y: number;
+  x: number
+  y: number
   /** 显示哪个区域（adcode），空则按定位 */
-  adcode: string;
-  style: string;
+  adcode: string
+  style: string
 }
 
-// localStorage 键名：与其他地图设置一样走 `lingchat.` 前缀（品牌一致，
-// 也避免与开发线上遗留的 `lsyuki.*` 键混在一起）。
-const KEY = "lingchat.worldLayer";
+const KEY = 'lsyuki.worldLayer'
 
 function load(): WorldLayerState {
-  const def: WorldLayerState = {
-    mode: "off",
-    opacity: 0.28,
-    x: -1,
-    y: -1,
-    adcode: "",
-    style: "gaode",
-  };
+  const def: WorldLayerState = { mode: 'off', opacity: 0.28, x: -1, y: -1, adcode: '', style: 'gaode' }
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return def;
-    const o = JSON.parse(raw);
+    const raw = localStorage.getItem(KEY)
+    if (!raw) return def
+    const o = JSON.parse(raw)
     return {
-      mode: o.mode === "overlay" || o.mode === "corner" ? o.mode : "off",
-      opacity:
-        typeof o.opacity === "number" ? Math.min(0.9, Math.max(0.05, o.opacity)) : def.opacity,
-      x: typeof o.x === "number" ? o.x : -1,
-      y: typeof o.y === "number" ? o.y : -1,
-      adcode: typeof o.adcode === "string" ? o.adcode : "",
-      style: typeof o.style === "string" ? o.style : "gaode",
-    };
+      mode: o.mode === 'overlay' || o.mode === 'corner' ? o.mode : 'off',
+      opacity: typeof o.opacity === 'number' ? Math.min(0.9, Math.max(0.05, o.opacity)) : def.opacity,
+      x: typeof o.x === 'number' ? o.x : -1,
+      y: typeof o.y === 'number' ? o.y : -1,
+      adcode: typeof o.adcode === 'string' ? o.adcode : '',
+      style: typeof o.style === 'string' ? o.style : 'gaode',
+    }
   } catch {
-    return def;
+    return def
   }
 }
 
 /** 模块级单例：任何组件/页面都能控制同一份状态 */
-const state = ref<WorldLayerState>(load());
+const state = ref<WorldLayerState>(load())
 
 watch(
   state,
   (v) => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(v));
+      localStorage.setItem(KEY, JSON.stringify(v))
     } catch {
       /* 存储不可用不影响功能 */
     }
   },
-  { deep: true }
-);
+  { deep: true },
+)
 
 export function useWorldMapLayer() {
   function setMode(m: WorldLayerMode) {
-    state.value.mode = m;
+    state.value.mode = m
   }
   function cycleMode() {
-    const order: WorldLayerMode[] = ["off", "overlay", "corner"];
-    const i = order.indexOf(state.value.mode);
-    state.value.mode = order[(i + 1) % order.length];
+    const order: WorldLayerMode[] = ['off', 'overlay', 'corner']
+    const i = order.indexOf(state.value.mode)
+    state.value.mode = order[(i + 1) % order.length]
   }
   function setOpacity(v: number) {
-    state.value.opacity = Math.min(0.9, Math.max(0.05, v));
+    state.value.opacity = Math.min(0.9, Math.max(0.05, v))
   }
   function setPos(x: number, y: number) {
-    state.value.x = x;
-    state.value.y = y;
+    state.value.x = x
+    state.value.y = y
   }
   function setRegion(adcode: string, style?: string) {
-    state.value.adcode = adcode;
-    if (style) state.value.style = style;
+    state.value.adcode = adcode
+    if (style) state.value.style = style
   }
-  return { state, setMode, cycleMode, setOpacity, setPos, setRegion };
+  return { state, setMode, cycleMode, setOpacity, setPos, setRegion }
 }

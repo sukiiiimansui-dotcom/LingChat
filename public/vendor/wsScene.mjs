@@ -746,13 +746,14 @@ function lodTierLabel(tier) {
   if (tier === "vector") return `实时矢量（z≥${LOD_NEAR_ZOOM}）`;
   return `过渡中（${LOD_FAR_ZOOM}~${LOD_NEAR_ZOOM}）`;
 }
-var LOD_OPACITY_ZERO_ZOOM = 13.5;
+var LOD_OPACITY_ZERO_ZOOM = 14;
 var LOD_OPACITY_STOPS = [
   [9, 1],
   [10, 1],
   [11, 0.72],
   [12, 0.45],
-  [13, 0.18],
+  [13, 0.25],
+  [13.5, 0.12],
   [LOD_OPACITY_ZERO_ZOOM, 0]
 ];
 function lodOpacityAt(zoom) {
@@ -2281,6 +2282,53 @@ function pickBuildingsForView(feats, input) {
   };
   return { features: chosen, stats };
 }
+var WS_BLD_CELL_CAP = 100;
+var WS_BLD_CELL_DEG = 0.02;
+function capBuildingsPerCell(feats, input = {}) {
+  const size = Number.isFinite(input.cellDeg) && input.cellDeg > 0 ? input.cellDeg : WS_BLD_CELL_DEG;
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
+  const byCell = /* @__PURE__ */ new Map();
+  let noPoint = 0;
+  for (const f of feats) {
+    const pt = firstPoint(f);
+    if (!pt) {
+      noPoint++;
+      continue;
+    }
+    const w = Math.floor(pt[0] / size) * size;
+    const s = Math.floor(pt[1] / size) * size;
+    const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? "") };
+    const arr = byCell.get(cell);
+    if (arr) arr.push(it);
+    else byCell.set(cell, [it]);
+  }
+  const chosen = [];
+  const rows = [];
+  let dropped = 0;
+  for (const cell of [...byCell.keys()].sort()) {
+    const arr = byCell.get(cell);
+    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+    const take = arr.slice(0, cap);
+    for (const x of take) chosen.push(x.f);
+    rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
+    dropped += arr.length - take.length;
+  }
+  return {
+    features: chosen,
+    stats: {
+      considered: feats.length,
+      cells: byCell.size,
+      cap,
+      cellDeg: size,
+      byCell: rows,
+      chosen: chosen.length,
+      dropped,
+      noPoint,
+      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${chosen.length} 栋（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`
+    }
+  };
+}
 
 // src/components/views/worldsim/wsBldGl.ts
 var R = 6378137;
@@ -3185,6 +3233,8 @@ export {
   WHEEL_ZOOM_RATE,
   WIN_MIN_H,
   WIN_PATTERN_SIZE,
+  WS_BLD_CELL_CAP,
+  WS_BLD_CELL_DEG,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
   WS_BLD_VIEW_CAP,
@@ -3229,6 +3279,7 @@ export {
   bundlePlacesOf,
   bundleRoadsOf,
   cameraDefaults,
+  capBuildingsPerCell,
   contrastRatio,
   contrastReport,
   createBldGlLayer,

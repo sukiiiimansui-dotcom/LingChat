@@ -91,10 +91,54 @@
       /* 🛰 LOD 徽标（`?lod=1`）：颜色与另外两枚区分开，点开是逐项回证 */
       #lodb .artb__h { color: #8fd3ff; }
       .artb__skip { color: #d0b6ff; }
+      /* ══ 🗄 诊断抽屉（2026-09-25 机主：「把诊断改成抽屉式打开，后面是要与角色在里面对话的」）══
+         为什么：诊断件以前是**浮在地图上的面板**（点开就盖住视野）；改成**从左边缘滑出的抽屉**，
+         默认只留一条竖排把手 ⇒ 地图永远看得见。抽屉里同时**预留了角色对话区**（`#wsdrawer-chat`）。
+         规矩：抽屉**不自动打开**（有问题只在把手上显示 ❌ 数字），也不允许铺满整屏（宽度上限 86vw / 460px）。 */
+      #wsdrawer-tab { position: fixed; left: 0; top: 96px; z-index: 32; cursor: pointer;
+        padding: 10px 6px; border-radius: 0 10px 10px 0; background: rgba(26, 26, 26, 0.94);
+        color: #ffffff; font-size: 11px; font-weight: 700; writing-mode: vertical-rl;
+        border: 1px solid #3a3a3a; border-left: none; user-select: none; }
+      #wsdrawer-tab .badge { color: #ff7b72; }
+      #wsdrawer { position: fixed; left: 0; top: 0; bottom: 0; z-index: 33;
+        width: min(86vw, 460px); max-width: 460px; background: #1a1a1a;
+        border-right: 1px solid #3a3a3a; transform: translateX(-102%);
+        transition: transform 0.22s ease; display: flex; flex-direction: column;
+        color: #eaf6ff; font-size: 11px; box-shadow: 6px 0 22px rgba(0, 0, 0, 0.35); }
+      #wsdrawer.open { transform: translateX(0); }
+      #wsdrawer-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+        border-bottom: 1px solid #3a3a3a; font-weight: 700; color: #ffffff; }
+      #wsdrawer-h .sp { flex: 1; }
+      #wsdrawer-h button { padding: 4px 10px; border-radius: 8px; cursor: pointer;
+        border: 1px solid #0d47a1; background: rgba(13, 71, 161, 0.35); color: #ffffff; }
+      #wsdrawer-b { flex: 1; overflow: auto; padding: 8px 10px; overscroll-behavior: contain; }
+      /* 抽屉里的诊断件**取消 fixed 定位**（它们在抽屉里只是普通块，各自仍可点标题展开/收起） */
+      #wsdrawer-b .artb, #wsdrawer-b .badgesL { position: static; left: auto; right: auto; top: auto;
+        max-width: none; background: rgba(255, 255, 255, 0.04); margin-bottom: 6px; }
+      #wsdrawer-b .bldb { max-width: none; }
+      #wsdrawer-chat { margin-top: 10px; padding: 8px 10px; border-radius: 10px;
+        border: 1px dashed rgba(121, 217, 255, 0.35); color: #b9d7ef; line-height: 1.6; }
+      #wsdrawer-hint { opacity: 0.75; }
     </style>
   </head>
   <body>
     <div id="map"></div>
+    <!-- 🗄 诊断抽屉（详见样式里那段注释）：默认只留左边一条把手；`#wsdrawer-chat` 是**角色对话的预留位** -->
+    <div id="wsdrawer-tab" title="点这里拉出诊断抽屉（后面角色对话也在这里）">🗄 诊断<span class="badge" id="wsdrawer-badge"></span></div>
+    <div id="wsdrawer">
+      <div id="wsdrawer-h">
+        <span>🗄 诊断 / 对话</span><span class="sp"></span>
+        <button id="wsdrawer-close" type="button">收起</button>
+      </div>
+      <div id="wsdrawer-b">
+        <div id="wsdrawer-hint">地图永远看得见：抽屉只在需要时从左边缘拉出。<br />下面这些是诊断件（点各自标题展开）；<b>将来与角色的对话就放在最下面那块</b>。</div>
+      </div>
+      <div id="wsdrawer-chat">
+        💬 <b>角色对话（预留位）</b><br />
+        这里以后放世界模拟里的角色对话：地图上的人物/设施 ↔ 对话流。
+        现在先把容器占好，等对话接上来时**不用再动布局**。
+      </div>
+    </div>
     <!-- 🎨 art 变体徽标 + **回证表**（机主第一反馈"这变了个啥"⇒ 先证明补丁真的生效） -->
     <div id="artb" class="artb">
       <div id="artb-head" class="artb__h">art=1（基准）</div>
@@ -209,7 +253,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v30";
+      const BUILD = "ws3dshow-2026-09-25-v32";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -528,6 +572,7 @@
         return [
           {
             id: "bld-shadow", type: "fill", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
             paint: {
               "fill-color": s.color,
               "fill-opacity": s.opacity,
@@ -537,6 +582,7 @@
           },
           {
             id: "bld-ao", type: "line", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
             paint: {
               "line-color": s.color,
               "line-opacity": Math.min(1, s.opacity + 0.15),
@@ -566,6 +612,7 @@
         return bldShadowLayers().concat([
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
             paint: {
               /* 按**渲染高度**上色：矮的沉下去、高的亮起来 ⇒ 一眼看出天际线的高低起伏。
                  （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。）
@@ -585,6 +632,7 @@
                BA 风的地面(0.919)和矮楼(0.87)亮度几乎一样，全靠这条深藏青细线把楼"勾"出来。
                🎮 `?look=2` 地面压暗之后，这条线**翻成亮线**（深底亮线），颜色同样来自主题。 */
             id: "bld-line", type: "line", source: "bld",
+            minzoom: 14,   /* 同上：与矢量层/瓦片交接点统一 */
             paint: {
               "line-color": outline.color,
               /* 🎨 art=2：描边**随 zoom 变细/变粗**（近粗 ⇒ 动画感；远细 ⇒ 不糊成一片）。
@@ -628,6 +676,7 @@
           },
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
             paint: {
               /* 高度**硬边分档**（step）：低/中/高各一段，密集俯视下也读得出高矮 */
               "fill-extrusion-color": ["step", ["get", "h3d"], t1, Math.max(6, hi * 0.25), t2, Math.max(20, hi * 0.6), t3],
@@ -639,6 +688,7 @@
           },
           {
             id: "bld-line", type: "line", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
             /* 🔴 **只给大脚印描边**：`small` 是页面在准备要素时算好的 0/1（脚印面积 < BST_SMALL_M2） */
             filter: ["!=", ["get", "small"], 1],
             paint: { "line-color": outline.color, "line-width": outline.width },
@@ -650,6 +700,7 @@
       function bldLineLayer(outline) {
         return {
           id: "bld-line", type: "line", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
           paint: {
             "line-color": outline.color,
             "line-width": ART >= 2 ? outlineWidthExpr() : outline.width,
@@ -677,6 +728,7 @@
         };
         const colorLayer = {
           id: "bld-ext", type: "fill-extrusion", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
           paint: {
             ...paintCommon,
             /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）。
@@ -687,6 +739,7 @@
         if (WINS) colorLayer.filter = ["!=", ["get", "win"], 1]; // 与窗格层互补
         const winLayer = {
           id: "bld-win", type: "fill-extrusion", source: "bld",
+            minzoom: 14,   /* 🔴 z≥14 才画（与共享常量统一；14 以下交给预渲染瓦片）*/
           filter: ["==", ["get", "win"], 1],
           paint: { ...paintCommon, "fill-extrusion-pattern": WIN_IMAGE_ID },
         };
@@ -748,6 +801,11 @@
       const GLBN = (function () {
         try { const m = /[?&]glbn=(\d+)/.exec(location.search); return m ? Math.max(0, parseInt(m[1], 10)) : 20000; }
         catch (e) { return 20000; }
+      })();
+      /* 🧱 区块边长（度）：0.02° ≈ 2.2km —— "小范围一个区块"；`?bldcell=` 可调 */
+      const BLDCELL = (function () {
+        try { const m = /[?&]bldcell=([0-9.]+)/.exec(location.search); return m ? Math.max(0.002, Math.min(0.2, parseFloat(m[1]))) : 0.02; }
+        catch (e) { return 0.02; }
       })();
       const BLDN_NEAR_ZOOM = (function () {
         try { const v = window.__TF__ && window.__TF__.WS_BLD_VECTOR_MINZOOM; return typeof v === "number" ? v : 12.8; }
@@ -2347,8 +2405,10 @@
         try {
           const TFp = window.__TF__;
           const z = map.getZoom();
-          if (TFp && typeof TFp.pickBuildingsForView === "function" && BLDN > 0 && z >= BLDN_NEAR_ZOOM) {
-            const r = TFp.pickBuildingsForView(all.features, { bounds: map.getBounds(), center: map.getCenter(), cap: BLDN });
+          /* 🧱 **按区块封顶**（机主更正：「小范围一个区块最高 100 栋」，且**不许挪视野就乱变**）：
+             挑选只依赖**区块**（固定经纬格），与视野/中心无关 ⇒ 同一块永远同一批。 */
+          if (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && z >= BLDN_NEAR_ZOOM) {
+            const r = TFp.capBuildingsPerCell(all.features, { cap: BLDN, cellDeg: BLDCELL });
             data = { type: "FeatureCollection", features: r.features };
             pickWhy = r.stats.why;
             window.__BLD_PICK__ = r.stats;
@@ -3703,6 +3763,37 @@
     <script>
       /* 📋 日志面板接线（**只在展开时**每 2s 刷新；收起时零开销）。
          报告文本来自共享真源 `wsLog.text(envSnapshot(...))` —— 页面不自己拼格式。 */
+      /* 🗄 抽屉接线（2026-09-25 机主：「把诊断改成抽屉式打开」）：
+         ① 把**已有的诊断件**（artb/bldb/lookb/lodb/logb）搬进抽屉 —— 不重写它们的标记/逻辑，
+            只改父节点 ⇒ 它们各自的"点标题展开/收起"照旧可用，但展开的只是抽屉里的一块，**不再盖地图**；
+         ② 抽屉**不自动打开**；有问题时在把手上显示 ❌ 数字（一眼可见，又不挡视野）；
+         ③ 后面接角色对话时，往 `#wsdrawer-chat` 里填内容即可，布局不用再动。 */
+      (function () {
+        var tab = document.getElementById("wsdrawer-tab"), dw = document.getElementById("wsdrawer");
+        var body = document.getElementById("wsdrawer-b"), badge = document.getElementById("wsdrawer-badge");
+        if (!tab || !dw || !body) return;
+        var moved = 0;
+        for (var id of ["artb", "bldb", "lookb", "lodb", "logb"]) {
+          var el = document.getElementById(id);
+          if (el) { body.appendChild(el); moved++; }
+        }
+        var hint = document.getElementById("wsdrawer-hint");
+        if (hint) hint.textContent = "地图永远看得见：抽屉只在需要时从左边缘拉出（已装 " + moved + " 个诊断件；点各自标题展开）。与角色的对话将来放在最下面那块。";
+        function setOpen(v) { dw.classList.toggle("open", !!v); tab.style.opacity = v ? "0.35" : "1"; }
+        tab.onclick = function () { setOpen(!dw.classList.contains("open")); };
+        document.getElementById("wsdrawer-close").onclick = function () { setOpen(false); };
+        document.addEventListener("keydown", function (e) { if (e.key === "Escape") setOpen(false); });
+        window.__WSDRAWER__ = { open: function () { setOpen(true); }, close: function () { setOpen(false); }, moved: moved };
+        /* 🔴 把手上的 ❌ 数字：从 wsLog 的 error 计数取（**数不出来就不显示**，不写 0 冒充） */
+        setInterval(function () {
+          try {
+            var c = window.__WSLOG__ && window.__WSLOG__.counts ? window.__WSLOG__.counts() : null;
+            badge.textContent = (c && c.error > 0) ? "❌" + c.error : "";
+            badge.style.color = "#ff7b72";
+          } catch (e) { /* 忽略 */ }
+        }, 2000);
+      })();
+
       (function () {
         var head = document.getElementById("logb-head"), body = document.getElementById("logb-body");
         var pre = document.getElementById("logb-pre"), note = document.getElementById("logb-note");

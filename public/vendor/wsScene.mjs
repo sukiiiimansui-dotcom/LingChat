@@ -2692,6 +2692,164 @@ function toggleTask(state, taskId, done) {
   return { day: state.day, tasks };
 }
 
+// src/components/views/worldsim/wsNameGen.ts
+var WS_GEN_TAG = "生成·示意";
+var PREFIX = [
+  "老街",
+  "巷口",
+  "三元",
+  "李家",
+  "张记",
+  "王姐",
+  "陈氏",
+  "转角",
+  "南门",
+  "北巷",
+  "桥头",
+  "半边街",
+  "小院",
+  "新华",
+  "民主",
+  "建设",
+  "和平",
+  "长江",
+  "嘉陵",
+  "山城"
+];
+var SHOP = [
+  "小面",
+  "抄手",
+  "火锅",
+  "串串",
+  "茶馆",
+  "理发",
+  "药房",
+  "烟酒",
+  "五金",
+  "裁缝",
+  "文具",
+  "水果",
+  "早餐",
+  "卤味",
+  "凉菜",
+  "炒货",
+  "糖水",
+  "奶茶",
+  "糕点",
+  "照相",
+  "洗衣",
+  "快递代收",
+  "杂货",
+  "粮油",
+  "修车",
+  "锁匠",
+  "钟表",
+  "花店",
+  "布艺",
+  "家电维修"
+];
+var STALL = [
+  "烤红薯",
+  "糖炒栗子",
+  "凉粉",
+  "豆花",
+  "冰粉",
+  "煎饼",
+  "油茶",
+  "锅盔",
+  "串串香",
+  "酸辣粉",
+  "手工糍粑",
+  "鲜榨果汁",
+  "烤玉米",
+  "卤鸭脖",
+  "炸洋芋",
+  "抄手皮",
+  "麻花",
+  "糍粑块",
+  "凉虾",
+  "棉花糖"
+];
+var SUFFIX = ["店", "铺", "馆", "行", "坊", "屋", "站"];
+function hash32(s) {
+  let h = 2166136261;
+  const str = String(s ?? "");
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+  }
+  return h >>> 0;
+}
+function genName(id, kind = "shop") {
+  const h = hash32(String(id ?? "") + "|" + kind);
+  const p = PREFIX[h % PREFIX.length];
+  if (kind === "stall") {
+    const s2 = STALL[(h >>> 8) % STALL.length];
+    return p + s2;
+  }
+  const s = SHOP[(h >>> 8) % SHOP.length];
+  const suf = SUFFIX[(h >>> 16) % SUFFIX.length];
+  return p + s + suf;
+}
+function planGenNames(ids, cap, kind = "shop") {
+  const list = (ids || []).map((x) => String(x ?? "").trim()).filter((x) => x.length > 0);
+  const n = Math.max(0, Math.trunc(Number(cap) || 0));
+  if (n === 0 || list.length === 0) return [];
+  const uniq = Array.from(new Set(list));
+  const sorted = uniq.map((id) => ({ id, k: hash32(id + "|pick|" + kind) })).sort((a, b) => a.k - b.k || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const out = [];
+  const take = Math.min(n, sorted.length);
+  for (let i = 0; i < take; i++) {
+    const idx = Math.floor(i * sorted.length / take);
+    const it = sorted[idx];
+    out.push({ id: it.id, name: genName(it.id, kind), kind });
+  }
+  return out;
+}
+function planStalls(roads, cap, perRoad = 2) {
+  const n = Math.max(0, Math.trunc(Number(cap) || 0));
+  if (n === 0) return [];
+  const per = Math.max(1, Math.trunc(perRoad) || 1);
+  const picked = [];
+  for (const r of roads || []) {
+    const cs = (r?.coords || []).filter((c) => Array.isArray(c) && c.length >= 2);
+    if (cs.length < 2) continue;
+    for (let j = 0; j < per; j++) {
+      const h = hash32(`${r.id}|stall|${j}`);
+      const t = h % 1e3 / 1e3 * 0.9 + 0.05;
+      const seg = Math.min(cs.length - 2, Math.floor(t * (cs.length - 1)));
+      const local = t * (cs.length - 1) - seg;
+      const a = cs[seg], b = cs[seg + 1];
+      const lng = Number(a[0]) + (Number(b[0]) - Number(a[0])) * local;
+      const lat = Number(a[1]) + (Number(b[1]) - Number(a[1])) * local;
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      const dx = Number(b[0]) - Number(a[0]);
+      const dy = Number(b[1]) - Number(a[1]);
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const dLat = 4 / 110540;
+      const dLng = 4 / (111320 * Math.max(0.05, Math.cos(lat * Math.PI / 180)));
+      const sign = (h >>> 12) % 2 ? 1 : -1;
+      const id = `${r.id}#s${j}`;
+      picked.push({ id, name: genName(id, "stall"), lng: lng + nx * sign * dLng, lat: lat + ny * sign * dLat, k: hash32(id + "|pick") });
+    }
+  }
+  picked.sort((a, b) => a.k - b.k || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const take = Math.min(n, picked.length);
+  const out = [];
+  for (let i = 0; i < take; i++) {
+    const it = picked[Math.floor(i * picked.length / take)];
+    out.push({ id: it.id, name: it.name, lng: it.lng, lat: it.lat });
+  }
+  return out;
+}
+function genCountsLine(realShown, genShown, stallsShown) {
+  const r = Number.isFinite(realShown) ? String(realShown) : "数不出来";
+  const g = Number.isFinite(genShown) ? String(genShown) : "数不出来";
+  const s = Number.isFinite(stallsShown) ? String(stallsShown) : "数不出来";
+  return `🏷 真名 ${r} · ${WS_GEN_TAG} 楼名 ${g} · ${WS_GEN_TAG} 小摊 ${s}`;
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -2729,7 +2887,7 @@ var KIND_HEIGHT_M = {
 };
 var UNKNOWN_KIND_BAND_M = [15, 18];
 var FALLBACK_HEIGHT_M = 16.5;
-function hash32(s) {
+function hash322(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -2750,12 +2908,12 @@ function renderHeight(props) {
   const seed = String(p.osm_id || p.name || "x");
   const kind = String(p.kind || "yes").toLowerCase();
   if (kind === "yes" || !Object.prototype.hasOwnProperty.call(KIND_HEIGHT_M, kind)) {
-    const k2 = hash32(seed + "#unk") % 101;
+    const k2 = hash322(seed + "#unk") % 101;
     const h2 = UNKNOWN_KIND_BAND_M[0] + (UNKNOWN_KIND_BAND_M[1] - UNKNOWN_KIND_BAND_M[0]) * k2 / 100;
     return { h: Math.min(MAX_RENDER_H, Math.max(3, Math.round(h2 * 10) / 10)), from: "kind" };
   }
   const base = KIND_HEIGHT_M[kind] ?? FALLBACK_HEIGHT_M;
-  const k = hash32(seed) % 31;
+  const k = hash322(seed) % 31;
   const jitter = 1 - KIND_JITTER + 2 * KIND_JITTER * k / 30;
   const h = Math.max(3, Math.round(base * jitter * 10) / 10);
   return { h: Math.min(MAX_RENDER_H, h), from: "kind" };
@@ -2840,7 +2998,7 @@ function rampColorOf(h, ramp = HEIGHT_COLOR_RAMP) {
   return c;
 }
 function buildingColor(h, seed, ramp = HEIGHT_COLOR_RAMP) {
-  const k = 0.9 + hash32(seed || "x") % 21 / 100;
+  const k = 0.9 + hash322(seed || "x") % 21 / 100;
   return shade(rampColorOf(h, ramp), k);
 }
 function outerRing(geom) {
@@ -3142,7 +3300,7 @@ function equipBoxes(ring, seed, roofTop) {
   for (let i = 0; i < wanted; i++) {
     let placed = false;
     for (let cand = 0; cand < 4 && !placed; cand++) {
-      const s = hash32(`${seed}#eq${i}:${cand}`);
+      const s = hash322(`${seed}#eq${i}:${cand}`);
       const ang = s % 360 * Math.PI / 180;
       const frac = 0.15 + (s >>> 9) % 40 / 100;
       const side = EQUIP_SIDE_MIN + (s >>> 17) % EQUIP_SIDE_STEPS * EQUIP_SIDE_STEP_M;
@@ -3341,6 +3499,7 @@ export {
   WS_FETCH_R_MAX,
   WS_FETCH_R_MIN,
   WS_FETCH_R_SOURCE_MAX,
+  WS_GEN_TAG,
   WS_ROADS_CHUNKING_VERDICT,
   WS_ROADS_LIMIT_WHY,
   WS_ROADS_LIVE_DEFAULT,
@@ -3396,7 +3555,9 @@ export {
   fetchWithTimeout,
   fmtCount,
   footprintMetrics,
-  hash32,
+  genCountsLine,
+  genName,
+  hash322 as hash32,
   heightColorExpression,
   hexRgb,
   hexToRgb,
@@ -3449,6 +3610,8 @@ export {
   placesPointOf,
   planDaily,
   planEnsureRoadOrder,
+  planGenNames,
+  planStalls,
   pointInRing,
   prerenderSourceOf,
   rampColorOf,

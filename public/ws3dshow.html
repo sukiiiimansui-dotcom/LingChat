@@ -189,6 +189,16 @@
         background: rgba(13, 71, 161, 0.92); border: 1px solid rgba(255, 255, 255, 0.5);
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
       #lc-off.on { display: flex; }
+      /* 🏷 生成名层（**示意·非真实**）：与真名标签**样式不同** —— 虚线框 + 斜体 + 前置 ＊，
+         机主/任何人一眼就能分出"哪些是编的"。这一层永远 pointer-events:none（不挡交互）。 */
+      #ws-gennames { position: absolute; inset: 0; z-index: 24; pointer-events: none; }
+      #ws-gennames .gn { position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
+        font-size: 10.5px; font-style: italic; padding: 1px 5px; border-radius: 4px;
+        border: 1px dashed rgba(255, 214, 102, 0.85); background: rgba(40, 32, 12, 0.55);
+        color: #ffe9a8; }
+      #ws-gennames .gn.is-stall { font-size: 10px; border-color: rgba(120, 230, 180, 0.85);
+        background: rgba(12, 40, 32, 0.55); color: #b7f2d8; transform: translate(-50%, -120%); }
+      #ws-gennames .gn.is-stall::before { content: "🛒 "; }
     </style>
   </head>
   <body>
@@ -286,6 +296,7 @@
       <!-- 🏷 标签层回证（机主 2026-09-25：「如何实现楼房及区域名字喵」）：
            显示 N / 丢弃 M（避让）/ 上限 L —— 可数口径，便于对着 fps 判断。 -->
       <span class="w" id="m-labels">🏷 标签 —</span>
+      <span class="w" id="m-gennames">🏷 生成名 —</span>
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
       <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
@@ -337,7 +348,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v51";
+      const BUILD = "ws3dshow-2026-09-26-v52";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1480,6 +1491,109 @@
       }
 
       /** 布局 + 写 DOM（**只在事件里调**） */
+      /* ══════════════════════════════════════════════════════════════════════════
+         🏷 **生成名层**（示意·非真实）—— 机主批准「每栋楼注明名字（含小摊）」+「都要」。
+         · 真源 = 共享模块 `wsNameGen`（确定性：同 id 永远同名；红线：不进数据/对话）；
+         · 与真名**样式不同**、**分开计数**（HUD 两格：真名 / 生成名）；
+         · `?names=real` ⇒ 整层关掉（生成名一个都不画）。
+         ⚠️ 只画**视野内**、并按 48px 网格稀疏（首版：一格一个），免得糊成一团。
+         ══════════════════════════════════════════════════════════════════════════ */
+      const GENNAMES_ON = !/[?&]names=real/.test(location.search);
+      const GEN_BLD_MAX = 40, GEN_STALL_MAX = 12;
+      let genLayerEl = null, genShownBld = null, genShownStall = null;
+      function genLayerOf() {
+        if (genLayerEl) return genLayerEl;
+        genLayerEl = document.createElement("div");
+        genLayerEl.id = "ws-gennames";
+        const host = document.getElementById("map") || document.body;
+        host.appendChild(genLayerEl);
+        return genLayerEl;
+      }
+      /** 视野内稀疏：按 48px 网格，一格只留一个（顺序由 id 哈希决定 ⇒ 稳定） */
+      function genThin(items, cell) {
+        const seen = new Set(), out = [];
+        for (const it of items) {
+          const k = Math.round(it.x / cell) + ":" + Math.round(it.y / cell);
+          if (seen.has(k)) continue;
+          seen.add(k); out.push(it);
+        }
+        return out;
+      }
+      function refreshGenNames(why) {
+        const hud = document.getElementById("m-gennames");
+        const TFx = window.__TF__;
+        const layer = genLayerOf();
+        if (!GENNAMES_ON) { layer.textContent = ""; if (hud) hud.textContent = "🏷 生成名 关（?names=real）"; return; }
+        if (!TFx || typeof TFx.planGenNames !== "function") {
+          if (hud) hud.textContent = "🏷 生成名 数不出来：vendor 缺 wsNameGen（旧产物？）";
+          return;
+        }
+        const cv = map.getCanvas ? map.getCanvas() : null;
+        const W = (cv && cv.clientWidth) || 400, H = (cv && cv.clientHeight) || 400;
+        const t0 = Date.now();
+        /* ── 楼名：从**楼房仓库**的 id 生成（代表点取脚印第一个顶点） ── */
+        let bldPts = [];
+        try {
+          const st = bldStoreOf();
+          const feats = (st && st.features) ? st.features() : [];
+          bldPts = feats.map(function (f) {
+            const ring = (f && f.p && f.p[0]) || null;
+            const id = f && (f.i || f.id || (f.properties && f.properties.id)) || null;
+            if (!ring || !ring[0] || !id) return null;
+            return { id: String(id), lng: Number(ring[0][0]), lat: Number(ring[0][1]) };
+          }).filter(Boolean);
+        } catch (e) { bldPts = []; }
+        const byId = new Map(bldPts.map(function (b) { return [b.id, b]; }));
+        const pickedBld = TFx.planGenNames(bldPts.map(function (b) { return b.id; }), GEN_BLD_MAX).map(function (g) {
+          const b = byId.get(g.id); return b ? { name: g.name, kind: "shop", lng: b.lng, lat: b.lat } : null;
+        }).filter(Boolean);
+        /* ── 小摊：沿**路网仓库**的折线生成（真源里做垂直退距） ── */
+        let roads = [];
+        try {
+          const st = roadsStoreOf();
+          const feats = (st && st.features) ? st.features() : [];
+          roads = feats.map(function (f) {
+            const id = f && (f.i || f.id) || null;
+            let cs = (f && f.p) || (f && f.geometry && f.geometry.coordinates) || null;
+            if (cs && cs.length && Array.isArray(cs[0]) && typeof cs[0][0] === "number") cs = [cs];   // 单段折线
+            const line = Array.isArray(cs) && cs.length ? cs[0] : null;
+            return (id && line && line.length >= 2) ? { id: String(id), coords: line } : null;
+          }).filter(Boolean);
+        } catch (e) { roads = []; }
+        const stalls = TFx.planStalls(roads, GEN_STALL_MAX, 2);
+        /* ── 投影 + 稀疏 + 落 DOM（只改 left/top，不重建元素） ── */
+        const items = [];
+        for (const b of pickedBld) {
+          const p = map.project([b.lng, b.lat]);
+          if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
+          items.push({ x: p.x, y: p.y, text: "＊" + b.name, stall: false });
+        }
+        genShownBld = items.length;
+        for (const s of stalls) {
+          const p = map.project([s.lng, s.lat]);
+          if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
+          items.push({ x: p.x, y: p.y, text: s.name, stall: true });
+        }
+        genShownStall = items.filter(function (i) { return i.stall; }).length;
+        const kept = genThin(items, 48);
+        layer.textContent = "";
+        for (const it of kept) {
+          const d = document.createElement("div");
+          d.className = "gn" + (it.stall ? " is-stall" : "");
+          d.textContent = it.text;
+          d.style.left = it.x.toFixed(1) + "px";
+          d.style.top = it.y.toFixed(1) + "px";
+          layer.appendChild(d);
+        }
+        if (hud) {
+          const realN = (labelStat && typeof labelStat.shown === "number") ? labelStat.shown : NaN;
+          hud.textContent = (typeof TFx.genCountsLine === "function")
+            ? TFx.genCountsLine(realN, kept.filter(function (k) { return !k.stall; }).length, kept.filter(function (k) { return k.stall; }).length)
+            : ("🏷 生成名 " + kept.length + "（" + why + "）");
+        }
+        try { window.__GENN__ = { on: GENNAMES_ON, bld: genShownBld, stall: genShownStall, shown: kept.length, ms: Date.now() - t0, roads: roads.length }; } catch (e) { /* 忽略 */ }
+      }
+
       function refreshLabels(why) {
         const el = $("m-labels");
         if (!LABELS_ON) { if (el) el.textContent = "🏷 标签 关（?labels=0）"; return; }
@@ -3926,7 +4040,7 @@
                             name: function () { return lcDisplayName(); }, settingsName: function () { return lcSettingsName; },
                             resolvePos: function (force) { return lcResolveAnchor(force); } };
         } catch (e) { errs.push("char " + e); }
-        map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
+        map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("zoomend"); } catch (e2) { errs.push("gennames " + e2); } });
         /* 🛰 LOD 那一格也要跟着 zoom 走（它是 zoom 的纯函数；只在 zoomend 刷一次，仍是"事件驱动"） */
         map.on("zoom", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });
         /* ☁️ art=3：天空叠加重画（moveend 时重画一次即可 —— 几何是确定性的，不会抖） */

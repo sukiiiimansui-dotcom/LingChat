@@ -126,7 +126,10 @@ export interface WsMapTheme {
    * **AI 示意层**的配色（真数据稀疏时才会出现，见 `wsAiLayers`）。
    *
    * ⚠️ 为什么"水体换色"只能在这里做：小区级**没有水系数据集** ——
-   * 底图是 Esri 的**灰度**瓦片（`World_Light_Gray_Base` 里江面就是一片浅灰，
+   * 底图 = Esri **World_Street_Map**（有水体/绿地配色）。
+   * 🔴 2026-09-26 改动依据：机主真机截图「水、绿植啥的都看不到」—— 原底图是
+   *     `Canvas/World_Light_Gray_Base`（**灰度**瓦片，天生没有植被色）。
+   * 旧记录留档：底图是 Esri 的**灰度**瓦片（`World_Light_Gray_Base` 里江面就是一片浅灰，
    * 和陆地同色系，**没法只把水挑出来染**；灰度上做色相旋转是空操作）。
    * 我们真正拥有几何的"水"，只有 AI 精绘产出的示意水体（`kind: "water"`）。
    * ⇒ 想让**真实江面**也变青蓝，得先有水的矢量数据（Overpass/自有水系），那是另一张卡，
@@ -410,7 +413,7 @@ const ANIME: WsMapTheme = {
        ⇒ 所以 maxzoom 必须钉在 16（让地图库放大复用 z16，别去要占位图）。 */
     base: {
       tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
       ],
       maxzoom: 16,
       attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",

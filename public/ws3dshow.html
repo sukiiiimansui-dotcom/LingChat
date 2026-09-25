@@ -2229,7 +2229,8 @@
           let txt;
           if (TF2 && typeof TF2.bldVerdictText === "function" && facts) {
             const state = (typeof TF2.bldVerdictState === "function") ? TF2.bldVerdictState(facts) : "bundle";
-            txt = TF2.bldVerdictText({ state: state, n: facts.n, cells: facts.have, cap: facts.cap });
+            txt = TF2.bldVerdictText({ state: state, n: facts.n, cells: facts.have, cap: facts.cap,
+                                       pkgCell: facts.index ? facts.index.cellSize : null, feCell: facts.cellDeg });
           } else {
             txt = "🏢 离线格 数不出来（模块缺 bldVerdictText / createBundleFeed）";
           }
@@ -2360,6 +2361,8 @@
         return {
           n: f.n, have: f.have, missing: f.missing, failed: f.failed, pending: f.pending, cap: f.cap,
           wanted: f.wanted, capped: f.capped, got: f.got, asked: f.asked,
+          /* 🔴 口径不符（包 cellSize ≠ 前端常量）⇒ 管道**拒绝取数**：这两个字段就是自检/机主看它的窗口 */
+          refused: !!f.refused, cellDeg: f.cellDeg,
           index: { state: f.index.state, cells: f.index.cells, keys: f.index.keys, why: f.index.why,
                    attribution: f.index.attribution, real: f.index.real },
           plan: feed.plan(),

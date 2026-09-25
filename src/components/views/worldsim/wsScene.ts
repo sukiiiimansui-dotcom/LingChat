@@ -471,16 +471,27 @@ export function bldLiveDecision(input?: { forceLive?: boolean | null }): { live:
  *   · `pending` / `ok` / `empty` / `failed` / `off` 与路同一套语义。
  */
 export function bldVerdictText(input: {
-  state: "bundle" | "outside" | "pending" | "ok" | "empty" | "failed" | "off";
+  /* 🔴 第七态 `sizemismatch` = **格尺寸口径不符**（包按 X° 分格、前端按 Y° 算键 ⇒ 拒绝取数）：
+     它与"包外 / 取数失败 / 这里没有楼"**四者互不混淆** —— 说错任何一种是撒谎。 */
+  state: "bundle" | "outside" | "pending" | "ok" | "empty" | "failed" | "off" | "sizemismatch";
   n?: number | null;
   have?: number | null;
   missing?: number | null;
   cells?: number | null;
   cap?: number | null;
   err?: string | null;
+  /** 包自己的格边长（度）与前端常量 —— 口径不符时**两个数字都要说出来** */
+  pkgCell?: number | null;
+  feCell?: number | null;
 }): string {
   const n = input.n === null || input.n === undefined ? "数不出来" : String(input.n);
   if (input.state === "off") return "🏢 未开（?bld=0）";
+  if (input.state === "sizemismatch") {
+    const pkg = input.pkgCell === null || input.pkgCell === undefined ? "?" : input.pkgCell + "°";
+    const fe = input.feCell === null || input.feCell === undefined ? "?" : input.feCell + "°";
+    return `🏢 ❌ **格尺寸口径不符**（包 ${pkg} / 前端 ${fe}）⇒ 拒绝取数 —— `
+      + "**不是「包外」、不是「取数失败」、更不是「这里没有楼」**（修包或改前端常量后重试）";
+  }
   if (input.state === "pending") return "🏢 离线格取数中…";
   if (input.state === "failed") return `🏢 取数**失败**：${input.err || "原因未知"} —— 不是「这一带没有楼」`;
   if (input.state === "outside") {

@@ -26,7 +26,10 @@
  */
 
 import type { FeatureStore, LngLat } from "./wsFeatureStore";
-import { bldBundleCellsForView, placesBundleCellsForView, roadsBundleCellsForView } from "./wsFeatureStore";
+import {
+  BLD_BUNDLE_CELL_DEG, PLACES_BUNDLE_CELL_DEG, ROADS_BUNDLE_CELL_DEG,
+  bldBundleCellsForView, placesBundleCellsForView, roadsBundleCellsForView,
+} from "./wsFeatureStore";
 
 export type BundleKind = "bld" | "roads" | "places";
 
@@ -298,6 +301,11 @@ export function roadsPointOf(f: BundleRoadFeature): LngLat | null {
 
 interface BundleKindSpec<T> {
   dir: string;
+  /** 🔴 前端现在按多少度分格（**引同一批常量**，不新写数字）。
+   *  与 `index.json.cellSize` 不一致 ⇒ **拒绝取数并响亮报错**（见 `ensureIndex()`）：
+   *  2026-09-25 的事故就是两边各改一半 —— 包按 0.02 分格、前端按 0.05 算键，
+   *  所有格被静默判成"包外" ⇒ **把有数据说成没数据**。 */
+  cellDeg: number;
   plan: (bounds: BundleBoundsLike | null, center: { lng: number; lat: number } | null, maxCells: number) => {
     cells: Array<{ key: string; w: number; s: number }>;
     wanted: number;
@@ -315,6 +323,7 @@ interface BundleKindSpec<T> {
 const SPECS = {
   bld: {
     dir: "bldbundle",
+    cellDeg: BLD_BUNDLE_CELL_DEG,
     plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => bldBundleCellsForView(b, c, maxCells),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
@@ -324,6 +333,7 @@ const SPECS = {
   } as unknown as BundleKindSpec<BundleBuildingFeature>,
   places: {
     dir: "placesbundle",
+    cellDeg: PLACES_BUNDLE_CELL_DEG,
     plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => placesBundleCellsForView(b, c, maxCells),
     parse: bundlePlacesOf,
     perRefresh: PLACES_BUNDLE_PER_REFRESH,
@@ -333,6 +343,7 @@ const SPECS = {
   } as unknown as BundleKindSpec<BundlePlaceFeature>,
   roads: {
     dir: "roadsbundle",
+    cellDeg: ROADS_BUNDLE_CELL_DEG,
     plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => roadsBundleCellsForView(b, c, maxCells),
     parse: bundleRoadsOf,
     perRefresh: ROADS_BUNDLE_PER_REFRESH,
@@ -357,9 +368,14 @@ export interface BundleFeedFacts {
   wanted: number | null;
   /** 这一轮计划是不是被 `maxCells` 截过 */
   capped: boolean;
+  /** 🔴 **口径不符 ⇒ 本轮拒绝取数**（`index.cellSize` ≠ 前端常量）：既不取格、也不写 `missing`。
+   *  为什么不能"退回试格子"：0.05 的键在 0.02 的包里**一个都不存在** ⇒ 全 404 ⇒ 照样把有数据说成包外。 */
+  refused: boolean;
+  /** 前端现在按多少度分格（引常量）—— 与 `index.cellSize` 一起进 HUD，事故要能当场看见 */
+  cellDeg: number;
   /** 🗂 包里那张**索引**（`index.json`）的实况 —— HUD 要能回答"包外是读来的还是猜的" */
-  index: { state: "未读" | "读取中" | "已读" | "失败"; cells: number | null; keys: number | null;
-           why: string | null; attribution: string | null; real: boolean | null };
+  index: { state: "未读" | "读取中" | "已读" | "失败" | "口径不符"; cells: number | null; keys: number | null;
+           why: string | null; attribution: string | null; real: boolean | null; cellSize: number | null };
   /** 累计并进仓库的要素数 */
   got: number;
   /** 有没有为这一种包**真的计划过取数**（false ⇒ HUD 写"未取"，而不是编一个 0） */
@@ -369,6 +385,8 @@ export interface BundleFeedFacts {
 export interface BundleRefreshReport {
   /** 视野算不出格（bounds 拿不到）⇒ 什么都没做 */
   planned: boolean;
+  /** 🔴 格尺寸口径不符 ⇒ **拒绝取数**（一个格都没取，也没写"包外"） */
+  refused?: boolean;
   /** 这次真的取了几格 */
   batch: number;
   /** 这次并进仓库几个要素 */
@@ -421,8 +439,9 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   /* 🗂 **索引优先**（父代理 2026-09-25 体检：index 早就生成了，页面却从不请求、靠试 404 猜）：
      先读一次 `<包>/index.json` ⇒ 只对"索引里有的格"发请求；索引里没有的格直接记 `missing`（**包外**，
      零请求、且是**读来的事实**）。索引取不到 ⇒ **如实退回**试格子（`indexState="失败"`，HUD 写出来）。 */
+  let refused = false;
   let indexFact: BundleIndexFact | null = null;
-  let indexState: "未读" | "读取中" | "已读" | "失败" = "未读";
+  let indexState: "未读" | "读取中" | "已读" | "失败" | "口径不符" = "未读";
   let indexWhy: string | null = null;
   let indexPromise: Promise<BundleIndexFact> | null = null;
 
@@ -431,8 +450,31 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     indexState = "读取中";
     indexPromise = loadBundleIndex(opts.fetchCell, opts.kind).then((f) => {
       indexFact = f;
-      if (f.cells) { indexState = "已读"; indexWhy = null; }
-      else { indexState = "失败"; indexWhy = "索引没读到（退回试格子）"; opts.onError?.(`index ${spec.dir} 没读到，退回试格子`); }
+      if (!f.cells) {
+        indexState = "失败";
+        indexWhy = "索引没读到（退回试格子）";
+        opts.onError?.(`index ${spec.dir} 没读到，退回试格子`);
+        return f;
+      }
+      /* 🔴 **口径对拍**（2026-09-25 事故的硬化）：包按 X° 分格、前端按 Y° 算键 ⇒
+         键集与索引**零交集** ⇒ 若不拦，每个格都会被"读"成包外 —— 那是**把有数据说成没数据**。
+         ⇒ 一律**拒绝取数**（不取格、不写 missing），并把两个数字**响亮**写进 HUD/errs。 */
+      const pkg = f.cellSize;
+      if (pkg === null) {
+        /* 老包没有 `cellSize` 字段：**不猜**，也不因此拒绝（保持既有行为），如实标注 */
+        indexState = "已读";
+        indexWhy = "包里没有 cellSize 字段（对拍不了口径）";
+        return f;
+      }
+      if (Math.abs(pkg - spec.cellDeg) > 1e-9) {
+        indexState = "口径不符";
+        refused = true;
+        indexWhy = `包按 ${pkg}° 分格、前端按 ${spec.cellDeg}° 算 ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+        opts.onError?.(`${spec.dir} 格尺寸口径不符：包 ${pkg}° / 前端 ${spec.cellDeg}° ⇒ 本轮一个格都不取`);
+        return f;
+      }
+      indexState = "已读";
+      indexWhy = null;
       return f;
     });
     return indexPromise;
@@ -451,8 +493,10 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     return {
       n, have: have.size, missing: missing.size, failed: failed.size,
       pending, cap, wanted, capped, got, asked,
+      refused: refused, cellDeg: spec.cellDeg,
       index: {
         state: indexState,
+        cellSize: indexFact ? indexFact.cellSize : null,
         cells: indexFact && indexFact.cellCount !== null ? indexFact.cellCount : null,
         keys: indexFact && indexFact.cells ? indexFact.cells.size : null,
         why: indexWhy,
@@ -478,6 +522,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     capped = p.capped;
     /* 🗂 **先读索引**（一次；失败就退回试格子）—— 索引里没有的格 = **包外**，零请求 */
     const idx = await ensureIndex();
+    /* 🔴 口径不符 ⇒ **本轮什么都不做**（不取格、不写 missing）：把事情说成"包外"是最坏的那种谎 */
+    if (refused) return { planned: true, batch: 0, got: 0, capped: p.capped, refused: true };
     /* 已经取过的格不重取；**包外**的也不重试（404/索引判包外 都是"包里没有"，重试只白费流量） */
     const todo: typeof p.cells = [];
     for (const c of p.cells) {
@@ -571,6 +617,8 @@ export interface BundleIndexFact {
   attribution: string | null;
   /** 是不是**真实数据**包（`index.json.real`；缺失 = null ⇒ 不许猜） */
   real: boolean | null;
+  /** 包自己的格边长（度）—— 与前端常量对拍用；缺字段 = null（老包） */
+  cellSize: number | null;
 }
 
 /**
@@ -583,7 +631,7 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind):
   try {
     const r = await fetchCell(url, BUNDLE_TIMEOUT_MS);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = (await r.json()) as { source?: unknown; cellCount?: unknown; cells?: unknown; attribution?: unknown; real?: unknown } | null;
+    const j = (await r.json()) as { source?: unknown; cellCount?: unknown; cells?: unknown; attribution?: unknown; real?: unknown; cellSize?: unknown } | null;
     const rawCells = (j?.cells && typeof j.cells === "object") ? Object.keys(j.cells as Record<string, unknown>) : null;
     return {
       kind, url,
@@ -592,9 +640,10 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind):
       cells: rawCells ? new Set(rawCells) : null,
       attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
       real: typeof j?.real === "boolean" ? j.real : null,
+      cellSize: num(j?.cellSize),
     };
   } catch {
-    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null };
+    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
   }
 }
 
@@ -608,6 +657,12 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind):
 export function bundleCountsLine(f: BundleFeedFacts, icon: string, unit: string): string {
   if (!f.asked && f.have === 0 && f.missing === 0 && f.failed === 0) {
     return `${icon} 离线格 未取（还没要数据）`;
+  }
+  /* 🔴 口径不符 ⇒ **只**说这一句（不许出现"包外 N" —— 那会把"有数据"说成"没有"） */
+  if (f.refused) {
+    const pkgC = f.index && f.index.cellSize !== null && f.index.cellSize !== undefined ? f.index.cellSize + "°" : "?";
+    return `${icon} ❌ **格尺寸口径不符**（包 ${pkgC} / 前端 ${f.cellDeg}°）⇒ **本轮一个格都不取**`
+      + `（取格会把有数据的格说成「包外」；修包或改前端常量后重试）`;
   }
   const idx = f.index
     ? (f.index.state === "已读" ? `（索引 ${f.index.cells === null ? "?" : f.index.cells} 格）`
@@ -625,7 +680,10 @@ export function bundleCountsLine(f: BundleFeedFacts, icon: string, unit: string)
    那正是判词纪律要防的事。所以这条规则只有一个地方，并且自检逐态钉住。 */
 
 /** 楼房的态：`outside`（包外）与 `failed`（取数失败）必须分得开，也不许把"还在取"写成"没有" */
-export function bldVerdictState(f: BundleFeedFacts): "bundle" | "outside" | "pending" | "failed" {
+export function bldVerdictState(f: BundleFeedFacts): "bundle" | "outside" | "pending" | "failed" | "sizemismatch" {
+  /* ⚠️ **`refused` 排在最前**：口径不符时"包外/失败/没有楼"三种说法**都不成立**，
+     说任何一种都是撒谎（这次事故就是把"有数据"说成"包外"）。 */
+  if (f.refused) return "sizemismatch";
   /* ⚠️ `missing` 现在有**两个来源**：索引说"包里没这格"（读来的）与 404（试出来的）——
      两者都是**包外**，判词一视同仁（"我们没这个包"，不是"这里没有楼"）。 */
   if (f.pending > 0 && f.n === 0 && f.have === 0) return "pending";

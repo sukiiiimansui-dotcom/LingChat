@@ -192,7 +192,7 @@
       /* 🏷 生成名层（**示意·非真实**）：与真名标签**样式不同** —— 虚线框 + 斜体 + 前置 ＊，
          机主/任何人一眼就能分出"哪些是编的"。这一层永远 pointer-events:none（不挡交互）。 */
       #ws-gennames { position: absolute; inset: 0; z-index: 24; pointer-events: none; }
-      #ws-gennames .gn { position: absolute; transform: translate(-50%, -100%); white-space: nowrap;
+      #ws-gennames .gn { position: absolute; left: 0; top: 0; will-change: transform; white-space: nowrap;
         font-size: 10.5px; font-style: italic; padding: 1px 5px; border-radius: 4px;
         border: 1px dashed rgba(255, 214, 102, 0.85); background: rgba(40, 32, 12, 0.55);
         color: #ffe9a8; }
@@ -202,7 +202,7 @@
       #ws-gennames svg.gn-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
       #ws-gennames svg.gn-lines line { stroke: rgba(255, 214, 102, 0.7); stroke-width: 1; stroke-dasharray: 2 2; }
       #ws-gennames svg.gn-lines line.is-stall { stroke: rgba(120, 230, 180, 0.75); }
-      #ws-gennames .gn-dot { position: absolute; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px;
+      #ws-gennames .gn-dot { position: absolute; left: 0; top: 0; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; will-change: transform;
         border-radius: 50%; background: rgba(255, 214, 102, 0.95); }
       #ws-gennames .gn-dot.is-stall { background: rgba(120, 230, 180, 0.95); }
     </style>
@@ -354,7 +354,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v56";
+      const BUILD = "ws3dshow-2026-09-26-v57";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1507,6 +1507,32 @@
       const GENNAMES_ON = !/[?&]names=real/.test(location.search);
       const GEN_BLD_MAX = 40, GEN_STALL_MAX = 12;
       let genLayerEl = null, genShownBld = null, genShownStall = null;
+      /** 当前画出来的生成名节点（带**地理坐标**）—— 拖动时只重投影它们，不重建、不重挑 */
+      let genNodes = [];
+      const GEN_LIFT = 16;
+      /**
+       * **丝滑**的关键：`move`/`zoom` 每帧只更新位置（transform + SVG 属性），
+       * 不重建 DOM、不重跑挑点 ⇒ 拖动过程中标签与引线**跟着地图连续走**，不会"等松手才跳一下"。
+       * （机主：「现在是滑动刷新一会，能改成丝滑的滑动吗」）
+       */
+      function positionGenNames() {
+        if (!genNodes.length) return;
+        const cv = map.getCanvas ? map.getCanvas() : null;
+        const W = (cv && cv.clientWidth) || 400, H = (cv && cv.clientHeight) || 400;
+        for (const n of genNodes) {
+          let p;
+          try { p = map.project([n.lng, n.lat]); } catch (e) { continue; }
+          const off = p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20;
+          const vis = off ? "none" : "block";
+          if (n.el.style.display !== vis) { n.el.style.display = vis; n.dot.style.display = vis; n.line.style.display = vis; }
+          if (off) continue;
+          const x = p.x.toFixed(1), y = p.y.toFixed(1), y2 = (p.y - GEN_LIFT).toFixed(1);
+          n.el.style.transform = "translate3d(" + x + "px," + y2 + "px,0) translate(-50%,-100%)";
+          n.dot.style.transform = "translate3d(" + x + "px," + y + "px,0)";
+          n.line.setAttribute("x1", x); n.line.setAttribute("y1", y);
+          n.line.setAttribute("x2", x); n.line.setAttribute("y2", y2);
+        }
+      }
       function genLayerOf() {
         if (genLayerEl) return genLayerEl;
         genLayerEl = document.createElement("div");
@@ -1558,7 +1584,17 @@
               if (Array.isArray(c)) ring = (Array.isArray(c[0]) && Array.isArray(c[0][0])) ? c[0] : c;
             }
             if (!id || !ring || !Array.isArray(ring[0])) { skipped++; return null; }
-            return { id: String(id), lng: Number(ring[0][0]), lat: Number(ring[0][1]) };
+            /* 🔴 机主：「连线不准确」—— 根因是我原来取**脚印第一个顶点**（大楼的角，离楼心几十米）。
+               改成共享模块的**代表点** `bldPointOf`（外环质心）；拿不到才自己算质心。 */
+            let pt = null;
+            try { if (TFx && typeof TFx.bldPointOf === "function") pt = TFx.bldPointOf(f); } catch (e3) { pt = null; }
+            if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) {
+              let sx = 0, sy = 0, n2 = 0;
+              for (const c of ring) { if (Array.isArray(c)) { sx += Number(c[0]); sy += Number(c[1]); n2++; } }
+              pt = n2 ? [sx / n2, sy / n2] : null;
+            }
+            if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) { skipped++; return null; }
+            return { id: String(id), lng: Number(pt[0]), lat: Number(pt[1]) };
           }).filter(Boolean);
           try { window.__GENN_SKIP__ = skipped; } catch (e2) { /* 忽略 */ }
         } catch (e) { bldPts = []; }
@@ -1585,13 +1621,13 @@
         for (const b of pickedBld) {
           const p = map.project([b.lng, b.lat]);
           if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
-          items.push({ x: p.x, y: p.y, text: "＊" + b.name, stall: false });
+          items.push({ x: p.x, y: p.y, lng: b.lng, lat: b.lat, text: "＊" + b.name, stall: false });
         }
         genShownBld = items.length;
         for (const s of stalls) {
           const p = map.project([s.lng, s.lat]);
           if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
-          items.push({ x: p.x, y: p.y, text: s.name, stall: true });
+          items.push({ x: p.x, y: p.y, lng: s.lng, lat: s.lat, text: s.name, stall: true });
         }
         genShownStall = items.filter(function (i) { return i.stall; }).length;
         const kept = genThin(items, 48);
@@ -1601,27 +1637,21 @@
         const LIFT = 16;
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.setAttribute("class", "gn-lines");
+        genNodes = [];
         for (const it of kept) {
           const d = document.createElement("div");
           d.className = "gn" + (it.stall ? " is-stall" : "");
           d.textContent = it.text;
-          d.style.left = it.x.toFixed(1) + "px";
-          d.style.top = (it.y - LIFT).toFixed(1) + "px";
-          layer.appendChild(d);
           const dot = document.createElement("div");
           dot.className = "gn-dot" + (it.stall ? " is-stall" : "");
-          dot.style.left = it.x.toFixed(1) + "px";
-          dot.style.top = it.y.toFixed(1) + "px";
-          layer.appendChild(dot);
           const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          ln.setAttribute("x1", it.x.toFixed(1));
-          ln.setAttribute("y1", it.y.toFixed(1));
-          ln.setAttribute("x2", it.x.toFixed(1));
-          ln.setAttribute("y2", (it.y - LIFT).toFixed(1));
           if (it.stall) ln.setAttribute("class", "is-stall");
-          svg.appendChild(ln);
+          layer.appendChild(d); layer.appendChild(dot); svg.appendChild(ln);
+          /* 记下**地理坐标**（不是屏幕坐标）：拖动时只需重投影，不用重挑标签 */
+          genNodes.push({ lng: it.lng, lat: it.lat, stall: it.stall, el: d, dot: dot, line: ln });
         }
         layer.appendChild(svg);
+        positionGenNames();          // 立刻摆一次（新节点不能停在 0,0）
         if (hud) {
           const realN = (labelStat && typeof labelStat.shown === "number") ? labelStat.shown : NaN;
           hud.textContent = (typeof TFx.genCountsLine === "function")
@@ -3538,6 +3568,9 @@
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
         map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("moveend"); } catch (e2) { errs.push("gennames " + e2); } });
+        /* 🧈 丝滑：拖动/缩放**每帧**只重投影（不重建、不重挑） */
+        map.on("move", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
+        map.on("zoom", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
 
         /* ══════════════════════════════════════════════════════════════════════════════
          * 💬 **角色接入 LingChat 本身的对话**（机主 2026-09-25：「我最[想]把角色做进去喵

@@ -124,6 +124,26 @@
       #wsdrawer-chat { margin-top: 10px; padding: 8px 10px; border-radius: 10px;
         border: 1px dashed rgba(121, 217, 255, 0.35); color: #b9d7ef; line-height: 1.6; }
       #wsdrawer-hint { opacity: 0.75; }
+      /* ══ 💬 **对话抽屉**（与诊断抽屉**分开**；机主 2026-09-25：「将诊断与对话页分开喵，影响观看
+         （而且**诊断页是不进App的**）」）══
+         设计口径：诊断件（art/LOD/观感/形体/统计/日志）= **试验台**，不进 App ⇒ 单独一个把手、单独一个抽屉；
+         对话/立绘/我的家/今日三件事 = **要进 App 的部分** ⇒ 干净的一页，里面**不放任何诊断件**。 */
+      #wschat-tab { position: fixed; left: 0; top: 176px; z-index: 32; cursor: pointer;
+        padding: 10px 6px; border-radius: 0 10px 10px 0; background: #0d47a1;
+        color: #fff; font-size: 11px; font-weight: 700; writing-mode: vertical-rl;
+        border: 1px solid rgba(255, 255, 255, 0.35); border-left: none; user-select: none; }
+      #wschat { position: fixed; left: 0; top: 0; bottom: 0; z-index: 34;
+        width: min(86vw, 420px); max-width: 420px; background: #14181d;
+        border-right: 1px solid #3a3a3a; transform: translateX(-102%);
+        transition: transform 0.22s ease; display: flex; flex-direction: column;
+        color: #eaf6ff; font-size: 11px; box-shadow: 6px 0 22px rgba(0, 0, 0, 0.35); }
+      #wschat.open { transform: translateX(0); }
+      #wschat-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+        border-bottom: 1px solid #3a3a3a; font-weight: 700; color: #fff; }
+      #wschat-h .sp { flex: 1; }
+      #wschat-h button { padding: 4px 10px; border-radius: 8px; cursor: pointer;
+        border: 1px solid #0d47a1; background: rgba(13, 71, 161, 0.35); color: #fff; }
+      #wschat-b { flex: 1; overflow: auto; padding: 8px 10px; overscroll-behavior: contain; }
       /* 💬 角色对话（机主：「我最[想]把角色做进去（接入 lingchat 本身对对话）」）——
          聊的是 **LingChat 自己的后端**（`POST /api/chat`），回复里的好感/记忆都是**真数值**。 */
       #lc-stat { font-size: 10.5px; color: #9fd8ff; margin-bottom: 4px; }
@@ -163,14 +183,20 @@
   <body>
     <div id="map"></div>
     <!-- 🗄 诊断抽屉（详见样式里那段注释）：默认只留左边一条把手；`#wsdrawer-chat` 是**角色对话的预留位** -->
-    <div id="wsdrawer-tab" title="点这里拉出诊断抽屉（后面角色对话也在这里）">🗄 诊断<span class="badge" id="wsdrawer-badge"></span></div>
+    <div id="wsdrawer-tab" title="诊断（试验台用，**不进 App**）：art/LOD/观感/形体/统计/日志">🗄 诊断<span class="badge" id="wsdrawer-badge"></span></div>
+    <div id="wschat-tab" title="对话（要进 App 的部分）：角色立绘 / 我的家 / 今日三件事">💬 对话</div>
+    <div id="wschat">
+      <div id="wschat-h"><span>💬 对话</span><span class="sp"></span><button id="wschat-close" type="button">收起</button></div>
+      <div id="wschat-b"><!-- 对话/立绘/我的家/今日三件事由 JS 搬进来（`#wsdrawer-chat`） --></div>
+    </div>
     <div id="wsdrawer">
       <div id="wsdrawer-h">
         <span>🗄 诊断 / 对话</span><span class="sp"></span>
         <button id="wsdrawer-close" type="button">收起</button>
       </div>
       <div id="wsdrawer-b">
-        <div id="wsdrawer-hint">地图永远看得见：抽屉只在需要时从左边缘拉出。<br />下面这些是诊断件（点各自标题展开）；<b>将来与角色的对话就放在最下面那块</b>。</div>
+        <div id="wsdrawer-hint">🗄 <b>诊断（只给试验台用 —— <u>不进 App</u>）</b>：地图永远看得见，抽屉只在需要时从左边缘拉出。<br />
+          下面这些是诊断件（点各自标题展开）。<b>与角色的对话在左边那个「💬 对话」抽屉里</b>，两者分开，互不遮挡。</div>
       </div>
       <div id="wsdrawer-chat">
         <div id="ws-daily" style="margin-bottom:6px">
@@ -300,7 +326,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v42";
+      const BUILD = "ws3dshow-2026-09-25-v43";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3701,7 +3727,8 @@
                 + '<span class="tag">💬 ' + ((lcChar && lcChar.name) || "角色") + '</span>';
               lcMarker.title = "点我和她说话（走 LingChat 本身的对话）";
               lcMarker.onclick = function () {
-                try { window.__WSDRAWER__ && window.__WSDRAWER__.open(); } catch (e) { /* 忽略 */ }
+                /* 点地图上的角色 ⇒ 开**对话**抽屉（不是诊断抽屉） */
+                try { window.__WSDRAWER__ && window.__WSDRAWER__.chat && window.__WSDRAWER__.chat(); } catch (e) { /* 忽略 */ }
                 try { lcEl.input && lcEl.input.focus(); } catch (e) { /* 忽略 */ }
               };
               (document.getElementById("map") || document.body).appendChild(lcMarker);
@@ -4251,11 +4278,26 @@
         }
         var hint = document.getElementById("wsdrawer-hint");
         if (hint) hint.textContent = "地图永远看得见：抽屉只在需要时从左边缘拉出（已装 " + moved + " 个诊断件；点各自标题展开）。与角色的对话将来放在最下面那块。";
-        function setOpen(v) { dw.classList.toggle("open", !!v); tab.style.opacity = v ? "0.35" : "1"; }
+        /* 💬 对话抽屉：把 `#wsdrawer-chat`（立绘/对话/我的家/今日三件事）**整体搬进来** —— 不重写它的标记与逻辑 */
+        var chat = document.getElementById("wschat"), chatBody = document.getElementById("wschat-b");
+        var chatTab = document.getElementById("wschat-tab");
+        var chatBlock = document.getElementById("wsdrawer-chat");
+        if (chat && chatBody && chatBlock) { chatBody.appendChild(chatBlock); }
+        function setChat(v) {
+          if (!chat) return;
+          chat.classList.toggle("open", !!v);
+          if (chatTab) chatTab.style.opacity = v ? "0.35" : "1";
+          if (v) setOpen(false);                      /* 互斥：开对话就把诊断收起（不叠着挡地图） */
+        }
+        function setOpen(v) { dw.classList.toggle("open", !!v); tab.style.opacity = v ? "0.35" : "1"; if (v) setChat(false); }
         tab.onclick = function () { setOpen(!dw.classList.contains("open")); };
         document.getElementById("wsdrawer-close").onclick = function () { setOpen(false); };
-        document.addEventListener("keydown", function (e) { if (e.key === "Escape") setOpen(false); });
-        window.__WSDRAWER__ = { open: function () { setOpen(true); }, close: function () { setOpen(false); }, moved: moved };
+        if (chatTab) chatTab.onclick = function () { setChat(!chat.classList.contains("open")); };
+        var chatClose = document.getElementById("wschat-close");
+        if (chatClose) chatClose.onclick = function () { setChat(false); };
+        document.addEventListener("keydown", function (e) { if (e.key === "Escape") { setOpen(false); setChat(false); } });
+        window.__WSDRAWER__ = { open: function () { setOpen(true); }, close: function () { setOpen(false); }, moved: moved,
+                                chat: function () { setChat(true); }, chatClose: function () { setChat(false); } };
         /* 🔴 把手上的 ❌ 数字：从 wsLog 的 error 计数取（**数不出来就不显示**，不写 0 冒充） */
         setInterval(function () {
           try {

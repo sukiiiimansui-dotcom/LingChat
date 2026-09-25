@@ -118,6 +118,21 @@
         <div id="lodb-head" class="artb__h">🛰 LOD —</div>
         <div id="lodb-body" class="artb__b"></div>
       </div>
+      <!-- 📋 **超级详细日志**（机主 2026-09-25 要求）：默认收起（只占一行小字）；展开后是**逐条时间线**
+           （每条请求 / 模块加载 / 每次刷新 / 每个错误，带相对毫秒）。三个按钮：复制（直接给主会话看）、
+           下载（.txt 落盘）、清空。🔴 **只在展开时**每 2 秒刷新一次 —— 收起时零开销（日志不许拖慢页面）。 -->
+      <div id="logb" class="artb bldb">
+        <div id="logb-head" class="artb__h">📋 日志 —</div>
+        <div id="logb-body" class="artb__b" style="display:none">
+          <div style="display:flex;gap:6px;margin:2px 0 6px">
+            <button id="logb-copy" type="button">复制全部</button>
+            <button id="logb-dl" type="button">下载 .txt</button>
+            <button id="logb-clear" type="button">清空</button>
+            <span id="logb-note" style="opacity:.75;align-self:center"></span>
+          </div>
+          <pre id="logb-pre" style="margin:0;max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.35"></pre>
+        </div>
+      </div>
     </div>
     <div class="hud">
       <span><b id="m-n">0</b> 栋</span>
@@ -2461,6 +2476,7 @@
         const f = roadsFeedOf();
         if (!f) return;
         const rep = await f.refresh("view");
+        try { const L = window.__WSLOG__; if (L) L.debug("bundle", "路 刷新", rep); } catch (e2) { /* 忽略 */ }
         if (rep && rep.planned && rep.capped) window.__ROADS_BUNDLE_CAPPED__ = f.facts().wanted;
         try { renderRoadHud(); } catch (e) { /* HUD 失败不影响地图 */ }
         renderLodAttribution();
@@ -2471,6 +2487,7 @@
         const f = bldFeedOf();
         if (!f) return;
         const rep = await f.refresh("view");
+        try { const L = window.__WSLOG__; if (L) L.debug("bundle", "楼 刷新", rep); } catch (e2) { /* 忽略 */ }
         if (rep && rep.planned && rep.capped) window.__BLD_BUNDLE_CAPPED__ = f.facts().wanted;
         try { renderBldBundleHud(); } catch (e) { /* HUD 失败不影响地图 */ }
         renderLodAttribution();
@@ -2482,6 +2499,7 @@
         const f = placesFeedOf();
         if (!f) return null;
         const rep = await f.refresh("view");
+        try { const L = window.__WSLOG__; if (L) L.debug("bundle", "片区名 刷新", rep); } catch (e2) { /* 忽略 */ }
         if (rep && rep.planned && rep.capped) window.__PLACES_BUNDLE_CAPPED__ = f.facts().wanted;
         try { refreshLabels("places-hud"); } catch (e) { /* 标签失败不影响地图 */ }
         renderLodAttribution();
@@ -2929,6 +2947,11 @@
             }
           } catch (err) { /* 计数失败不该影响地图 */ }
           errs.push(String(e?.error?.message || e));
+          /* 📋 进日志：地图级错误最容易"只在屏幕上闪一下"⇒ 时间线里必须留痕（日志抛错不许影响地图） */
+          try {
+            const L = window.__WSLOG__;
+            if (L) L.warn("map", "地图 error", { src: (e && e.sourceId) || null, msg: String(e?.error?.message || e) });
+          } catch (err2) { /* 忽略 */ }
         });
         /* 🛰 瓦片陆续到达 ⇒ 计数 + 刷新回证（节流 250ms）。
            ⚠️ 判据是"**有没有坐标**"（`tile` 或 `coord` 任一），不是"有没有 tile" ——
@@ -2947,6 +2970,13 @@
 
         let busy = false;
         map.on("load", async () => {
+          try {
+            const L = window.__WSLOG__;
+            if (L) L.info("map", "地图 load（样式校验通过、可以建层了）", {
+              zoom: (function () { try { return map.getZoom(); } catch (e2) { return null; } })(),
+              style: (function () { try { return (map.getStyle() || {}).name || null; } catch (e2) { return null; } })(),
+            });
+          } catch (err2) { /* 忽略 */ }
           /* 🛰 **LOD 层排在最前**：它**不依赖任何取数**（栅格层只用瓦片 URL）。
              🔴 2026-09-25 真机回归「道路全没了 + LOD 层压根没建」的真因就是**顺序**：
              它原排在 `applyRoads()` 之后，而那次取路（r=2000，源扛不住）卡了 ~94s
@@ -3060,10 +3090,25 @@
         }
 
         /* FPS（滚动 1 秒窗口，与项目其它地方同口径） */
-        let last = performance.now(), frames = 0, win = 0;
+        let last = performance.now(), frames = 0, win = 0, fpsSamples = 0;
         (function tick(now) {
           const dt = now - last; last = now; frames++; win += dt;
-          if (win >= 1000) { $("m-fps").textContent = String(Math.round((frames * 1000) / win)); frames = 0; win = 0; }
+          if (win >= 1000) {
+            const fps = Math.round((frames * 1000) / win);
+            $("m-fps").textContent = String(fps); frames = 0; win = 0;
+            /* 📋 每 **5 秒**记一条 fps + 当时机位（机主说"卡"时，日志里能对上"在哪个 zoom/哪一带"）；
+               每秒都记太密 —— 有抽样保护也不该让 fps 把缓冲塞满。 */
+            if ((++fpsSamples % 5) === 0) {
+              try {
+                const L = window.__WSLOG__;
+                if (L) L.info("fps", fps + " fps", {
+                  zoom: (function () { try { return Number(map.getZoom().toFixed(2)); } catch (e2) { return null; } })(),
+                  pitch: (function () { try { return Math.round(map.getPitch()); } catch (e2) { return null; } })(),
+                  layers: (function () { try { return map.getStyle().layers.length; } catch (e2) { return null; } })(),
+                });
+              } catch (e2) { /* 忽略 */ }
+            }
+          }
           requestAnimationFrame(tick);
         })(performance.now());
 
@@ -3442,6 +3487,109 @@
     <script type="module">
       import * as TF from "/vendor/wsScene.mjs";
       window.__TF__ = TF;
+
+    </script>
+    <script>
+      /* 📋 日志面板接线（**只在展开时**每 2s 刷新；收起时零开销）。
+         报告文本来自共享真源 `wsLog.text(envSnapshot(...))` —— 页面不自己拼格式。 */
+      (function () {
+        var head = document.getElementById("logb-head"), body = document.getElementById("logb-body");
+        var pre = document.getElementById("logb-pre"), note = document.getElementById("logb-note");
+        if (!head || !body || !pre) return;
+        var timer = null, open = false;
+        function report() {
+          var L = window.__WSLOG__;
+          if (!L) return "日志未接（?log=0，或 vendor 是旧产物没有 createWsLog）";
+          var TFx = window.__TF__ || {};
+          var env = (typeof TFx.envSnapshot === "function") ? TFx.envSnapshot({
+            build: (document.getElementById("m-build") || {}).textContent || null,
+            fps: (document.getElementById("m-fps") || {}).textContent || null,
+            zoom: (document.getElementById("m-z") || {}).textContent || null,
+            bldb: (document.getElementById("m-bldb") || {}).textContent || null,
+            roads: (document.getElementById("m-roads") || {}).textContent || null,
+            labels: (document.getElementById("m-labels") || {}).textContent || null,
+            wslogFresh: window.__TF_FRESH__ || null
+          }) : {};
+          return L.text(env);
+        }
+        function paint() {
+          pre.textContent = report();
+          var c = (window.__WSLOG__ && window.__WSLOG__.counts) ? window.__WSLOG__.counts() : null;
+          note.textContent = c ? ("共 " + c.total + " 条 · 丢弃 " + c.dropped + (c.dropped ? "（日志不完整）" : "")) : "";
+          var mark = c && c.error ? " ❌" + c.error : "";
+          head.textContent = "📋 日志 " + (open ? "▾" : "▸") + mark;
+        }
+        function setOpen(v) {
+          open = v; body.style.display = v ? "" : "none";
+          if (v) { paint(); timer = setInterval(function () { if (body.offsetParent !== null) paint(); }, 2000); }
+          else if (timer) { clearInterval(timer); timer = null; }
+          paint();
+        }
+        head.style.cursor = "pointer";
+        head.onclick = function () { setOpen(!open); };
+        document.getElementById("logb-copy").onclick = function () {
+          var txt = report();
+          var done = function (ok) { note.textContent = ok ? "✅ 已复制（" + txt.length + " 字符）" : "复制被拒：已全选，长按复制"; };
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(txt).then(function () { done(true); }, function () {
+                var r = document.createRange(); r.selectNodeContents(pre); var s = getSelection(); s.removeAllRanges(); s.addRange(r); done(false);
+              });
+            } else {
+              var r2 = document.createRange(); r2.selectNodeContents(pre); var s2 = getSelection(); s2.removeAllRanges(); s2.addRange(r2); done(false);
+            }
+          } catch (e) { note.textContent = "复制失败：" + e; }
+        };
+        document.getElementById("logb-dl").onclick = function () {
+          try {
+            var blob = new Blob([report()], { type: "text/plain;charset=utf-8" });
+            var a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "ws3dshow-log-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
+            document.body.appendChild(a); a.click(); a.remove();
+            note.textContent = "✅ 已下载";
+          } catch (e) { note.textContent = "下载失败：" + e; }
+        };
+        document.getElementById("logb-clear").onclick = function () {
+          try { window.__WSLOG__ && window.__WSLOG__.clear(); } catch (e) { /* 忽略 */ }
+          paint();
+        };
+        /* `?log=1` 直接展开（默认收起） */
+        try {
+          var q = new URLSearchParams(location.search);
+          if ((q.get("log") || "") === "1") setOpen(true); else paint();
+        } catch (e) { paint(); }
+        window.__WSLOG_PANEL__ = { open: function () { setOpen(true); }, text: report, paint: paint };
+      })();
+      /* 📋 **超级详细日志上报**（机主 2026-09-25：「在页面做超级详细的日志上报喵」）。
+         规则**全在共享真源** `wsLog.ts`（环形缓冲 / 截断 / 诚实丢弃计数 / fetch 与全局错误自动收），页面只接线。
+         · `?log=0` 整体关掉（想量"日志本身花多少"时用）；默认开；`?log=1` 直接展开面板。
+         · 🔴 启动时**点名关键符号**：今天机主截图那句「模块缺 createBundleFeed（旧 vendor?）」花了半小时才分辨出
+           "是产物缺符号、还是浏览器缓存" —— 现在开机第一行就写清楚缺哪些。 */
+      try {
+        const q = new URLSearchParams(location.search);
+        const on = (q.get("log") ?? "1") !== "0";
+        if (on && typeof TF.createWsLog === "function") {
+          const L = TF.createWsLog({ tag: "ws3dshow", cap: 1500 });
+          L.patchFetch();                       // 每条请求：status / ms / 内容类型 / 失败原因
+          L.installErrors();                    // window.onerror + unhandledrejection
+          window.__WSLOG__ = L;
+          const NEED = ["createBundleFeed", "bundleCountsLine", "loadBundleIndex", "lodPlan", "lodOpacityAt",
+                        "pickLabels", "bldVerdictText", "sceneSelfReport", "envSnapshot", "createWsLog"];
+          const miss = NEED.filter((k) => typeof TF[k] !== "function");
+          L.info("boot", "页面启动（日志已接）", TF.envSnapshot({
+            build: (document.getElementById("m-build") || {}).textContent || null,
+            logSwitch: q.get("log") ?? "默认(开)",
+            vendorFresh: window.__TF_FRESH__ ?? null,
+          }));
+          if (miss.length) L.error("vendor", "缺符号 " + miss.join("/") + "（旧 vendor 或产物不全）", { miss });
+          else L.info("vendor", "关键符号齐（" + NEED.length + " 个）");
+        } else if (!on) {
+          window.__WSLOG__ = null;              // 显式关：HUD/面板会写"日志已关"
+        } else {
+          console.warn("[wslog] vendor 里没有 createWsLog（旧产物？）");
+        }
+      } catch (e) { console.warn("[wslog] 启动失败：", e); }
     </script>
   </body>
 </html>

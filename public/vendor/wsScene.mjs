@@ -1983,6 +1983,188 @@ function adminLabelsFrom(list) {
   return out;
 }
 
+// src/components/views/worldsim/wsLog.ts
+var LEVEL_ORDER = { debug: 10, info: 20, warn: 30, error: 40 };
+function safeStr(v, maxStr = 400) {
+  if (v === void 0) return "undefined";
+  if (v === null) return "null";
+  if (typeof v === "string") return v.length > maxStr ? v.slice(0, maxStr) + `…(+${v.length - maxStr})` : v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (typeof v === "bigint") return String(v) + "n";
+  if (typeof v === "function") return `[fn ${v.name || "anonymous"}]`;
+  try {
+    const seen = /* @__PURE__ */ new WeakSet();
+    const s = JSON.stringify(v, (_k, val) => {
+      if (typeof val === "object" && val !== null) {
+        if (seen.has(val)) return "[circular]";
+        seen.add(val);
+      }
+      if (typeof val === "bigint") return String(val) + "n";
+      if (typeof val === "function") return `[fn ${val.name || "anonymous"}]`;
+      return val;
+    });
+    if (s === void 0) return String(v);
+    return s.length > maxStr ? s.slice(0, maxStr) + `…(+${s.length - maxStr})` : s;
+  } catch (e) {
+    return `[数不出来：${e?.message || String(e)}]`;
+  }
+}
+function hhmmss(ms) {
+  const d = new Date(ms);
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+function createWsLog(opts = {}) {
+  const cap = Math.max(50, opts.cap ?? 1500);
+  const maxStr = Math.max(40, opts.maxStr ?? 400);
+  const now = opts.now ?? (() => Date.now());
+  const t0 = now();
+  const buf = [];
+  const counts = { total: 0, debug: 0, info: 0, warn: 0, error: 0, dropped: 0, cap };
+  const min = LEVEL_ORDER[opts.minLevel ?? "debug"];
+  let seq = 0;
+  const repeats = /* @__PURE__ */ new Map();
+  function push(lvl, tag, msg, data) {
+    if (LEVEL_ORDER[lvl] < min) return null;
+    const key = lvl + "|" + tag + "|" + msg;
+    const n = (repeats.get(key) ?? 0) + 1;
+    repeats.set(key, n);
+    if (n > 5 && n % 50 !== 0) {
+      counts.dropped += 1;
+      return null;
+    }
+    const e = {
+      seq: ++seq,
+      dt: now() - t0,
+      at: hhmmss(now()),
+      lvl,
+      tag,
+      msg: n > 5 ? `${msg}（同类第 ${n} 次）` : msg,
+      ...data === void 0 ? {} : { data: typeof data === "string" ? safeStr(data, maxStr) : data }
+    };
+    counts.total += 1;
+    counts[lvl] += 1;
+    buf.push(e);
+    if (buf.length > cap) {
+      buf.splice(0, buf.length - cap);
+      counts.dropped += 1;
+    }
+    try {
+      opts.sink?.(e);
+    } catch {
+    }
+    return e;
+  }
+  function text(env = {}) {
+    const head = [
+      `📋 wsLog 报告 · ${opts.tag || "page"} · 生成于 ${hhmmss(now())}`,
+      `条数 ${counts.total}（debug ${counts.debug} / info ${counts.info} / warn ${counts.warn} / error ${counts.error}） · 缓冲上限 ${cap} · **丢弃 ${counts.dropped}**${counts.dropped ? "（日志不完整，重复行或超上限）" : ""}`
+    ];
+    const envLines = Object.keys(env).length ? ["── 环境 ──", ...Object.keys(env).map((k) => `  ${k} = ${safeStr(env[k], maxStr)}`)] : [];
+    const body = buf.map((e) => {
+      const d = e.data === void 0 ? "" : `  ${typeof e.data === "string" ? e.data : safeStr(e.data, maxStr)}`;
+      const mark = e.lvl === "error" ? "❌" : e.lvl === "warn" ? "⚠️" : e.lvl === "info" ? "·" : "◦";
+      return `${mark} [${String(e.dt).padStart(7)}ms] ${e.tag}: ${e.msg}${d}`;
+    });
+    return [...head, ...envLines, "── 事件 ──", ...body].join("\n");
+  }
+  return {
+    tag: opts.tag || "page",
+    log: push,
+    debug: (tag, msg, data) => push("debug", tag, msg, data),
+    info: (tag, msg, data) => push("info", tag, msg, data),
+    warn: (tag, msg, data) => push("warn", tag, msg, data),
+    error: (tag, msg, data) => push("error", tag, msg, data),
+    entries: () => buf.slice(),
+    counts: () => ({ ...counts }),
+    text,
+    json: (env = {}) => ({ tag: opts.tag || "page", at: now(), counts: { ...counts }, env, entries: buf.slice() }),
+    clear: () => {
+      buf.length = 0;
+      repeats.clear();
+    },
+    /**
+     * 包住 `fetch`：每条请求记 **url / status / ms / 字节数 / 错误**（字节数只有真读到 body 才有，
+     * 拿不到就是 `null` —— 不许写 0）。返回 `restore()`。
+     */
+    patchFetch(target = globalThis) {
+      const orig = target.fetch;
+      if (typeof orig !== "function") {
+        push("warn", "log", "patchFetch：没有 fetch 可包");
+        return () => {
+        };
+      }
+      target.fetch = async function(input, init) {
+        const url = typeof input === "string" ? input : input?.url || String(input);
+        const t = now();
+        try {
+          const r = await orig.call(this, input, init);
+          push(r.ok ? "debug" : "warn", "fetch", `${r.status} ${url}`, { ms: now() - t, ct: r.headers?.get?.("content-type") || null });
+          return r;
+        } catch (e) {
+          push("error", "fetch", `失败 ${url}`, { ms: now() - t, err: safeStr(e?.message || e, 200) });
+          throw e;
+        }
+      };
+      return () => {
+        target.fetch = orig;
+      };
+    },
+    /** `window.onerror` + `unhandledrejection` 全收（返回 `restore()`） */
+    installErrors(target = globalThis) {
+      const prevOnError = target.onerror;
+      const onErr = (ev) => {
+        const e = ev;
+        push("error", "window", e?.message || safeStr(e?.reason ?? ev, 200), {
+          at: `${e?.filename || "?"}:${e?.lineno ?? "?"}:${e?.colno ?? "?"}`,
+          stack: e?.error?.stack ? safeStr(e.error.stack, 300) : null
+        });
+        return false;
+      };
+      const onRej = (ev) => {
+        const e = ev;
+        const r = e?.reason;
+        push("error", "promise", r?.message || safeStr(e?.reason, 200), { stack: r?.stack ? safeStr(r.stack, 300) : null });
+      };
+      try {
+        target.onerror = onErr;
+      } catch {
+      }
+      const ae = target.addEventListener;
+      try {
+        ae?.call(target, "unhandledrejection", onRej);
+      } catch {
+      }
+      return () => {
+        try {
+          target.onerror = prevOnError;
+        } catch {
+        }
+        try {
+          target.removeEventListener?.call(target, "unhandledrejection", onRej);
+        } catch {
+        }
+      };
+    }
+  };
+}
+function envSnapshot(extra = {}) {
+  const nav = globalThis.navigator;
+  const mem = performance?.memory;
+  const conn = nav?.connection;
+  return {
+    ua: nav?.userAgent ?? null,
+    lang: nav?.language ?? null,
+    dpr: globalThis.devicePixelRatio ?? null,
+    viewport: globalThis.innerWidth ? `${globalThis.innerWidth}×${globalThis.innerHeight ?? "?"}` : null,
+    url: globalThis.location?.href ?? null,
+    heapMB: mem?.usedJSHeapSize ? Math.round(mem.usedJSHeapSize / 1048576) : null,
+    heapLimitMB: mem?.jsHeapSizeLimit ? Math.round(mem.jsHeapSizeLimit / 1048576) : null,
+    conn: conn?.effectiveType ?? null,
+    ...extra
+  };
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -2667,7 +2849,9 @@ export {
   contrastReport,
   createBundleFeed,
   createFeatureStore,
+  createWsLog,
   decorateBuildings,
+  envSnapshot,
   equipBoxes,
   fetchRadiusForView,
   fetchRadiusForZoom,
@@ -2746,6 +2930,7 @@ export {
   roadsRadiusFor,
   roadsVerdictState,
   roadsVerdictText,
+  safeStr,
   sceneGroupOf,
   sceneLayerPlan,
   sceneOrderViolations,

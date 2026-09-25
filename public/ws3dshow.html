@@ -534,8 +534,11 @@
         const opacity = THEME?.extrudOpacity || 0.97;
         const stops = [];
         for (const [h, c] of ramp) stops.push(h, c);
+        /* 🔘 `?bld=0`：**一层都不建**（调用方也会跳过 addLayer；这里返回空数组是双保险） */
+        if (BLD_OFF) return [];
         /* 🏢 `?bld=2` 走"拆件"那套图层（颜色读要素自带的 `color3d`、底座读 `h_base`） */
         if (BLD === 2) return bldShadowLayers().concat(bldLayerSpecsDetail(outline, vgrad, opacity, stops, ramp));
+        if (BST === 2) return bldShadowLayers().concat(bstLayers(outline, vgrad, opacity, stops, ramp));
         return bldShadowLayers().concat([
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
@@ -566,6 +569,57 @@
             },
           },
         ]);
+      }
+
+      /**
+       * 🎨 **楼体观感 v2（`?bst=2`）** —— 治机主那句「铺满地图的方片好丑」。
+       *
+       * 三层，各自对应一条诊断（**依据写在这里，别只写"更好看"**）：
+       *  ① `bld-contact`：**接触阴影** —— `fill` 层，`fill-translate:[2,2]` + 低不透明度、
+       *     **只有 z≥15 才建**（低 zoom 下影子会连成一片，反而更脏；低档整层关）。
+       *     颜色 = 主题描边色与地面色的**派生**（`shade`），不是第二套配色。
+       *  ② `bld-ext`：楼体 —— 高度**硬边分档**（`step`，3 档取自主题 ramp 的低/中/高段）
+       *     ⇒ 一眼看出高矮（原来的平滑插值在密集俯视下"几乎所有楼同色"）。
+       *  ③ `bld-line`：描边 —— **只画大脚印**（`filter: 非 small`）。
+       *     很小的楼（< ~15×15m）在屏幕上只有几像素，给它描边就等于在整片地上画网格线
+       *     —— 这是"一地瓷砖"感的最大来源（父代理的押注，我复算后同意）。
+       */
+      function bstLayers(outline, vgrad, opacity, stops, ramp) {
+        const ground = (THEME && THEME.metrics && THEME.metrics.groundHex) || "#dceff7";
+        const shadeFn = (window.__TF__ && window.__TF__["shade"]) || null;
+        const shadowCol = shadeFn ? shadeFn(ground, 0.82) : "rgba(0,0,0,0.12)";
+        /* 3 档：取 ramp 的 低/中/高 三段（**不新写色号**；ramp 本身就是主题真源） */
+        const pick = (i) => ramp[Math.min(ramp.length - 1, Math.max(0, i))][1];
+        const t1 = pick(Math.floor(ramp.length / 3)), t2 = pick(Math.floor((ramp.length * 2) / 3)), t3 = pick(ramp.length - 1);
+        const hi = ramp[ramp.length - 1][0];
+        return [
+          {
+            id: "bld-contact", type: "fill", source: "bld",
+            /* 低 zoom 不建这一层（影子会连成脏块）；`minzoom` 是**图层级**开关 ⇒ 可整层关 */
+            minzoom: 15,
+            paint: {
+              "fill-color": shadowCol, "fill-opacity": 0.35,
+              "fill-translate": [2, 2], "fill-translate-anchor": "viewport",
+            },
+          },
+          {
+            id: "bld-ext", type: "fill-extrusion", source: "bld",
+            paint: {
+              /* 高度**硬边分档**（step）：低/中/高各一段，密集俯视下也读得出高矮 */
+              "fill-extrusion-color": ["step", ["get", "h3d"], t1, Math.max(6, hi * 0.25), t2, Math.max(20, hi * 0.6), t3],
+              "fill-extrusion-height": ["get", "h3d"],
+              "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
+              "fill-extrusion-opacity": opacity,
+              "fill-extrusion-vertical-gradient": true,
+            },
+          },
+          {
+            id: "bld-line", type: "line", source: "bld",
+            /* 🔴 **只给大脚印描边**：`small` 是页面在准备要素时算好的 0/1（脚印面积 < BST_SMALL_M2） */
+            filter: ["!=", ["get", "small"], 1],
+            paint: { "line-color": outline.color, "line-width": outline.width },
+          },
+        ];
       }
 
       /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
@@ -641,7 +695,18 @@
            · `?bld=2&low=1`（或 `__PERF_LOW__`）：低档 —— 只画主体 + 描边。
          ⚠️ 模块没加载/没有 `decorateBuildings` 时**如实回退**到基准版，并把原因写进徽标
          （回退 == 静默失效，是这个项目反复踩过的坑）。 */
-      const BLD = (function () { try { return /[?&]bld=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; } })();
+      /* 🔘 `?bld=0` = **不画楼**（机主 2026-09-25：「这个瓦片能去掉吗喵 好丑…」→「就是那些铺满地图的方片」= 楼本身）。
+         保留路网/设施/标签与所有回证 —— 他只是想看看"没有那些方片"长什么样。
+         ⚠️ **默认保持开**（一个字节都不改默认观感）。 */
+      const BLD_OFF = (function () { try { return /[?&]bld=0\b/.test(location.search); } catch (e) { return false; } })();
+      const BLD = (function () { try { return BLD_OFF ? 0 : (/[?&]bld=2\b/.test(location.search) ? 2 : 1); } catch (e) { return 1; } })();
+      /* 🎨 `?bst=2` = 楼体观感 v2（A/B 用）：**小楼不描边** + **接触阴影**（贴地）+ 高度**硬边分档**。
+         依据（父代理诊断 + 我复算）：机主截图里"一地瓷砖"感来自 ① 很小的楼也画深色描边 ⇒ 形成网格线；
+         ② 可见区绝大多数楼落在同一高度档 ⇒ 同色；③ 低 pitch 下挤出体块=平面方块、没有接触阴影。
+         颜色仍然**全部取自主题**（ramp/outline 的派生），**不新增第二套配色**。 */
+      const BST = (function () { try { return /[?&]bst=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; } })();
+      /** 小楼阈值：脚印面积 < 这个（m²）就**只填充不描边**（≈15×15m；z16 下约 38px²） */
+      const BST_SMALL_M2 = 220;
       let WINS = BLD === 2 && (function () { try { return /[?&]win=1\b/.test(location.search); } catch (e) { return false; } })();
       const BLD_LOW = (function () { try { return !!(window.__PERF_LOW__ || /[?&]low=1\b/.test(location.search)); } catch (e) { return false; } })();
       /** 窗格层的状态（**三态判词**：未开 / 已开 / 失败：原因）—— 徽标如实显示，别让人以为是开了 */
@@ -684,6 +749,8 @@
       let lodVerdict = null;
       let lodLive = null;
       let lodPlanCache = null;
+      /** 最近一次 LOD 判定用的 zoom（用来标"陈旧"；null = 还没判定过） */
+      let lodHudZoom = null;
       /** 窗格贴图在 `map.addImage()` 里的 id（图由 `windowPatternSpec()` 现产，**不引 sprite 服务器**） */
       const WIN_IMAGE_ID = "ws-win";
       /**
@@ -1304,6 +1371,12 @@
       function updateLodHud() {
         const el = $("m-lod");
         if (!el) return;
+        /* 🔴 2026-09-25 读数 bug（机主截图）：`LOD[预渲染(z≤12) 不透明度 1.00]` 出现在 **z14.3** ——
+           档位/不透明度其实都是 zoom 的纯函数（z14.3 ⇒ 0 / vector），是**这一格没跟着 zoom 重画**。
+           ⇒ 修法：① 每次 `zoom` 事件也排一次刷新（下面挂了监听）；② 若"判定用的 zoom"与当前差 >0.05，
+           在格子里**如实标"陈旧（判定时 z=X）"**，绝不拿旧值冒充当前值。 */
+        const zNow = (map && map.getZoom) ? map.getZoom() : null;
+        const stale = (zNow !== null && lodHudZoom !== null && Math.abs(zNow - lodHudZoom) > 0.05);
         if (!LOD_ON) {
           el.textContent = "🛰 LOD 未启用（URL 加 `?lod=1`；当前未建预渲染层）";
           lodVerdict = null;
@@ -1336,9 +1409,12 @@
           /* 只读诊断口径（**最硬**的证据：瓦片状态 loaded/errored）——拿不到就是 null ⇒ 判"数不出来" */
           states: states,
         });
-        el.textContent = TFx.lodHudLine({ enabled: true, zoom: map.getZoom(), tiles: lodVerdict, live: lodLive }) +
+        lodHudZoom = zNow;
+        el.textContent = TFx.lodHudLine({ enabled: true, zoom: zNow, tiles: lodVerdict, live: lodLive }) +
           (lodState.indexOf("失败") === 0 ? " · " + lodState : "") +
-          (lodManifestErr ? " · 清单没取到：" + lodManifestErr : "");
+          (lodManifestErr ? " · 清单没取到：" + lodManifestErr : "") +
+          /* ⚠️ 瓦片计数可能比 zoom 旧（事件驱动）⇒ **如实标"陈旧"**，绝不拿旧值冒充当前值 */
+          (stale ? " · ⏳陈旧（判定时 z=" + lodHudZoom.toFixed(2) + "）" : "");
         window.__LOD_VERDICT__ = lodVerdict;
         window.__LOD_LIVE__ = lodLive;
         window.__LOD_TILE_STATES__ = states;
@@ -1460,7 +1536,8 @@
           const skipN = rows.filter(function (r) { return r.skip; }).length;
           const badKeys = rows.filter(function (r) { return r.hit === false || r.hit === "no-layer"; })
             .map(function (r) { return r.id + "." + r.key; });
-          head.textContent = (missN ? "⚠️ " : "") + "🛰 LOD ✅" + hitN + " ❌" + missN + (badKeys.length ? "（" + badKeys.join("；") + "）" : "") +
+          /* 🔴 读数 bug（机主截图 `❌4` 但看不出是哪 4 项）：**点名放最前**，再报计数 */
+          head.textContent = (badKeys.length ? "⚠️ ❌" + badKeys.length + "（" + badKeys.join("；") + "）· " : "") + "🛰 LOD ✅" + hitN + " ❌" + missN +
             " ⏭" + skipN + " · " + lodState;
           body.innerHTML = rows.map(function (r) {
             const mark = r.skip ? '<span class="artb__skip">⏭</span>'
@@ -1607,11 +1684,16 @@
           } catch (e) { errs.push("contrast " + e); }
           const hitN = rows.filter(function (r) { return r.hit === true; }).length;
           const missN = rows.filter(function (r) { return r.hit === false; }).length;
-          head.textContent = ART >= 2
+          head.textContent = (BST === 2 ? "🎨 bst=2（小楼不描边·接触阴影·高度硬边分档）· " : "") + (ART >= 2
             ? ("🎨 art=" + ART + " ✓ 命中 " + hitN + "/" + rows.length + (missN ? (" ❌未命中 " + missN) : "") +
                (ART3 ? " · " + (window.__TF__ && window.__TF__.art3Summary ? window.__TF__.art3Summary() : "") : "") +
                " · 🎬" + ((window.__TF__ && window.__TF__.WS_SCENE_SOURCE) ? (window.__SCENE_CONSUMED__ ? "wsScene ✓" : "页面自带（未换源）") : "未加载"))
-            : "🎨 art=1（基准版）";
+            : "🎨 art=1（基准版）");
+          if (BST === 2) {
+            const allF = (fcCache && fcCache.features) || [];
+            const smallN = allF.filter(function (f) { return (f.properties || {}).small === 1; }).length;
+            head.textContent += ` · 小楼（<${BST_SMALL_M2}m²）${smallN}/${allF.length} 张只填充不描边`;
+          }
           head.onclick = function () { box.classList.toggle("is-open"); };
           body.innerHTML = rows.map(function (r) {
             const mark = r.hit === true ? '<span class="artb__ok">✅</span>'
@@ -1640,6 +1722,12 @@
           const body = $("bldb-body");
           const box = $("bldb");
           if (!head || !body || !box) return;
+          if (BLD_OFF) {
+            head.textContent = "🏢 楼层已关（?bld=0）—— 路网/设施/标签照常";
+            body.innerHTML = '<div class="artb__row">· 去掉 <b>?bld=0</b> 就回来（**默认是开的**）</div>'
+              + '<div class="artb__row">· 楼的数据仍准备好（标签/HUD 还用），只是**不画**</div>';
+            return;
+          }
           const TFb = window.__TF__;
           const count = window.__BLD_COUNT__ || null;
           const tier = BLD_LOW ? "低档（只主体）" : "普通";
@@ -2305,9 +2393,28 @@
             bldWhy = "数不出来：模块里没有 decorateBuildings（" + tfState + "）—— 若产物里明明有，多半是**浏览器缓存了旧的 /vendor/wsScene.mjs**（服务端 immutable、URL 无内容哈希）：强刷/清缓存，或让主会话重建预览包";
           }
         }
+        /* 🎨 算一个**脚印面积**（m²，鞋带公式，经纬度按本地米制换算）——`?bst=2` 用它决定"小楼不描边"。
+           为什么不用"屏幕像素面积"：那要随 zoom 重算全部要素（贵且会抖）；面积是**要素自身属性**，
+           稳定、可数、可自检（阈值 `BST_SMALL_M2`）。 */
+        const fpAreaM2 = (f) => {
+          const g = (f && f.geometry) || {};
+          const ring = (g.coordinates || [])[0] || [];
+          if (ring.length < 3) return 0;
+          let lat0 = 0;
+          for (const q of ring) lat0 += q[1];
+          lat0 /= ring.length;
+          const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
+          let a = 0;
+          for (let i = 0, n = ring.length; i < n; i++) {
+            const [x1, y1] = ring[i], [x2, y2] = ring[(i + 1) % n];
+            a += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
+          }
+          return Math.abs(a) / 2;
+        };
         if (!feats) feats = (fc.features || []).map((f) => {
           const [h, src] = renderHeight(f.properties || {});
-          return { ...f, properties: { ...f.properties, h3d: h, h_from: src } };
+          const fp = fpAreaM2(f);
+          return { ...f, properties: { ...f.properties, h3d: h, h_from: src, fp: Math.round(fp), small: fp < BST_SMALL_M2 ? 1 : 0 } };
         });
         window.__BLD_COUNT__ = bldCount || null;
         window.__BLD_FALLBACK__ = bldWhy || null;
@@ -2327,6 +2434,15 @@
         $("m-msg").textContent = stats.n ? "" : "这一带 OSM 没登记楼房";
         const data = { type: "FeatureCollection", features: feats };
         fcCache = data;
+        if (BLD_OFF) {
+          /* 🔘 `?bld=0`：**一个楼体图层都不建**，也不建源（省一次上传）。
+             数据仍然准备好（`stats`/标签要用），只是不画 —— HUD 如实写"楼层已关"。 */
+          stats.n = 0;
+          $("m-n").textContent = "关";
+          $("m-msg").textContent = "楼层已关（?bld=0）—— 路网/设施/标签照常，去掉 ?bld=0 即回来";
+          renderBldBadge();
+          return;
+        }
         if (map.getSource("bld")) map.getSource("bld").setData(data);
         else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
         renderBldBadge(); // 🏢 回证（各细节生成了多少 + 档位）随每次取楼刷新
@@ -2504,6 +2620,8 @@
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
         map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } });
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
+        /* 🛰 LOD 那一格也要跟着 zoom 走（它是 zoom 的纯函数；只在 zoomend 刷一次，仍是"事件驱动"） */
+        map.on("zoom", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });
         /* ☁️ art=3：天空叠加重画（moveend 时重画一次即可 —— 几何是确定性的，不会抖） */
         map.on("moveend", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });
         map.on("pitch", () => { try { drawSky(); } catch (e) { errs.push("sky " + e); } });

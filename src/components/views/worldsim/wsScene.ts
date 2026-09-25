@@ -199,13 +199,15 @@ export function lodTierLabel(tier: LodTier): string {
  *   z11  → 0.72（开始让位）
  *   z12  → 0.45（明显让位；此刻实时层+离线路网已盖住视野里的大部分）
  *   z13  → 0.18（几乎交还实时层，只剩一点"远处的底"）
- *   z≥13.5 → **0**（完全交还；层本身也在 `LOD_NEAR_ZOOM` 关掉）
+ *   z≥14 → **0**（完全交还；层本身也在 `LOD_NEAR_ZOOM` 关掉）
+ *   ⚠️ 2026-09-25 改：原来 13.5 就归零，而矢量楼要到 14 才画 ⇒ **12.8~14 那截两层都不管**
+ *   （机主在 13.5 看到「只有路线没有楼」）。现在归零点与矢量楼起点**统一在 14**。
  * ⚠️ **不是删掉瓦片**：z≤12 之外/实时层取不到的地方，仍靠它兜底（见 README/DESIGN 的 LOD 分工）。
  * 自检钉着：档位单调不增、`z ≥ LOD_OPACITY_ZERO_ZOOM` 必须为 0。
  */
-export const LOD_OPACITY_ZERO_ZOOM = 13.5;
+export const LOD_OPACITY_ZERO_ZOOM = 14;
 export const LOD_OPACITY_STOPS: ReadonlyArray<readonly [number, number]> = [
-  [9, 1], [10, 1], [11, 0.72], [12, 0.45], [13, 0.18], [LOD_OPACITY_ZERO_ZOOM, 0],
+  [9, 1], [10, 1], [11, 0.72], [12, 0.45], [13, 0.25], [13.5, 0.12], [LOD_OPACITY_ZERO_ZOOM, 0],
 ];
 
 /** 预渲染层在某个 zoom 下的不透明度（纯函数 ⇒ 自检不必建地图、更不必有 WebGL） */

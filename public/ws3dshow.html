@@ -124,6 +124,27 @@
       #wsdrawer-chat { margin-top: 10px; padding: 8px 10px; border-radius: 10px;
         border: 1px dashed rgba(121, 217, 255, 0.35); color: #b9d7ef; line-height: 1.6; }
       #wsdrawer-hint { opacity: 0.75; }
+      /* 💬 角色对话（机主：「我最[想]把角色做进去（接入 lingchat 本身对对话）」）——
+         聊的是 **LingChat 自己的后端**（`POST /api/chat`），回复里的好感/记忆都是**真数值**。 */
+      #lc-stat { font-size: 10.5px; color: #9fd8ff; margin-bottom: 4px; }
+      #lc-msgs { max-height: 34vh; overflow: auto; display: flex; flex-direction: column; gap: 6px;
+        padding: 4px 2px; }
+      #lc-msgs .m { padding: 5px 8px; border-radius: 9px; max-width: 92%; line-height: 1.5; white-space: pre-wrap; }
+      #lc-msgs .me { align-self: flex-end; background: rgba(13, 71, 161, 0.45); }
+      #lc-msgs .ta { align-self: flex-start; background: rgba(255, 255, 255, 0.08); }
+      #lc-msgs .sys { align-self: center; color: #ffb4a2; font-size: 10px; }
+      #lc-row { display: flex; gap: 6px; margin-top: 6px; }
+      #lc-in { flex: 1; min-width: 0; padding: 7px 9px; border-radius: 9px; background: #101418;
+        border: 1px solid #3a3a3a; color: #fff; font-size: 12px; }
+      #lc-send { padding: 7px 12px; border-radius: 9px; border: 1px solid #0d47a1;
+        background: rgba(13, 71, 161, 0.5); color: #fff; cursor: pointer; }
+      /* 地图上的角色标记（DOM，按 `map.project` 定位；不引新依赖） */
+      #lc-char { position: absolute; z-index: 26; transform: translate(-50%, -100%); cursor: pointer;
+        padding: 3px 8px; border-radius: 12px; background: rgba(13, 71, 161, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.5); color: #fff; font-size: 11px; font-weight: 700;
+        white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+      #lc-char .pin { display: block; text-align: center; font-size: 14px; line-height: 1; }
+      #lc-char.hide { display: none; }
     </style>
   </head>
   <body>
@@ -139,9 +160,12 @@
         <div id="wsdrawer-hint">地图永远看得见：抽屉只在需要时从左边缘拉出。<br />下面这些是诊断件（点各自标题展开）；<b>将来与角色的对话就放在最下面那块</b>。</div>
       </div>
       <div id="wsdrawer-chat">
-        💬 <b>角色对话（预留位）</b><br />
-        这里以后放世界模拟里的角色对话：地图上的人物/设施 ↔ 对话流。
-        现在先把容器占好，等对话接上来时**不用再动布局**。
+        <div id="lc-stat">💬 角色对话 · 正在连 LingChat…</div>
+        <div id="lc-msgs"></div>
+        <div id="lc-row">
+          <input id="lc-in" type="text" placeholder="跟她说句话…（走 LingChat 本身的对话）" />
+          <button id="lc-send" type="button">发送</button>
+        </div>
       </div>
     </div>
     <!-- 🎨 art 变体徽标 + **回证表**（机主第一反馈"这变了个啥"⇒ 先证明补丁真的生效） -->
@@ -258,7 +282,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v35";
+      const BUILD = "ws3dshow-2026-09-25-v37";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3303,6 +3327,139 @@
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
         map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } });
+
+        /* ══════════════════════════════════════════════════════════════════════════════
+         * 💬 **角色接入 LingChat 本身的对话**（机主 2026-09-25：「我最[想]把角色做进去喵
+         *    （接入 lingchat 本身对对话）」）
+         *
+         * 事实基线（都实测过，不猜）：
+         *  · LingChat 后端在 `http://127.0.0.1:8766`，且 **CORS 已放行** `http://127.0.0.1:5212`
+         *    （`access-control-allow-origin` 实测有）⇒ 页面**直接调**，不需要代理。
+         *  · `GET /api/characters` → 角色（实测 1 个：SYuki）· `POST /api/chat {message}` →
+         *    `{reply, affection, affection_delta, memory_count, chat_count, memory_saved}` ——
+         *    **回复 + 好感 + 记忆都是真数值**，正好是"过日子"要的三样。
+         *  · 失败**如实显示错误**，绝不编一句回复（红线：画面可以编，事实不许编）。
+         * ══════════════════════════════════════════════════════════════════════════════ */
+        const LC_BASE = "http://127.0.0.1:8766";
+        /* 角色站位：默认机位（渝中区 SPOT）旁边 ~60m —— 16 级一眼就能看见 */
+        const LC_POS = { lng: 106.56340, lat: 29.55630 };
+        let lcChar = null, lcAff = null, lcMem = null, lcBusy = false;
+        const lcEl = { stat: null, msgs: null, input: null };
+        try {
+          lcEl.stat = document.getElementById("lc-stat");
+          lcEl.msgs = document.getElementById("lc-msgs");
+          lcEl.input = document.getElementById("lc-in");
+        } catch (e) { /* 忽略 */ }
+
+        /** 好感/增量在接口里可能是**数字或对象**（实测 `affection: {affection_value: 10, shy_value: …}`）
+         *  ⇒ 统一取数：认 `数字` / `.affection_value` / `.value` / `.delta`；都认不出就 null（**数不出来，不写 0**）。 */
+        function lcNum(v) {
+          if (typeof v === "number" && isFinite(v)) return v;
+          if (v && typeof v === "object") {
+            for (const k of ["affection_value", "value", "delta", "affection_delta"]) {
+              if (typeof v[k] === "number" && isFinite(v[k])) return v[k];
+            }
+          }
+          return null;
+        }
+        function lcLine() {
+          if (!lcChar) return "💬 角色对话 · 未连上 LingChat（" + (window.__LC_ERR__ || "原因见日志") + "）";
+          return "💬 " + lcChar.name + " · 好感 " + (lcAff === null ? "数不出来" : lcAff)
+            + " · 记忆 " + (lcMem === null ? "数不出来" : lcMem) + " 条";
+        }
+        function lcPaint() { if (lcEl.stat) lcEl.stat.textContent = lcLine(); }
+        function lcPush(who, text) {
+          if (!lcEl.msgs) return;
+          const d = document.createElement("div");
+          d.className = "m " + who;
+          d.textContent = text;
+          lcEl.msgs.appendChild(d);
+          lcEl.msgs.scrollTop = lcEl.msgs.scrollHeight;
+        }
+        function lcSys(text) { lcPush("sys", text); }
+        function lcLog(lvl, msg, data) {
+          try { const L = window.__WSLOG__; if (L && L[lvl]) L[lvl]("char", msg, data); } catch (e) { /* 忽略 */ }
+        }
+        async function lcLoadChar() {
+          try {
+            const r = await fetch(LC_BASE + "/api/characters", { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const d = await r.json();
+            const cs = Array.isArray(d) ? d : (d.characters || d.data || []);
+            lcChar = cs[0] || null;
+            window.__LC_ERR__ = lcChar ? null : "角色列表为空";
+            lcLog("info", "角色已接入", { n: cs.length, name: lcChar && lcChar.name, id: lcChar && lcChar.id });
+          } catch (e) {
+            window.__LC_ERR__ = String(e).slice(0, 80);
+            lcLog("error", "取角色列表失败（LingChat 后端在 " + LC_BASE + "？）", { err: window.__LC_ERR__ });
+          }
+          lcPaint();
+          try { const m = document.getElementById("lc-char"); if (m) m.textContent = "💬 " + ((lcChar && lcChar.name) || "角色"); } catch (e) { /* 忽略 */ }
+          return lcChar;
+        }
+        async function lcSend(text) {
+          const msg = String(text || "").trim();
+          if (!msg || lcBusy) return null;
+          lcBusy = true;
+          lcPush("me", msg);
+          if (lcEl.input) lcEl.input.value = "";
+          try {
+            const r = await fetch(LC_BASE + "/api/chat", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ message: msg }),
+            });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const d = await r.json();
+            const affV = lcNum(d.affection), dltV = lcNum(d.affection_delta);
+            if (affV !== null) lcAff = affV;
+            if (typeof d.memory_count === "number") lcMem = d.memory_count;
+            lcPush("ta", String(d.reply || "（回复为空）"));
+            lcSys("好感 " + (affV === null ? "数不出来" : affV) + "（Δ" + (dltV === null ? "数不出来" : dltV) + "）"
+              + " · 记忆 " + (d.memory_count ?? "数不出来") + " 条" + (d.memory_saved ? " · 已存档" : ""));
+            lcPaint();
+            lcLog("info", "对话往返", { asked: msg.length, reply: String(d.reply || "").length, aff: affV, d: dltV, mem: d.memory_count });
+            return d;
+          } catch (e) {
+            /* 🔴 失败**如实显示**：绝不编一句回复（红线：画面可以编，事实不许编） */
+            lcPush("sys", "对话失败：" + String(e).slice(0, 90) + "（LingChat 后端在 " + LC_BASE + "？）");
+            lcLog("error", "对话失败", { err: String(e).slice(0, 120) });
+            return null;
+          } finally { lcBusy = false; }
+        }
+        /* 地图上的角色标记：DOM + `map.project`（零依赖），随地图移动更新 */
+        let lcMarker = null;
+        function lcUpdateMarker() {
+          try {
+            if (!lcMarker) {
+              lcMarker = document.createElement("div");
+              lcMarker.id = "lc-char";
+              lcMarker.innerHTML = '<span class="pin">💬</span>' + ((lcChar && lcChar.name) || "角色");
+              lcMarker.title = "点我和她说话（走 LingChat 本身的对话）";
+              lcMarker.onclick = function () {
+                try { window.__WSDRAWER__ && window.__WSDRAWER__.open(); } catch (e) { /* 忽略 */ }
+                try { lcEl.input && lcEl.input.focus(); } catch (e) { /* 忽略 */ }
+              };
+              (document.getElementById("map") || document.body).appendChild(lcMarker);
+            }
+            const p = map.project([LC_POS.lng, LC_POS.lat]);
+            const w = map.getCanvas().clientWidth, h = map.getCanvas().clientHeight;
+            const outside = p.x < -20 || p.y < -20 || p.x > w + 20 || p.y > h + 20;
+            lcMarker.classList.toggle("hide", outside);
+            lcMarker.style.left = p.x + "px";
+            lcMarker.style.top = p.y + "px";
+          } catch (e) { /* 标记失败不许影响地图 */ }
+        }
+        try {
+          const lcBtn = document.getElementById("lc-send");
+          if (lcBtn) lcBtn.onclick = function () { void lcSend(lcEl.input && lcEl.input.value); };
+          if (lcEl.input) lcEl.input.onkeydown = function (e) { if (e.key === "Enter") { e.preventDefault(); void lcSend(lcEl.input.value); } };
+          map.on("move", lcUpdateMarker);
+          map.on("zoom", lcUpdateMarker);
+          void lcLoadChar().then(function () { lcUpdateMarker(); });
+          /* 核验出口（无头/真机都能读；也便于以后接自动化） */
+          window.__LC__ = { send: lcSend, char: function () { return lcChar; }, aff: function () { return lcAff; },
+                            mem: function () { return lcMem; }, paint: lcPaint, pos: LC_POS, base: LC_BASE };
+        } catch (e) { errs.push("char " + e); }
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
         /* 🛰 LOD 那一格也要跟着 zoom 走（它是 zoom 的纯函数；只在 zoomend 刷一次，仍是"事件驱动"） */
         map.on("zoom", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });

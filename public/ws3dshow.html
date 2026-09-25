@@ -182,6 +182,13 @@
       #lc-char .tag { padding: 0 6px; border-radius: 999px; font-size: 0.72em; font-weight: 700; line-height: 1.5;
         background: rgba(13, 71, 161, 0.86); border: 1px solid rgba(255, 255, 255, 0.45); color: #fff; white-space: nowrap; }
       #lc-char.hide { display: none; }
+      /* 🧭 角色在视野外时的**边缘指示牌**（不编位置：只把"真实站位"的方向与距离说出来，点了把镜头带过去） */
+      #lc-off { position: absolute; z-index: 27; display: none; align-items: center; gap: 4px;
+        transform: translate(-50%, -50%); padding: 2px 8px; border-radius: 999px; cursor: pointer;
+        font-size: 11px; font-weight: 700; white-space: nowrap; color: #fff;
+        background: rgba(13, 71, 161, 0.92); border: 1px solid rgba(255, 255, 255, 0.5);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
+      #lc-off.on { display: flex; }
     </style>
   </head>
   <body>
@@ -330,7 +337,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v45";
+      const BUILD = "ws3dshow-2026-09-25-v49";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3460,16 +3467,24 @@
           try {
             const st = (typeof placesStoreOf === "function") ? placesStoreOf() : null;
             const feats = (st && st.features) ? st.features() : [];
+            const TFx = window.__TF__ || {};
             const out = [];
             for (const f of feats) {
-              const p = f.properties || {};
-              const nm = p.n || p.name;
-              const g = (f.geometry && f.geometry.coordinates) || null;
-              if (!nm || !g || !g.length) continue;
-              out.push({ name: String(nm), lng: Number(g[0]), lat: Number(g[1]), kind: p.k || null });
+              /* 🔴 离线包里的点是**扁平**的 `{n,k,p:[lng,lat],i}`（见 `/placesbundle/<格>.json`），
+                 **不是 GeoJSON** —— 以前这里按 `f.properties.n` + `f.geometry.coordinates` 读，
+                 结果永远返回空数组 ⇒ 「我的家」与角色站位双双掉兜底（机主看到的"位置不对"）。
+                 口径：形状交给共享模块的取值器（`placesPointOf`），没有它才退回扁平字段，**不自己猜**。 */
+              const nm = (f && (f.n || (f.properties && (f.n || f.properties.name)))) || null;
+              const pt = (typeof TFx.placesPointOf === "function") ? TFx.placesPointOf(f)
+                : (Array.isArray(f && f.p) ? f.p : ((f && f.geometry && f.geometry.coordinates) || null));
+              if (!nm || !pt || pt.length < 2) continue;
+              const lng = Number(pt[0]), lat = Number(pt[1]);
+              if (!isFinite(lng) || !isFinite(lat)) continue;
+              out.push({ name: String(nm), lng: lng, lat: lat, kind: (f && (f.k || (f.properties && f.properties.k))) || null });
             }
+            window.__WS_PLACES_N__ = out.length;   /* 核验出口：本函数**读到几个可用名点**（0 就是 0） */
             return out;
-          } catch (e) { return []; }
+          } catch (e) { window.__WS_PLACES_N__ = null; return []; }
         }
         function wsDeps() {
           const TFd = window.__TF__;
@@ -3741,7 +3756,7 @@
           } finally { lcBusy = false; }
         }
         /* 地图上的角色标记：DOM + `map.project`（零依赖），随地图移动更新 */
-        let lcMarker = null;
+        let lcMarker = null, lcOffEl = null, lcOffscreen = false;
         /**
          * 解析站位：**真实名点一旦拿到就钉住**（机主要「稳定显示」，不是每拖一下就换地方）；
          * 但**"视野中心兜底"不算数** —— 它只是"片区名包还没进仓库"时的临时值，
@@ -3749,23 +3764,52 @@
          * 第 ③ 级「本地散点」的锚点取真实片区名点：与「我的家」同一份 `pickHome` 数据，
          * 有名字才用；一条都没有 ⇒ 退到视野中心并**如实说明**（绝不编一个坐标）。
          */
+        /** 站位参考中心：**只在第一次解析时取一次**（之后不再读实时视野 ——
+            否则每拖动一次她就跟着"当前屏幕中心"跑，机主看到的就是"固定在屏幕中央"。） */
+        let lcAnchorRef = null;
+
         function lcResolveAnchor(force) {
           if (lcAnchorReal && !force) return lcAnchor;   /* 已经是真实名点 ⇒ 不再动（稳定） */
           lcPosSource = "scatter";
           try {
-            const c = map.getCenter();
-            const ph = (window.__TF__ && typeof window.__TF__.pickHome === "function")
-              ? window.__TF__.pickHome(wsPlaces(), { center: { lng: c.lng, lat: c.lat }, maxM: 3000 })
-              : { home: null, why: "vendor 缺 pickHome（旧产物？）" };
+            /* 冻结参考中心（只一次）；地图还没就绪就下次再说 */
+            if (!lcAnchorRef) {
+              const c0 = map.getCenter();
+              if (!isFinite(c0.lng) || !isFinite(c0.lat)) throw new Error("地图中心还不可用");
+              lcAnchorRef = { lng: c0.lng, lat: c0.lat };
+            }
+            const TF = window.__TF__;
+            if (!TF || typeof TF.pickHome !== "function") throw new Error("vendor 缺 pickHome（旧产物？）");
+            const places = wsPlaces();
+            /* 视野半径（用共享 `distM`；数不出来就不限）—— 先保证「**站在你看得见的地方**」，否则等于没显示 */
+            let visM = null;
+            try {
+              const b = map.getBounds();
+              const d = (typeof TF.distM === "function") ? TF.distM : null;
+              if (d) {
+                visM = Math.max(d(lcAnchorRef, { lng: b.getEast(), lat: b.getNorth() }),
+                                d(lcAnchorRef, { lng: b.getWest(), lat: b.getSouth() }));
+              }
+            } catch (e0) { visM = null; }
+            /* ① **视野内**最近的名点（优先"片区/小区"级别；与「我的家」同一份数据、同一个口径） */
+            let ph = visM ? TF.pickHome(places, { center: lcAnchorRef, maxM: visM }) : { home: null, why: "视野半径数不出来" };
+            let tier = "视野内";
+            /* ② 视野内没有名点 ⇒ 放宽到 3km（**可能不在视野里**，文案里要说清） */
+            if (!ph.home) { ph = TF.pickHome(places, { center: lcAnchorRef, maxM: 3000 }); tier = "3km 内（可能不在当前视野）"; }
+            /* ③ 再没有 ⇒ 20km 取**最近**名点（`preferKinds` 空 = 不按类型偏袒） */
+            if (!ph.home) { ph = TF.pickHome(places, { center: lcAnchorRef, maxM: 20000, preferKinds: [] }); tier = "20km 内最近（可能不在当前视野）"; }
             if (ph.home && isFinite(ph.home.lng) && isFinite(ph.home.lat)) {
               lcAnchor = { lng: ph.home.lng, lat: ph.home.lat };
               lcAnchorReal = true;
               lcPosNote = "本地散点：锚点 = 真实片区「" + ph.home.name + "」（" + (ph.home.kind || "片区")
-                + " · 距视野中心 " + Math.round(ph.distM || 0) + "m）· 浏览器预览没有运行时/日程 ⇒ 到不了前两级";
+                + " · 距首次视野中心 " + Math.round(ph.distM || 0) + "m · " + tier
+                + "）· 浏览器预览没有运行时/日程 ⇒ 到不了前两级";
             } else {
-              lcAnchor = { lng: c.lng, lat: c.lat };
-              lcAnchorReal = false;   /* 兜底：不钉住，等真名点到了再换 */
-              lcPosNote = "本地散点：**临时**取视野中心（" + (ph.why || "附近没有有名字的片区") + "）· 拿到片区名后会自动换成真实名点";
+              /* 兜底：钉在**冻结的参考中心**（不是实时中心）⇒ 拖动地图时跟着地图走，绝不追屏幕中心 */
+              lcAnchor = { lng: lcAnchorRef.lng, lat: lcAnchorRef.lat };
+              lcAnchorReal = false;
+              lcPosNote = "本地散点：**临时**钉在首次视野中心（" + (ph.why || "附近没有有名字的片区")
+                + "）· 名点一旦到位自动换，期间**不随拖动跑**";
             }
           } catch (e) {
             lcAnchor = null;
@@ -3815,6 +3859,33 @@
             lcMarker.classList.toggle("hide", outside);
             lcMarker.style.left = p.x + "px";
             lcMarker.style.top = p.y + "px";
+            lcOffscreen = outside;
+            /* 视野外 ⇒ 在屏幕边缘放一块指示牌（方向 + 真实距离）；点了把镜头带过去（**用户点了才动镜头**） */
+            if (!lcOffEl) {
+              lcOffEl = document.createElement("div");
+              lcOffEl.id = "lc-off";
+              lcOffEl.onclick = function () {
+                try { map.easeTo({ center: [lcAnchor.lng, lcAnchor.lat], duration: 500 }); } catch (e) { /* 忽略 */ }
+              };
+              (document.getElementById("map") || document.body).appendChild(lcOffEl);
+            }
+            if (outside) {
+              const m = 22;
+              const cx = Math.min(w - m, Math.max(m, p.x));
+              const cy = Math.min(h - m, Math.max(m, p.y));
+              let distM2 = null;
+              try {
+                const c = map.getCenter();
+                const d = (window.__TF__ && typeof window.__TF__.distM === "function") ? window.__TF__.distM : null;
+                if (d) distM2 = Math.round(d({ lng: c.lng, lat: c.lat }, lcAnchor));
+              } catch (e5) { distM2 = null; }
+              lcOffEl.textContent = "💬 " + ((lcChar && lcChar.name) || "角色") + " 在视野外"
+                + (distM2 === null ? "" : " · " + distM2 + "m") + " →";
+              lcOffEl.title = "点一下把镜头带过去（她的位置来自" + lcPosSource + "：" + lcPosNote + "）";
+              lcOffEl.style.left = cx + "px";
+              lcOffEl.style.top = cy + "px";
+            }
+            if (lcOffEl) lcOffEl.classList.toggle("on", !!outside);
           } catch (e) { /* 标记失败不许影响地图 */ }
         }
         try {
@@ -3828,7 +3899,7 @@
           /* 🔴 角色站位**不跟着视野变**（机主要"稳定"）：只在还没解析出来时重试一次（片区名包可能刚到） */
           map.on("moveend", function () {
             try { wsBuildDaily(); } catch (e2) { /* 忽略 */ }
-            try { if (!lcAnchorReal) lcResolveAnchor(); } catch (e3) { /* 忽略 */ }
+            /* 🔴 这里**不许**重算站位：兜底锚点是"冻结的参考中心"，重算就等于"每拖一次追一次屏幕中心" */
             try { lcUpdateMarker(); } catch (e4) { /* 忽略 */ }
           });
           /* 核验出口（无头/真机都能读；也便于以后接自动化） */
@@ -3838,7 +3909,7 @@
                             mem: function () { return lcMem; }, paint: lcPaint, base: LC_BASE,
                             /* 站位如实出口：位置 / **来源档位** / 一句为什么（无头自检与真机都能读） */
                             pos: function () { return lcAnchor; }, posSource: function () { return lcPosSource; },
-                            posNote: function () { return lcPosNote; }, posReal: function () { return lcAnchorReal; },
+                            posNote: function () { return lcPosNote; }, posReal: function () { return lcAnchorReal; }, offscreen: function () { return lcOffscreen; },
                             resolvePos: function (force) { return lcResolveAnchor(force); } };
         } catch (e) { errs.push("char " + e); }
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });

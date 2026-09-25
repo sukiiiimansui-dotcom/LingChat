@@ -3487,6 +3487,39 @@
     <script type="module">
       import * as TF from "/vendor/wsScene.mjs";
       window.__TF__ = TF;
+      /* 📋 **超级详细日志上报**（机主 2026-09-25：「在页面做超级详细的日志上报喵」）。
+         规则**全在共享真源** `wsLog.ts`（环形缓冲 / 截断 / 诚实丢弃计数 / fetch 与全局错误自动收），页面只接线。
+         · `?log=0` 整体关掉（想量"日志本身花多少"时用）；默认开；`?log=1` 直接展开面板。
+         · 🔴 启动时**点名关键符号**：今天机主截图那句「模块缺 createBundleFeed（旧 vendor?）」花了半小时才分辨出
+           "是产物缺符号、还是浏览器缓存" —— 现在开机第一行就写清楚缺哪些。 */
+      try {
+        const q = new URLSearchParams(location.search);
+        const on = (q.get("log") ?? "1") !== "0";
+        if (on && typeof TF.createWsLog === "function") {
+          const L = TF.createWsLog({ tag: "ws3dshow", cap: 1500 });
+          L.patchFetch();                       // 每条请求：status / ms / 内容类型 / 失败原因
+          L.installErrors();                    // window.onerror + unhandledrejection
+          window.__WSLOG__ = L;
+          const NEED = ["createBundleFeed", "bundleCountsLine", "loadBundleIndex", "lodPlan", "lodOpacityAt",
+                        "pickLabels", "bldVerdictText", "sceneSelfReport", "envSnapshot", "createWsLog"];
+          const miss = NEED.filter((k) => typeof TF[k] !== "function");
+          L.info("boot", "页面启动（日志已接）", TF.envSnapshot({
+            build: (document.getElementById("m-build") || {}).textContent || null,
+            logSwitch: q.get("log") ?? "默认(开)",
+            vendorFresh: window.__TF_FRESH__ ?? null,
+          }));
+          if (miss.length) L.error("vendor", "缺符号 " + miss.join("/") + "（旧 vendor 或产物不全）", { miss });
+          else L.info("vendor", "关键符号齐（" + NEED.length + " 个）");
+          /* 面板是 classic 块、**先于**本 module 执行（module 默认 deferred）⇒ 起来后请它重画一次，
+             免得 `?log=1` 的首帧一直停在"日志未接"。 */
+          try { window.__WSLOG_PANEL__ && window.__WSLOG_PANEL__.paint && window.__WSLOG_PANEL__.paint(); } catch (e2) { /* 忽略 */ }
+        } else if (!on) {
+          window.__WSLOG__ = null;              // 显式关：HUD/面板会写"日志已关"
+        } else {
+          console.warn("[wslog] vendor 里没有 createWsLog（旧产物？）");
+        }
+      } catch (e) { console.warn("[wslog] 启动失败：", e); }
+
 
     </script>
     <script>
@@ -3561,35 +3594,6 @@
         } catch (e) { paint(); }
         window.__WSLOG_PANEL__ = { open: function () { setOpen(true); }, text: report, paint: paint };
       })();
-      /* 📋 **超级详细日志上报**（机主 2026-09-25：「在页面做超级详细的日志上报喵」）。
-         规则**全在共享真源** `wsLog.ts`（环形缓冲 / 截断 / 诚实丢弃计数 / fetch 与全局错误自动收），页面只接线。
-         · `?log=0` 整体关掉（想量"日志本身花多少"时用）；默认开；`?log=1` 直接展开面板。
-         · 🔴 启动时**点名关键符号**：今天机主截图那句「模块缺 createBundleFeed（旧 vendor?）」花了半小时才分辨出
-           "是产物缺符号、还是浏览器缓存" —— 现在开机第一行就写清楚缺哪些。 */
-      try {
-        const q = new URLSearchParams(location.search);
-        const on = (q.get("log") ?? "1") !== "0";
-        if (on && typeof TF.createWsLog === "function") {
-          const L = TF.createWsLog({ tag: "ws3dshow", cap: 1500 });
-          L.patchFetch();                       // 每条请求：status / ms / 内容类型 / 失败原因
-          L.installErrors();                    // window.onerror + unhandledrejection
-          window.__WSLOG__ = L;
-          const NEED = ["createBundleFeed", "bundleCountsLine", "loadBundleIndex", "lodPlan", "lodOpacityAt",
-                        "pickLabels", "bldVerdictText", "sceneSelfReport", "envSnapshot", "createWsLog"];
-          const miss = NEED.filter((k) => typeof TF[k] !== "function");
-          L.info("boot", "页面启动（日志已接）", TF.envSnapshot({
-            build: (document.getElementById("m-build") || {}).textContent || null,
-            logSwitch: q.get("log") ?? "默认(开)",
-            vendorFresh: window.__TF_FRESH__ ?? null,
-          }));
-          if (miss.length) L.error("vendor", "缺符号 " + miss.join("/") + "（旧 vendor 或产物不全）", { miss });
-          else L.info("vendor", "关键符号齐（" + NEED.length + " 个）");
-        } else if (!on) {
-          window.__WSLOG__ = null;              // 显式关：HUD/面板会写"日志已关"
-        } else {
-          console.warn("[wslog] vendor 里没有 createWsLog（旧产物？）");
-        }
-      } catch (e) { console.warn("[wslog] 启动失败：", e); }
     </script>
   </body>
 </html>

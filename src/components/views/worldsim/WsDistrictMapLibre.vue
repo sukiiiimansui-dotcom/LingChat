@@ -104,6 +104,12 @@
       <span v-if="stats.roads" :title="'本视野看得见的路（' + (stats.roadNote || '') + '）；行人会吸附到这些路上'">
         🛣 {{ stats.roads }}
       </span>
+      <!-- 🧱🏢 **离线楼房包**（切片 A）：默认**不发 `/api/buildings`**，楼从 `/bldbundle/<格>.json` 来。
+           可数一行：已取 x 格 / 包外 y / 失败 z + 仓库 N 栋（**数不出来不写 0**）。
+           `title` 是真源判词（`wsScene.bldVerdictText`）——"包外"必须与"这里没有楼"分得开。 -->
+      <span v-if="stats.bldBundle" :title="stats.bldVerdict">{{ stats.bldBundle }}</span>
+      <!-- 🧱🛣 离线路网包：同式（默认**不发 `/api/roads`**；仓库是**累积**的，换视野不减） -->
+      <span v-if="stats.roadsBundle" :title="stats.roadsVerdict">{{ stats.roadsBundle }}</span>
       <!-- 🏪 设施：**必须写"示意布局"**——这些点的经纬度是按 /api/facilities 的
            28×30m 方格摊出来的，不是实测位置（实测位置要走另一条卡）。 -->
       <span v-if="stats.facilities" :title="'设施（' + (stats.facNote || '') + '）—— 点位是**示意布局**，不是实测经纬度'">
@@ -139,6 +145,12 @@
         真楼 {{ stats.count }} 栋（稀疏）· {{ aiDrawn > 0 ? "已叠加 AI 示意层（非事实）" : "AI 示意层待生成" }}
       </span>
     </div>
+
+    <!-- 🔴 **署名**（`ROUTE.md` 第 2 条：用了有许可的数据就必须有可见署名，且"关掉 attribution 不算方案"）。
+         我们的地图库开了 `attributionControl: false` ⇒ 这里给一个**等价可见方案**：
+         句子**逐字来自包里的 `index.json`**（`source` 字段，由导出脚本写），页面**不改写第二版**。
+         取不到就如实写"署名取不到"——署名是合规项，**不许猜、不许编**。 -->
+    <div v-if="stats.attribution" class="ws-dml__attr" :title="stats.attribution">{{ stats.attribution }}</div>
   </div>
 </template>
 
@@ -210,7 +222,59 @@
   /* 🎬 场景装配（相机 + 层序）的**唯一真源**：与代拍页同一份（主会话要求"不许复制第二份"）。
      ⚠️ 数值**逐字保持**：本组件过去用 bearing 0 / maxPitch 85（与代拍页的 -18 / 70 不同），
      这两项**显式本地保留**并注明原因 —— 不许借"换源"顺手改观感。 */
-  import { applyPitchGuard, cameraDefaults, sceneLayerPlan, sceneOrderViolations, sceneSelfReport } from "./wsScene";
+  /* 🧱🏢🛣 **offline-first 的真源**（2026-09-25 切片 A）：发不发 `/api/*`、取数半径、三态判词
+     全在这几个函数里 —— App **只读结论 + 如实写 HUD**，一条规则都不在这里重写。
+     ⚠️ 这份真源同时有别的代理在用（片区名那条线），所以**本切片一个字都不改它**。 */
+  import {
+    WS_FETCH_R_BACKEND_MAX,
+    applyPitchGuard,
+    bldLiveDecision,
+    bldVerdictText,
+    cameraDefaults,
+    fetchRadiusForView,
+    fetchRadiusLadder,
+    prerenderSourceOf,
+    roadsLiveDecision,
+    roadsVerdictText,
+    sceneOrderViolations,
+    sceneSelfReport,
+    viewHalfMetersOf,
+  } from "./wsScene";
+  /* 🎬🏢 **小区级 3D 装配的共享真源**（`wsDistrictScene.ts`，2026-09-25 切片 A 从本组件**搬家**过去）：
+     `districtStyleOf`（原本地 `makeStyle`）、`bldLayerSpecsFor`（原 `bldLayerSpecs`）、
+     `applyBuildingsTo` + `flushBldStore` / `flushRoadsStore`（原 `applyBuildings`/`flushBld`/`flushRoads`）。
+     🔴 PR 标准门禁 C1：「App 宿主不许有第二份实现」—— 宿主只接线，逻辑在这份真源里，
+     原型页之后也从这里取（它的那份由片区名那条线收口）。 */
+  import {
+    bldLayerSpecsFor,
+    districtStyleOf,
+    flushBldStore,
+    flushRoadsStore,
+    scenePlanConsumed,
+  } from "./wsDistrictScene";
+  /* 🧱 **累积式要素仓库 + 离线格数学**（`createFeatureStore` / `*BundleCellsForView`）：
+     机主「之前的没了…必须保证视野内完整」那条。合并/淘汰/格键的规则只有那一份，这里只调用。 */
+  import { createFeatureStore } from "./wsFeatureStore";
+  /* 🧱 **离线包取数管道**（App 侧承载；代拍页里那份是原型的内联写法，不进 PR）：
+     串行取格 + 每格独立超时 + 并进仓库 + 一次 setData。判词/决策/半径仍从 `wsScene` 来。 */
+  import {
+    BLD_STORE_CAP,
+    ROADS_STORE_CAP,
+    type BundleBuildingFeature,
+    type BundleFeedFacts,
+    type BundleRoadFeature,
+    type BundleView,
+    bldIdOf,
+    bldPointOf,
+    bldVerdictState,
+    bundleCountsLine,
+    createBundleFeed,
+    fetchWithTimeout,
+    loadBundleIndex,
+    roadsIdOf,
+    roadsPointOf,
+    roadsVerdictState,
+  } from "./wsOfflineFeed";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -382,7 +446,7 @@
    */
   const fallbackKind = ref<"none" | "temp" | "perm">("none");
   /** 🎬 相机/层序有没有真的取自 `wsScene`（自证用；拿不到模块就保持 false ⇒ 面板如实标"还没换源"） */
-  let sceneConsumed = false;
+  /* 层序锚点「用上了没有」由共享真源回证（`wsDistrictScene.scenePlanConsumed()`）——宿主不再自存一份 */
   /** 曾经降级、后来恢复回 WebGL 了吗（面板要写出来：不然人以为一直在 2D） */
   const recovered = ref(false);
   /** 临时类的"后台等它出帧"计时器（卸载要清） */
@@ -748,6 +812,18 @@
     pins: 0,
     /** 🛣 本视野**看得见**的路条数（口径与画法一致：按 zoom 过滤档位，见 `visibleRoadCount`） */
     roads: 0,
+    /** 🛣 累积仓库那一行（可数：仓库 N 条 / 已取格 / 包外 / 失败）—— 与 HUD 同源 */
+    roadStore: "",
+    /** 🏢 离线楼房包那一行（`🏢 离线格 已取 x / 包外 y / 失败 z · 仓库 N 栋`） */
+    bldBundle: "",
+    /** 🛣 离线路网包那一行（同式） */
+    roadsBundle: "",
+    /** 🏢 判词（**真源** `wsScene.bldVerdictText`：包外 / 取数失败 / 正常，三态不混） */
+    bldVerdict: "",
+    /** 🛣 判词（**真源** `wsScene.roadsVerdictText`；包外只在计数行里如实写） */
+    roadsVerdict: "",
+    /** 🔴 署名（**原句取自包里的 `index.json`**，不在这里重写第二版）—— ODbL 硬要求 */
+    attribution: "",
     /** 路网统计的一句话（主干几条 / 有几条有名字）—— 数据质量要看得见 */
     roadNote: "",
     /** 🏪 画在地图上的设施点（`/api/facilities` 的生活类 + 交通类） */
@@ -805,37 +881,15 @@
   }
 
   /**
-   * 自建 style。
+   * 自建 style —— **装配在共享真源里**（`wsDistrictScene.districtStyleOf()`）。
    *
-   * ⚠️ 2026-09-19 更正：原来写「**不依赖瓦片服务器**」——那是当时的取舍，但结果是这块地方
-   * 一直是一整片纯深色（机主："只有白底/不像地图"）。现在接 **Esri 暗色灰底**（免 key、实测 0.48s）。
-   * 🔴 Esri 路径是 `{z}/{y}/{x}`（y 在前），写成 `{z}/{x}/{y}` 不报错但地图会跑到错位置。
+   * 🔴 2026-09-25（PR 标准门禁 C1）：这里原来有一份本地 `makeStyle()`，与原型页那份并存 ⇒
+   * "运行期逻辑必须在共享单一真源"（`ROUTE.md §五.1`）不达标。现在**搬家**到
+   * `wsDistrictScene.ts`（行为逐字不变），宿主只把主题/档位/过渡时长递进去。
+   * 回退：`git revert <本 commit>`。
    */
-  function makeStyle() {
-    /* 🎨 整份 style 的"底半部分"（`sky` + `sources` + 背景/底图/色罩/注记）现在由
-       `wsMapTheme.themeStyleParts()` 生成 —— 它是**纯函数**，所以
-       `ws_map_theme_selftest.mjs` 能在 Node 里把生成出来的 style 按
-       **从 vendored maplibre 包里现抠出来的 spec** 逐条校验
-       （根级属性白名单 / 图层类型枚举 / sky 的 7 个合法字段 / 各 paint 字段表）。
-
-       🔴 为什么值得这么做：2026-09-20 我往 `layers[0]` 塞过一个坏对象 ⇒
-       **整份 style 校验失败 ⇒ `load` 永不触发 ⇒ 全站退回 2D 降级**。
-       那种错只在**运行时**炸一次，而它本来是可以被断言掉的。
-       ⚠️ `sky` **不是图层类型**（图层类型只有 fill/line/symbol/circle/heatmap/
-       fill-extrusion/raster/hillshade/color-relief/background），只能走**根级** `sky`。 */
-    const parts = themeStyleParts(theme.value, !!perf.low, perf.low.value ? 0 : NIGHT_FADE_MS);
-    return {
-      version: 8,
-      name: `ws-district-${theme.value.id}`,
-      /* `sky` 可能没有（低端档会关掉它）—— 用展开而不是写 `sky: undefined`，
-         免得给 style 里塞一个值为 undefined 的键（校验器会当它存在）。 */
-      ...(parts.sky ? { sky: parts.sky } : {}),
-      sources: parts.sources,
-      /* ⚠️ 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
-         楼房的图层由 `addLayer(l, "ref")` 插到 **ref 之前** ⇒ 自动落在线罩**之上**。
-         `ref` 必须留在最后一条：它是楼房层的插入锚点（见 loadBuildingsForView）。 */
-      layers: parts.layers,
-    };
+  function styleNow(): Record<string, unknown> {
+    return districtStyleOf(theme.value, !!perf.low.value, perf.low.value ? 0 : NIGHT_FADE_MS);
   }
 
   function bboxOfGeometry(g: { type?: string; coordinates?: unknown } | null | undefined): [number, number, number, number] | null {
@@ -1843,8 +1897,7 @@
       sceneSource: (() => {
         try {
           const camOk = true; // 相机默认值在 setup 期就取自 `cameraDefaults()`
-          sceneConsumed = sceneConsumed || camOk;
-          return sceneSelfReport(sceneConsumed).source;
+          return sceneSelfReport(scenePlanConsumed() || camOk).source;
         } catch {
           return "（页面自带）";
         }
@@ -1864,6 +1917,30 @@
         return c2 ? canvasIsBlank(c2) : null;
       })(),
       counts: { buildings: stats.count, roads: stats.roads, facilities: stats.facilities, pins: stats.pins },
+      /* 🧱 **离线包 offline-first 的可数回证**（切片 A）：默认发了几条 `/api/*`、取了哪些格、
+         包外/失败各几格、仓库里多少要素（**数不出来写 null，不写 0**）、以及署名原句。
+         ⚠️ 判词/计数口径**只有一份**（`wsScene.*VerdictText` / `wsOfflineFeed.bundleCountsLine`），
+         面板只是把它念出来 —— 不在这里另算一套。 */
+      bundle: (() => {
+        const bf: BundleFeedFacts = bldFeed.facts();
+        const rf: BundleFeedFacts = roadsFeed.facts();
+        let pre: { src: string; tilePath: string; kind: string; attribution: string } | undefined;
+        try {
+          /* 远景预渲染的**路径与署名取自真源**（`wsScene.prerenderSourceOf`）——App 还没挂那一层
+             （切片 C），这里只把真源的值念出来，免得以后有人手抄一份路径字面量。 */
+          const p = prerenderSourceOf("real");
+          pre = { src: p.src, tilePath: p.tilePath, kind: p.kind, attribution: p.attribution };
+        } catch {
+          pre = undefined;
+        }
+        return {
+          bld: { have: bf.have, missing: bf.missing, failed: bf.failed, pending: bf.pending, n: bf.n, cap: bf.cap, verdict: stats.bldVerdict },
+          roads: { have: rf.have, missing: rf.missing, failed: rf.failed, pending: rf.pending, n: rf.n, verdict: stats.roadsVerdict },
+          live: { on: LIVE_ON, bldHits: liveBldHits, roadHits: liveRoadHits, bldInfo: liveBldInfo, roadInfo: liveRoadInfo },
+          attribution: stats.attribution,
+          ...(pre ? { prerender: pre } : {}),
+        };
+      })(),
       roadSpecs: (() => {
         try {
           return roadLayerSpecs(theme.value.road).length;
@@ -1931,83 +2008,6 @@
        此时路网是地面上**唯一的结构** —— 用暗底那套（近黑描边 + 暖白路芯）
        铺在浅青地面上就是"白线画白纸"。 */
     return roadLayerSpecs(theme.value.road);
-  }
-
-  function bldLayerSpecs(): Array<Record<string, unknown>> {
-    /* 🎨 主题参数（暗色 ↔ 二次元）与低端档 —— 都从单一真源取，不在这里写死任何颜色 */
-    const th = theme.value;
-    const tier = themeTier.value;
-    /** 挤出体的公共 paint（三条层只差颜色/过滤，写一份免得漂移） */
-    const common = {
-      /* 主题/时间切换要**平滑**而不是「啪」一下：本构建的 paint 属性带 `transition: true`（spec 实测），
-         写上 `*-transition` 就由 MapLibre 自己做时长插值 —— **别自己写 rAF 插值动画**（那是重复劳动且更贵）。
-         三层（bld-ext / bld-roof / bld-antenna）共用这个对象 ⇒ 改一处覆盖三层。
-         900ms 是手感取值：太短像瞬变、太长像卡住。 */
-      "fill-extrusion-color-transition": { duration: 900, delay: 0 },
-      "fill-extrusion-opacity-transition": { duration: 900, delay: 0 },
-      "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
-      /* 底座统一读 `h_base`（拆件时每条都写了；老数据没有就退回 `min_height`） */
-      "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["get", "min_height"], 0],
-      /* 远景褪色（#8）：远处楼淡一点，近处实（曲线由主题给，见 `wsMapTheme.extrudOpacity`） */
-      "fill-extrusion-opacity": th.extrudOpacity,
-      /* 竖向渐变：楼顶比楼底亮一点 —— **写实**要它（墙面有明暗、体块才"立"得起来）；
-         **二次元要关掉它**（平涂/cell-shading：楼是一块纯色板，有渐变就不"动画"了）。
-         MapLibre 默认就是 true，但我们**显式写死**：默认值会随版本改，而这一条直接决定观感。 */
-      "fill-extrusion-vertical-gradient": th.verticalGradient,
-    };
-    /** 低端档：`outlineWidth === null` ⇒ **整条描边层不建**（少一层 = 少一遍要素遍历）。
-        暗色主题低端就是这条路；二次元低端只把线调细（因为那里描边是**唯一**的分隔手段）。 */
-    const showOutline = tier.outlineWidth !== null;
-    return [
-      {
-        id: "bld-ext",
-        type: "fill-extrusion",
-        source: "bld",
-        /* 性能（机主 2026-09-19：「能玩」优先）：
-           `fill-extrusion` 的开销**随要素数线性增长**（见 MapLibre 官方性能指南 /
-           Bavaria 矢量瓦片 3D 经验），而整区视野下楼只有亚像素 ⇒ 这一档**整层不画**。
-           取楼本来也要 zoom ≥ 13.5，两层阈值对齐（12.8 留一点余量，免得来回抖）。 */
-        minzoom: 12.8,
-        /* 只画主体 —— 屋顶/天线是另外两条层（拆件后同一个源里有三种 `part`） */
-        filter: ["==", ["get", "part"], "body"],
-        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpression(th)] },
-      },
-      {
-        /* 屋顶压顶：同一轮廓内缩 + 更深色 ⇒ 楼顶多一圈"女儿墙"的层次（#4）
-           ⚠️ 只在 `h3d ≥ 15m` 的楼上生成（`wsBuildingLook.ROOF_MIN_H`）——
-           矮平房压顶只会显脏，还白翻一倍要素数。 */
-        id: "bld-roof",
-        type: "fill-extrusion",
-        source: "bld",
-        minzoom: 14.5, // 远景看不出这一层，不白画
-        filter: ["==", ["get", "part"], "roof"],
-        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.roofFallback] },
-      },
-      {
-        /* 天线：>60m 的楼顶一根细挤出（#6）—— 城市轮廓里最抓眼的一档，要素数极少 */
-        id: "bld-antenna",
-        type: "fill-extrusion",
-        source: "bld",
-        minzoom: 14.5,
-        filter: ["==", ["get", "part"], "antenna"],
-        paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.antennaFallback] },
-      },
-      ...(showOutline
-        ? [
-            {
-              id: "bld-line",
-              type: "line",
-              source: "bld",
-              minzoom: 12.8, // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
-              /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
-              filter: ["==", ["get", "part"], "body"],
-              /* 二次元这层是"动画感"的主要来源（平涂 + 深藏青细线）；
-                 暗色这层只是淡淡一圈，低端档直接不建。 */
-              paint: { "line-color": th.outline.color, "line-width": tier.outlineWidth ?? th.outline.width },
-            },
-          ]
-        : []),
-    ];
   }
 
   /**
@@ -2487,41 +2487,16 @@
     addLayer(spec: Record<string, unknown>, beforeId?: string): void;
   }
 
-  /** 取楼半径的上下限（米）。下限：太小了连一个小区都盖不住；上限见下方"为什么要封顶" */
-  const BLD_R_MIN = 350;
   /**
-   * 上限 **2000m**（2026-09-20 从 1400 放宽）。
+   * ✅ 2026-09-25（切片 A）：**取楼半径的本地实现已删除**。
    *
-   * 为什么：机主真机截图（涪陵）里 `🏢 0`，查下来是这一带的楼**本来就稀** ——
-   * 实测涪陵驻地 400m→**0 栋**、600m→3、900m→18、1000m→21、1400m→29、
-   * **2500m→整条查询失败**。1400m 只够拿到那 29 栋里的一部分。
-   * 放宽是**只帮稀疏区、不伤密集区**的改法：密集区（渝中 700m 就有 232 栋）
-   * 第一级就 ≥`BLD_ENOUGH` 停下，**根本走不到上限**；只有稀疏区才会爬到 2000。
+   * 这里原来有一份 App **自己的** `radiusForView()`（视野半对角线 × 0.95，夹到 `[350, 2000]`），
+   * 与代拍页/真源 `wsScene.fetchRadiusForView()` **并存** —— 那正是 `ROUTE.md` 里
+   * 「App 接同一功能时不该出现第二份实现」的红线（两份口径迟早漂移，而漂移了没人看得出来）。
+   * 现在统一走真源：`liveRadiusFor()`（`viewHalfMetersOf` 量视野 → `fetchRadiusForView` 判半径），
+   * 阶梯用 `fetchRadiusLadder()`。**旧实现直接删掉，不留兼容分支。**
+   * 回退：`git revert <本 commit>`。
    */
-  const BLD_R_MAX = 2000;
-  /** "够看"的楼栋数：一屏想看到"成片"，至少得有这么几栋（不到就换更大的半径再试一次） */
-  const BLD_ENOUGH = 25;
-
-  /**
-   * 视野 → 取楼半径：**按屏幕真正看得见的范围**要数据，而不是拿 zoom 拍脑袋。
-   *
-   * 🔴 这一条是 `🏢 0` 的直接解药（2026-09-19 定位到根因）：
-   * 旧公式 `500 * 2^(15-z)` 在默认的 zoom 15.2 上只给 **435m** ——
-   * 而 zoom 15.2 在手机横屏上**一眼能看到 4km 宽**，435m 连屏幕的一小块都盖不住；
-   * 涪陵驻地那一带 400m 内更是**一栋楼都没有**（实测 400m→0、600m→3）⇒
-   * 取回来是空的，HUD 就永远停在 `🏢 0`，而且那时还是**静默 return**、什么都不说。
-   */
-  function radiusForView(m: BldMapLike): number {
-    const b = m.getBounds();
-    const c = m.getCenter();
-    const dLng = Math.abs(b.getEast() - b.getWest()) / 2;
-    const dLat = Math.abs(b.getNorth() - b.getSouth()) / 2;
-    /* 经纬度 → 米（够用的近似：纬度 1°≈110.54km，经度要乘 cos(纬度)） */
-    const mx = dLng * 111320 * Math.cos((c.lat * Math.PI) / 180);
-    const my = dLat * 110540;
-    const r = Math.hypot(mx, my) * 0.95;
-    return Math.max(BLD_R_MIN, Math.min(BLD_R_MAX, Math.round(r / 50) * 50));
-  }
 
   /* ── 🛣 路网：与楼房**同一套节奏**（视野算半径 / 去抖键 / 超时 / 如实上报）────
      为什么单独一个函数而不是塞进 loadBuildingsForView：
@@ -2536,16 +2511,23 @@
 
   async function loadRoadsForView(m: BldMapLike): Promise<void> {
     if (!alive) return;
+    /* 🔴 **默认根本不打 live**（offline-first）：决策在真源 `wsScene.roadsLiveDecision()`
+       —— 冷查分钟级、600m 只有缓存命中才 0.1~1s，所以默认 0 条，路从**离线路网包**来；
+       `?live=1` 才走这条（补新区域/调试），失败照旧**可见**。 */
+    if (!roadsLive.live) return;
     const z = m.getZoom();
     if (z < ROAD_MIN_ZOOM) {
       stats.view = stats.view || "全区视野";
       return;
     }
     const c = m.getCenter();
-    const r = radiusForView(m);
+    /* 半径**由真源算**（视野中心→角 与 zoom 档位取大者，夹到可用上限）—— 本组件不再有第二份 */
+    const rp = liveRadiusFor(m);
+    const r = rp.radius;
     const key = `${c.lng.toFixed(3)},${c.lat.toFixed(3)},${r}`;
     if (key === lastRoadKey) return;
     lastRoadKey = key;
+    liveRoadHits += 1; // 可数口径：这一轮真的发了一条 `/api/roads`
     try {
       /* 🔴 2026-09-24：与取楼同一口径 —— **放宽上限（25s → 55s）+ 重试 2 次 + 失败可见**。
          实测 `/api/roads` 渝中 600m **冷查 32.5s**（缓存命中 0.03s）⇒ 25s 那一刀必然砍掉冷查。
@@ -2555,31 +2537,28 @@
       const fc = geo as { type?: string; features?: unknown[] } | null;
       const feats = (fc?.features || []) as BldFeature[];
       if (!feats.length) {
-        /* 空结果**必须说出来**（同楼房的纪律：静默 = 让人以为"这里没路"） */
-        stats.roads = 0;
-        stats.note = stats.note ? `${stats.note} · 这一带没有路网数据（${r}m）` : `这一带没有路网数据（${r}m）`;
+        /* 空结果**必须说出来**（同楼房的纪律：静默 = 让人以为"这里没路"）。
+           ⚠️ 仓库里已有的**不清空**（累积语义：live 说的是"这一问回了 0 条"，不是"全都没有"）。 */
+        stats.note = stats.note ? `${stats.note} · live 取路回来 0 条（r=${r}m）` : `live 取路回来 0 条（r=${r}m）`;
+        liveRoadInfo = `r=${r}m（${rp.decidedBy}）· 0 条（已量）`;
         return;
       }
-      const data = { type: "FeatureCollection", features: feats };
-      if (m.getLayer("road-line-0")) {
-        (m.getSource("roads") as { setData(d: unknown): void } | undefined)?.setData(data);
-      } else {
-        m.addSource("roads", { type: "geojson", data });
-        /* 插在**楼房之下**：路是地面上的东西，压在楼上会像"从楼顶穿过" */
-        const before = m.getLayer("bld-ext") ? "bld-ext" : m.getLayer("ref") ? "ref" : undefined;
-        for (const l of roadLayerSpecsForMap()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
-      }
-      roadSegs = roadSegments(data as never);
-      stats.roads = visibleRoadCount(data as never, z);
+      /* 🧱 **并进同一个累积仓库**（不是整份替换）：换视野/换来源都不会"新的一来旧的没了" */
+      roadsStore.merge(feats as unknown as BundleRoadFeature[], `live:${key}`);
+      roadsFlush("live");
       /* `worldMapApi.roads()` 只解包 `geojson`（与 buildings 同一个壳），
          统计在**原始信封**里 ⇒ 这里显式放宽类型读一次；拿不到就给 null（HUD 会少一行统计，
          但**不会**编一个数字出来）。 */
       stats.roadNote = roadStatsLine((geo as { stats?: Record<string, unknown> } | null)?.stats ?? null);
+      liveRoadInfo = `r=${r}m（${rp.decidedBy}${rp.limitWhy ? `，策略本想要 ${rp.want}m` : ""}）· ${feats.length} 条 · live 第 ${liveRoadHits} 条`;
     } catch (e) {
       const why = String((e as Error)?.message || e || "后端没响应").slice(0, 60);
+      liveRoadInfo = `r=${r}m（${rp.decidedBy}）· 失败：${why} · 已试 ${roadTries} 次`;
       stats.note = stats.note ? `${stats.note} · 路网取不到（${why}，已试 ${roadTries} 次）` : `路网取不到（${why}，已试 ${roadTries} 次）`;
     }
   }
+  /** 最近一次 live 取路的实况（面板回证；离线路走 `stats.roadStore` 那一行） */
+  let liveRoadInfo = "";
 
   /* ── 🏪 设施（`/api/facilities`）→ MapLibre 圆点 ────────────────────────────
      机主 2026-09-20：「在地图上把**道路和设施**全部勾出来（方便将行人啥的挪出来）」。
@@ -2715,27 +2694,37 @@
    */
   async function loadBuildingsForView(m: BldMapLike): Promise<void> {
     if (!alive) return;
+    /* 🔴 **默认根本不打 live**（offline-first）：决策在真源 `wsScene.bldLiveDecision()`
+       —— 现场一次只覆盖 R≤2000m 且冷查 27~33s（最慢 91.7s），所以默认 0 条，楼从**离线楼房包**来；
+       `?live=1` 才走这条（补新区域/调试），失败照旧**可见**。 */
+    if (!bldLive.live) return;
     const z = m.getZoom();
     if (z < BLD_MIN_ZOOM) {
       stats.view = "全区视野";
       return;
     }
     const c = m.getCenter();
-    const r0 = radiusForView(m);
+    /* 半径与阶梯**都由真源给**（`fetchRadiusForView` / `fetchRadiusLadder`，2km 起、封顶 8km）；
+       后端单查还有硬闸 2000m ⇒ 每一级**夹一次**并把差异写进面板（策略要多少 / 源给不了多少）。 */
+    const rp = liveRadiusFor(m);
+    const r0 = rp.radius;
     const key = `${c.lng.toFixed(3)},${c.lat.toFixed(3)},${r0}`;
     if (key === lastBldKey) return;
     lastBldKey = key;
+    liveBldHits += 1; // 可数口径：这一轮真的发了一条 `/api/buildings`
 
-    /* 半径梯子：视野半径 → 翻倍 → 再翻倍（封顶）。命中就停，别白等 Overpass。 */
-    const ladder: number[] = [r0];
-    while (ladder[ladder.length - 1]! < BLD_R_MAX) {
-      ladder.push(Math.min(BLD_R_MAX, ladder[ladder.length - 1]! * 2));
+    const ladder = fetchRadiusLadder(z, rp.halfM);
+    const asks: number[] = [];
+    for (const r of ladder) {
+      const a = Math.min(r, WS_FETCH_R_BACKEND_MAX);
+      if (asks.indexOf(a) < 0) asks.push(a);
     }
     const tried: number[] = [];
     /** 一路记着"目前最好的一份"：后面某一级失败/更少时，不至于把手上的楼丢掉 */
     let best: { feats: BldFeature[]; r: number } | null = null;
     let failed = false;
-    for (const r of ladder) {
+    for (let i = 0; i < asks.length; i++) {
+      const r = asks[i]!;
       tried.push(r);
       try {
         const geo = await withTimeout(worldMapApi.buildings({ lat: c.lat, lng: c.lng, r }), 25000);
@@ -2749,9 +2738,9 @@
       }
     }
 
-    const feats = best?.feats ?? [];
+    let features: BldFeature[] = best?.feats ?? [];
     if (!alive) return;
-    if (!feats.length) {
+    if (!features.length) {
       /* 🔴 空结果**必须说出来**：不然就是"看起来卡住了/什么都没有" */
       stats.view = "街区视野";
       stats.note = failed
@@ -2759,46 +2748,252 @@
         : `OSM 在这一带没有登记楼房（已试 ${tried.join("/")}m）`;
       /* OSM 一栋都没有 = 最稀疏的情况 ⇒ 交给第二源补（拿不到就只留上面那句实话） */
       const fill0 = await overtureFill(c.lat, c.lng, best?.r ?? r0, 0);
-      if (!alive || !fill0?.features.length) return;
-      applyBuildings(m, dressBld({ features: fill0.features }));
+      if (!alive || !fill0?.features.length) {
+        liveBldInfo = `r=${r0}m（${rp.decidedBy}）· 0 栋（已量，试过 ${tried.join("/")}m）`;
+        return;
+      }
+      liveBldInfo = `r=${r0}m（${rp.decidedBy}）· Overture 补缺 ${fill0.features.length} 栋`;
+      bldStore.merge(fill0.features as unknown as BundleBuildingFeature[], `live:fill:${key}`);
+        bldFlush("live-fill");
       stats.note = `${stats.note} · ${fill0.note}`;
       return;
     }
     /* 🆕 第二源补缺：OSM 不够看时才问（够看的地方一次网络都不发） */
-    let features: BldFeature[] = feats;
     let fillNote = "";
-    if (shouldAskSecondSource(feats.length, BLD_SPARSE)) {
+    if (shouldAskSecondSource(features.length, BLD_SPARSE)) {
       /* 先如实说"正在补"，别让人对着不动的画面猜（这一问冷启动要十几秒） */
-      stats.note = `真楼只有 ${feats.length} 栋，正在取 Overture 补缺…`;
-      const fill = await overtureFill(c.lat, c.lng, best!.r, feats.length);
+      stats.note = `真楼只有 ${features.length} 栋，正在取 Overture 补缺…`;
+      const fill = await overtureFill(c.lat, c.lng, best!.r, features.length);
       if (!alive) return;
       if (fill?.features.length) {
-        const mg = mergeBuildingSources(feats, fill.features);
+        const mg = mergeBuildingSources(features, fill.features);
         features = mg.features as typeof features;
         fillNote = `${fill.note}（去重 ${mg.dropped}）`;
       } else {
         fillNote = "Overture 补缺不可用（只用 OSM）";
       }
     }
-    applyBuildings(m, dressBld({ features }));
+    /* 🧱 **并进同一个累积仓库**（不是整份替换）：live 与离线包走同一条落图通路（一次 `setData`） */
+    bldStore.merge(features as unknown as BundleBuildingFeature[], `live:${key}`);
+    bldFlush("live");
+    liveBldInfo = `r=${r0}m（${rp.decidedBy}${rp.limitWhy ? `，策略本想要 ${rp.want}m` : ""}）· ${features.length} 栋 · live 第 ${liveBldHits} 条`;
     stats.view = "街区视野";
     const sparse = best!.feats.length < BLD_ENOUGH ? `楼房稀疏：半径已放大到 ${best!.r}m（试过 ${tried.join("/")}m）` : "";
     stats.note = [sparse, fillNote].filter(Boolean).join(" · ");
   }
+  /** 最近一次 live 取楼的实况（面板回证；离线路走 `stats.bldBundle` 那一行） */
+  let liveBldInfo = "";
+  /**
+   * "够看"的楼栋数（**只在 `?live=1` 这条兜底路里用**）：一屏想看到"成片"至少得有这么几栋，
+   * 不到就沿阶梯放大再试一级。25 与代拍页 `loadForView` 里那个 `>= 25` **同值**（自检对拍）。
+   * ⚠️ 默认路径（离线包）**不看这个数**：包里有多少画多少，格子按视野取。
+   */
+  const BLD_ENOUGH = 25;
 
   /**
-   * 把一份**已上妆**的楼栋数据落到图层上：首次建源 + 建层，之后只 `setData`。
-   * （两条路都要用：OSM 有一份数据的路、OSM 空但 Overture 有数据的路 —— 写两遍迟早漂移。）
+   * 落图通路（`applyBuildings` / `planBeforeOf`）—— **2026-09-25 搬家到共享真源**
+   * `wsDistrictScene.ts`（PR 标准门禁 C1：App 宿主不许有第二份实现）。
+   * 宿主现在只接线：`flushBldStore` 负责"仓库并集 → 一次 setData → 首次建源建层"，
+   * 插入锚点仍取自 `wsScene.sceneLayerPlan()`（用没用上由 `scenePlanConsumed()` 回证）。
+   * 回退：`git revert <本 commit>`。
    */
-  function applyBuildings(m: BldMapLike, data: { type: "FeatureCollection"; features: unknown[] }): void {
-    if (m.getSource("bld")) {
-      m.getSource("bld")!.setData(data);
-      return;
+
+  /* ══ 🧱🏢🛣 **offline-first + 累积仓库**（切片 A，2026-09-25）══════════════════════════
+     病根（机主三条真机反馈同源）：「**楼只有一块**」「**加载慢**」「**路时有时无**」——
+     App 一直走"现场取数 + 整份替换"：`/api/buildings` 一次只覆盖视野中心 R≤2000m 且冷查 27~33s
+     （最慢见过 91.7s）、`/api/roads` 600m 冷查 32.5s（默认打一条必然撞超时）；而每取到一批就
+     `setData(这一批)` ⇒ **整份替换** ⇒"新的一来旧的没了"。
+
+     ✅ 现在两条数据都走**离线包**（静态文件，快且可预期）并进**同一个累积仓库**，一次 `setData`：
+       · 默认 **0 条** `/api/buildings`、**0 条** `/api/roads`（决策取自真源 `wsScene.*LiveDecision()`）；
+       · 只有 `?live=1` 才现场取数（补新区域/调试），失败照旧**可见**；
+       · 换视野**要素数不减**（去重并集），淘汰只丢"视野外一圈"与超上限的（帧率护栏）。
+     🔴 **判词/决策/半径一条都不在这里重写**：判词走 `bldVerdictText`/`roadsVerdictText`，
+        半径走 `fetchRadiusForView`/`fetchRadiusLadder`/`viewHalfMetersOf`，格数学走 `wsFeatureStore`。
+        旧的本地 `radiusForView`（那份"两份实现"）在本切片**删除**。 */
+  const LIVE_ON = (() => {
+    try {
+      return /[?&]live=1\b/.test(location.search);
+    } catch {
+      return false;
     }
-    m.addSource("bld", { type: "geojson", data });
-    /* 插在注记层之前 ⇒ 街名压在楼上面（和地图 App 一个口径：楼不该把街名挡住） */
-    const before = m.getLayer("ref") ? "ref" : undefined;
-    for (const l of bldLayerSpecs()) m.addLayer(l, before);
+  })();
+  const bldLive = bldLiveDecision({ forceLive: LIVE_ON });
+  const roadsLive = roadsLiveDecision({ forceLive: LIVE_ON });
+  /** live 取数打了几条（**默认应当是 0**；`?live=1` 才是 1）—— 面板/自检的可数口径 */
+  let liveBldHits = 0;
+  let liveRoadHits = 0;
+
+  /** 视野半对角线（米）——量出来的，交给真源判半径（App 不自己写三角函数，代拍页同款） */
+  function viewHalf(m: BldMapLike): number | null {
+    try {
+      const b = m.getBounds();
+      return viewHalfMetersOf(
+        { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() },
+        m.getCenter().lat
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** live 取数半径：**规则全在 `wsScene.fetchRadiusForView`**（视野中心→角 与 zoom 档位取大者） */
+  function liveRadiusFor(m: BldMapLike): { radius: number; decidedBy: string; want: number; limitWhy: string | null; halfM: number | null } {
+    const halfM = viewHalf(m);
+    const p = fetchRadiusForView(m.getZoom(), halfM);
+    return { radius: p.radius, decidedBy: p.decidedBy, want: p.want, limitWhy: p.limitWhy, halfM };
+  }
+
+  /* 🧱 **累积仓库**：由真源 `wsFeatureStore.createFeatureStore()` 造（合并/淘汰规则只有那一份），
+     去重键与代表点取法由 `wsOfflineFeed` 给（一处定义、自检与 App 同一份）。 */
+  const bldStore = createFeatureStore<BundleBuildingFeature>({ cap: BLD_STORE_CAP, idOf: bldIdOf, pointOf: bldPointOf });
+  const roadsStore = createFeatureStore<BundleRoadFeature>({ cap: ROADS_STORE_CAP, idOf: roadsIdOf, pointOf: roadsPointOf });
+
+  /** 浏览器取数（每格**独立超时**；AbortController 在 `wsOfflineFeed.fetchWithTimeout` 里） */
+  const fetchCell = (url: string, timeoutMs: number) =>
+    fetchWithTimeout((u: string, init?: { signal?: AbortSignal }) => fetch(u, init), url, timeoutMs);
+
+  /** 宿主视野（`map` 还没建时给 null ⇒ 管道本轮什么都不做，如实写成"未取"） */
+  function bundleView(): BundleView {
+    const m = map;
+    try {
+      if (!m?.getBounds || !m?.getCenter) return { bounds: null, center: null };
+      return { bounds: m.getBounds() as BundleView["bounds"], center: m.getCenter() as { lng: number; lat: number } };
+    } catch {
+      return { bounds: null, center: null };
+    }
+  }
+
+  /**
+   * 🧱 **落图（楼）**：仓库并集 →（宿主上妆 `dressBld`）→ **一次 `setData`**。
+   * 落图通路本身在共享真源 `wsDistrictScene.flushBldStore()`（PR 标准门禁 C1 要求"宿主只接线"）；
+   * 这里只提供三件**宿主自己的**东西：**仓库**、**上妆口径**、**没有地图时怎么办**（2D 降级路交给自绘）。
+   * 回退：`git revert <本 commit>`。
+   */
+  function bldFlush(why: string): void {
+    if (!alive) return;
+    flushBldStore<BundleBuildingFeature>(
+      {
+        features: () => bldStore.features(),
+        /* 上妆（高度/颜色/拆件）在这里做**一次** ⇒ HUD 的计数与画出去的是同一批要素 */
+        dress: (feats) => dressBld({ features: feats as unknown as BldFeature[] }),
+        /* 2D 降级路没有可落的图（临时降级时 map 其实还在，但那时画的是自绘那块） */
+        map: () => (renderKind.value === "fallback2d" ? null : (map as BldMapLike | null)),
+        specs: () => bldLayerSpecsFor(theme.value, themeTier.value),
+        onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
+        beforeDraw: (why0) => {
+          bldFlushWhy = why0;
+          renderBundleHud();
+        },
+      },
+      why
+    );
+  }
+  /** 上一次 flush 的原因（面板回证：是离线包来的还是 live 来的） */
+  let bldFlushWhy = "";
+
+  /**
+   * 🧱 **落图（路）**：仓库并集 → **一次 `setData`**（首次建源建层）。
+   * 同楼：通路在 `wsDistrictScene.flushRoadsStore()`；宿主给仓库/地图/规格，并在落图前后做自己的计数。
+   * ⚠️ 失败**必须可见**（原来是 try/catch 写 `stats.note`，这里保持同一口径）。
+   */
+  function roadsFlush(why: string): void {
+    if (!alive) return;
+    try {
+      flushRoadsStore<BundleRoadFeature>(
+        {
+          features: () => roadsStore.features(),
+          map: () => map as BldMapLike | null,
+          specs: () => roadLayerSpecsForMap(),
+          beforeDraw: (why0, data) => {
+            /* 行人吸附用的段：拿到数据就留着（与画出去的是同一份，不重算一套） */
+            roadSegs = roadSegments(data as never);
+            roadFlushWhy = why0;
+            renderBundleHud();
+          },
+          afterDraw: (_why0, data) => {
+            const m = map as BldMapLike | null;
+            if (!m) return;
+            stats.roads = visibleRoadCount(data as never, m.getZoom());
+            stats.roadStore = `仓库 ${data.features.length} 条（累积：已取 ${roadsFeed.facts().have} 格，包外 ${roadsFeed.facts().missing}，失败 ${roadsFeed.facts().failed}）`;
+          },
+        },
+        why
+      );
+    } catch (e) {
+      stats.note = stats.note ? `${stats.note} · 路网落图失败：${String((e as Error)?.message || e).slice(0, 40)}` : `路网落图失败：${e}`;
+    }
+  }
+  let roadFlushWhy = "";
+
+  /** 🛣🛣 离线包的两条管道（**永不发 `/api/*`**：只读静态包） */
+  const bldFeed = createBundleFeed<BundleBuildingFeature>({
+    kind: "bld",
+    store: bldStore,
+    view: bundleView,
+    fetchCell,
+    flush: bldFlush,
+    /* 保留"视野外一圈"（与代拍页同式）：来回挪地图不该反复重取，也不该把刚取到的丢掉 */
+    retainRadiusM: () => Math.max(2000, Math.round((bundleViewHalfMeters() || 0) * 2.2)),
+    onError: (why) => {
+      stats.note = stats.note ? `${stats.note} · ${why}` : why;
+    },
+  });
+  const roadsFeed = createBundleFeed<BundleRoadFeature>({
+    kind: "roads",
+    store: roadsStore,
+    view: bundleView,
+    fetchCell,
+    flush: roadsFlush,
+    retainRadiusM: () => Math.max(3000, Math.round((bundleViewHalfMeters() || 0) * 2.5)),
+    onError: (why) => {
+      stats.note = stats.note ? `${stats.note} · ${why}` : why;
+    },
+  });
+  function bundleViewHalfMeters(): number | null {
+    const m = map as BldMapLike | null;
+    return m ? viewHalf(m) : null;
+  }
+
+  /** HUD/面板那一行（**可数口径只有一份**：`wsOfflineFeed.bundleCountsLine`）
+   *  · `stats.bldBundle/roadsBundle` = 机主看的**可数一行**（已取/包外/失败 + 仓库数）；
+   *  · `stats.bldVerdict/roadsVerdict` = **真源判词**（三态：包外 / 取数失败 / 正常；数不出来照实写）。 */
+  function renderBundleHud(): void {
+    const bf = bldFeed.facts();
+    const rf = roadsFeed.facts();
+    stats.bldBundle = bundleCountsLine(bf, "🏢", "栋");
+    stats.roadsBundle = bundleCountsLine(rf, "🛣", "条");
+    stats.bldVerdict = bldVerdictText({ state: bldVerdictState(bf), n: bf.n, cells: bf.have, cap: bf.cap });
+    stats.roadsVerdict = roadsVerdictText({ state: roadsVerdictState(rf), n: rf.n });
+  }
+
+  /**
+   * 按视野补离线格（**后台、串行、每格独立超时**；一次最多 2 格，不堵首屏）。
+   * 楼/路各一条管道，两条互不阻塞；**都不打 `/api/*`**。
+   */
+  async function refreshBundles(why = "view"): Promise<void> {
+    const m = map as BldMapLike | null;
+    if (!m) return; // 地图还没建（或 2D 降级路）⇒ 没有视野可算，管道如实不取
+    const z = m.getZoom();
+    /* 阈值与实时层对齐（楼 z≥13.5、路 z≥12）：整区视野下楼是亚像素，取它只是白花流量 */
+    if (z >= BLD_MIN_ZOOM) await bldFeed.refresh(why);
+    if (z >= ROAD_MIN_ZOOM) await roadsFeed.refresh(why);
+    renderBundleHud();
+  }
+
+  /** 🔴 署名（ODbL 硬要求）：句子**取自包里的 `index.json`**（导出脚本写的那句原话），不在这里重写 */
+  async function loadBundleAttribution(): Promise<void> {
+    try {
+      const [b, r] = await Promise.all([loadBundleIndex(fetchCell, "bld"), loadBundleIndex(fetchCell, "roads")]);
+      /* ⚠️ 优先用**可机读的** `attribution`（导出器写的那句常量），老包没有该字段才退回 `source`
+         —— 两处口径必须一致：代拍页读的也是同一对字段。 */
+      const lines = [b.attribution || b.source, r.attribution || r.source].filter((x): x is string => !!x);
+      stats.attribution = lines.join(" · ");
+      /* 取不到就**如实说取不到**（不编一句"© Overture"充数；署名是合规项，不能猜） */
+      if (!lines.length) stats.attribution = "离线包署名取不到（index.json 没拿到）";
+    } catch {
+      stats.attribution = "离线包署名取不到（index.json 没拿到）";
+    }
   }
 
   /* ── 浏览器手势兜底（CSS 之外的保险）─────────────────────────────────────
@@ -3097,7 +3292,11 @@
         /* 定位拿不到：保持 undefined，让后端兜底（与原来行为一致） */
       }
       let geo: { features?: unknown[] } | null = null;
-      if (!districtWide) {
+      /* 🧱 **offline-first**（切片 A）：默认**不发**这条 `/api/buildings`（决策在真源
+         `wsScene.bldLiveDecision()`）—— 现场一次只覆盖视野中心 R≤2000m 且冷查 27~33s（最慢 91.7s），
+         正是机主看到的"**楼只有一块**"。楼改从**离线楼房包**来（`/bldbundle/<格>.json`，静态文件），
+         在地图 `load` 之后按视野补格（见 `refreshBundles`）。`?live=1` 才走下面这条兜底。 */
+      if (!districtWide && bldLive.live) {
         /* 🔴 2026-09-24 取数超时重做（机主「有时矢量层不出现」→ 父会话定的下一刀）：
            原来这里一把 **20s** 硬超时、**不重试**。而同一台后端实测**冷查 27~33s**
            （`/api/buildings` 渝中 600m 冷 27.3s / `/api/roads` 32.5s；缓存命中 0.03~0.05s）
@@ -3106,11 +3305,14 @@
            现在：**放宽到 55s** + **最多重试 2 次**（第 2 次开始后端多半已在写缓存 ⇒ 命中很快），
            并把"超时/失败 + 试了几次 + 原文"如实写进 HUD（**三态：失败/空数据/成功，不许混**）。 */
         geo = (await fetchBuildingsWithRetry(lat, lng, props.radius)) as { features?: unknown[] } | null;
+      } else if (!districtWide) {
+        /* 没走 live ⇒ 如实留一句"楼从离线包来"（不写"没有楼"，也不写 0） */
+        stats.note = "楼从**离线楼房包**来（默认不发 /api/buildings；要现场取数加 ?live=1）";
       }
       /* OSM 楼栋覆盖**极不均匀**（2026-09-19 实测同一个后端：涪陵区中心 400m→**0 栋**、600m→3 栋、
          1500m→29 栋；渝中区中心 400m→**152 栋**）。所以第一把太少时**自动放大一次**半径
          （只放一次、封顶 2500m，免得把 Overpass 打爆），并把这件事写进 HUD —— 不假装"没有楼房"。 */
-      if (!districtWide && (geo?.features?.length ?? 0) < 5) {
+      if (!districtWide && bldLive.live && (geo?.features?.length ?? 0) < 5) {
         const r2 = Math.min(2500, Math.max(1500, props.radius * 3));
         triedRs.push(r2);
         const geo2 = (await fetchBuildingsWithRetry(lat, lng, r2)) as { features?: unknown[] } | null;
@@ -3195,7 +3397,7 @@
       container: host.value as HTMLElement,
       /* `cv.value` 在 WebGL 路下是 null（`v-if` 关着）⇒ 不能把 null 当 canvas 传 */
       ...(cv.value ? { canvas: cv.value as HTMLCanvasElement } : {}),
-      style: makeStyle(),
+      style: styleNow(),
       center: [106.569, 29.558],
       /* 🎬 相机默认值取自 `wsScene.cameraDefaults()`（唯一真源；数值与换源前**逐字相同** 16.4/38） */
       zoom: cameraDefaults().zoom,
@@ -3287,22 +3489,10 @@
       /* 第一帧真的出来了 ⇒ 撤掉看门狗（它不是"超时就算失败"，是"到点还没好才算失败"） */
       window.clearTimeout(watchdog);
       if (fc?.features?.length) {
-        m.addSource("bld", { type: "geojson", data: dressBld(fc) });
-        const before0 = m.getLayer("ref") ? "ref" : undefined;
-        /* 🎬 层序：`before=` 取自**计划**（`wsScene.sceneLayerPlan()`）—— 计划里 roads/bld 的
-           `beforeId` 就是这里的取值（`bld-ext`），**逐字相同**；取不到才退回本地判断。 */
-        const planBeforeOf = (group: "roads" | "buildings"): string | undefined => {
-          try {
-            const e = sceneLayerPlan().find((x) => x.group === group);
-            if (!e) return undefined;
-            sceneConsumed = true;
-            return e.beforeId && m.getLayer(e.beforeId) ? e.beforeId : undefined;
-          } catch {
-            return undefined;
-          }
-        };
-        void planBeforeOf;
-        for (const l of bldLayerSpecs()) m.addLayer(l, before0);
+        /* `?live=1` 的首批（或老路径）：**并进同一个累积仓库**再 flush ——
+           落图通路只有一条（`bldFlush` → 真源 `flushBldStore`），一次 `setData`，换视野不减。 */
+        bldStore.merge(fc.features as unknown as BundleBuildingFeature[], "live:init");
+        bldFlush("live+init");
         // 用真实楼房的范围收一下相机（取不到就保持默认中心）
         try {
           const b = new (maplibregl as unknown as { LngLatBounds: new () => unknown }).LngLatBounds();
@@ -3391,6 +3581,13 @@
       syncPins();
       phase.value = "done";
       stopTimer();
+      /* 🧱🏢🛣 **离线包首刷**（切片 A）：地图一就绪就按视野补格（后台、串行、每格独立超时）。
+         放在 `phase=done` 之后 ⇒ **不阻塞首屏**（这正是治"加载慢"的那一刀：以前要等
+         `/api/buildings` 十几秒到 91.7s，现在首屏一出来楼就一批批补进来）。
+         ⚠️ 楼/路走同一条管道（`refreshBundles`），live 只在 `?live=1` 时另外打。 */
+      void refreshBundles("init");
+      /* 🔴 署名（ODbL）**随数据一起显示**：句子取自包里的 `index.json`（导出脚本那句原话） */
+      void loadBundleAttribution();
       /* 🎬 场景就绪 ⇒ 把地图与**真楼栋**交给外层（交通设施要用楼脚印；见 `emit` 的说明）。
          放在 `phase` 之后：这时 loading 已收起、楼体图层已 addLayer，外层加图层不会插进加载态。 */
       emit("scene-ready", { map: m, buildings: (fc as { features?: unknown[] } | null) || null });
@@ -3400,13 +3597,16 @@
       maybeAppSelfShot("webgl");
     });
 
-    /* 视野变化 → 按需取楼（"放大到街区再取"的触发点；去抖 600ms，避免拖动时把 Overpass 打爆） */
+    /* 视野变化 → 按需补数据（去抖 600ms，避免拖动时把后端/磁盘打爆）。
+       · **默认**：只补**离线格**（静态文件 ⇒ 不打 Overpass；换视野要素数**不减**：并进累积仓库）；
+       · `?live=1`：另外走现场取数（楼/路各一条），失败照旧**可见**。 */
     m.on("moveend", () => {
       if (bldTimer) window.clearTimeout(bldTimer);
       bldTimer = window.setTimeout(() => {
         bldTimer = 0;
-        void loadBuildingsForView(m as unknown as BldMapLike);
-        void loadRoadsForView(m as unknown as BldMapLike);
+        void refreshBundles("move");
+        if (bldLive.live) void loadBuildingsForView(m as unknown as BldMapLike);
+        if (roadsLive.live) void loadRoadsForView(m as unknown as BldMapLike);
       }, 600);
     });
 
@@ -3556,6 +3756,28 @@
   }
   .ws-dml__hud .is-warn {
     color: #ffd28a;
+  }
+  /* 🔴 **署名条**（ODbL 硬要求：`attributionControl:false` ⇒ 必须有等价可见方案）。
+     刻意做得素且**不占交互**（`pointer-events: none` + 右下角一行小字）：
+     它必须**一直可见**（署名要求"画面上可见"，不是"藏在 title 里"），但不该盖住地图内容。
+     `max-width` + 省略号：句子是导出脚本写的原句（可能不短），宁可截断显示也不改写它。
+     ⚠️ 位置抬到 HUD 之上（`bottom: 30px`）：HUD 是**一行会很长**的 flex 条，
+     同一条 `bottom: 8px` 上两者会叠在一起（机主横屏时尤其明显）。 */
+  .ws-dml__attr {
+    position: absolute;
+    right: 8px;
+    bottom: 30px;
+    max-width: 62%;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: rgba(10, 16, 24, 0.45);
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 10px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
   }
   /* 🎨 主题 A/B 开关。
      🔴 `pointer-events: auto` **不能省**：整条 HUD 是 `pointer-events:none`（它只是层显示，

@@ -209,7 +209,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v26";
+      const BUILD = "ws3dshow-2026-09-25-v27";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -737,7 +737,13 @@
           return m ? Math.max(0, Math.min(5000, parseInt(m[1], 10))) : 100;
         } catch (e) { return 100; }
       })();
-      const BLDN_NEAR_ZOOM = 14;   // 与 LOD 的"近景"分界一致（远景由预渲染瓦片负责，挑它没意义）
+      /* 🏢 挑楼从**楼房矢量层开始画的那一档**起生效（共享常量 `WS_BLD_VECTOR_MINZOOM` = 12.8，
+         在 vendor 里；读不到就退回 12.8）。⚠️ 以前这里另写了 14 ⇒ 机主停在 13.5 时"矢量在画、挑楼没生效"
+         ⇒ 12,000 栋全画（他截图里的"黑点 + 还这么多"）。**阈值只许有一份。** */
+      const BLDN_NEAR_ZOOM = (function () {
+        try { const v = window.__TF__ && window.__TF__.WS_BLD_VECTOR_MINZOOM; return typeof v === "number" ? v : 12.8; }
+        catch (e) { return 12.8; }
+      })();
       /** 小楼阈值：脚印面积 < 这个（m²）就**只填充不描边**（≈15×15m；z16 下约 38px²） */
       const BST_SMALL_M2 = 220;
       let WINS = BLD === 2 && (function () { try { return /[?&]win=1\b/.test(location.search); } catch (e) { return false; } })();
@@ -2233,6 +2239,45 @@
       }
 
       /** 把楼房仓库的并集一次性写进地图（**不每格一次 setData**） */
+      /* 🎨 脚印面积（m²，鞋带公式，经纬度按本地米制换算）—— `?bst=2` 用它决定"小楼不描边"。
+         为什么不用"屏幕像素面积"：那要随 zoom 重算全部要素（贵且会抖）；面积是**要素自身属性**，稳定可数可自检。 */
+      function fpAreaM2Of(f) {
+        const g = (f && f.geometry) || {};
+        const ring = (g.coordinates || [])[0] || [];
+        if (ring.length < 3) return 0;
+        let lat0 = 0;
+        for (const q of ring) lat0 += q[1];
+        lat0 /= ring.length;
+        const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
+        let a = 0;
+        for (let i = 0, n = ring.length; i < n; i++) {
+          const [x1, y1] = ring[i], [x2, y2] = ring[(i + 1) % n];
+          a += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
+        }
+        return Math.abs(a) / 2;
+      }
+
+      /**
+       * 🎨 **基准上妆（唯一一份）** —— 给要素补上 `h3d`（渲染高度）/`h_from`（高度来源）/`fp`/`small`。
+       *
+       * 🔴 2026-09-25 机主「**这是近处，连3d都没有**」的**真因**：图层写的是
+       * `"fill-extrusion-height": ["get","h3d"]`（**没有兜底**），而**离线通路 `flushBld` 以前直接把仓库要素
+       * 塞进 `setData`、从没上妆** ⇒ `h3d` 缺失 = MapLibre 当 0 ⇒ 一地图**平躺的板**。
+       * live 通路（`applyBuildings`）上妆了、离线通路没有 —— **两条通路两份口径**就是病根，
+       * 所以这里收成一份：`applyBuildings` 与 `flushBld` 都调它。
+       * （之前没暴露，是因为离线取数一直坏着 ⇒ 楼根本没画出来；今天修好取数才露出来。）
+       */
+      function dressBldBase(features) {
+        return (features || []).map((f) => {
+          const [h, src] = renderHeight(f.properties || {});
+          const fp = fpAreaM2Of(f);
+          return { ...f, properties: { ...f.properties, h3d: h, h_from: src, fp: Math.round(fp), small: fp < BST_SMALL_M2 ? 1 : 0 } };
+        });
+      }
+
+      /** 拆件（`?bld=2`）异步上妆的**代际号**：防"旧的一次 setData 覆盖新的" */
+      let bldDressGen = 0;
+
       function flushBld(why) {
         const st = bldStoreOf();
         if (!st) return;
@@ -2256,6 +2301,42 @@
           }
         } catch (e) { errs.push("pick " + e); }
         window.__BLD_PICK_WHY__ = pickWhy;
+        /* 🏢 `?bld=2`（拆件）：**离线通路也必须上妆** —— 与 live 通路同一个病根（两条通路只有一条处理）。
+           不处理的话：详情图层按 `part` 过滤（body/roof/antenna），而要素里没有 `part` ⇒ **一层都画不出来**。
+           ⚠️ 拆件要 `decorateBuildings`（异步、要先 `ensureVendor()`）⇒ 用**代际号**防乱序 setData。 */
+        if (BLD === 2) {
+          const gen = ++bldDressGen;
+          void (async () => {
+            try {
+              const TFb = await ensureVendor();
+              if (gen !== bldDressGen) return;                    // 期间又刷新过 ⇒ 丢弃这一次
+              if (TFb && typeof TFb.decorateBuildings === "function") {
+                const dec = TFb.decorateBuildings({ type: "FeatureCollection", features: data.features },
+                                                  artRamp((THEME && THEME.ramp) || FALLBACK_RAMP), { mode: "detail", low: BLD_LOW });
+                window.__BLD_COUNT__ = dec.count || null;
+                window.__BLD_FALLBACK__ = null;
+                const dd = { type: "FeatureCollection", features: dec.features };
+                if (map.getSource("bld")) map.getSource("bld").setData(dd);
+                stats.n = dec.count ? dec.count.n : dec.features.length;
+                window.__BLD_BUNDLE_FC__ = dec.features.length;
+                try { $("m-n").textContent = String(stats.n); } catch (e2) { /* 忽略 */ }
+                try { window.__WSLOG__ && window.__WSLOG__.info("bld-dress", "离线通路拆件上妆完成", { parts: dec.features.length, n: stats.n }); } catch (e2) { /* 忽略 */ }
+              } else {
+                window.__BLD_FALLBACK__ = "数不出来：模块里没有 decorateBuildings（" + tfState + "）";
+                try { window.__WSLOG__ && window.__WSLOG__.warn("bld-dress", window.__BLD_FALLBACK__); } catch (e2) { /* 忽略 */ }
+              }
+            } catch (e) { errs.push("dress " + e); }
+          })();
+          return;                                                   // 异步那次负责落图，这里不再 setData
+        }
+        /* 🎨 **上妆（补 h3d）**：没有这一步，`fill-extrusion-height: ["get","h3d"]` 取不到 = 高度 0 = 平躺的板 */
+        const dressed = dressBldBase(data.features);
+        data = { type: "FeatureCollection", features: dressed };
+        stats.n = dressed.length;
+        stats.real = dressed.filter((f) => f.properties.h_from === "real").length;
+        stats.levels = dressed.filter((f) => f.properties.h_from === "levels").length;
+        stats.kind = dressed.filter((f) => f.properties.h_from === "kind").length;
+        try { $("m-n").textContent = String(stats.n); } catch (e2) { /* HUD 失败不影响落图 */ }
         try {
           if (BLD_OFF) { window.__BLD_BUNDLE_FC__ = data.features.length; return; }  // ?bld=0：数据备好但不画
           if (map.getSource("bld")) map.getSource("bld").setData(data);
@@ -2755,29 +2836,7 @@
             bldWhy = "数不出来：模块里没有 decorateBuildings（" + tfState + "）—— 若产物里明明有，多半是**浏览器缓存了旧的 /vendor/wsScene.mjs**（服务端 immutable、URL 无内容哈希）：强刷/清缓存，或让主会话重建预览包";
           }
         }
-        /* 🎨 算一个**脚印面积**（m²，鞋带公式，经纬度按本地米制换算）——`?bst=2` 用它决定"小楼不描边"。
-           为什么不用"屏幕像素面积"：那要随 zoom 重算全部要素（贵且会抖）；面积是**要素自身属性**，
-           稳定、可数、可自检（阈值 `BST_SMALL_M2`）。 */
-        const fpAreaM2 = (f) => {
-          const g = (f && f.geometry) || {};
-          const ring = (g.coordinates || [])[0] || [];
-          if (ring.length < 3) return 0;
-          let lat0 = 0;
-          for (const q of ring) lat0 += q[1];
-          lat0 /= ring.length;
-          const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
-          let a = 0;
-          for (let i = 0, n = ring.length; i < n; i++) {
-            const [x1, y1] = ring[i], [x2, y2] = ring[(i + 1) % n];
-            a += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
-          }
-          return Math.abs(a) / 2;
-        };
-        if (!feats) feats = (fc.features || []).map((f) => {
-          const [h, src] = renderHeight(f.properties || {});
-          const fp = fpAreaM2(f);
-          return { ...f, properties: { ...f.properties, h3d: h, h_from: src, fp: Math.round(fp), small: fp < BST_SMALL_M2 ? 1 : 0 } };
-        });
+        if (!feats) feats = dressBldBase(fc.features);
         window.__BLD_COUNT__ = bldCount || null;
         window.__BLD_FALLBACK__ = bldWhy || null;
         window.__LASTFC__ = fc; // 🚌 `?tf=1` 要用楼栋轮廓（停车场/出入口按脚印算）

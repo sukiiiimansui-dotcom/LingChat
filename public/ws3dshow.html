@@ -164,19 +164,23 @@
         border: 1px solid #3a3a3a; color: #fff; font-size: 12px; }
       #lc-send { padding: 7px 12px; border-radius: 9px; border: 1px solid #0d47a1;
         background: rgba(13, 71, 161, 0.5); color: #fff; cursor: pointer; }
-      /* 地图上的角色标记（DOM，按 `map.project` 定位；不引新依赖） */
-      /* 🧍 **地图上的角色 = 立绘本体**（机主 2026-09-25：「人物立绘**直接显示在地图上，可视可见**」
-         「要在地图上**稳定显示**」）：
-         · 用 `map.project` 定位，`translate(-50%,-100%)` 让脚底落在坐标点 ⇒ 与地图**一起移动、不漂**；
-         · `will-change: transform` + 只改 left/top（不重建元素）⇒ 拖动时不抖；
-         · 立绘随**情绪**变（与抽屉里那张同一个 `lcFace`）。 */
+      /* 地图上的角色标记（DOM，按 `map.project` 定位；不引新依赖）
+         🔴 形态**照 App 的既定设计**（机主 2026-09-25：「立绘太大，位置不对，位置是固定的，
+            去看看之前是怎么设计的喵」）——「之前」= `WsAvatarMark.vue` / `useWsActors.ts`：
+           · 尺寸 = `.ws-av__ring`：**2.1em 圆头像 + 2px 状态环**（基准字号 15px ⇒ ≈31.5px），名字 `0.72em`；
+             地图上**不再放立绘本体**（立绘只在对话抽屉里那张）；
+           · 锚点 = `translate(-50%,-100%)`（脚底落在坐标点上）+ 只改 left/top（不重建元素）⇒ 拖动不漂不抖；
+           · 头像用**小方图**（与 App 的 `get_avatar_file` 第一优先同源）。 */
       #lc-char { position: absolute; z-index: 26; transform: translate(-50%, -100%); cursor: pointer;
-        display: flex; flex-direction: column; align-items: center; will-change: transform, left, top;
-        filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45)); }
-      #lc-char img { height: 84px; width: auto; max-width: 140px; object-fit: contain; display: block; }
-      #lc-char .tag { margin-top: -2px; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; font-weight: 700;
+        display: flex; flex-direction: column; align-items: center; gap: 2px;
+        font-size: 15px; /* 基准字号：App 侧 `.ws-av` 是 `font: inherit`，环宽 2.1em 随容器字号缩放 */
+        will-change: transform, left, top; }
+      #lc-char .ring { position: relative; display: block; width: 2.1em; height: 2.1em; border-radius: 50%;
+        overflow: hidden; background: rgba(20, 28, 40, 0.85); border: 2px solid #6ea8ff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5); }
+      #lc-char .ring img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      #lc-char .tag { padding: 0 6px; border-radius: 999px; font-size: 0.72em; font-weight: 700; line-height: 1.5;
         background: rgba(13, 71, 161, 0.86); border: 1px solid rgba(255, 255, 255, 0.45); color: #fff; white-space: nowrap; }
-      #lc-char .pin { display: block; text-align: center; font-size: 14px; line-height: 1; }
       #lc-char.hide { display: none; }
     </style>
   </head>
@@ -326,7 +330,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v43";
+      const BUILD = "ws3dshow-2026-09-25-v44";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3385,8 +3389,17 @@
          *  · 失败**如实显示错误**，绝不编一句回复（红线：画面可以编，事实不许编）。
          * ══════════════════════════════════════════════════════════════════════════════ */
         const LC_BASE = "http://127.0.0.1:8766";
-        /* 角色站位：默认机位（渝中区 SPOT）旁边 ~60m —— 16 级一眼就能看见 */
-        const LC_POS = { lng: 106.56340, lat: 29.55630 };
+        /* 角色站位：**不许硬写坐标**（机主 2026-09-25：「位置不对，位置是固定的」）。
+           口径与 App 的 `useWsActors.ts:257` **同一套三级**：
+             ① `runtime`  —— 真壳（Tauri）里 `world_map_runtime` 给的后端实时坐标；
+             ② `schedule` —— 日程里该角色此刻所在设施点；
+             ③ `scatter`  —— 本地散点（兜底）。
+           ⚠️ **浏览器预览拿不到前两级**（没有 Tauri 运行时、也没有日程接口）⇒ 这里只能到第 ③ 级，
+              锚点取**真实片区名点**（`pickHome` 给的最近有名片区 —— 真数据，不是编的坐标），
+              并在状态行/HUD/`window.__LC__` 里**如实写明是哪一级**（不冒充"LingChat 说她在这"）。 */
+        let lcAnchor = null;         /* { lng, lat } —— 解析出来的站位（null = 还没解析出来） */
+        let lcPosSource = "scatter"; /* 三档之一：runtime / schedule / scatter（与 App 同名） */
+        let lcPosNote = "还没算（等地图与片区名包就绪）";
         let lcChar = null, lcAff = null, lcMem = null, lcBusy = false;
         const lcEl = { stat: null, msgs: null, input: null };
         try {
@@ -3413,7 +3426,9 @@
             : "";
           return "💬 " + lcChar.name + " · 🎭" + (lcFace || "数不出来") + ev
             + " · 好感 " + (lcAff === null ? "数不出来" : lcAff)
-            + " · 记忆 " + (lcMem === null ? "数不出来" : lcMem) + " 条";
+            + " · 记忆 " + (lcMem === null ? "数不出来" : lcMem) + " 条"
+            /* 📍 **位置要如实**：说清是"LingChat 说的"还是"本地散点"（机主：「位置是固定的」那次就是没写） */
+            + " · 📍" + (lcPosSource === "runtime" ? "运行时" : lcPosSource === "schedule" ? "日程设施点" : "本地散点");
         }
         function lcPaint() { if (lcEl.stat) lcEl.stat.textContent = lcLine(); }
         function lcPush(who, text) {
@@ -3648,7 +3663,13 @@
             lcLog("error", "取角色列表失败（LingChat 后端在 " + LC_BASE + "？）", { err: window.__LC_ERR__ });
           }
           lcPaint();
-          try { const m = document.getElementById("lc-char"); if (m) m.textContent = "💬 " + ((lcChar && lcChar.name) || "角色"); } catch (e) { /* 忽略 */ }
+          /* ⚠️ 只改**名字标签**：以前这里写 `m.textContent = …`，会把整个标记（圆头像+环）一起清掉 */
+          try {
+            const m = document.getElementById("lc-char");
+            const tag = m && m.querySelector(".tag");
+            if (tag) tag.textContent = "💬 " + ((lcChar && lcChar.name) || "角色");
+          } catch (e) { /* 忽略 */ }
+          try { lcUpdateMarker(); } catch (e2) { /* 忽略 */ }
           return lcChar;
         }
         /**
@@ -3718,12 +3739,43 @@
         }
         /* 地图上的角色标记：DOM + `map.project`（零依赖），随地图移动更新 */
         let lcMarker = null;
+        /**
+         * 解析站位（**只做一次**，之后不再变 —— 机主要「稳定显示」，不是每拖一下就换地方）。
+         * 第 ③ 级「本地散点」的锚点取**真实片区名点**：与「我的家」同一份 `pickHome` 数据，
+         * 有名字才用；一条都没有 ⇒ 退到视野中心并**如实说明**（绝不编一个坐标）。
+         */
+        function lcResolveAnchor() {
+          lcPosSource = "scatter";
+          try {
+            const c = map.getCenter();
+            const ph = (window.__TF__ && typeof window.__TF__.pickHome === "function")
+              ? window.__TF__.pickHome(wsPlaces(), { center: { lng: c.lng, lat: c.lat }, maxM: 3000 })
+              : { home: null, why: "vendor 缺 pickHome（旧产物？）" };
+            if (ph.home && isFinite(ph.home.lng) && isFinite(ph.home.lat)) {
+              lcAnchor = { lng: ph.home.lng, lat: ph.home.lat };
+              lcPosNote = "本地散点：锚点 = 真实片区「" + ph.home.name + "」（" + (ph.home.kind || "片区")
+                + " · 距视野中心 " + Math.round(ph.distM || 0) + "m）· 浏览器预览没有运行时/日程 ⇒ 到不了前两级";
+            } else {
+              lcAnchor = { lng: c.lng, lat: c.lat };
+              lcPosNote = "本地散点：视野中心兜底（" + (ph.why || "附近没有有名字的片区") + "）";
+            }
+          } catch (e) {
+            lcAnchor = null;
+            lcPosNote = "本地散点算不出来：" + String(e).slice(0, 80);
+          }
+          try {
+            window.__WSLOG__ && window.__WSLOG__.info("char", "角色站位（" + lcPosSource + "）", { note: lcPosNote, lng: lcAnchor && lcAnchor.lng, lat: lcAnchor && lcAnchor.lat });
+          } catch (e2) { /* 忽略 */ }
+          lcPaint();
+          return lcAnchor;
+        }
         function lcUpdateMarker() {
           try {
             if (!lcMarker) {
               lcMarker = document.createElement("div");
               lcMarker.id = "lc-char";
-              lcMarker.innerHTML = '<img alt="立绘" />'
+              /* 形态 = App 既定设计：2.1em 圆头像 + 状态环 + 名字（立绘只在抽屉里） */
+              lcMarker.innerHTML = '<span class="ring"><img alt="" /></span>'
                 + '<span class="tag">💬 ' + ((lcChar && lcChar.name) || "角色") + '</span>';
               lcMarker.title = "点我和她说话（走 LingChat 本身的对话）";
               lcMarker.onclick = function () {
@@ -3733,11 +3785,20 @@
               };
               (document.getElementById("map") || document.body).appendChild(lcMarker);
             }
+            /* 头像 = **小方图**（`头像.webp`；与 App 的 `get_avatar_file` 第一优先同源）。
+               注意：**不跟着情绪换** —— 情绪换的是抽屉里那张立绘；地图上的小头像保持人的辨识度。 */
             try {
-              const img0 = lcMarker.querySelector("img");
-              if (img0 && !img0.src && lcFolder) img0.src = lcAssetUrl(lcFace || (lcFaces.indexOf("平静") >= 0 ? "平静" : (lcFaces[0] || "头像")));
+              const img0 = lcMarker.querySelector(".ring img");
+              if (img0 && !img0.getAttribute("src") && lcFolder) img0.src = lcAssetUrl("头像");
             } catch (e2) { /* 忽略 */ }
-            const p = map.project([LC_POS.lng, LC_POS.lat]);
+            /* 名字标签：角色名单晚于标记到达时补上 */
+            try {
+              const tag = lcMarker.querySelector(".tag");
+              if (tag) tag.textContent = "💬 " + ((lcChar && lcChar.name) || "角色");
+            } catch (e3) { /* 忽略 */ }
+            if (!lcAnchor) lcResolveAnchor();
+            if (!lcAnchor) { lcMarker.classList.add("hide"); return; }
+            const p = map.project([lcAnchor.lng, lcAnchor.lat]);
             const w = map.getCanvas().clientWidth, h = map.getCanvas().clientHeight;
             const outside = p.x < -20 || p.y < -20 || p.x > w + 20 || p.y > h + 20;
             lcMarker.classList.toggle("hide", outside);
@@ -3753,12 +3814,20 @@
           map.on("zoom", lcUpdateMarker);
           void lcLoadAssets().then(lcLoadChar).then(function () { lcUpdateMarker(); lcPaint(); try { wsBuildDaily(); } catch (e2) { /* 忽略 */ } });
           /* 片区名/视野变了 ⇒ 家可能要重挑（只重挑"家"，不动当天已勾选的任务） */
-          map.on("moveend", function () { try { wsBuildDaily(); } catch (e2) { /* 忽略 */ } });
+          /* 🔴 角色站位**不跟着视野变**（机主要"稳定"）：只在还没解析出来时重试一次（片区名包可能刚到） */
+          map.on("moveend", function () {
+            try { wsBuildDaily(); } catch (e2) { /* 忽略 */ }
+            try { if (!lcAnchor) lcResolveAnchor(); } catch (e3) { /* 忽略 */ }
+            try { lcUpdateMarker(); } catch (e4) { /* 忽略 */ }
+          });
           /* 核验出口（无头/真机都能读；也便于以后接自动化） */
           void lcLoadEmotion();
           window.__LC__ = { send: lcSend, char: function () { return lcChar; }, emotion: function () { return lcEmotion; },
                             cur: function () { return window.__LC_CUR__; }, face: function () { return lcFace; }, aff: function () { return lcAff; },
-                            mem: function () { return lcMem; }, paint: lcPaint, pos: LC_POS, base: LC_BASE };
+                            mem: function () { return lcMem; }, paint: lcPaint, base: LC_BASE,
+                            /* 站位如实出口：位置 / **来源档位** / 一句为什么（无头自检与真机都能读） */
+                            pos: function () { return lcAnchor; }, posSource: function () { return lcPosSource; },
+                            posNote: function () { return lcPosNote; }, resolvePos: lcResolveAnchor };
         } catch (e) { errs.push("char " + e); }
         map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
         /* 🛰 LOD 那一格也要跟着 zoom 走（它是 zoom 的纯函数；只在 zoomend 刷一次，仍是"事件驱动"） */

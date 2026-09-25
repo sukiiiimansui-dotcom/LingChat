@@ -209,7 +209,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v27";
+      const BUILD = "ws3dshow-2026-09-25-v29";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -740,6 +740,15 @@
       /* 🏢 挑楼从**楼房矢量层开始画的那一档**起生效（共享常量 `WS_BLD_VECTOR_MINZOOM` = 12.8，
          在 vendor 里；读不到就退回 12.8）。⚠️ 以前这里另写了 14 ⇒ 机主停在 13.5 时"矢量在画、挑楼没生效"
          ⇒ 12,000 栋全画（他截图里的"黑点 + 还这么多"）。**阈值只许有一份。** */
+      /* 🌐 **楼房直画 WebGL**（`?glbld=1`，默认关）：MapLibre 自定义层 + 实例化方盒。
+         为什么做它：`fill-extrusion` 开销随要素数线性增长（官方性能要点），今天为了不卡只能"只画 100 栋"；
+         直画 GL 上万栋也只是几次 draw call ⇒ 密与清楚**可以不再是取舍**。
+         `?glbn=N` 调上限（默认 20000）。⚠️ 方盒是**近似**（外接盒），HUD 必须写明。 */
+      const GLBLD = (function () { try { return /[?&]glbld=1\b/.test(location.search); } catch (e) { return false; } })();
+      const GLBN = (function () {
+        try { const m = /[?&]glbn=(\d+)/.exec(location.search); return m ? Math.max(0, parseInt(m[1], 10)) : 20000; }
+        catch (e) { return 20000; }
+      })();
       const BLDN_NEAR_ZOOM = (function () {
         try { const v = window.__TF__ && window.__TF__.WS_BLD_VECTOR_MINZOOM; return typeof v === "number" ? v : 12.8; }
         catch (e) { return 12.8; }
@@ -2278,10 +2287,46 @@
       /** 拆件（`?bld=2`）异步上妆的**代际号**：防"旧的一次 setData 覆盖新的" */
       let bldDressGen = 0;
 
+      /** 🌐 直画 GL 的层实例（`?glbld=1` 才建；建过就一直复用，只换实例数据） */
+      let glBldLayer = null;
+
       function flushBld(why) {
         const st = bldStoreOf();
         if (!st) return;
         const all = { type: "FeatureCollection", features: st.features() };
+        /* 🌐 **直画分支**（`?glbld=1`）：不挑 100，画**全量**方盒；现有 bld-ext/bld-line 只藏不删（可随时对照） */
+        if (GLBLD) {
+          try {
+            const TFg = window.__TF__;
+            if (!TFg || typeof TFg.buildBldBoxes !== "function" || typeof TFg.createBldGlLayer !== "function") {
+              errs.push("glbld: vendor 没有 buildBldBoxes/createBldGlLayer");
+              window.__BLD_GL__ = { err: "vendor 缺符号（旧产物？）" };
+              return;
+            }
+            const dressed = dressBldBase(all.features);
+            const boxes = TFg.buildBldBoxes(dressed.map((f) => ({
+              ring: (f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]) || null,
+              h3d: f.properties.h3d,
+              color: f.properties.color3d || null,
+            })), { cap: GLBN, minFootprintM2: 30, fallbackHeight: 8 });
+            if (!glBldLayer) {
+              glBldLayer = TFg.createBldGlLayer({ boxes });
+              map.addLayer(glBldLayer);
+              /* 藏掉样式层（只藏不删：关掉 ?glbld=1 重开即回到原样） */
+              for (const id of ["bld-ext", "bld-line", "bld-roof", "bld-antenna"]) {
+                try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none"); } catch (e2) { /* 忽略 */ }
+              }
+            } else {
+              glBldLayer.update(boxes);
+            }
+            const gs = glBldLayer.glStats ? glBldLayer.glStats() : null;
+            window.__BLD_GL__ = { boxes: boxes.stats, gl: gs };
+            try { $("m-n").textContent = String(boxes.count); } catch (e2) { /* 忽略 */ }
+            try { window.__WSLOG__ && window.__WSLOG__.info("bld-gl", "直画方盒", { ...boxes.stats, gl: gs }); } catch (e2) { /* 忽略 */ }
+            renderBldBundleHud();
+          } catch (e) { errs.push("glbld " + e); window.__BLD_GL__ = { err: String(e).slice(0, 120) }; }
+          return;
+        }
         /* 🏙 **近景按视野挑楼**（机主口径：上限 100 栋、随视野刷新；小区/基础设施自然浮出来）。
            ⚠️ 挑的只是"画哪些"：**仓库仍是全量真数据**，HUD 的「仓库 N 栋」照旧报全量，另加一行挑楼口径。
            规则全在共享真源 `wsBuildingPick.pickBuildingsForView`（纯函数，自检 30/0），页面只给视野与上限。 */
@@ -2369,7 +2414,13 @@
           }
           window.__BLD_BUNDLE__ = facts ? { n: facts.n, have: facts.have, missing: facts.missing, failed: facts.failed,
                                             cap: s2 ? s2.cap : null, dropped: s2 ? s2.dropped : null } : null;
-          const pk = window.__BLD_PICK_WHY__ ? " · 🏙 " + window.__BLD_PICK_WHY__ : "";
+          const gl = window.__BLD_GL__;
+          const glLine = gl ? (" · 🌐 " + (gl.err ? ("直画 GL 失败：" + gl.err)
+            : ("直画 GL " + gl.boxes.boxes + " 个方盒（输入 " + gl.boxes.considered + "）"
+               + (gl.gl ? (" · 实例 " + gl.gl.instances + " · draw " + gl.gl.draws + " 次"
+                          + (gl.gl.errors ? (" · **GL 错误 " + gl.gl.errors + "**：" + gl.gl.lastError) : " · GL 无错")) : "")
+               + " · ⚠️ 方盒是近似"))) : "";
+          const pk = (window.__BLD_PICK_WHY__ ? " · 🏙 " + window.__BLD_PICK_WHY__ : "") + glLine;
           el.textContent = txt + (line ? " · " + line.replace(/^🏢 /, "") : "") + pk;
           el.title = [
             "🏢 离线楼房包：`/bldbundle/<格>.json`（静态文件，**不打 /api/buildings**）",

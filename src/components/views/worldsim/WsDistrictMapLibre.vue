@@ -3410,8 +3410,23 @@
          85° 是 MapLibre 允许的上限（90 会把相机压到与地面平行、数值上容易出问题）。 */
       maxPitch: cameraDefaults().maxPitch, // 70（机主拍板：与代拍页统一）
       attributionControl: false,
-      // 无头截图需要；真机无影响
-      preserveDrawingBuffer: true,
+      /* 🔴 2026-09-25（父代理从 vendored 库**逐字核出**的一手证据）：`preserveDrawingBuffer`
+         **必须写在 `canvasContextAttributes` 里** —— 顶层那个键本构建**根本不读**：
+         全库只出现 1 次（`defaultOptions.canvasContextAttributes:{antialias:!1,preserveDrawingBuffer:!1,…}`），
+         构造期做的是 `{...jm, ...e, canvasContextAttributes:{...jm.canvasContextAttributes, ...e.canvasContextAttributes}}`
+         ⇒ 写在顶层 = 截图/自拍**拍到空白**（App 自拍那条链一直拿不到真画面）。
+         ⚠️ 只写这一个键：其余默认值靠库的浅合并保住（`antialias` 等行为一字不变）。 */
+      canvasContextAttributes: { preserveDrawingBuffer: true },
+      /* 🗺 **关掉世界副本**：库默认 `renderWorldCopies: true` —— 经度滚过边界时最多多画 7 份世界
+         （`for(let e=1;e<=3;e++)`）。我们只做中国城市级，那 6 份一份都不需要（纯白花填充率）。 */
+      renderWorldCopies: false,
+      /* 🧠 瓦片缓存收口：库默认 `maxTileCacheSize: null`（= 不设上限）⇒ 长时间拖动后瓦片会一直堆着。
+         低档给更小的一份（`maxTileCacheZoomLevels` **不动**：它的默认值本来就是库常量，重复设没有意义）。 */
+      maxTileCacheSize: perf.low.value ? 40 : 120,
+      /* 🖥 低档机**像素比封顶 1.5**（真机 dpr 常见 2.4~3，填充率按平方涨）。
+         库源码确认这条是真的生效的：`getPixelRatio(){return this._overridePixelRatio ?? devicePixelRatio}`
+         —— 传了就覆盖，不传（高档）逐字保持原行为。⚠️ 取舍：观感略软，换填充率。 */
+      ...(perf.low.value ? { pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5) } : {}),
     });
     map = m;
 

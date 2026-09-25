@@ -250,10 +250,10 @@ function buildTransport(roads, buildings, center, low = false) {
   };
   if (low) notes.push("低档：只画 公交站 + 红绿灯（其余按规则关掉，保帧率）");
   const O = center;
-  const R2 = roads.map((r) => ({ cls: typeof r.cls === "number" ? r.cls : 3, name: r.name || "", pts: r.pts.map((p) => toMeters(p, O)) })).filter((r) => r.pts.length >= 2);
+  const R3 = roads.map((r) => ({ cls: typeof r.cls === "number" ? r.cls : 3, name: r.name || "", pts: r.pts.map((p) => toMeters(p, O)) })).filter((r) => r.pts.length >= 2);
   const B = buildings.map((b) => ({ kind: String(b.kind || "").toLowerCase(), name: b.name || "", ring: b.ring.map((p) => toMeters(p, O)) })).filter((b) => b.ring.length >= 3);
   const J = junctions(
-    R2.map((r) => ({ pts: r.pts, cls: r.cls, name: r.name })),
+    R3.map((r) => ({ pts: r.pts, cls: r.cls, name: r.name })),
     18
   );
   const features = [];
@@ -261,7 +261,7 @@ function buildTransport(roads, buildings, center, low = false) {
     features.push(f);
   };
   if (!low || true) {
-    const busRoads = R2.filter((r) => r.cls <= TF_RULES.bus.maxCls);
+    const busRoads = R3.filter((r) => r.cls <= TF_RULES.bus.maxCls);
     for (const r of busRoads) {
       const samples = sampleAlong(r.pts, TF_RULES.bus.spacing);
       for (const sp of samples) {
@@ -348,7 +348,7 @@ function buildTransport(roads, buildings, center, low = false) {
       const cx = b.ring.reduce((s, p) => s + p[0], 0) / b.ring.length;
       const cy = b.ring.reduce((s, p) => s + p[1], 0) / b.ring.length;
       let best = null;
-      for (const r of R2) {
+      for (const r of R3) {
         const n = nearestOnLine(r.pts, [cx, cy]);
         if (!best || n.d < best.d) best = n;
       }
@@ -376,7 +376,7 @@ function buildTransport(roads, buildings, center, low = false) {
       if (area < TF_RULES.driveway.minAreaM2) continue;
       let bestRoad = null;
       let bestD = Infinity;
-      for (const r of R2) {
+      for (const r of R3) {
         for (const p of b.ring) {
           const n = nearestOnLine(r.pts, p);
           if (n.d < bestD) {
@@ -2599,6 +2599,99 @@ function createBldGlLayer(opts) {
   };
 }
 
+// src/components/views/worldsim/wsDaily.ts
+var R2 = 63710088e-1;
+var D2R2 = Math.PI / 180;
+function distM(a, b) {
+  const dLat = (b.lat - a.lat) * D2R2;
+  const dLng = (b.lng - a.lng) * D2R2;
+  const la1 = a.lat * D2R2, la2 = b.lat * D2R2;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R2 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function pickHome(places, opts) {
+  const maxM = Number.isFinite(opts.maxM) ? opts.maxM : 3e3;
+  const prefer = opts.preferKinds || ["neighbourhood", "quarter", "suburb"];
+  const valid = (places || []).filter((p) => p && typeof p.name === "string" && p.name.trim() && Number.isFinite(p.lng) && Number.isFinite(p.lat));
+  if (!opts.center || !Number.isFinite(opts.center.lng) || !Number.isFinite(opts.center.lat)) {
+    return { home: null, why: "没有地图中心 ⇒ 数不出来（不能瞎挑一个家）", candidates: null, distM: null };
+  }
+  const c = opts.center;
+  const inRange = valid.map((p) => ({ p, d: distM(c, p) })).filter((x) => x.d <= maxM);
+  if (inRange.length === 0) {
+    return {
+      home: null,
+      why: `半径 ${maxM}m 内没有**有名字**的片区（有名点共 ${valid.length} 个）⇒ 不编一个家`,
+      candidates: 0,
+      distM: null
+    };
+  }
+  const rank = (k) => {
+    const i = prefer.indexOf(String(k || ""));
+    return i < 0 ? prefer.length : i;
+  };
+  inRange.sort((a, b) => rank(a.p.kind) - rank(b.p.kind) || a.d - b.d || (a.p.name < b.p.name ? -1 : a.p.name > b.p.name ? 1 : 0));
+  const best = inRange[0];
+  return {
+    home: best.p,
+    why: `家 = ${best.p.name}（${best.p.kind || "片区"} · 距中心 ${Math.round(best.d)}m · 半径内有名点 ${inRange.length} 个）`,
+    candidates: inRange.length,
+    distM: best.d
+  };
+}
+function dayKeyOf(nowMs) {
+  const d = new Date(nowMs);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function dayHash(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+function planDaily(opts) {
+  const now = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
+  const day = dayKeyOf(now);
+  const residents = (opts.residents || []).filter((r) => r && r.id && r.name);
+  const spots = (opts.spots || []).filter((s) => s && s.id && s.name);
+  const missing = [];
+  if (residents.length === 0) missing.push("没有居民（角色）⇒ 前两件只能退成'走走看看'");
+  if (spots.length === 0 && !opts.homeName) missing.push("没有地点/家 ⇒ 第三件只能退成'随便逛逛'");
+  const pickOf = (arr, kind) => arr.length ? arr[dayHash(day + "|" + kind) % arr.length] : null;
+  const r1 = pickOf(residents, "greet");
+  const r2 = pickOf(residents, "gift");
+  const s1 = pickOf(spots, "visit");
+  const tasks = [
+    r1 ? { id: `greet:${r1.id}`, kind: "greet", targetId: r1.id, done: false, text: `跟 ${r1.name} 打个招呼` } : { id: "greet:none", kind: "greet", targetId: null, done: false, text: "在附近走走，看看有什么" },
+    r2 ? { id: `gift:${r2.id}`, kind: "gift", targetId: r2.id, done: false, text: `送一样东西给 ${r2.name}` } : { id: "gift:none", kind: "gift", targetId: null, done: false, text: "找一样喜欢的东西带上" },
+    opts.homeName || s1 ? {
+      id: `visit:${opts.homeName || s1.id}`,
+      kind: "visit",
+      targetId: s1 ? s1.id : null,
+      done: false,
+      text: opts.homeName ? `回一趟 ${opts.homeName}` : `去一次 ${s1.name}`
+    } : { id: "visit:none", kind: "visit", targetId: null, done: false, text: "随便逛逛" }
+  ];
+  const prev = opts.prev;
+  if (prev && prev.day === day) {
+    const doneMap = new Map(prev.tasks.map((t) => [t.id, t.done]));
+    for (const t of tasks) if (doneMap.get(t.id) === true) t.done = true;
+  }
+  const doneN = tasks.filter((t) => t.done).length;
+  return {
+    state: { day, tasks },
+    missing,
+    why: `今日三件事（${day}）：完成 ${doneN}/3` + (prev && prev.day !== day ? ` · **已跨天重置**（上次 ${prev.day}）` : "") + (missing.length ? ` · 缺件：${missing.join("；")}` : "")
+  };
+}
+function toggleTask(state, taskId, done) {
+  const tasks = state.tasks.map((t) => t.id === taskId ? { ...t, done: done === void 0 ? !t.done : !!done } : t);
+  return { day: state.day, tasks };
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -3290,7 +3383,10 @@ export {
   createBundleFeed,
   createFeatureStore,
   createWsLog,
+  dayHash,
+  dayKeyOf,
   decorateBuildings,
+  distM,
   envSnapshot,
   equipBoxes,
   fetchRadiusForView,
@@ -3342,6 +3438,7 @@ export {
   nearestOnLine,
   panDamping,
   pickBuildingsForView,
+  pickHome,
   pickLabels,
   pitchGuardParams,
   pixelRatioForTier,
@@ -3350,6 +3447,7 @@ export {
   placesBundleCellsForView,
   placesIdOf,
   placesPointOf,
+  planDaily,
   planEnsureRoadOrder,
   pointInRing,
   prerenderSourceOf,
@@ -3385,6 +3483,7 @@ export {
   shapeCountsLine,
   toLngLat,
   toMeters,
+  toggleTask,
   transportHudLine,
   viewHalfMetersOf,
   visibleRoadCount,

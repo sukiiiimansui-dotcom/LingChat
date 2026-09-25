@@ -166,6 +166,10 @@
         <div id="wsdrawer-hint">地图永远看得见：抽屉只在需要时从左边缘拉出。<br />下面这些是诊断件（点各自标题展开）；<b>将来与角色的对话就放在最下面那块</b>。</div>
       </div>
       <div id="wsdrawer-chat">
+        <div id="ws-daily" style="margin-bottom:6px">
+          <div style="font-weight:700;color:#9fd8ff">🏠 <span id="ws-home">正在找家…</span></div>
+          <div id="ws-tasks" style="margin-top:2px"></div>
+        </div>
         <img id="lc-portrait" alt="立绘（LingChat 资产）" />
         <div id="lc-stat">💬 角色对话 · 正在连 LingChat…</div>
         <div id="lc-msgs"></div>
@@ -289,7 +293,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v40";
+      const BUILD = "ws3dshow-2026-09-25-v41";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3391,6 +3395,96 @@
         function lcLog(lvl, msg, data) {
           try { const L = window.__WSLOG__; if (L && L[lvl]) L[lvl]("char", msg, data); } catch (e) { /* 忽略 */ }
         }
+        /* ══════════════════════════════════════════════════════════════════════════════
+         * 🏠📋 **我的家 + 今日三件事**（动森式玩法 M1-2；逻辑全在共享真源 `wsDaily.ts`）
+         *  · 家：从**当前片区名包**里挑最近的有名片区（`pickHome`）——**没名字就不挑，绝不编**
+         *  · 三件事：打招呼/送礼/去一个地方，名字取**真实**居民与地点；**确定性**（当天固定）+ **跨天重置**
+         *  · 落盘：`localStorage["wsDaily.v1"]`（只存 day + 任务 id + done ⇒ 不存任何编造内容）
+         *  · 喂给对话：家名 + 今日进度会拼进消息前缀（"角色知道你今天的日子"的官方通道 = 消息文本）
+         * ══════════════════════════════════════════════════════════════════════════════ */
+        const DAILY_KEY = "wsDaily.v1";
+        let wsHome = null, wsDaily = null, wsDailyWhy = "";
+        /** 从**当前片区名包**（页面已有的 places 仓库）取有名点 —— 真实数据，不编 */
+        function wsPlaces() {
+          try {
+            const st = (typeof placesStoreOf === "function") ? placesStoreOf() : null;
+            const feats = (st && st.features) ? st.features() : [];
+            const out = [];
+            for (const f of feats) {
+              const p = f.properties || {};
+              const nm = p.n || p.name;
+              const g = (f.geometry && f.geometry.coordinates) || null;
+              if (!nm || !g || !g.length) continue;
+              out.push({ name: String(nm), lng: Number(g[0]), lat: Number(g[1]), kind: p.k || null });
+            }
+            return out;
+          } catch (e) { return []; }
+        }
+        function wsDeps() {
+          const TFd = window.__TF__;
+          const residents = lcChar ? [{ id: "char:" + (lcChar.id ?? "0"), name: lcChar.name }] : [];
+          /* 「去一个地方」的候选：只用**真实**的东西（家 / 页面默认机位所在区）——不编地点 */
+          const spots = [];
+          if (wsHome) spots.push({ id: "home", name: wsHome.name });
+          if (SPOT && SPOT.name) spots.push({ id: "spot", name: SPOT.name });
+          return { TFd, residents, spots };
+        }
+        function wsRenderDaily() {
+          try {
+            const h = document.getElementById("ws-home"), box = document.getElementById("ws-tasks");
+            if (!h || !box) return;
+            h.textContent = wsHome ? ("我的家：" + wsHome.name + (wsHome.kind ? "（" + wsHome.kind + "）" : ""))
+              : ("我的家：数不出来（" + (wsDailyWhy || "附近没有有名片区") + "）");
+            if (!wsDaily) { box.textContent = ""; return; }
+            box.innerHTML = "";
+            wsDaily.tasks.forEach(function (task) {
+              const row = document.createElement("label");
+              row.style.cssText = "display:flex;gap:6px;align-items:flex-start;margin:1px 0;cursor:pointer";
+              const cb = document.createElement("input");
+              cb.type = "checkbox"; cb.checked = !!task.done; cb.style.marginTop = "2px";
+              cb.onchange = function () { wsToggle(task.id, cb.checked); };
+              const sp = document.createElement("span");
+              sp.textContent = task.text; if (task.done) sp.style.opacity = "0.55";
+              row.appendChild(cb); row.appendChild(sp); box.appendChild(row);
+            });
+            const doneN = wsDaily.tasks.filter(function (x) { return x.done; }).length;
+            const foot = document.createElement("div");
+            foot.style.cssText = "opacity:.75;margin-top:2px";
+            foot.textContent = "完成 " + doneN + "/3 · " + wsDaily.day
+              + (wsDailyWhy ? " · " + wsDailyWhy.replace(/^今日三件事（[^）]*）：/, "") : "");
+            box.appendChild(foot);
+          } catch (e) { /* 渲染失败不许影响地图 */ }
+        }
+        function wsSaveDaily() {
+          try { localStorage.setItem(DAILY_KEY, JSON.stringify(wsDaily ? { day: wsDaily.day, tasks: wsDaily.tasks.map(function (t) { return { id: t.id, done: !!t.done }; }) } : null)); } catch (e) { /* 忽略 */ }
+        }
+        function wsToggle(id, done) {
+          const TFd = window.__TF__;
+          if (!TFd || !TFd.toggleTask || !wsDaily) return;
+          wsDaily = TFd.toggleTask(wsDaily, id, done);
+          wsSaveDaily(); wsRenderDaily();
+          try { window.__WSLOG__ && window.__WSLOG__.info("daily", "勾选任务", { id: id, done: done, why: "" }); } catch (e) { /* 忽略 */ }
+        }
+        function wsBuildDaily() {
+          const { TFd, residents, spots } = wsDeps();
+          if (!TFd || typeof TFd.planDaily !== "function") { wsDailyWhy = "vendor 缺 wsDaily（旧产物？）"; wsRenderDaily(); return; }
+          let prev = null;
+          try { prev = JSON.parse(localStorage.getItem(DAILY_KEY) || "null"); } catch (e) { prev = null; }
+          /* 家的选址：有片区名就用最近的；没有 ⇒ 如实"数不出来"（`pickHome` 自己会给 why） */
+          const ph = (typeof TFd.pickHome === "function")
+            ? TFd.pickHome(wsPlaces(), { center: (function () { try { const c = map.getCenter(); return { lng: c.lng, lat: c.lat }; } catch (e) { return null; } })(), maxM: 3000 })
+            : { home: null, why: "vendor 缺 pickHome" };
+          wsHome = ph.home; wsDailyWhy = ph.why || "";
+          const r = TFd.planDaily({
+            prev: prev && prev.day ? { day: prev.day, tasks: (prev.tasks || []).map(function (x) { return { id: x.id, text: "", kind: "greet", targetId: null, done: !!x.done }; }) } : null,
+            residents: residents, spots: spots, homeName: wsHome ? wsHome.name : null,
+          });
+          wsDaily = r.state;
+          wsSaveDaily(); wsRenderDaily();
+          try { window.__WSLOG__ && window.__WSLOG__.info("daily", r.why, { home: wsHome && wsHome.name, tasks: wsDaily.tasks.map(function (x) { return x.text; }) }); } catch (e) { /* 忽略 */ }
+        }
+        window.__WSD__ = { home: function () { return wsHome; }, daily: function () { return wsDaily; }, rebuild: wsBuildDaily };
+
         /* 🎭 立绘资产（来自 LingChat 自己的角色目录；`/char/index.json` 列的是**真实存在的文件名**） */
         const LC_FOLDER_HINT = (function () {          /* `?charfolder=` 可指定；否则用第一个有 avatar/ 的角色 */
           try { const m = /[?&]charfolder=([^&]+)/.exec(location.search); return m ? decodeURIComponent(m[1]) : null; }
@@ -3520,6 +3614,12 @@
               if (st && typeof st.n === "number") bits.push("这一刻视野里的楼房仓库有 " + st.n + " 栋（我只画了其中一部分）");
               bits.push("地图缩放 " + z.toFixed(1) + " 级");
             } catch (e2) { /* 取不到就不写 */ }
+            if (wsHome) bits.push("我在这边的家是「" + wsHome.name + "」");
+            if (wsDaily) {
+              const todo = wsDaily.tasks.filter(function (x) { return !x.done; }).map(function (x) { return x.text; });
+              bits.push("今天的三件事完成 " + wsDaily.tasks.filter(function (x) { return x.done; }).length + "/3"
+                + (todo.length ? "，还没做的是：" + todo.join("、") : "（都做完了）"));
+            }
             return "【地图】" + bits.join("；") + "。";
           } catch (e) { return ""; }
         }
@@ -3591,7 +3691,9 @@
           if (lcEl.input) lcEl.input.onkeydown = function (e) { if (e.key === "Enter") { e.preventDefault(); void lcSend(lcEl.input.value); } };
           map.on("move", lcUpdateMarker);
           map.on("zoom", lcUpdateMarker);
-          void lcLoadAssets().then(lcLoadChar).then(function () { lcUpdateMarker(); lcPaint(); });
+          void lcLoadAssets().then(lcLoadChar).then(function () { lcUpdateMarker(); lcPaint(); try { wsBuildDaily(); } catch (e2) { /* 忽略 */ } });
+          /* 片区名/视野变了 ⇒ 家可能要重挑（只重挑"家"，不动当天已勾选的任务） */
+          map.on("moveend", function () { try { wsBuildDaily(); } catch (e2) { /* 忽略 */ } });
           /* 核验出口（无头/真机都能读；也便于以后接自动化） */
           void lcLoadEmotion();
           window.__LC__ = { send: lcSend, char: function () { return lcChar; }, emotion: function () { return lcEmotion; },

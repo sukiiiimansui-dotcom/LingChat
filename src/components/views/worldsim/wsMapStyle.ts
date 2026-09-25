@@ -105,16 +105,15 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean } = {}): Rec
        用 `theme.sea` 而不是硬编码：亮/暗两套主题自动跟随
        （GeoTheme 只有 land/line/accent/accentLine/label/labelHalo/sea 七个字段，**没有 `dark`** ——
         当初我写 `theme.dark` 被 tsc 当场抓住，就是这个原因）。
-       实测本 vendored 构建支持 fog-color / fog-ground-blend / horizon-blend；
-       **不支持** `light` 与 `fill-extrusion-ambient-occlusion`（"光照"只能靠时间驱动配色）。 */
-    fog: {
-      range: [0.6, 9],
-      color: theme.sea,
-      "horizon-blend": 0.12,
-      "high-color": theme.land,
-      "space-color": theme.sea,
-      "star-intensity": 0,
-    },
+
+       🔴 2026-09-25 更正（从 vendored 源码的 `$root` 键表逐字核出，见 RESEARCH-MOBILE-3D-PERF.md）：
+       · **根级没有 `fog` 这个键** —— `fog-color` / `fog-ground-blend` / `horizon-blend` 属于 **`sky`**；
+         原来这里那段根级 `fog: {…}` 是**死配置（从来没生效过）**，已删除。
+         要真正加雾/天际线，走 `sky`（`wsMapTheme.ts` 的 sky 段，那里已经是合法写法）。
+       · 本构建**不支持** `star-intensity`（旧块里那个键同样是死配置）。
+       · **`light` 是支持的**（`$root.light` + shader 里 `u_lightpos/u_lightcolor/u_lightintensity` 都在算）
+         ⇒ 将来要"给楼打光"直接用根级 `light`，**零依赖、零额外 draw call**。
+         （本条推翻了此处旧注释"不支持 `light`"的说法。） */
     sources,
     layers,
   };

@@ -206,3 +206,75 @@ export function pickBuildingsForView<T extends PickFeature>(
   };
   return { features: chosen, stats };
 }
+
+
+/* ══ 🧱 **按区块封顶**（机主 2026-09-25 更正：「楼房别乱变不变的，我是说**小范围一个区块最高 100 栋**」）══
+ * 上一版是"**整个视野**最多 100 栋、随视野重挑" —— 两个毛病：① 挪一下地图那批楼就换了一批（"乱变"）；
+ * ② 视野大时稀、视野小时又扎堆。机主要的规则是：**空间切成固定区块，每块最多 100 栋**。
+ * ⇒ 挑选只依赖**区块本身**（与视野/中心无关）⇒ 同一块永远是那 100 栋，**拖动不乱变**。
+ * 区块用**固定经纬格**（默认 0.02° ≈ 2.2km，与离线包同一套 `floor(lng/size)*size` 数学）。
+ */
+export interface CapCellInput {
+  /** 区块边长（度）；默认 0.02 ≈ 2.2km（"小范围一个区块"） */
+  cellDeg?: number;
+  /** 每块上限；默认 `WS_BLD_CELL_CAP` = 100 */
+  cap?: number;
+}
+export interface CapCellStats {
+  considered: number;
+  cells: number;
+  cap: number;
+  cellDeg: number;
+  /** 每块实际画了几栋（按格子键排序） */
+  byCell: Array<{ cell: string; drawn: number; dropped: number }>;
+  chosen: number;
+  dropped: number;
+  /** 定位不到的（没几何/坐标坏）——**不画且如实计数** */
+  noPoint: number;
+  why: string;
+}
+
+export const WS_BLD_CELL_CAP = 100;
+export const WS_BLD_CELL_DEG = 0.02;
+
+/** 每块最多 `cap` 栋；**只依赖区块 ⇒ 稳定**（拖动不重挑、同一块永远同一批） */
+export function capBuildingsPerCell<T extends PickFeature>(
+  feats: readonly T[],
+  input: CapCellInput = {},
+): { features: T[]; stats: CapCellStats } {
+  const size = Number.isFinite(input.cellDeg as number) && (input.cellDeg as number) > 0 ? (input.cellDeg as number) : WS_BLD_CELL_DEG;
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
+  const byCell = new Map<string, Array<{ f: T; named: number; area: number; key: string }>>();
+  let noPoint = 0;
+  for (const f of feats) {
+    const pt = firstPoint(f);
+    if (!pt) { noPoint++; continue; }                    // 定位不到 ⇒ 不画（也不许算进任何区块）
+    const w = Math.floor(pt[0] / size) * size;
+    const s = Math.floor(pt[1] / size) * size;
+    const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? "") };
+    const arr = byCell.get(cell);
+    if (arr) arr.push(it); else byCell.set(cell, [it]);
+  }
+  const chosen: T[] = [];
+  const rows: Array<{ cell: string; drawn: number; dropped: number }> = [];
+  let dropped = 0;
+  for (const cell of [...byCell.keys()].sort()) {
+    const arr = byCell.get(cell)!;
+    /* 块内排序：**有名字优先 → 底面大优先 → id 定序**（同分同序 ⇒ 两次挑选逐字节相同） */
+    arr.sort((a, z) => (z.named - a.named) || (z.area - a.area) || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+    const take = arr.slice(0, cap);
+    for (const x of take) chosen.push(x.f);
+    rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
+    dropped += arr.length - take.length;
+  }
+  return {
+    features: chosen,
+    stats: {
+      considered: feats.length, cells: byCell.size, cap, cellDeg: size,
+      byCell: rows, chosen: chosen.length, dropped, noPoint,
+      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${chosen.length} 栋（输入 ${feats.length} · 块内超出 ${dropped}`
+        + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`,
+    },
+  };
+}

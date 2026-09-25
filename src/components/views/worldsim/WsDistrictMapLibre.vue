@@ -241,6 +241,7 @@
     viewHalfMetersOf,
     LOD_NEAR_ZOOM,
   } from "./wsScene";
+import { WS_BLD_VECTOR_MINZOOM } from "./wsDistrictScene";
 import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
   /* 🎬🏢 **小区级 3D 装配的共享真源**（`wsDistrictScene.ts`，2026-09-25 切片 A 从本组件**搬家**过去）：
      `districtStyleOf`（原本地 `makeStyle`）、`bldLayerSpecsFor`（原 `bldLayerSpecs`）、
@@ -2888,7 +2889,8 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
         pickNearView: (() => {
           try {
             const z = map ? map.getZoom() : null;
-            if (z === null || z < LOD_NEAR_ZOOM) return null;
+            /* 与楼房矢量层的 minzoom 用**同一个共享常量**（别再各写一份 —— 13.5 那次就是两处阈值不一致） */
+            if (z === null || z < WS_BLD_VECTOR_MINZOOM) return null;
             const b = map!.getBounds();
             return { bounds: b, center: map!.getCenter(), cap: WS_BLD_VIEW_CAP };
           } catch { return null; }

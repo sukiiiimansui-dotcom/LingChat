@@ -95,6 +95,18 @@ export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number)
  * 楼房那几条图层（`bld-ext` / `bld-roof` / `bld-antenna` / `bld-line`）（原宿主 `bldLayerSpecs()`，逐字搬）。
  * 颜色/描边/色阶**全从主题取**（`theme` / `themeTier`），这里不写死任何色号。
  */
+/**
+ * 🏢 **楼房矢量层从哪一档开始画**（= `bld-ext` / `bld-line` 的 minzoom）。
+ * 🔴 抽成共享常量的原因（2026-09-25 真机事故）：这个数以前在 specs 里写 12.8、而页面"近景挑楼"的门槛
+ * 另写了 14 ⇒ 机主停在 **13.5 级**时**两不靠**：矢量楼在画（≥12.8）、挑楼却没生效（<14）
+ * ⇒ 12,000 栋全画出来 = 他截图里那片"黑点/还这么多"。**阈值只许有一份。**
+ */
+export const WS_BLD_VECTOR_MINZOOM = 12.8;
+
+/** 🖊 描边从哪一档才开始**可见**：小比例下每栋只有 1~3px，深色描边会把填充整个盖住（"灯芯绒"）。
+ *  与 AI 绘制管线里那条经验同源（z12 小楼不许描边）；这里用 zoom 插值让线从 12.8 的 0 平滑长到 15 的正常宽。 */
+export const WS_BLD_OUTLINE_FULL_ZOOM = 15;
+
 export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier): Array<Record<string, unknown>> {
   /* 🎨 主题参数（暗色 ↔ 二次元）与低端档 —— 都从单一真源取，不在这里写死任何颜色 */
   const th = theme;
@@ -128,7 +140,7 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier): Array<Reco
          `fill-extrusion` 的开销**随要素数线性增长**（见 MapLibre 官方性能指南 /
          Bavaria 矢量瓦片 3D 经验），而整区视野下楼只有亚像素 ⇒ 这一档**整层不画**。
          取楼本来也要 zoom ≥ 13.5，两层阈值对齐（12.8 留一点余量，免得来回抖）。 */
-      minzoom: 12.8,
+      minzoom: WS_BLD_VECTOR_MINZOOM,
       /* 只画主体 —— 屋顶/天线是另外两条层（拆件后同一个源里有三种 `part`） */
       filter: ["==", ["get", "part"], "body"],
       paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpression(th)] },
@@ -159,12 +171,20 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier): Array<Reco
             id: "bld-line",
             type: "line",
             source: "bld",
-            minzoom: 12.8, // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
+            minzoom: WS_BLD_VECTOR_MINZOOM, // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
             /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
             filter: ["==", ["get", "part"], "body"],
             /* 二次元这层是"动画感"的主要来源（平涂 + 深藏青细线）；
                暗色这层只是淡淡一圈，低端档直接不建。 */
-            paint: { "line-color": th.outline.color, "line-width": tier.outlineWidth ?? th.outline.width },
+            /* 🖊 **描边宽度随 zoom 长起来**（2026-09-25 机主「黑色一坨」的真因）：
+               12.8~15 之间从 0 平滑到正常宽 —— 小比例下每栋 1~3px，深色描边会把填充整个盖住，
+               整片楼就变成"黑点地毯"；到 15+ 楼够大了，描边才恢复它该有的"动画感"分隔作用。 */
+            paint: {
+              "line-color": th.outline.color,
+              "line-width": ["interpolate", ["linear"], ["zoom"],
+                WS_BLD_VECTOR_MINZOOM, 0,
+                WS_BLD_OUTLINE_FULL_ZOOM, tier.outlineWidth ?? th.outline.width],
+            },
           },
         ]
       : []),

@@ -3,7 +3,7 @@
  "generatedBy": "world_map/prerender_pipeline.py",
  "style": "anime",
  "kinds": {
-  "real": 10
+  "real": 187
  },
  "kindsNote": "本目录只有 real（本轮管线用真楼脚印 + OSM 道路画的）。示意/占位瓦片在 /prerender-demo/，不在这里 —— 机主 2026-09-25 拍板「占位默认不画」。",
  "themeLabel": "二次元（蔚蓝档案）",
@@ -35,25 +35,218 @@
  },
  "tileSize": 512,
  "zoomRange": [
-  11,
+  10,
   12
  ],
  "bbox": [
-  106.5,
-  29.52,
-  106.62,
-  29.6
+  106.25221,
+  29.12655,
+  107.00221,
+  30.12413
  ],
- "tileCount": 10,
- "tileCountReal": 10,
- "totalBytes": 209470,
- "bytesReal": 209470,
+ "batches": [
+  {
+   "bbox": [
+    106.5,
+    29.52,
+    106.62,
+    29.6
+   ],
+   "zoomRange": [
+    11,
+    12
+   ],
+   "tiles": 10,
+   "note": "合并前的清单（没有 batches 段）"
+  },
+  {
+   "ts": 1790302029,
+   "bbox": [
+    106.25221,
+    29.12655,
+    107.00221,
+    30.12413
+   ],
+   "zoomRange": [
+    10,
+    12
+   ],
+   "tiles": 187,
+   "tilesWritten": 187,
+   "tilesSkipped": 0,
+   "cost": {
+    "fetchSecs": 0.0,
+    "drawSecs": 8.4
+   },
+   "data": {
+    "buildings": {
+     "features": 0,
+     "missing": true,
+     "disks": null,
+     "disksReusedFromCache": null,
+     "secs": null
+    },
+    "roads": {
+     "elements": 0,
+     "subBboxes": [
+      "106.4,29.44,106.5,29.54",
+      "106.4,29.54,106.5,29.64",
+      "106.4,29.64,106.5,29.66",
+      "106.5,29.44,106.6,29.54",
+      "106.5,29.54,106.6,29.64",
+      "106.5,29.64,106.6,29.66",
+      "106.6,29.44,106.66,29.54",
+      "106.6,29.54,106.66,29.64",
+      "106.6,29.64,106.66,29.66"
+     ],
+     "failed": true
+    }
+   }
+  },
+  {
+   "ts": 1790306750,
+   "bbox": [
+    106.25221,
+    29.12655,
+    107.00221,
+    30.12413
+   ],
+   "zoomRange": [
+    10,
+    12
+   ],
+   "tiles": 187,
+   "tilesWritten": 187,
+   "tilesSkipped": 0,
+   "cost": {
+    "fetchSecs": 14.3,
+    "drawSecs": 897.7
+   },
+   "data": {
+    "buildings": {
+     "features": 654763,
+     "missing": false,
+     "disks": 34,
+     "disksReusedFromCache": 0,
+     "secs": 7961.2
+    },
+    "roads": {
+     "elements": 7156,
+     "subBboxes": [
+      "106.4,29.44,106.5,29.54",
+      "106.4,29.54,106.5,29.64",
+      "106.4,29.64,106.5,29.66",
+      "106.5,29.44,106.6,29.54",
+      "106.5,29.54,106.6,29.64",
+      "106.5,29.64,106.6,29.66",
+      "106.6,29.44,106.66,29.54",
+      "106.6,29.54,106.66,29.64",
+      "106.6,29.64,106.66,29.66"
+     ],
+     "failed": false
+    }
+   }
+  },
+  {
+   "ts": 1790308727,
+   "bbox": [
+    106.25221,
+    29.12655,
+    107.00221,
+    30.12413
+   ],
+   "zoomRange": [
+    10,
+    12
+   ],
+   "tiles": 187,
+   "tilesWritten": 187,
+   "tilesSkipped": 0,
+   "cost": {
+    "fetchSecs": 14.3,
+    "drawSecs": 772.5
+   },
+   "data": {
+    "buildings": {
+     "features": 654763,
+     "missing": false,
+     "disks": 34,
+     "disksReusedFromCache": 0,
+     "secs": 7961.2
+    },
+    "roads": {
+     "elements": 7156,
+     "subBboxes": [
+      "106.4,29.44,106.5,29.54",
+      "106.4,29.54,106.5,29.64",
+      "106.4,29.64,106.5,29.66",
+      "106.5,29.44,106.6,29.54",
+      "106.5,29.54,106.6,29.64",
+      "106.5,29.64,106.6,29.66",
+      "106.6,29.44,106.66,29.54",
+      "106.6,29.54,106.66,29.64",
+      "106.6,29.64,106.66,29.66"
+     ],
+     "failed": false
+    }
+   }
+  },
+  {
+   "ts": 1790309866,
+   "bbox": [
+    106.25221,
+    29.12655,
+    107.00221,
+    30.12413
+   ],
+   "zoomRange": [
+    10,
+    12
+   ],
+   "tiles": 187,
+   "tilesWritten": 187,
+   "tilesSkipped": 0,
+   "cost": {
+    "fetchSecs": 22.7,
+    "drawSecs": 1271.1
+   },
+   "data": {
+    "buildings": {
+     "features": 654763,
+     "missing": false,
+     "disks": 34,
+     "disksReusedFromCache": 0,
+     "secs": 7961.2
+    },
+    "roads": {
+     "elements": 7156,
+     "subBboxes": [
+      "106.4,29.44,106.5,29.54",
+      "106.4,29.54,106.5,29.64",
+      "106.4,29.64,106.5,29.66",
+      "106.5,29.44,106.6,29.54",
+      "106.5,29.54,106.6,29.64",
+      "106.5,29.64,106.6,29.66",
+      "106.6,29.44,106.66,29.54",
+      "106.6,29.54,106.66,29.64",
+      "106.6,29.64,106.66,29.66"
+     ],
+     "failed": false
+    }
+   }
+  }
+ ],
+ "batchesNote": "分批跑的历史（每批一个 bbox；`--merge` 把各批并起来）。顶层 bbox/zoomRange 是**并集**，tiles 是**各批的并集**；顶层 cost/data 只是**最后一批**的，看历史请读 batches[]。",
+ "tileCount": 187,
+ "tileCountReal": 187,
+ "totalBytes": 4008720,
+ "bytesReal": 4008720,
  "staleFiles": [],
  "staleNote": "输出目录里**不在本轮计划内**的 PNG（大概是上一个 bbox/zoom 留下的）。**没有**并进 `tiles`：它们不是本轮真数据的产物，标成 real 就是撒谎；页面按清单判「缺图」，所以留它们会让那一格显示为「缺」——要么重跑覆盖，要么手工清掉。",
  "timings": {
-  "fetchSecs": 3.8,
-  "drawSecs": 23.6,
-  "totalSecs": 28.3
+  "fetchSecs": 22.7,
+  "drawSecs": 1271.1,
+  "totalSecs": 1297.1
  },
  "data": {
   "buildings": {
@@ -61,24 +254,24 @@
    "license": "ODbL-1.0",
    "attribution": "楼房数据 © Overture Maps Foundation（ODbL 1.0）· 由 OpenStreetMap 等来源合成",
    "bbox": [
-    106.5,
-    29.52,
-    106.62,
-    29.6
+    106.25221,
+    29.12655,
+    107.00221,
+    30.12413
    ],
    "disk_r_m": 9000,
-   "disks": 1,
-   "disksReusedFromCache": 1,
+   "disks": 34,
+   "disksReusedFromCache": 0,
    "maxFeatures": "400000",
-   "features_raw": 108603,
-   "features": 108603,
-   "secs": 2.6,
-   "bytes": 33394143,
-   "verdict": "108603 栋（1 个盘）"
+   "features_raw": 934918,
+   "features": 654763,
+   "secs": 7961.2,
+   "bytes": 374486537,
+   "verdict": "654763 栋（34 个盘）"
   },
   "roads": {
-   "elements": 2937,
-   "endpoint": "https://overpass-api.de/api/interpreter",
+   "elements": 7156,
+   "endpoint": null,
    "failed": false,
    "error": null,
    "source": "OpenStreetMap / Overpass（与运行期路网同一个来源）"
@@ -92,17 +285,25 @@
   }
  },
  "counts": {
-  "buildingsInBbox": 41732,
-  "roads": 2937
+  "buildingsInBbox": 545887,
+  "roads": 7156
+ },
+ "coverage": {
+  "discsOnDisk": 35,
+  "discRadiusM": 9000,
+  "tilesFull": 44,
+  "tilesPartial": 143,
+  "tilesUncovered": 0,
+  "note": "`cov` = 该瓦片被**盘上已有的圆**盖住的采样比例（4×4）。cov=0 是「这一片还没铺盘」（≠「这里没有楼房」）；cov=1 是「取样点全在某个盘里」。"
  },
  "cost": {
-  "fetchSecs": 3.8,
-  "drawSecs": 23.6,
-  "fetchSecsPerTile": 0.38,
-  "drawSecsPerTile": 2.365,
-  "disks": 1,
-  "disksReusedFromCache": 1,
-  "verdict": "取数 3.8s / 渲染 23.6s"
+  "fetchSecs": 22.7,
+  "drawSecs": 1271.1,
+  "fetchSecsPerTile": 0.12,
+  "drawSecsPerTile": 6.797,
+  "disks": 34,
+  "disksReusedFromCache": 0,
+  "verdict": "取数 22.7s / 渲染 1271.1s"
  },
  "attribution": "楼房数据 © Overture Maps Foundation（ODbL 1.0）· 由 OpenStreetMap 等来源合成",
  "license": "ODbL-1.0（楼脚印）· ODbL（OSM 道路）",
@@ -116,66 +317,1893 @@
    "why": "Overture 公网 S3 实测 4km 盘 224s/8.5MB ⇒ 82,400 km² 逐盘取数是**几天级**，本机不做；本片只覆盖给定 bbox（试点=主城核心）"
   }
  ],
+ "provenance": {
+  "rule": "画面可以编，事实不许编：sketch 只存在于预渲染 PNG 的像素里，**不进任何数据接口**（`/api/buildings`、喂给逻辑的 store、寻路/设施摆位一律只认 real）",
+  "channels": {
+   "pixels": "预渲染 PNG（含 real 脚印 / blocks 斑块 / sketch 沿街绘制）",
+   "data": "本清单里的 real 计数（sketch 只以计数出现，**不导出任何几何**）"
+  },
+  "tilesByTier": {
+   "blocks": 47,
+   "footprint": 128,
+   "mixed": 12
+  },
+  "realBldDrawn": 4876147,
+  "sketchBldDrawn": 44262,
+  "sketchIsDecorationOnly": true,
+  "canonNote": "**AI 精绘并入库的小区**是 canon（世界模拟当它是真的，数据里带它自己的来源）；**渲染期 sketch 是装饰**（刷新可重画，不进数据）—— 两者在数据里可区分。",
+  "verdict": "real 4876147 栋（真脚印）· sketch 44262 栋（**只在像素里**）"
+ },
  "tiles": {
   "11/1629/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12845,
-   "bld": 7507
+   "bytes": 70369,
+   "bld": 111813,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.812,
+   "covN": "13/16"
   },
   "11/1629/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4646,
-   "bld": 1993
+   "bytes": 57034,
+   "bld": 91273,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.562,
+   "covN": "9/16"
   },
   "11/1630/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 30941,
-   "bld": 26151
+   "bytes": 87407,
+   "bld": 96028,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.938,
+   "covN": "15/16"
   },
   "11/1630/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10636,
-   "bld": 6081
+   "bytes": 62065,
+   "bld": 72388,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
   },
   "12/3259/1695": {
    "kind": "real",
-   "src": "overture+osm",
-   "bytes": 30774,
-   "bld": 7507
+   "src": "overture+osm+sketch",
+   "bytes": 54026,
+   "bld": 74941,
+   "sketch": 3101,
+   "tier": "mixed",
+   "cov": 0.812,
+   "covN": "13/16"
   },
   "12/3259/1696": {
    "kind": "real",
-   "src": "overture+osm",
-   "bytes": 9438,
-   "bld": 1993
+   "src": "overture+osm+sketch",
+   "bytes": 35037,
+   "bld": 57232,
+   "sketch": 2480,
+   "tier": "mixed",
+   "cov": 0.562,
+   "covN": "9/16"
   },
   "12/3260/1695": {
    "kind": "real",
-   "src": "overture+osm",
-   "bytes": 74456,
-   "bld": 25169
+   "src": "overture+osm+sketch",
+   "bytes": 68674,
+   "bld": 67118,
+   "sketch": 8272,
+   "tier": "mixed",
+   "cov": 1.0,
+   "covN": "16/16"
   },
   "12/3260/1696": {
    "kind": "real",
-   "src": "overture+osm",
-   "bytes": 22500,
-   "bld": 5984
+   "src": "overture+osm+sketch",
+   "bytes": 39482,
+   "bld": 47021,
+   "sketch": 7664,
+   "tier": "mixed",
+   "cov": 0.812,
+   "covN": "13/16"
   },
   "12/3261/1695": {
    "kind": "real",
-   "src": "overture+osm",
-   "bytes": 8709,
-   "bld": 982
+   "src": "overture+osm+sketch",
+   "bytes": 33038,
+   "bld": 33688,
+   "sketch": 2617,
+   "tier": "mixed",
+   "cov": 0.812,
+   "covN": "13/16"
   },
   "12/3261/1696": {
    "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 44050,
+   "bld": 29630,
+   "sketch": 6473,
+   "tier": "mixed",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "10/814/422": {
+   "kind": "real",
    "src": "overture+osm",
-   "bytes": 4525,
-   "bld": 97
+   "bytes": 47142,
+   "bld": 85974,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "10/814/423": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 52924,
+   "bld": 161210,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "10/814/424": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 53673,
+   "bld": 140046,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "10/814/425": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 21744,
+   "bld": 34548,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.25,
+   "covN": "4/16"
+  },
+  "10/815/422": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 52819,
+   "bld": 78014,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.875,
+   "covN": "14/16"
+  },
+  "10/815/423": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 68833,
+   "bld": 151322,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "10/815/424": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 56607,
+   "bld": 113711,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "10/815/425": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 26258,
+   "bld": 28851,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "10/816/422": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 25681,
+   "bld": 30908,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "10/816/423": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 24245,
+   "bld": 29702,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.25,
+   "covN": "4/16"
+  },
+  "10/816/424": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 25452,
+   "bld": 26576,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "10/816/425": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12588,
+   "bld": 12759,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.25,
+   "covN": "4/16"
+  },
+  "11/1628/844": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 35773,
+   "bld": 19796,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "11/1628/845": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 28846,
+   "bld": 27313,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "11/1628/846": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 23670,
+   "bld": 31481,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "11/1628/847": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 33633,
+   "bld": 33618,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "11/1628/848": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 32082,
+   "bld": 35887,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "11/1628/849": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 31512,
+   "bld": 40937,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "11/1628/850": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 27636,
+   "bld": 20624,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "11/1629/844": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 56539,
+   "bld": 28221,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "11/1629/845": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 49954,
+   "bld": 52178,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1629/846": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 41774,
+   "bld": 71374,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "11/1629/849": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 63352,
+   "bld": 59516,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "11/1629/850": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 42545,
+   "bld": 27620,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "11/1630/844": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 34899,
+   "bld": 14088,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "11/1630/845": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 46771,
+   "bld": 41719,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1630/846": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 39304,
+   "bld": 60789,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1630/849": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 33688,
+   "bld": 38212,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "11/1630/850": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 32520,
+   "bld": 17743,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "11/1631/844": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 41644,
+   "bld": 12171,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "11/1631/845": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 48431,
+   "bld": 36548,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1631/846": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 38534,
+   "bld": 34270,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1631/847": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 49296,
+   "bld": 28572,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "11/1631/848": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 42914,
+   "bld": 31844,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1631/849": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 37804,
+   "bld": 27889,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1631/850": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 41123,
+   "bld": 18336,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "11/1632/844": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 37281,
+   "bld": 10882,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "11/1632/845": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 33795,
+   "bld": 24913,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1632/846": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 31919,
+   "bld": 21834,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1632/847": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 38020,
+   "bld": 13851,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "11/1632/848": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 29860,
+   "bld": 14934,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "11/1632/849": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 43256,
+   "bld": 18294,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.938,
+   "covN": "15/16"
+  },
+  "11/1632/850": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 32077,
+   "bld": 12759,
+   "sketch": null,
+   "tier": "blocks",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "12/3256/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 3914,
+   "bld": 7175,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3256/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5337,
+   "bld": 8563,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.188,
+   "covN": "3/16"
+  },
+  "12/3256/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2847,
+   "bld": 7536,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.062,
+   "covN": "1/16"
+  },
+  "12/3256/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 4155,
+   "bld": 8547,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3256/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 3823,
+   "bld": 6708,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.188,
+   "covN": "3/16"
+  },
+  "12/3256/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 3359,
+   "bld": 8947,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.062,
+   "covN": "1/16"
+  },
+  "12/3256/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5296,
+   "bld": 12061,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3256/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2122,
+   "bld": 8376,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.188,
+   "covN": "3/16"
+  },
+  "12/3256/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2386,
+   "bld": 10499,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.062,
+   "covN": "1/16"
+  },
+  "12/3256/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 4222,
+   "bld": 14960,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3256/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 4793,
+   "bld": 11606,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.188,
+   "covN": "3/16"
+  },
+  "12/3256/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2632,
+   "bld": 9260,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.062,
+   "covN": "1/16"
+  },
+  "12/3256/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5175,
+   "bld": 9178,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3256/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2699,
+   "bld": 3821,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.188,
+   "covN": "3/16"
+  },
+  "12/3257/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 18528,
+   "bld": 17100,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3257/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 21858,
+   "bld": 19198,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3257/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 9141,
+   "bld": 15924,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3257/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 16474,
+   "bld": 20461,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3257/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 19696,
+   "bld": 17155,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3257/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10733,
+   "bld": 21374,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3257/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 26079,
+   "bld": 30949,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3257/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 20055,
+   "bld": 22787,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "12/3257/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13416,
+   "bld": 22076,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3257/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 33279,
+   "bld": 32032,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3257/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 23670,
+   "bld": 28014,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "12/3257/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 16950,
+   "bld": 25333,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "12/3257/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 23066,
+   "bld": 20733,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3257/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8297,
+   "bld": 8749,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3258/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 18124,
+   "bld": 21726,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 18446,
+   "bld": 23300,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "12/3258/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7238,
+   "bld": 18531,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3258/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 23596,
+   "bld": 30359,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 27494,
+   "bld": 26534,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3258/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10565,
+   "bld": 29011,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3258/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 25998,
+   "bld": 58869,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 22214,
+   "bld": 51785,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "12/3258/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14500,
+   "bld": 48114,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3258/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 21092,
+   "bld": 48496,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 22943,
+   "bld": 34752,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 21190,
+   "bld": 31667,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 19753,
+   "bld": 23645,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3258/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 9070,
+   "bld": 10111,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3259/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13955,
+   "bld": 15342,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3259/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 15504,
+   "bld": 16496,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3259/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8808,
+   "bld": 19277,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3259/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 25275,
+   "bld": 33109,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3259/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 20476,
+   "bld": 27449,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3259/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12414,
+   "bld": 33967,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3259/1694": {
+   "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 45267,
+   "bld": 80104,
+   "sketch": 2546,
+   "tier": "mixed",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3259/1697": {
+   "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 38225,
+   "bld": 43626,
+   "sketch": 1092,
+   "tier": "mixed",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "12/3259/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 22117,
+   "bld": 26821,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3259/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 21192,
+   "bld": 21107,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "12/3259/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 20010,
+   "bld": 16188,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.75,
+   "covN": "12/16"
+  },
+  "12/3259/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7369,
+   "bld": 7591,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3260/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10434,
+   "bld": 8943,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3260/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7298,
+   "bld": 9497,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3260/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10045,
+   "bld": 19575,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3260/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 25763,
+   "bld": 27548,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3260/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 16567,
+   "bld": 17975,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3260/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 17894,
+   "bld": 37819,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3260/1694": {
+   "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 62994,
+   "bld": 79023,
+   "sketch": 6000,
+   "tier": "mixed",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3260/1697": {
+   "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 24886,
+   "bld": 39315,
+   "sketch": 1465,
+   "tier": "mixed",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3260/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10355,
+   "bld": 22945,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.25,
+   "covN": "4/16"
+  },
+  "12/3260/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7714,
+   "bld": 13735,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.188,
+   "covN": "3/16"
+  },
+  "12/3260/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10932,
+   "bld": 11242,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3260/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 4090,
+   "bld": 5549,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.25,
+   "covN": "4/16"
+  },
+  "12/3261/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5440,
+   "bld": 8410,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3261/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 9034,
+   "bld": 9459,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3261/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8597,
+   "bld": 17780,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3261/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14302,
+   "bld": 23855,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3261/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14831,
+   "bld": 15121,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3261/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14087,
+   "bld": 27443,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3261/1694": {
+   "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 32881,
+   "bld": 44693,
+   "sketch": 1911,
+   "tier": "mixed",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3261/1697": {
+   "kind": "real",
+   "src": "overture+osm+sketch",
+   "bytes": 24802,
+   "bld": 31646,
+   "sketch": 641,
+   "tier": "mixed",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3261/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 17987,
+   "bld": 18154,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.625,
+   "covN": "10/16"
+  },
+  "12/3261/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8187,
+   "bld": 12412,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3261/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13173,
+   "bld": 13023,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3261/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 6567,
+   "bld": 6636,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3262/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 6764,
+   "bld": 7398,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3262/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14000,
+   "bld": 8846,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3262/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7486,
+   "bld": 12791,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3262/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 18347,
+   "bld": 18030,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3262/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14089,
+   "bld": 13319,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3262/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8534,
+   "bld": 14070,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3262/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 19493,
+   "bld": 20226,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3262/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13229,
+   "bld": 14842,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3262/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10136,
+   "bld": 16001,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3262/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 17382,
+   "bld": 19290,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3262/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10566,
+   "bld": 12263,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "12/3262/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8540,
+   "bld": 11726,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3262/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 16438,
+   "bld": 13231,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3262/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7060,
+   "bld": 6542,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3263/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5590,
+   "bld": 6827,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3263/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8183,
+   "bld": 8204,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3263/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 6816,
+   "bld": 14645,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3263/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 17059,
+   "bld": 21298,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3263/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 15940,
+   "bld": 14622,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3263/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8741,
+   "bld": 12492,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3263/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13901,
+   "bld": 17813,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3263/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12392,
+   "bld": 13262,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3263/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7955,
+   "bld": 13212,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3263/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 15068,
+   "bld": 15355,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3263/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 10786,
+   "bld": 10958,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.562,
+   "covN": "9/16"
+  },
+  "12/3263/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 9813,
+   "bld": 11495,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3263/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12670,
+   "bld": 11987,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3263/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5333,
+   "bld": 6052,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3264/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7069,
+   "bld": 9183,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3264/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13435,
+   "bld": 10539,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3264/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7852,
+   "bld": 12912,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3264/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 16961,
+   "bld": 20170,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3264/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 13252,
+   "bld": 16198,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3264/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8293,
+   "bld": 11013,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3264/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 16293,
+   "bld": 12849,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3264/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 11945,
+   "bld": 9529,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3264/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 6089,
+   "bld": 9930,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3264/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12808,
+   "bld": 11944,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3264/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 11116,
+   "bld": 11289,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.938,
+   "covN": "15/16"
+  },
+  "12/3264/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12520,
+   "bld": 13420,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.875,
+   "covN": "14/16"
+  },
+  "12/3264/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 15236,
+   "bld": 12810,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3264/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5913,
+   "bld": 5779,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
+  },
+  "12/3265/1688": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 6640,
+   "bld": 7439,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1689": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7529,
+   "bld": 8131,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3265/1690": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 2712,
+   "bld": 5869,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.312,
+   "covN": "5/16"
+  },
+  "12/3265/1691": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7416,
+   "bld": 7650,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1692": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 14772,
+   "bld": 6773,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3265/1693": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 3138,
+   "bld": 6131,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.375,
+   "covN": "6/16"
+  },
+  "12/3265/1694": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5370,
+   "bld": 6746,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1695": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 5844,
+   "bld": 4264,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.688,
+   "covN": "11/16"
+  },
+  "12/3265/1696": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 4531,
+   "bld": 4254,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.438,
+   "covN": "7/16"
+  },
+  "12/3265/1697": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 7907,
+   "bld": 5707,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1698": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 8442,
+   "bld": 7042,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1699": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 12392,
+   "bld": 8586,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1700": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 11272,
+   "bld": 7953,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 1.0,
+   "covN": "16/16"
+  },
+  "12/3265/1701": {
+   "kind": "real",
+   "src": "overture+osm",
+   "bytes": 4365,
+   "bld": 3377,
+   "sketch": null,
+   "tier": "footprint",
+   "cov": 0.5,
+   "covN": "8/16"
   }
  }
 }

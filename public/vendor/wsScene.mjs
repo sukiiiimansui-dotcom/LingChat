@@ -852,6 +852,26 @@ function roadsLiveDecision(input) {
   }
   return { live: false, why: WS_ROADS_LIVE_VERDICT };
 }
+var WS_BLD_LIVE_DEFAULT = false;
+var WS_BLD_LIVE_VERDICT = "默认不发 /api/buildings：现场一次只有 R≤2000m（后端硬闸）且冷查 27~33s（最慢 91.7s） ⇒ 默认 0 条，楼走离线楼房包（实测 373 格 / 720,087 栋 / 102.6MB，单格中位 205KB）；要现场取数加 ?live=1";
+function bldLiveDecision(input) {
+  if (input && input.forceLive === true) {
+    return { live: true, why: "URL 显式 ?live=1 ⇒ 现场取数（R≤2000m、冷查可能几十秒，失败会如实报出来）" };
+  }
+  return { live: false, why: WS_BLD_LIVE_VERDICT };
+}
+function bldVerdictText(input) {
+  const n = input.n === null || input.n === void 0 ? "数不出来" : String(input.n);
+  if (input.state === "off") return "🏢 未开（?bld=0）";
+  if (input.state === "pending") return "🏢 离线格取数中…";
+  if (input.state === "failed") return `🏢 取数**失败**：${input.err || "原因未知"} —— 不是「这一带没有楼」`;
+  if (input.state === "outside") {
+    return "🏢 **包外**（这一带没有离线楼房格；默认不发 /api/buildings ⇒ 要现场取数加 ?live=1） —— 这是「我们没这个包」，**不是**「这里没有楼」";
+  }
+  const cells = input.cells === null || input.cells === void 0 ? "数不出来" : String(input.cells);
+  const cap = input.cap ? `，上限 ${input.cap}` : "";
+  return `🏢 离线包 offline-first（仓库 ${n} 栋${cap}；已取 ${cells} 格；**默认不发 /api/buildings** ⇒ 要现场取数加 ?live=1）`;
+}
 function roadsVerdictText(input) {
   const r = input.radius === null || input.radius === void 0 ? "?" : String(Math.round(input.radius));
   const cap = input.capped ? `（半径已封顶；本想要 ${Math.round(Number(input.wanted) || 0)}m —— ${input.why || ""}）` : "";
@@ -1264,15 +1284,28 @@ function createFeatureStore(opts) {
   };
 }
 var ROADS_BUNDLE_CELL_DEG = 0.05;
-function roadsBundleCellOf(lng, lat, size = ROADS_BUNDLE_CELL_DEG) {
+var BLD_BUNDLE_CELL_DEG = 0.05;
+function bundleCellOf(lng, lat, size) {
   const w = Math.floor(lng / size) * size;
   const s = Math.floor(lat / size) * size;
   return { w: +w.toFixed(5), s: +s.toFixed(5) };
 }
-function roadsBundleCellKey(w, s, size = ROADS_BUNDLE_CELL_DEG) {
+function bundleCellKey(w, s, size) {
   return `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
 }
-function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUNDLE_CELL_DEG) {
+function roadsBundleCellOf(lng, lat, size = ROADS_BUNDLE_CELL_DEG) {
+  return bundleCellOf(lng, lat, size);
+}
+function roadsBundleCellKey(w, s, size = ROADS_BUNDLE_CELL_DEG) {
+  return bundleCellKey(w, s, size);
+}
+function bldBundleCellOf(lng, lat, size = BLD_BUNDLE_CELL_DEG) {
+  return bundleCellOf(lng, lat, size);
+}
+function bldBundleCellKey(w, s, size = BLD_BUNDLE_CELL_DEG) {
+  return bundleCellKey(w, s, size);
+}
+function bundleCellsForView(bounds, center, maxCells, size) {
   if (!bounds || !center) return null;
   const w0 = bounds.getWest(), e0 = bounds.getEast(), s0 = bounds.getSouth(), n0 = bounds.getNorth();
   if (![w0, e0, s0, n0, center.lng, center.lat].every((v) => Number.isFinite(v))) return null;
@@ -1285,7 +1318,7 @@ function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUND
   for (let i = 0; i < steps; i++) {
     for (let j = 0; j < stepn; j++) {
       const w = +((i0 + i) * size).toFixed(5), s = +((j0 + j) * size).toFixed(5);
-      const key = roadsBundleCellKey(w, s, size);
+      const key = bundleCellKey(w, s, size);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({ key, w, s, d: metersBetween([w + size / 2, s + size / 2], [center.lng, center.lat]) });
@@ -1294,6 +1327,12 @@ function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUND
   out.sort((a, b) => a.d - b.d);
   const capped = out.length > maxCells;
   return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
+}
+function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUNDLE_CELL_DEG) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
+function bldBundleCellsForView(bounds, center, maxCells = 6, size = BLD_BUNDLE_CELL_DEG) {
+  return bundleCellsForView(bounds, center, maxCells, size);
 }
 
 // src/components/views/worldsim/wsLabels.ts
@@ -2043,6 +2082,7 @@ function windowPatternSpec(wall, pane, size = WIN_PATTERN_SIZE, cols = 4, rows =
 export {
   ANTENNA_M,
   ANTENNA_MIN_H,
+  BLD_BUNDLE_CELL_DEG,
   BUILDING_LAYER_ID,
   CAMERA_DEFAULTS,
   EQUIP_MIN_AREA_M2,
@@ -2107,6 +2147,8 @@ export {
   WHEEL_ZOOM_RATE,
   WIN_MIN_H,
   WIN_PATTERN_SIZE,
+  WS_BLD_LIVE_DEFAULT,
+  WS_BLD_LIVE_VERDICT,
   WS_FETCH_R_BACKEND_MAX,
   WS_FETCH_R_LADDER,
   WS_FETCH_R_LIMIT_WHY,
@@ -2122,6 +2164,11 @@ export {
   adminLabelsFrom,
   applyPitchGuard,
   art3Summary,
+  bldBundleCellKey,
+  bldBundleCellOf,
+  bldBundleCellsForView,
+  bldLiveDecision,
+  bldVerdictText,
   buildSkyGeometry,
   buildTransport,
   buildingColor,
@@ -2129,6 +2176,9 @@ export {
   buildingMasses,
   buildingPartSet,
   buildingParts,
+  bundleCellKey,
+  bundleCellOf,
+  bundleCellsForView,
   cameraDefaults,
   contrastRatio,
   contrastReport,

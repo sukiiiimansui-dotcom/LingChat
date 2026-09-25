@@ -163,31 +163,52 @@ export function createFeatureStore<T>(opts: {
   };
 }
 
-/* ── 🛣 离线路面包：格子与"视野需要哪些格"（纯函数，页面/App 共用） ───────────────── */
+/* ── 🛣🏢 离线包：格子与"视野需要哪些格"（纯函数，页面/App 共用） ───────────────────── */
 
-/** 离线路面包的格边长（度）。0.05° ≈ 5.5km —— 手机上一次取几格也不至于太大。 */
+/** 离线**路**包的格边长（度）。0.05° ≈ 5.5km —— 手机上一次取几格也不至于太大。 */
 export const ROADS_BUNDLE_CELL_DEG = 0.05;
+/** 离线**楼房**包的格边长（度）。楼房比路密得多（实测 373 格 / 72 万栋），但沿用同一格边长：
+ *  · 一套格子公式两边共用（少一处能写错的地方）； · 单格中位 **205 KB**、最大 **1.9 MB**（实测），
+ *    一次取 1~6 格 ⇒ 手机能接受。真要再小，改这里 + 重跑导出脚本即可（口径同式）。 */
+export const BLD_BUNDLE_CELL_DEG = 0.05;
 
-/** 一条路网要素落在哪一格（格心取整；与导出脚本同式） */
-export function roadsBundleCellOf(lng: number, lat: number, size = ROADS_BUNDLE_CELL_DEG): { w: number; s: number } {
+/** 一个要素落在哪一格（格心取整；与两个导出脚本同式） */
+export function bundleCellOf(lng: number, lat: number, size: number): { w: number; s: number } {
   const w = Math.floor(lng / size) * size;
   const s = Math.floor(lat / size) * size;
   return { w: +w.toFixed(5), s: +s.toFixed(5) };
 }
 
-export function roadsBundleCellKey(w: number, s: number, size = ROADS_BUNDLE_CELL_DEG): string {
+export function bundleCellKey(w: number, s: number, size: number): string {
   return `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+}
+
+export function roadsBundleCellOf(lng: number, lat: number, size = ROADS_BUNDLE_CELL_DEG): { w: number; s: number } {
+  return bundleCellOf(lng, lat, size);
+}
+
+export function roadsBundleCellKey(w: number, s: number, size = ROADS_BUNDLE_CELL_DEG): string {
+  return bundleCellKey(w, s, size);
+}
+
+export function bldBundleCellOf(lng: number, lat: number, size = BLD_BUNDLE_CELL_DEG): { w: number; s: number } {
+  return bundleCellOf(lng, lat, size);
+}
+
+/** 🏢 离线楼房包的格键（与 `world_map/export_bld_bundle.py` 同式） */
+export function bldBundleCellKey(w: number, s: number, size = BLD_BUNDLE_CELL_DEG): string {
+  return bundleCellKey(w, s, size);
 }
 
 /**
  * 视野需要哪些离线格：**按离视野中心的距离排序**（近的先取），最多 `maxCells` 格。
  * 返回 `{ cells, wanted, capped }` —— `capped` 为真时 HUD 要如实写"只取了最近的 N 格"。
  */
-export function roadsBundleCellsForView(
+export function bundleCellsForView(
   bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
   center: { lng: number; lat: number } | null,
-  maxCells = 6,
-  size = ROADS_BUNDLE_CELL_DEG,
+  maxCells: number,
+  size: number,
 ): { cells: Array<{ key: string; w: number; s: number }>; wanted: number; capped: boolean } | null {
   if (!bounds || !center) return null;
   const w0 = bounds.getWest(), e0 = bounds.getEast(), s0 = bounds.getSouth(), n0 = bounds.getNorth();
@@ -203,7 +224,7 @@ export function roadsBundleCellsForView(
   for (let i = 0; i < steps; i++) {
     for (let j = 0; j < stepn; j++) {
       const w = +((i0 + i) * size).toFixed(5), s = +((j0 + j) * size).toFixed(5);
-      const key = roadsBundleCellKey(w, s, size);
+      const key = bundleCellKey(w, s, size);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({ key, w, s, d: metersBetween([w + size / 2, s + size / 2], [center.lng, center.lat]) });
@@ -212,4 +233,24 @@ export function roadsBundleCellsForView(
   out.sort((a, b) => a.d - b.d);
   const capped = out.length > maxCells;
   return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
+}
+
+/** 🛣 视野需要哪些**路**离线格（按离视野中心距离，近的先取） */
+export function roadsBundleCellsForView(
+  bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
+  center: { lng: number; lat: number } | null,
+  maxCells = 6,
+  size = ROADS_BUNDLE_CELL_DEG,
+) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
+
+/** 🏢 视野需要哪些**楼房**离线格（同式；楼房密 ⇒ 默认上限给大一点，仍是"近的先取"） */
+export function bldBundleCellsForView(
+  bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
+  center: { lng: number; lat: number } | null,
+  maxCells = 6,
+  size = BLD_BUNDLE_CELL_DEG,
+) {
+  return bundleCellsForView(bounds, center, maxCells, size);
 }

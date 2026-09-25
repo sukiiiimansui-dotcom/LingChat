@@ -746,14 +746,32 @@ function lodTierLabel(tier) {
   if (tier === "vector") return `实时矢量（z≥${LOD_NEAR_ZOOM}）`;
   return `过渡中（${LOD_FAR_ZOOM}~${LOD_NEAR_ZOOM}）`;
 }
+var LOD_OPACITY_ZERO_ZOOM = 13.5;
+var LOD_OPACITY_STOPS = [
+  [9, 1],
+  [10, 1],
+  [11, 0.72],
+  [12, 0.45],
+  [13, 0.18],
+  [LOD_OPACITY_ZERO_ZOOM, 0]
+];
 function lodOpacityAt(zoom) {
-  const z = Number.isFinite(zoom) ? Number(zoom) : LOD_FAR_ZOOM;
-  if (z <= LOD_FAR_ZOOM) return 1;
-  if (z >= LOD_NEAR_ZOOM) return 0;
-  return +((LOD_NEAR_ZOOM - z) / (LOD_NEAR_ZOOM - LOD_FAR_ZOOM)).toFixed(4);
+  const z = Number.isFinite(zoom) ? Number(zoom) : LOD_OPACITY_STOPS[LOD_OPACITY_STOPS.length - 1][0];
+  const st = LOD_OPACITY_STOPS;
+  if (z <= st[0][0]) return st[0][1];
+  for (let i = 1; i < st.length; i++) {
+    if (z <= st[i][0]) {
+      const [z0, o0] = st[i - 1], [z1, o1] = st[i];
+      if (z1 === z0) return o1;
+      return +(o0 + (o1 - o0) * (z - z0) / (z1 - z0)).toFixed(4);
+    }
+  }
+  return st[st.length - 1][1];
 }
 function lodOpacityExpression() {
-  return ["interpolate", ["linear"], ["zoom"], LOD_FAR_ZOOM, 1, LOD_NEAR_ZOOM, 0];
+  const flat = [];
+  for (const [z, o] of LOD_OPACITY_STOPS) flat.push(z, o);
+  return ["interpolate", ["linear"], ["zoom"], ...flat];
 }
 function prerenderSourceOf(src = "real") {
   if (src === "demo") {
@@ -1264,6 +1282,193 @@ function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUND
   out.sort((a, b) => a.d - b.d);
   const capped = out.length > maxCells;
   return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
+}
+
+// src/components/views/worldsim/wsLabels.ts
+function labelPlanFor(zoom) {
+  const z = Number.isFinite(zoom) ? Number(zoom) : 14;
+  return {
+    zoom: z,
+    admin: true,
+    // 行政名任何 zoom 都要（它就是"这是哪儿"）
+    place: z >= 13,
+    // 片区/小区名：中近景才有意义
+    roadTrunk: z >= 11,
+    // 主干道名
+    roadSecondary: z >= 13,
+    // 次干道名
+    building: z >= 13,
+    // 楼名（真实数据只有 ~5% 有名字，别期待满屏）
+    cap: z >= 16 ? 26 : z >= 13 ? 20 : z >= 11 ? 12 : 6
+  };
+}
+function labelPriorityOf(it) {
+  switch (it.kind) {
+    case "admin":
+      return 100 + (3 - Math.min(3, Math.max(1, it.adminLevel || 3)));
+    case "road_trunk":
+      return 60;
+    case "road_secondary":
+      return 40;
+    case "place":
+      return 30;
+    case "building":
+      return 20;
+    default:
+      return 0;
+  }
+}
+function labelKindAllowed(kind, plan) {
+  switch (kind) {
+    case "admin":
+      return plan.admin;
+    case "place":
+      return plan.place;
+    case "road_trunk":
+      return plan.roadTrunk;
+    case "road_secondary":
+      return plan.roadSecondary;
+    case "building":
+      return plan.building;
+    default:
+      return false;
+  }
+}
+var CHAR_W = 6.5;
+function labelBox(name, kind) {
+  const n = Array.from(String(name)).length;
+  const pad = kind === "building" ? 6 : 8;
+  const h = kind === "admin" ? 18 : 14;
+  return { w: Math.max(16, Math.round(n * CHAR_W) + pad), h };
+}
+function pickLabels(items, project, viewport, plan, opts = {}) {
+  const grid = Math.max(8, opts.gridPx || 48);
+  const margin = Number.isFinite(opts.margin) ? Number(opts.margin) : 24;
+  const allowSketch = !!opts.allowSketch;
+  const out = {
+    shown: [],
+    candidates: 0,
+    droppedByCollision: 0,
+    droppedByCap: 0,
+    skippedNoName: 0,
+    skippedSketch: 0,
+    skippedOffscreen: 0,
+    capped: false
+  };
+  const W = Number(viewport && viewport.width), H = Number(viewport && viewport.height);
+  if (!Number.isFinite(W) || !Number.isFinite(H) || W <= 0 || H <= 0) return out;
+  const cands = [];
+  for (const it of items) {
+    if (!it || String(it.name || "").trim() === "") {
+      out.skippedNoName++;
+      continue;
+    }
+    if (!allowSketch && it.source === "sketch") {
+      out.skippedSketch++;
+      continue;
+    }
+    if (!labelKindAllowed(it.kind, plan)) continue;
+    const pt = project(it.lng, it.lat);
+    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) {
+      out.skippedOffscreen++;
+      continue;
+    }
+    if (pt.x < -margin || pt.y < -margin || pt.x > W + margin || pt.y > H + margin) {
+      out.skippedOffscreen++;
+      continue;
+    }
+    const box = labelBox(it.name, it.kind);
+    cands.push({
+      id: it.id,
+      kind: it.kind,
+      name: String(it.name).trim(),
+      source: it.source,
+      priority: labelPriorityOf(it),
+      x: Math.round(pt.x),
+      y: Math.round(pt.y),
+      w: box.w,
+      h: box.h
+    });
+  }
+  out.candidates = cands.length;
+  cands.sort((a, b) => b.priority - a.priority || Array.from(a.name).length - Array.from(b.name).length || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const occupied = /* @__PURE__ */ new Set();
+  for (const c of cands) {
+    if (out.shown.length >= plan.cap) {
+      out.droppedByCap++;
+      out.capped = true;
+      continue;
+    }
+    const x0 = Math.floor((c.x - c.w / 2) / grid), x1 = Math.floor((c.x + c.w / 2) / grid);
+    const y0 = Math.floor((c.y - c.h / 2) / grid), y1 = Math.floor((c.y + c.h / 2) / grid);
+    let hit = false;
+    for (let gx = x0; gx <= x1 && !hit; gx++) for (let gy = y0; gy <= y1 && !hit; gy++) if (occupied.has(gx + "," + gy)) hit = true;
+    if (hit) {
+      out.droppedByCollision++;
+      continue;
+    }
+    for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) occupied.add(gx + "," + gy);
+    out.shown.push(c);
+  }
+  return out;
+}
+function roadLabelsFrom(features, kindOfRank) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const f of features || []) {
+    const props = f && f.properties || {};
+    const name = String(props.name || "").trim();
+    if (!name) continue;
+    const kind = kindOfRank(Number(props.rank));
+    if (kind !== "road_trunk" && kind !== "road_secondary") continue;
+    if (seen.has(name)) continue;
+    const coords = f.geometry && f.geometry.coordinates || [];
+    const mid = coords[Math.floor(coords.length / 2)];
+    if (!mid || !Number.isFinite(mid[0])) continue;
+    seen.set(name, {
+      id: "road:" + name,
+      kind,
+      name,
+      lng: mid[0],
+      lat: mid[1],
+      source: "real"
+      // 路网来自真 OSM（离线包/live 都是）
+    });
+  }
+  return [...seen.values()];
+}
+function buildingLabelsFrom(features) {
+  const out = [];
+  for (const f of features || []) {
+    const props = f && f.properties || {};
+    const name = String(props.name || "").trim();
+    if (!name) continue;
+    const g = f.geometry || {};
+    const ring = (g.coordinates || [])[0] || [];
+    if (!ring.length) continue;
+    let sx = 0, sy = 0;
+    for (const p of ring) {
+      sx += p[0];
+      sy += p[1];
+    }
+    out.push({
+      id: "bld:" + (props.osm_id || f.id || name),
+      kind: "building",
+      name,
+      lng: sx / ring.length,
+      lat: sy / ring.length,
+      source: "real"
+    });
+  }
+  return out;
+}
+function adminLabelsFrom(list) {
+  const out = [];
+  for (const it of list || []) {
+    const name = String(it && it.name || "").trim();
+    if (!name || !Number.isFinite(it.lng) || !Number.isFinite(it.lat)) continue;
+    out.push({ id: "admin:" + (it.id || name), kind: "admin", name, lng: it.lng, lat: it.lat, source: "real", adminLevel: it.level || 3 });
+  }
+  return out;
 }
 
 // src/components/views/worldsim/wsBuildingLook.ts
@@ -1840,6 +2045,8 @@ export {
   LOD_LIVE_LAYER_PREFIXES,
   LOD_LIVE_SOURCE_IDS,
   LOD_NEAR_ZOOM,
+  LOD_OPACITY_STOPS,
+  LOD_OPACITY_ZERO_ZOOM,
   LOD_VIEW_TILE_CAP,
   MAX_RENDER_H,
   PAN_MAX_SPEED,
@@ -1898,11 +2105,13 @@ export {
   WS_ROADS_LIMIT_WHY,
   WS_ROADS_R_MAX,
   WS_SCENE_SOURCE,
+  adminLabelsFrom,
   applyPitchGuard,
   art3Summary,
   buildSkyGeometry,
   buildTransport,
   buildingColor,
+  buildingLabelsFrom,
   buildingMasses,
   buildingPartSet,
   buildingParts,
@@ -1925,6 +2134,10 @@ export {
   insetRing,
   insetRingMeters,
   junctions,
+  labelBox,
+  labelKindAllowed,
+  labelPlanFor,
+  labelPriorityOf,
   layerOrderHud,
   lodEventTileKey,
   lodHudLine,
@@ -1949,6 +2162,7 @@ export {
   metersBetween,
   nearestOnLine,
   panDamping,
+  pickLabels,
   pitchGuardParams,
   planEnsureRoadOrder,
   pointInRing,
@@ -1961,6 +2175,7 @@ export {
   ringCentroid,
   roadCountHud,
   roadCountVerdict,
+  roadLabelsFrom,
   roadLayerSpecs,
   roadLayersOf,
   roadStatsLine,

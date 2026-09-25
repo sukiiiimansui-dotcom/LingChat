@@ -188,20 +188,49 @@ export function lodTierLabel(tier: LodTier): string {
   return `过渡中（${LOD_FAR_ZOOM}~${LOD_NEAR_ZOOM}）`;
 }
 
+/**
+ * 🔴 **瓦片的不透明度分档**（机主 2026-09-25：「**路确实有了，但是瓦片太挡视野了喵**」）。
+ *
+ * 为什么改：原来 z≤12 是**全不透明**（`[12,1, 14,0]`）—— 那是第 1 步"骨架期"定的，
+ * 当时实时层只有 600m 一小块，瓦片必须自己顶满；**现在不一样了**：
+ *   · 楼：实时层已能取到 2000m；· 路：离线包按视野铺（`/roadsbundle`）⇒ 实时层能覆盖大半屏。
+ * ⇒ 瓦片从"主角"退回**本职**：**远处没有实时数据时的替身**。分档（单调不增）：
+ *   z≤10 → **1.00**（全国/市区尺度：瓦片仍是唯一的信息源，"城市轮廓"要看得清）
+ *   z11  → 0.72（开始让位）
+ *   z12  → 0.45（明显让位；此刻实时层+离线路网已盖住视野里的大部分）
+ *   z13  → 0.18（几乎交还实时层，只剩一点"远处的底"）
+ *   z≥13.5 → **0**（完全交还；层本身也在 `LOD_NEAR_ZOOM` 关掉）
+ * ⚠️ **不是删掉瓦片**：z≤12 之外/实时层取不到的地方，仍靠它兜底（见 README/DESIGN 的 LOD 分工）。
+ * 自检钉着：档位单调不增、`z ≥ LOD_OPACITY_ZERO_ZOOM` 必须为 0。
+ */
+export const LOD_OPACITY_ZERO_ZOOM = 13.5;
+export const LOD_OPACITY_STOPS: ReadonlyArray<readonly [number, number]> = [
+  [9, 1], [10, 1], [11, 0.72], [12, 0.45], [13, 0.18], [LOD_OPACITY_ZERO_ZOOM, 0],
+];
+
 /** 预渲染层在某个 zoom 下的不透明度（纯函数 ⇒ 自检不必建地图、更不必有 WebGL） */
 export function lodOpacityAt(zoom: number): number {
-  const z = Number.isFinite(zoom) ? Number(zoom) : LOD_FAR_ZOOM;
-  if (z <= LOD_FAR_ZOOM) return 1;
-  if (z >= LOD_NEAR_ZOOM) return 0;
-  return +((LOD_NEAR_ZOOM - z) / (LOD_NEAR_ZOOM - LOD_FAR_ZOOM)).toFixed(4);
+  const z = Number.isFinite(zoom) ? Number(zoom) : LOD_OPACITY_STOPS[LOD_OPACITY_STOPS.length - 1][0];
+  const st = LOD_OPACITY_STOPS;
+  if (z <= st[0][0]) return st[0][1];
+  for (let i = 1; i < st.length; i++) {
+    if (z <= st[i][0]) {
+      const [z0, o0] = st[i - 1], [z1, o1] = st[i];
+      if (z1 === z0) return o1;
+      return +((o0 + ((o1 - o0) * (z - z0)) / (z1 - z0))).toFixed(4);
+    }
+  }
+  return st[st.length - 1][1];
 }
 
 /**
- * 写进 `raster-opacity` 的表达式 —— **与 `baseFade` 逐字同形**（这就是"复用同一机制"的字面含义）。
- * 自检里有一条断言它和 `wsMapTheme` 生成的 `base` 淡出表达式**形状一致**（防有人另造一套）。
+ * 写进 `raster-opacity` 的表达式 —— 与 `baseFade` **同一机制**（`interpolate/linear/zoom`），
+ * 但档位按上面那套"让位给实时层"重新定过（不再是 baseFade 的 2 档）。
  */
 export function lodOpacityExpression(): unknown[] {
-  return ["interpolate", ["linear"], ["zoom"], LOD_FAR_ZOOM, 1, LOD_NEAR_ZOOM, 0];
+  const flat: unknown[] = [];
+  for (const [z, o] of LOD_OPACITY_STOPS) flat.push(z, o);
+  return ["interpolate", ["linear"], ["zoom"], ...flat];
 }
 
 /** 某个源的路径/署名（**只这一份表**：页面与 App 都从这里取，别在两处写路径字面量） */

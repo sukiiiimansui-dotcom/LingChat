@@ -354,7 +354,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v59";
+      const BUILD = "ws3dshow-2026-09-26-v60";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3576,6 +3576,24 @@
         map.on("moveend", () => { try { void refreshRoadsBundle(); } catch (e) { errs.push("bundle " + e); } });
         /* 🏢 视野变了就补**楼房**离线格（静态文件、后台、一次最多几格；live 那条默认不在这里打） */
         map.on("moveend", () => { try { void refreshBldBundle(); } catch (e) { errs.push("bldBundle " + e); } });
+        /* 🔴 2026-09-26 机主真机：「我先放大后缩小，结果楼房**全出来了**」
+           ⇒ 开页这一趟**没建楼**：`refreshBldBundle()` 在 feed 还没就绪时是**静默 return**，
+           而唯一的挂钩是 `moveend`（用户一动才有）⇒ 首屏空白，缩放后才补上。
+           修法：**有界重试**的开页 kick（最多 20 次 × 400ms ≈ 8s，成功即停、无轮询常驻）。
+           判词如实：kick 了几次、成没成，都写进 `__BLD_KICK__` 供核验。 */
+        (function kickBldBundle(tries) {
+          const n = tries || 0;
+          let ready = false;
+          try { ready = !!bldFeedOf(); } catch (e) { ready = false; }
+          if (ready) {
+            try { window.__BLD_KICK__ = { tries: n, ok: true }; } catch (e2) { /* 忽略 */ }
+            try { void refreshBldBundle(); } catch (e) { errs.push("bldKick " + e); }
+            return;
+          }
+          try { window.__BLD_KICK__ = { tries: n, ok: false }; } catch (e2) { /* 忽略 */ }
+          if (n >= 20) return;
+          setTimeout(function () { kickBldBundle(n + 1); }, 400);
+        })(0);
         /* 🏘 视野变了就补**片区名**离线格（静态文件、很小；取到后重排一次标签） */
         map.on("moveend", () => { try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); } });
         /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */

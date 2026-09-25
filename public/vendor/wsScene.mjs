@@ -250,10 +250,10 @@ function buildTransport(roads, buildings, center, low = false) {
   };
   if (low) notes.push("低档：只画 公交站 + 红绿灯（其余按规则关掉，保帧率）");
   const O = center;
-  const R = roads.map((r) => ({ cls: typeof r.cls === "number" ? r.cls : 3, name: r.name || "", pts: r.pts.map((p) => toMeters(p, O)) })).filter((r) => r.pts.length >= 2);
+  const R2 = roads.map((r) => ({ cls: typeof r.cls === "number" ? r.cls : 3, name: r.name || "", pts: r.pts.map((p) => toMeters(p, O)) })).filter((r) => r.pts.length >= 2);
   const B = buildings.map((b) => ({ kind: String(b.kind || "").toLowerCase(), name: b.name || "", ring: b.ring.map((p) => toMeters(p, O)) })).filter((b) => b.ring.length >= 3);
   const J = junctions(
-    R.map((r) => ({ pts: r.pts, cls: r.cls, name: r.name })),
+    R2.map((r) => ({ pts: r.pts, cls: r.cls, name: r.name })),
     18
   );
   const features = [];
@@ -261,7 +261,7 @@ function buildTransport(roads, buildings, center, low = false) {
     features.push(f);
   };
   if (!low || true) {
-    const busRoads = R.filter((r) => r.cls <= TF_RULES.bus.maxCls);
+    const busRoads = R2.filter((r) => r.cls <= TF_RULES.bus.maxCls);
     for (const r of busRoads) {
       const samples = sampleAlong(r.pts, TF_RULES.bus.spacing);
       for (const sp of samples) {
@@ -348,7 +348,7 @@ function buildTransport(roads, buildings, center, low = false) {
       const cx = b.ring.reduce((s, p) => s + p[0], 0) / b.ring.length;
       const cy = b.ring.reduce((s, p) => s + p[1], 0) / b.ring.length;
       let best = null;
-      for (const r of R) {
+      for (const r of R2) {
         const n = nearestOnLine(r.pts, [cx, cy]);
         if (!best || n.d < best.d) best = n;
       }
@@ -376,7 +376,7 @@ function buildTransport(roads, buildings, center, low = false) {
       if (area < TF_RULES.driveway.minAreaM2) continue;
       let bestRoad = null;
       let bestD = Infinity;
-      for (const r of R) {
+      for (const r of R2) {
         for (const p of b.ring) {
           const n = nearestOnLine(r.pts, p);
           if (n.d < bestD) {
@@ -2282,6 +2282,271 @@ function pickBuildingsForView(feats, input) {
   return { features: chosen, stats };
 }
 
+// src/components/views/worldsim/wsBldGl.ts
+var R = 6378137;
+var D2R = Math.PI / 180;
+function mercatorXOf(lng) {
+  return (lng + 180) / 360;
+}
+function mercatorYOf(lat) {
+  return (180 - 180 / Math.PI * Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2))) / 360;
+}
+function metersToMercator(lat) {
+  return 1 / (2 * Math.PI * R * Math.cos(lat * D2R));
+}
+function hexToRgb(s) {
+  if (!s) return null;
+  let t = String(s).trim().replace(/^#/, "");
+  if (t.length === 3) t = t.split("").map((c) => c + c).join("");
+  if (!/^[0-9a-fA-F]{6}$/.test(t)) return null;
+  return [parseInt(t.slice(0, 2), 16) / 255, parseInt(t.slice(2, 4), 16) / 255, parseInt(t.slice(4, 6), 16) / 255];
+}
+function ringBBox(ring) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity, k = 0;
+  for (const p of ring || []) {
+    const x = Number(p?.[0]), y = Number(p?.[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (x < w) w = x;
+    if (y < s) s = y;
+    if (x > e) e = x;
+    if (y > n) n = y;
+    k++;
+  }
+  return k >= 3 ? { w, s, e, n } : null;
+}
+function buildBldBoxes(features, opts = {}) {
+  const fallbackH = Number.isFinite(opts.fallbackHeight) ? opts.fallbackHeight : 8;
+  const minM2 = Number.isFinite(opts.minFootprintM2) ? opts.minFootprintM2 : 30;
+  const cap = opts.cap == null ? Infinity : Math.max(0, Math.floor(opts.cap));
+  const ramp = (opts.ramp || []).map(([h, c]) => [h, hexToRgb(c) || [0.7, 0.8, 0.9]]);
+  const center = [], size = [], color = [];
+  const st = { considered: features.length, boxes: 0, skippedSmall: 0, skippedCap: 0, fallbackHeight: 0, noRing: 0, why: "" };
+  for (const f of features) {
+    if (st.boxes >= cap) {
+      st.skippedCap++;
+      continue;
+    }
+    const bb = f?.ring ? ringBBox(f.ring) : null;
+    if (!bb) {
+      st.noRing++;
+      continue;
+    }
+    const lat0 = (bb.s + bb.n) / 2, lng0 = (bb.w + bb.e) / 2;
+    const mx = metersToMercator(lat0);
+    const wM = Math.abs(bb.e - bb.w) * 111320 * Math.cos(lat0 * D2R);
+    const dM = Math.abs(bb.n - bb.s) * 110540;
+    if (wM * dM < minM2) {
+      st.skippedSmall++;
+      continue;
+    }
+    let h = Number(f.h3d);
+    if (!Number.isFinite(h) || h <= 0) {
+      h = fallbackH;
+      st.fallbackHeight++;
+    }
+    const c = hexToRgb(f.color) || (ramp.length ? ramp.reduce((acc, [hh, cc]) => h >= hh ? cc : acc, ramp[0][1]) : [0.62, 0.75, 0.88]);
+    center.push(mercatorXOf(lng0), mercatorYOf(lat0), 0);
+    size.push(Math.max(2, wM) * mx, Math.max(2, dM) * mx, h * mx);
+    color.push(c[0], c[1], c[2]);
+    st.boxes++;
+  }
+  st.why = `方盒 ${st.boxes} 栋 / 输入 ${st.considered}（跳过：太小 ${st.skippedSmall} · 超上限 ${st.skippedCap} · 无外环 ${st.noRing} · **用兜底高度 ${st.fallbackHeight}**）`;
+  return {
+    count: st.boxes,
+    center: new Float32Array(center),
+    size: new Float32Array(size),
+    color: new Float32Array(color),
+    stats: st
+  };
+}
+var VS = `#version 300 es
+in vec3 a_local;
+in vec3 a_normal;
+in vec3 a_center;
+in vec3 a_size;
+in vec3 a_color;
+uniform mat4 u_matrix;
+out vec3 v_color;
+out vec3 v_n;
+void main() {
+  vec3 world = a_center + a_local * a_size;
+  gl_Position = u_matrix * vec4(world, 1.0);
+  /* 固定光（左上）；够便宜、也够把盒子"立"起来 —— 观感细节以后再说，这一版只要"看得出是 3D" */
+  vec3 L = normalize(vec3(-0.45, -0.6, 0.8));
+  v_n = a_normal;
+  v_color = a_color * (0.62 + 0.38 * max(dot(a_normal, L), 0.0));
+}`;
+var FS = `#version 300 es
+precision mediump float;
+in vec3 v_color;
+in vec3 v_n;
+out vec4 outColor;
+void main() { outColor = vec4(v_color, 1.0); }`;
+function unitBox() {
+  const p = [], n = [], idx = [];
+  const faces = [
+    [[-0.5, -0.5, 0.5], [0, 0, 1]],
+    [[0.5, -0.5, 0.5], [0, 0, 1]],
+    [[0.5, 0.5, 0.5], [0, 0, 1]],
+    [[-0.5, 0.5, 0.5], [0, 0, 1]],
+    [[0.5, -0.5, -0.5], [0, 0, -1]],
+    [[-0.5, -0.5, -0.5], [0, 0, -1]],
+    [[-0.5, 0.5, -0.5], [0, 0, -1]],
+    [[0.5, 0.5, -0.5], [0, 0, -1]],
+    [[-0.5, -0.5, -0.5], [-1, 0, 0]],
+    [[-0.5, -0.5, 0.5], [-1, 0, 0]],
+    [[-0.5, 0.5, 0.5], [-1, 0, 0]],
+    [[-0.5, 0.5, -0.5], [-1, 0, 0]],
+    [[0.5, -0.5, 0.5], [1, 0, 0]],
+    [[0.5, -0.5, -0.5], [1, 0, 0]],
+    [[0.5, 0.5, -0.5], [1, 0, 0]],
+    [[0.5, 0.5, 0.5], [1, 0, 0]],
+    [[-0.5, 0.5, 0.5], [0, 1, 0]],
+    [[0.5, 0.5, 0.5], [0, 1, 0]],
+    [[0.5, 0.5, -0.5], [0, 1, 0]],
+    [[-0.5, 0.5, -0.5], [0, 1, 0]],
+    [[-0.5, -0.5, -0.5], [0, -1, 0]],
+    [[0.5, -0.5, -0.5], [0, -1, 0]],
+    [[0.5, -0.5, 0.5], [0, -1, 0]],
+    [[-0.5, -0.5, 0.5], [0, -1, 0]]
+  ];
+  for (const [pp, nn] of faces) {
+    p.push(...pp);
+    n.push(...nn);
+  }
+  for (let i = 0; i < 6; i++) {
+    const o = i * 4;
+    idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+  }
+  return { pos: new Float32Array(p), nrm: new Float32Array(n), idx: new Uint16Array(idx) };
+}
+function createBldGlLayer(opts) {
+  let gl = null;
+  let prog = null;
+  let vao = null;
+  let vboBox = null, vboNrm = null, ebo = null;
+  let vboC = null, vboS = null, vboCol = null;
+  let uni = null;
+  let cur = opts.boxes;
+  const stats = {
+    draws: 0,
+    lastInstances: 0,
+    errors: 0,
+    lastError: "",
+    /* 🔍 诊断（2026-09-25 首跑 draw=0 / 错误 3 时加的）：把 GL 版本与**每个 shader 的编译日志**都留下来，
+       否则只知道"失败了"、不知道为什么 —— 今天已经因为"没有回执"栽过好几次。 */
+    glVersion: "",
+    isWebGL2: null,
+    logs: []
+  };
+  function upload() {
+    if (!gl || !vboC) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, vboC);
+    gl.bufferData(gl.ARRAY_BUFFER, cur.center, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vboS);
+    gl.bufferData(gl.ARRAY_BUFFER, cur.size, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
+    gl.bufferData(gl.ARRAY_BUFFER, cur.color, gl.DYNAMIC_DRAW);
+    stats.lastInstances = cur.count;
+  }
+  return {
+    id: opts.id || "bld-gl",
+    type: "custom",
+    renderingMode: "3d",
+    /** 自检/HUD 用：层自己报的可数口径（不是我们从外面猜的） */
+    glStats: () => ({ ...stats, instances: cur.count }),
+    update(boxes) {
+      cur = boxes;
+      upload();
+    },
+    onAdd(_map, g) {
+      gl = g;
+      try {
+        stats.glVersion = String(g.getParameter(g.VERSION) || "?");
+        stats.isWebGL2 = typeof WebGL2RenderingContext !== "undefined" && g instanceof WebGL2RenderingContext;
+      } catch (e) {
+        stats.logs.push("取 VERSION 失败：" + String(e).slice(0, 80));
+      }
+      const box = unitBox();
+      const mk = (type, src) => {
+        const s = g.createShader(type);
+        if (!s) {
+          stats.errors++;
+          stats.logs.push("createShader 返回 null（type=" + type + "）");
+          stats.lastError = "createShader null";
+          return s;
+        }
+        g.shaderSource(s, src);
+        g.compileShader(s);
+        if (!g.getShaderParameter(s, g.COMPILE_STATUS)) {
+          stats.errors++;
+          const log = String(g.getShaderInfoLog(s) ?? "(空日志)").slice(0, 220);
+          stats.lastError = log;
+          stats.logs.push((type === g.VERTEX_SHADER ? "VS: " : "FS: ") + log);
+        }
+        return s;
+      };
+      prog = g.createProgram();
+      g.attachShader(prog, mk(g.VERTEX_SHADER, VS));
+      g.attachShader(prog, mk(g.FRAGMENT_SHADER, FS));
+      g.linkProgram(prog);
+      if (!g.getProgramParameter(prog, g.LINK_STATUS)) {
+        stats.errors++;
+        const pl = String(g.getProgramInfoLog(prog) ?? "(空日志)").slice(0, 220);
+        stats.lastError = pl;
+        stats.logs.push("LINK: " + pl);
+      }
+      uni = g.getUniformLocation(prog, "u_matrix");
+      vao = g.createVertexArray();
+      g.bindVertexArray(vao);
+      const attr = (name) => g.getAttribLocation(prog, name);
+      const bind = (buf, loc, size, div = 0) => {
+        g.bindBuffer(g.ARRAY_BUFFER, buf);
+        g.enableVertexAttribArray(loc);
+        g.vertexAttribPointer(loc, size, g.FLOAT, false, 0, 0);
+        if (div) g.vertexAttribDivisor(loc, div);
+      };
+      vboBox = g.createBuffer();
+      g.bindBuffer(g.ARRAY_BUFFER, vboBox);
+      g.bufferData(g.ARRAY_BUFFER, box.pos, g.STATIC_DRAW);
+      bind(vboBox, attr("a_local"), 3);
+      vboNrm = g.createBuffer();
+      g.bindBuffer(g.ARRAY_BUFFER, vboNrm);
+      g.bufferData(g.ARRAY_BUFFER, box.nrm, g.STATIC_DRAW);
+      bind(vboNrm, attr("a_normal"), 3);
+      ebo = g.createBuffer();
+      g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ebo);
+      g.bufferData(g.ELEMENT_ARRAY_BUFFER, box.idx, g.STATIC_DRAW);
+      vboC = g.createBuffer();
+      bind(vboC, attr("a_center"), 3, 1);
+      vboS = g.createBuffer();
+      bind(vboS, attr("a_size"), 3, 1);
+      vboCol = g.createBuffer();
+      bind(vboCol, attr("a_color"), 3, 1);
+      upload();
+      g.bindVertexArray(null);
+    },
+    render(g, matrix) {
+      if (!prog || !vao || cur.count === 0) return;
+      g.useProgram(prog);
+      g.uniformMatrix4fv(uni, false, new Float32Array(matrix));
+      g.bindVertexArray(vao);
+      g.enable(g.DEPTH_TEST);
+      g.depthFunc(g.LEQUAL);
+      g.enable(g.CULL_FACE);
+      g.cullFace(g.BACK);
+      g.drawElementsInstanced(g.TRIANGLES, 36, g.UNSIGNED_SHORT, 0, cur.count);
+      stats.draws++;
+      stats.lastInstances = cur.count;
+      g.bindVertexArray(null);
+    },
+    onRemove() {
+      stats.errors = stats.errors;
+      gl = null;
+    }
+  };
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -2946,6 +3211,7 @@ export {
   bldPointOf,
   bldVerdictState,
   bldVerdictText,
+  buildBldBoxes,
   buildSkyGeometry,
   buildTransport,
   buildingColor,
@@ -2965,6 +3231,7 @@ export {
   cameraDefaults,
   contrastRatio,
   contrastReport,
+  createBldGlLayer,
   createBundleFeed,
   createFeatureStore,
   createWsLog,
@@ -2981,6 +3248,7 @@ export {
   hash32,
   heightColorExpression,
   hexRgb,
+  hexToRgb,
   horizonYOf,
   insetRing,
   insetRingMeters,
@@ -3012,7 +3280,10 @@ export {
   lodTileX,
   lodTileY,
   lodViewTiles,
+  mercatorXOf,
+  mercatorYOf,
   metersBetween,
+  metersToMercator,
   nearestOnLine,
   panDamping,
   pickBuildingsForView,

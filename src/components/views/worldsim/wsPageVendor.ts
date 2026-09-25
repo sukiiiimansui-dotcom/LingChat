@@ -30,7 +30,8 @@ export * from "./wsLabels";
 /* 📋 **超级详细日志上报**（机主 2026-09-25：「在页面做超级详细的日志上报喵」）：
    环形缓冲 + fetch/全局错误自动收 + 截图友好的整份报告 —— 规则只有这一份，页面只接线。 */
 export * from "./wsLog";
-export * from "./wsBuildingPick"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
+export * from "./wsBuildingPick";
+export * from "./wsBldGl"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
 /* 🏢 楼房**形体细化**（2026-09-24）：代拍页 `?bld=2` 用 `decorateBuildings(fc, ramp, {mode:"detail"})`
    生成裙楼/塔楼/退台/女儿墙/设备箱，并拿 `shapeCountsLine()`/`shapeCountRows()` 做回证；
    `windowPatternSpec()` 供 `?win=1` 的窗格层。

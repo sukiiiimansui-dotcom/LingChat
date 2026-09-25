@@ -66,7 +66,7 @@
 
     <!-- 远处区块预览 -->
     <div v-if="selIndex >= 0" class="wm-lb" @click.self="selIndex = -1">
-      <img :src="remoteImg(selIndex)" alt="" />
+      <img v-if="lbImg" :src="lbImg" alt="" />
       <div class="wm-lbcap">
         {{ remotes[selIndex].name }} · 主块{{ remotes[selIndex].dir }}方向
         {{ remotes[selIndex].distance_km }} km
@@ -80,9 +80,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import worldMapApi, {
+  bigmapImgUrl,
   type BlocksPayload,
   type RemoteBlock,
   type ScheduleRole,
@@ -107,13 +108,50 @@ const weatherText = ref('')
 const mainName = computed(() => data.value?.main?.name || '世界地图')
 const radiusKm = computed(() => data.value?.main?.radius_km ?? 0)
 const remotes = computed<RemoteBlock[]>(() => data.value?.remotes || [])
-const mainImg = computed(() => {
+const mainImg = ref('')
+let mainSeq = 0
+/**
+ * 取主图（**双通路**：真壳走 Tauri 命令 `world_map_bigmap_svg`、浏览器走 HTTP `/api/bigmap`）。
+ *
+ * 为什么不在这里拼 URL：**App 里没有 HTTP 服务**（`src-tauri/src/world_map/mod.rs` 明写
+ * axum 路由没有搬），拼 `${apiBase}/api/bigmap` 在手机上必然取不到图。
+ * 分流与错误口径都在真源 `src/api/services/worldMap.ts` 的 `bigmapImgUrl()` 里，页面只接线。
+ */
+async function refreshMainImg() {
   const m = data.value?.main
-  if (!m) return ''
-  // 走 /api/bigmap：有缓存直接返回，没有就现场拼一张（首次较慢，之后秒开）
-  return `${worldMapApi.apiBase}/api/bigmap?ad=${m.adcode}&style=${style.value}&scale=1&_t=${imgTick.value}`
-})
+  if (!m) {
+    mainImg.value = ''
+    return
+  }
+  const seq = ++mainSeq
+  try {
+    const url = await bigmapImgUrl(m.adcode, style.value, imgTick.value)
+    if (seq === mainSeq) mainImg.value = url
+  } catch {
+    if (seq === mainSeq) mainImg.value = ''
+  }
+}
 const imgTick = ref(Date.now())
+/** 换块 / 换风格 / 点刷新（三者都会动 data 或 imgTick）⇒ 重新取主图 */
+watch([() => data.value?.main?.adcode || '', style, imgTick], () => void refreshMainImg())
+
+/** 远处区块预览图：同样双通路，只在打开预览时取一次 */
+const lbImg = ref('')
+let lbSeq = 0
+watch(selIndex, async (i) => {
+  const r = i >= 0 ? remotes.value[i] : null
+  if (!r) {
+    lbImg.value = ''
+    return
+  }
+  const seq = ++lbSeq
+  try {
+    const url = await bigmapImgUrl(r.adcode, style.value, imgTick.value)
+    if (seq === lbSeq) lbImg.value = url
+  } catch {
+    if (seq === lbSeq) lbImg.value = ''
+  }
+})
 const stageStyle = computed(() => ({ aspectRatio: '4 / 3' }))
 
 /** 指示器位置：后端给的边缘坐标 + 前端避让 */
@@ -173,11 +211,6 @@ function placeLabel(r: ScheduleRole) {
   const p = r.now?.place
   if (!p) return ''
   return p.label || p.name || p.kindZh || ''
-}
-
-function remoteImg(i: number) {
-  const r = remotes.value[i]
-  return r ? `${worldMapApi.apiBase}${r.img}&_t=${imgTick.value}` : ''
 }
 
 function onImgError() {

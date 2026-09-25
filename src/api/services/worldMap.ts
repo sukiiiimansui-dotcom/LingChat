@@ -1219,6 +1219,39 @@ export async function mapSvgUrl(
   }
 }
 
+/**
+ * 「行政区划总览」底图（HTTP `/api/bigmap` ↔ Tauri 命令 `world_map_bigmap_svg`）的**双通路 URL**。
+ *
+ * 为什么必须走这层（与 `mapSvgUrl()` 同一个理由；**别让页面自己拼串**）：
+ *   · **真壳（APK / 桌面）里没有 HTTP 服务** —— `src-tauri/src/world_map/mod.rs` 明写
+ *     「真源 `main.rs` 的 axum 路由**没有**搬，那是独立调试 HTTP 服务的入口，不是 Tauri 的东西」；
+ *     页面直接拼 `${API_BASE}/api/bigmap` 在手机上必然取不到图（`API_BASE` 默认 8791 = 本机调试服务）。
+ *   · 浏览器 / 局域网调试：把 HTTP 地址直接交给 `<img>` —— 省一次往返，还能吃浏览器缓存与 `_t` 破缓存。
+ *
+ * Rust 侧签名（`src-tauri/src/world_map/stitch_cmd.rs`，已注册进 `lib.rs`）：
+ *   pub async fn world_map_bigmap_svg(app, ad: String, style: Option<String>, max_tiles, width,
+ *        height, page, detail, hi, grid, seed, zoom, max_mb, refresh) -> Result<String, String>
+ * 这里只传 `ad` / `style`（其余走 Rust 默认值）；这两个形参都是单词，JS 侧同名即可。
+ *
+ * 失败一律 **throw**：调用方把 `src` 置空并走自己已有的错误提示，不留未捕获 rejection。
+ */
+export async function bigmapImgUrl(ad: string, style = "gaode", tick?: number): Promise<string> {
+  const code = String(ad || "").trim();
+  if (!code) throw new Error("缺少 adcode，取不到底图");
+
+  // ── ① 真壳：Tauri 命令（返回 SVG 文本 ⇒ 转 data URL，`<img>` 才能直接吃）──
+  if (isTauriRuntime()) {
+    const svg = await invoke<string>("world_map_bigmap_svg", { ad: code, style });
+    return svgToDataUrl(svg);
+  }
+
+  // ── ② 浏览器 / 局域网调试：HTTP 地址原样给 `<img>` ──
+  return (
+    `${API_BASE}/api/bigmap?ad=${encodeURIComponent(code)}&style=${encodeURIComponent(style)}&scale=1` +
+    (tick ? `&_t=${tick}` : "")
+  );
+}
+
 export default worldMapApi;
 
 // ═══════════════════════════════════════════════════════════════════

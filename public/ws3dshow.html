@@ -116,6 +116,11 @@
       #wsdrawer-b .artb, #wsdrawer-b .badgesL { position: static; left: auto; right: auto; top: auto;
         max-width: none; background: rgba(255, 255, 255, 0.04); margin-bottom: 6px; }
       #wsdrawer-b .bldb { max-width: none; }
+      /* `.hud` 原来是浮在地图上的统计块（机主要求"合计进诊断"）⇒ 在抽屉里当普通块 */
+      #wsdrawer-b .hud { position: static; left: auto; right: auto; bottom: auto; top: auto;
+        max-width: none; width: auto; background: rgba(255, 255, 255, 0.04); border-radius: 10px;
+        padding: 6px 8px; margin-bottom: 6px; display: block; }
+      #wsdrawer-b .hud > span { display: block; margin: 1px 0; }
       #wsdrawer-chat { margin-top: 10px; padding: 8px 10px; border-radius: 10px;
         border: 1px dashed rgba(121, 217, 255, 0.35); color: #b9d7ef; line-height: 1.6; }
       #wsdrawer-hint { opacity: 0.75; }
@@ -253,7 +258,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v32";
+      const BUILD = "ws3dshow-2026-09-25-v34";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -802,10 +807,15 @@
         try { const m = /[?&]glbn=(\d+)/.exec(location.search); return m ? Math.max(0, parseInt(m[1], 10)) : 20000; }
         catch (e) { return 20000; }
       })();
-      /* 🧱 区块边长（度）：0.02° ≈ 2.2km —— "小范围一个区块"；`?bldcell=` 可调 */
+      /* 🧱 区块边长（度）：**默认 0.05° ≈ 5.5km，与离线楼包的格完全对齐**。
+         为什么必须对齐（机主 2026-09-25：「**目前当务之急是把地图做稳定显示（永远不变）**」）：
+         若区块比数据格小（例如 0.02°），一个区块会**跨两个数据格** ⇒ 楼是"一格格陆续到"的
+         ⇒ 同一块里后来到了更大的楼，就会把已画的那批挤掉几栋 ⇒ **画面自己会变**。
+         对齐之后：一个数据格**要么没到、要么整格到** ⇒ 格内选出的 100 栋**一旦选定永远不变**。
+         `?bldcell=` 仍可调（调了就要接受"可能变"的代价）。 */
       const BLDCELL = (function () {
-        try { const m = /[?&]bldcell=([0-9.]+)/.exec(location.search); return m ? Math.max(0.002, Math.min(0.2, parseFloat(m[1]))) : 0.02; }
-        catch (e) { return 0.02; }
+        try { const m = /[?&]bldcell=([0-9.]+)/.exec(location.search); return m ? Math.max(0.002, Math.min(0.2, parseFloat(m[1]))) : 0.05; }
+        catch (e) { return 0.05; }
       })();
       const BLDN_NEAR_ZOOM = (function () {
         try { const v = window.__TF__ && window.__TF__.WS_BLD_VECTOR_MINZOOM; return typeof v === "number" ? v : 12.8; }
@@ -2408,7 +2418,31 @@
           /* 🧱 **按区块封顶**（机主更正：「小范围一个区块最高 100 栋」，且**不许挪视野就乱变**）：
              挑选只依赖**区块**（固定经纬格），与视野/中心无关 ⇒ 同一块永远同一批。 */
           if (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && z >= BLDN_NEAR_ZOOM) {
+            /* 🧊 **按格冻结**：同一格的结果缓存住（键 = 格 + 上限）⇒ ① 重复落图不再重排（省算力）；
+               ② "永远不变"变成可断言的：同一格任何时候取到的都是同一批（`window.__BLD_FROZEN__` 可核）。 */
+            const ckey = BLDCELL + "|" + BLDN;
+            if (!window.__BLD_FROZEN__) window.__BLD_FROZEN__ = {};
+            const frozen = window.__BLD_FROZEN__;
             const r = TFp.capBuildingsPerCell(all.features, { cap: BLDN, cellDeg: BLDCELL });
+            /* 逐格冻结：已经冻结过的格，用冻结那批（新格照常加入） */
+            const byCellNow = new Map();
+            for (const f of r.features) {
+              const pt = (f.geometry && f.geometry.coordinates && f.geometry.coordinates[0] && f.geometry.coordinates[0][0]) || null;
+              if (!pt) continue;
+              const w = Math.floor(pt[0] / BLDCELL) * BLDCELL, s = Math.floor(pt[1] / BLDCELL) * BLDCELL;
+              const k = ckey + "@" + w.toFixed(5) + "_" + s.toFixed(5);
+              if (!byCellNow.has(k)) byCellNow.set(k, []);
+              byCellNow.get(k).push(f);
+            }
+            const stableFeats = [];
+            let frozenCells = 0, newCells = 0;
+            for (const [k, arr] of byCellNow) {
+              if (frozen[k]) { frozenCells++; for (const f of frozen[k]) stableFeats.push(f); }
+              else { frozen[k] = arr; newCells++; for (const f of arr) stableFeats.push(f); }
+            }
+            r.features = stableFeats;
+            r.stats.frozenCells = frozenCells; r.stats.newCells = newCells;
+            window.__BLD_FROZEN_N__ = Object.keys(frozen).length;
             data = { type: "FeatureCollection", features: r.features };
             pickWhy = r.stats.why;
             window.__BLD_PICK__ = r.stats;
@@ -3773,6 +3807,14 @@
         var body = document.getElementById("wsdrawer-b"), badge = document.getElementById("wsdrawer-badge");
         if (!tab || !dw || !body) return;
         var moved = 0;
+        /* 🧾 **合计诊断**：把所有会挡视野的诊断件**一起**收进抽屉 ——
+           机主 2026-09-25：「**把这个档视野的东西合计诊断里**」（他截图里那一大块浮动统计 = `.hud`）。 */
+        var sec = document.createElement("div");
+        sec.id = "wsdrawer-aggr";
+        sec.innerHTML = '<div style="font-weight:700;margin:2px 0 6px">🧾 合计诊断（实况）</div>';
+        body.appendChild(sec);
+        var hud = document.querySelector(".hud");
+        if (hud) { sec.appendChild(hud); moved++; }
         for (var id of ["artb", "bldb", "lookb", "lodb", "logb"]) {
           var el = document.getElementById(id);
           if (el) { body.appendChild(el); moved++; }

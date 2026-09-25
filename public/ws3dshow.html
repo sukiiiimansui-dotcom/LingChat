@@ -127,6 +127,12 @@
       /* 💬 角色对话（机主：「我最[想]把角色做进去（接入 lingchat 本身对对话）」）——
          聊的是 **LingChat 自己的后端**（`POST /api/chat`），回复里的好感/记忆都是**真数值**。 */
       #lc-stat { font-size: 10.5px; color: #9fd8ff; margin-bottom: 4px; }
+      /* 🎭 **立绘（PNG/webp 静态图，机主 2026-09-25：「l2d 别加，用 png 立绘就行了」）**：
+         资产来自 LingChat 自己的角色目录（`<角色>/avatar/`，21 张表情），由预览服务器 `/char/*` 只读直通。
+         表情**跟着 `/api/chat` 返回的真实情绪量自动切**（不编情绪）。 */
+      #lc-portrait { display: block; width: 100%; height: 22vh; object-fit: contain; object-position: center bottom;
+        background: rgba(255, 255, 255, 0.03); border-radius: 10px; margin-bottom: 4px; }
+      #lc-avatar { width: 18px; height: 18px; border-radius: 50%; vertical-align: -3px; margin-right: 3px; }
       #lc-msgs { max-height: 34vh; overflow: auto; display: flex; flex-direction: column; gap: 6px;
         padding: 4px 2px; }
       #lc-msgs .m { padding: 5px 8px; border-radius: 9px; max-width: 92%; line-height: 1.5; white-space: pre-wrap; }
@@ -160,6 +166,7 @@
         <div id="wsdrawer-hint">地图永远看得见：抽屉只在需要时从左边缘拉出。<br />下面这些是诊断件（点各自标题展开）；<b>将来与角色的对话就放在最下面那块</b>。</div>
       </div>
       <div id="wsdrawer-chat">
+        <img id="lc-portrait" alt="立绘（LingChat 资产）" />
         <div id="lc-stat">💬 角色对话 · 正在连 LingChat…</div>
         <div id="lc-msgs"></div>
         <div id="lc-row">
@@ -282,7 +289,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v37";
+      const BUILD = "ws3dshow-2026-09-25-v38";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3364,7 +3371,8 @@
         }
         function lcLine() {
           if (!lcChar) return "💬 角色对话 · 未连上 LingChat（" + (window.__LC_ERR__ || "原因见日志") + "）";
-          return "💬 " + lcChar.name + " · 好感 " + (lcAff === null ? "数不出来" : lcAff)
+          return "💬 " + lcChar.name + " · 🎭" + (lcFace || "数不出来")
+            + " · 好感 " + (lcAff === null ? "数不出来" : lcAff)
             + " · 记忆 " + (lcMem === null ? "数不出来" : lcMem) + " 条";
         }
         function lcPaint() { if (lcEl.stat) lcEl.stat.textContent = lcLine(); }
@@ -3380,6 +3388,54 @@
         function lcLog(lvl, msg, data) {
           try { const L = window.__WSLOG__; if (L && L[lvl]) L[lvl]("char", msg, data); } catch (e) { /* 忽略 */ }
         }
+        /* 🎭 立绘资产（来自 LingChat 自己的角色目录；`/char/index.json` 列的是**真实存在的文件名**） */
+        const LC_FOLDER_HINT = (function () {          /* `?charfolder=` 可指定；否则用第一个有 avatar/ 的角色 */
+          try { const m = /[?&]charfolder=([^&]+)/.exec(location.search); return m ? decodeURIComponent(m[1]) : null; }
+          catch (e) { return null; }
+        })();
+        let lcFolder = null, lcFaces = [], lcPortraitEl = null, lcFace = null;
+        function lcAssetUrl(face) {
+          return "/char/" + encodeURIComponent(lcFolder) + "/avatar/" + encodeURIComponent(face + ".webp");
+        }
+        /**
+         * 🎭 **情绪 → 立绘**（用 `/api/chat` 返回的**真实情绪量**，不是编的）。
+         * 口径（可调，先给一套保守默认）：
+         *   shy_value ≥ 40 → 害羞 · frustration/anger ≥ 40 → 生气 · affection_value ≥ 80 → 心动
+         *   affection_value ≥ 40 → 高兴 · 否则 → 平静（没有平静就用 正常）
+         * 取不到的键**跳过**（宁可用"正常"也不编情绪）；每张图**必须在 `/char/index.json` 里真实存在**才切。
+         */
+        function lcFaceFor(aff) {
+          const g = (k) => (aff && typeof aff[k] === "number" ? aff[k] : null);
+          const shy = g("shy_value"), fr = g("frustration_value") ?? g("frustration") ?? g("anger_value"), love = g("affection_value");
+          const pick = (name) => (lcFaces.indexOf(name) >= 0 ? name : null);
+          if (shy !== null && shy >= 40) { const f = pick("害羞"); if (f) return f; }
+          if (fr !== null && fr >= 40) { const f = pick("生气"); if (f) return f; }
+          if (love !== null && love >= 80) { const f = pick("心动"); if (f) return f; }
+          if (love !== null && love >= 40) { const f = pick("高兴"); if (f) return f; }
+          return pick("平静") || pick("正常") || (lcFaces[0] || null);
+        }
+        function lcSetFace(face, why) {
+          if (!face || face === lcFace || !lcPortraitEl) { if (face) lcFace = face; return; }
+          lcFace = face;
+          lcPortraitEl.src = lcAssetUrl(face);
+          lcLog("info", "立绘切换：" + face, { reason: why || null, folder: lcFolder });
+        }
+        async function lcLoadAssets() {
+          try {
+            const r = await fetch("/char/index.json", { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const idx = await r.json();
+            const names = Object.keys(idx || {});
+            lcFolder = (LC_FOLDER_HINT && idx[LC_FOLDER_HINT]) ? LC_FOLDER_HINT : (names[0] || null);
+            lcFaces = (lcFolder && idx[lcFolder]) ? idx[lcFolder].map((f) => f.replace(/\.webp$/i, "")) : [];
+            lcLog("info", "立绘资产已接（LingChat 目录）", { folder: lcFolder, faces: lcFaces.length });
+          } catch (e) { lcLog("warn", "立绘清单取不到（/char/index.json）", { err: String(e).slice(0, 80) }); }
+          lcPortraitEl = document.getElementById("lc-portrait");
+          if (lcPortraitEl) lcPortraitEl.onerror = function () { lcPortraitEl.style.display = "none"; };
+          lcSetFace(lcFaces.indexOf("平静") >= 0 ? "平静" : "正常", "初始");
+          return lcFolder;
+        }
+
         async function lcLoadChar() {
           try {
             const r = await fetch(LC_BASE + "/api/characters", { cache: "no-store" });
@@ -3414,6 +3470,8 @@
             if (affV !== null) lcAff = affV;
             if (typeof d.memory_count === "number") lcMem = d.memory_count;
             lcPush("ta", String(d.reply || "（回复为空）"));
+            /* 🎭 按**真实情绪量**切立绘（取不到就保持原样，不编） */
+            try { lcSetFace(lcFaceFor(d.affection), "chat"); } catch (e2) { /* 忽略 */ }
             lcSys("好感 " + (affV === null ? "数不出来" : affV) + "（Δ" + (dltV === null ? "数不出来" : dltV) + "）"
               + " · 记忆 " + (d.memory_count ?? "数不出来") + " 条" + (d.memory_saved ? " · 已存档" : ""));
             lcPaint();
@@ -3433,7 +3491,9 @@
             if (!lcMarker) {
               lcMarker = document.createElement("div");
               lcMarker.id = "lc-char";
-              lcMarker.innerHTML = '<span class="pin">💬</span>' + ((lcChar && lcChar.name) || "角色");
+              const av = lcFolder ? ('/char/' + encodeURIComponent(lcFolder) + '/avatar/' + encodeURIComponent("头像.webp")) : null;
+              lcMarker.innerHTML = (av ? '<img src="' + av + '" alt="" style="width:16px;height:16px;border-radius:50%;vertical-align:-3px;margin-right:3px" />' : '<span class="pin">💬</span>')
+                + ((lcChar && lcChar.name) || "角色");
               lcMarker.title = "点我和她说话（走 LingChat 本身的对话）";
               lcMarker.onclick = function () {
                 try { window.__WSDRAWER__ && window.__WSDRAWER__.open(); } catch (e) { /* 忽略 */ }
@@ -3455,7 +3515,7 @@
           if (lcEl.input) lcEl.input.onkeydown = function (e) { if (e.key === "Enter") { e.preventDefault(); void lcSend(lcEl.input.value); } };
           map.on("move", lcUpdateMarker);
           map.on("zoom", lcUpdateMarker);
-          void lcLoadChar().then(function () { lcUpdateMarker(); });
+          void lcLoadAssets().then(lcLoadChar).then(function () { lcUpdateMarker(); lcPaint(); });
           /* 核验出口（无头/真机都能读；也便于以后接自动化） */
           window.__LC__ = { send: lcSend, char: function () { return lcChar; }, aff: function () { return lcAff; },
                             mem: function () { return lcMem; }, paint: lcPaint, pos: LC_POS, base: LC_BASE };

@@ -31,6 +31,7 @@
 
 import { rampExpression, themeForTier, themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { sceneLayerPlan } from "./wsScene";
+import { pickBuildingsForView, type PickBounds, type PickFeature, type PickViewStats } from "./wsBuildingPick";
 
 /** 楼层档位（`themeForTier()` 的返回；层序/描边这些"随主题变"的参数都从这里取） */
 export type ThemeTier = ReturnType<typeof themeForTier>;
@@ -230,6 +231,14 @@ export interface BldFlushOpts<T> {
   beforeDraw?: (why: string, data: FeatureCollectionLike) => void;
   /** 落图**之后**（宿主的标签/HUD；画不成时不会调用） */
   afterDraw?: (why: string, data: FeatureCollectionLike) => void;
+  /**
+   * 🏙 **近景按视野挑楼**（机主 2026-09-25：「楼房过于密集…**上限 100 栋根据视野来显示**」）：
+   * 传了就把挑出来的那批交给 `dress()`（**其余仍在仓库里，只是不画** —— 事实不编，只编"画多少"）。
+   * 规则全在 `wsBuildingPick.pickBuildingsForView`（纯函数、可自检）；`null`/不传 = 全画（远景/预览）。
+   */
+  pickNearView?: { bounds: PickBounds | null; center?: { lng: number; lat: number } | null; cap?: number } | null;
+  /** 挑完回报（**只读**，给 HUD 写"显示 N / 视野内 M"；不许在这里改数据） */
+  onPicked?: (stats: PickViewStats) => void;
 }
 
 /**
@@ -238,7 +247,14 @@ export interface BldFlushOpts<T> {
  * 数据来自仓库并集而不是"这一批" ⇒ 换视野/换来源都不会把已画上的楼抹掉。
  */
 export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
-  const data = opts.dress(opts.features());
+  /* 🏙 近景挑楼：**只影响"画哪些"**，仓库不动（HUD 的"仓库 N 栋"仍是全量） */
+  let drawn = opts.features();
+  if (opts.pickNearView) {
+    const r = pickBuildingsForView(drawn as unknown as PickFeature[], opts.pickNearView);
+    drawn = r.features as unknown as readonly T[];
+    try { opts.onPicked?.(r.stats); } catch { /* HUD 失败不影响落图 */ }
+  }
+  const data = opts.dress(drawn);
   opts.beforeDraw?.(why, data);
   const m = opts.map();
   if (!m) {

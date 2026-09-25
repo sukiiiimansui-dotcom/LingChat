@@ -239,7 +239,9 @@
     sceneOrderViolations,
     sceneSelfReport,
     viewHalfMetersOf,
+    LOD_NEAR_ZOOM,
   } from "./wsScene";
+import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
   /* 🎬🏢 **小区级 3D 装配的共享真源**（`wsDistrictScene.ts`，2026-09-25 切片 A 从本组件**搬家**过去）：
      `districtStyleOf`（原本地 `makeStyle`）、`bldLayerSpecsFor`（原 `bldLayerSpecs`）、
      `applyBuildingsTo` + `flushBldStore` / `flushRoadsStore`（原 `applyBuildings`/`flushBld`/`flushRoads`）。
@@ -2881,6 +2883,17 @@
         map: () => (renderKind.value === "fallback2d" ? null : (map as BldMapLike | null)),
         specs: () => bldLayerSpecsFor(theme.value, themeTier.value),
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
+        /* 🏙 **近景按视野挑楼**（机主：上限 100 栋、随视野刷新）：只有近景才挑；远景走预渲染瓦片，挑它没意义。
+           规则在共享真源 `wsBuildingPick`，这里只给"当前视野 + 上限"。 */
+        pickNearView: (() => {
+          try {
+            const z = map ? map.getZoom() : null;
+            if (z === null || z < LOD_NEAR_ZOOM) return null;
+            const b = map!.getBounds();
+            return { bounds: b, center: map!.getCenter(), cap: WS_BLD_VIEW_CAP };
+          } catch { return null; }
+        })(),
+        onPicked: (s) => { bldPickWhy = s.why; try { renderBundleHud(); } catch { /* HUD 失败不影响落图 */ } },
         beforeDraw: (why0) => {
           bldFlushWhy = why0;
           renderBundleHud();
@@ -2891,6 +2904,8 @@
   }
   /** 上一次 flush 的原因（面板回证：是离线包来的还是 live 来的） */
   let bldFlushWhy = "";
+  /** 🏙 上一次"近景挑楼"的口径（机主要 100 栋/视野）——面板回证用，没挑过就是空串 */
+  let bldPickWhy = "";
 
   /**
    * 🧱 **落图（路）**：仓库并集 → **一次 `setData`**（首次建源建层）。

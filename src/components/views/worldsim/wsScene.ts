@@ -527,6 +527,20 @@ export function roadsVerdictText(input: {
   return `🛣 ${n} 条（r=${r}m${cap}${ch}${secs}）`;
 }
 
+/**
+ * 📱 **像素比**：低档机收敛到 ≤1.5，其余 ≤2（上限来自 `devicePixelRatio`，取不到按 1 算）。
+ *
+ * 为什么放在真源里：`ws3dshow.html` 的地图构造要用它，App 侧将来也要用 —— **规则只写一份**。
+ * 为什么低档要收：像素比直接乘**填充率**（`pixelRatio²`），而 2D/3D 地图的瓶颈正是填充率；
+ * 低档机（`wsCaps.render.perf === "low"`，由 `wsPerf` 按实测帧率写回）用 1.5 换帧率。
+ * ⚠️ 具体数字**未在真机测过**（本机无头无 WebGL）—— 这是"宁可少画一点也别掉帧"的保守选择。
+ */
+export function pixelRatioForTier(perfTier: string | null | undefined, dpr?: number | null): number {
+  const d = Number.isFinite(dpr as number) ? Number(dpr) : 1;
+  const base = Math.min(2, Math.max(1, d));
+  return String(perfTier) === "low" ? Math.min(1.5, base) : base;
+}
+
 /** 为什么只能到 2000m（HUD 要如实说出来，别让人以为是"我们不想给"） */
 export const WS_FETCH_R_LIMIT_WHY =
   "Overpass 公共实例实测：R=2000 起常 504、R=8000 会静默截断 ⇒ 远景改用预渲染瓦片";

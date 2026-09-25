@@ -207,7 +207,10 @@ export function lodTierLabel(tier: LodTier): string {
  */
 export const LOD_OPACITY_ZERO_ZOOM = 14;
 export const LOD_OPACITY_STOPS: ReadonlyArray<readonly [number, number]> = [
-  [9, 1], [10, 1], [11, 0.72], [12, 0.45], [13, 0.25], [13.5, 0.12], [LOD_OPACITY_ZERO_ZOOM, 0],
+  /* 🔴 2026-09-25 修正（机主：「**拉远就看不到楼了喵**」）：原档位在 z12~14 一路压到 0，
+     而**楼房矢量层要到 14 才画** ⇒ 中间那一截"两层都不管" = 拉远看不到楼。
+     现在瓦片**在 14 之前都保持足够不透明**（只是轻微让位），交接点严格落在 14。 */
+  [8, 1], [9, 1], [10, 1], [11, 0.9], [12, 0.8], [13, 0.7], [13.5, 0.5], [LOD_OPACITY_ZERO_ZOOM, 0],
 ];
 
 /** 预渲染层在某个 zoom 下的不透明度（纯函数 ⇒ 自检不必建地图、更不必有 WebGL） */

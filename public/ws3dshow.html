@@ -348,7 +348,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v52";
+      const BUILD = "ws3dshow-2026-09-26-v55";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1536,12 +1536,25 @@
         try {
           const st = bldStoreOf();
           const feats = (st && st.features) ? st.features() : [];
+          let skipped = 0;
           bldPts = feats.map(function (f) {
-            const ring = (f && f.p && f.p[0]) || null;
-            const id = f && (f.i || f.id || (f.properties && f.properties.id)) || null;
-            if (!ring || !ring[0] || !id) return null;
+            if (!f) return null;
+            /* 🔴 形状**两种都要认**（实测踩过）：楼房仓库里是 **GeoJSON**（`geometry.coordinates`
+               + `properties.store_id/osm_id`），而离线包的原始项是扁平的 `{i, p}`。
+               只认一种 ⇒ 楼名恒为 0（自检/真浏览器抓到的）。 */
+            const props = f.properties || {};
+            const id = f.i || f.id || props.store_id || props.osm_id || props.id || null;
+            let ring = null;
+            if (Array.isArray(f.p) && Array.isArray(f.p[0])) ring = f.p[0];
+            else {
+              const g = f.geometry || null;
+              const c = g && g.coordinates;
+              if (Array.isArray(c)) ring = (Array.isArray(c[0]) && Array.isArray(c[0][0])) ? c[0] : c;
+            }
+            if (!id || !ring || !Array.isArray(ring[0])) { skipped++; return null; }
             return { id: String(id), lng: Number(ring[0][0]), lat: Number(ring[0][1]) };
           }).filter(Boolean);
+          try { window.__GENN_SKIP__ = skipped; } catch (e2) { /* 忽略 */ }
         } catch (e) { bldPts = []; }
         const byId = new Map(bldPts.map(function (b) { return [b.id, b]; }));
         const pickedBld = TFx.planGenNames(bldPts.map(function (b) { return b.id; }), GEN_BLD_MAX).map(function (g) {
@@ -2708,6 +2721,7 @@
         } catch (e2) { /* 自检失败不许影响落图 */ }
         renderBldBundleHud();
         try { refreshLabels("bundle-bld"); } catch (e) { /* 标签失败不影响地图 */ }
+        try { refreshGenNames("bundle-bld"); } catch (e2) { /* 忽略 */ }
         if (why) window.__BLD_FLUSH_WHY__ = why;
       }
 
@@ -2924,6 +2938,7 @@
         window.__ROADS_STORE__ = Object.assign({ why: why, evicted: ev, hunks: roadsHunkStat() }, st.stats());
         renderRoadHud();
         try { if (typeof refreshLabels === "function") refreshLabels("roads"); } catch (e) { /* 标签失败不影响地图 */ }
+        try { refreshGenNames("roads"); } catch (e2) { /* 忽略 */ }
       }
       function TF2visibleRoadCount(feats) {
         const TF2 = window.__TF__;
@@ -3283,6 +3298,7 @@
         else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
         renderBldBadge(); // 🏢 回证（各细节生成了多少 + 档位）随每次取楼刷新
         try { refreshLabels("buildings"); } catch (e) { /* 标签失败不影响地图 */ }   // 🏷 楼名到位后重排一次
+        try { refreshGenNames("buildings"); } catch (e2) { /* 生成名失败不影响地图 */ }
       }
 
       /**
@@ -3497,7 +3513,7 @@
         /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
-        map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } });
+        map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("moveend"); } catch (e2) { errs.push("gennames " + e2); } });
 
         /* ══════════════════════════════════════════════════════════════════════════════
          * 💬 **角色接入 LingChat 本身的对话**（机主 2026-09-25：「我最[想]把角色做进去喵

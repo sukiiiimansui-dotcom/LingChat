@@ -25,6 +25,20 @@ export interface LabelItem {
   source: LabelSource;
   /** 行政级别（仅 admin 用；区县=3、市=2、省=1）—— 用来在同类里再排序 */
   adminLevel?: number;
+  /** 片区类型（仅 place 用）：`suburb/quarter/borough` = **区片**（任何 zoom 都显示），
+   *  `neighbourhood` = 小区/街区（z≥11 才显示）。数据不认得的类型**不显示**。 */
+  placeType?: string;
+}
+
+/** 片区类型分档：**区片**（大范围）vs **小区/街区**（近景） */
+export const PLACE_AREA_TYPES: readonly string[] = ["suburb", "quarter", "borough"];
+export const PLACE_LOCAL_TYPES: readonly string[] = ["neighbourhood"];
+/** 这一档里的类型（不认得的类型 ⇒ 不显示 —— 宁可少显示，不许显示错的东西） */
+export function placeTierOf(placeType: string | undefined | null): "area" | "local" | null {
+  const t = String(placeType || "").trim().toLowerCase();
+  if (PLACE_AREA_TYPES.indexOf(t) >= 0) return "area";
+  if (PLACE_LOCAL_TYPES.indexOf(t) >= 0) return "local";
+  return null;
 }
 
 /** 当前 zoom 允许显示哪几类（**阈值只写在这里**，页面不许再写一份） */
@@ -35,17 +49,30 @@ export interface LabelPlan {
   roadTrunk: boolean;
   roadSecondary: boolean;
   building: boolean;
+  /** **区片**名（suburb/quarter/borough）：任何 zoom 都显示（它就是"这是哪一片"） */
+  placeArea: boolean;
+  /** **小区/街区**名（neighbourhood）：z≥11 才有意义（更近才看得见街区） */
+  placeLocal: boolean;
   /** 一次布局最多显示多少个（性能护栏；超了如实报"丢弃"） */
   cap: number;
 }
 
-/** 分层规则：z≤10 只区县名 · z11~12 加主干路名 · z13+ 加次干路/楼名/片区名 */
+/**
+ * 分层规则（机主/父代理 2026-09-25 定的口径）：
+ *   · z≤10：只 区县名（admin）+ **区片名**（suburb/quarter/borough）；
+ *   · z11~12：+ 主干路名 + **小区/街区名**（neighbourhood）；
+ *   · z13+：+ 次干路名 + 楼名（此时片区名和它们**同层竞争**，优先级 行政>主干>次干>**片区**>楼名）。
+ */
 export function labelPlanFor(zoom: number): LabelPlan {
   const z = Number.isFinite(zoom) ? Number(zoom) : 14;
   return {
     zoom: z,
     admin: true,                        // 行政名任何 zoom 都要（它就是"这是哪儿"）
-    place: z >= 13,                     // 片区/小区名：中近景才有意义
+    /* `place` = "这一档**有没有**片区名可见"。因为**区片**名任何 zoom 都显示 ⇒ 恒 true；
+       真正的**分档**在 `labelItemAllowed()` 里按类型判（区片=placeArea / 小区=placeLocal）。 */
+    place: true,
+    placeArea: true,                    // **区片**名：任何 zoom 都显示（"这是哪一片"）
+    placeLocal: z >= 11,                // **小区/街区**名：z≥11 才显示
     roadTrunk: z >= 11,                 // 主干道名
     roadSecondary: z >= 13,             // 次干道名
     building: z >= 13,                  // 楼名（真实数据只有 ~5% 有名字，别期待满屏）
@@ -54,15 +81,32 @@ export function labelPlanFor(zoom: number): LabelPlan {
 }
 
 /** 优先级：行政 > 主干道 > 次干道 > 片区/小区 > 楼名（同位置冲突时取高的） */
-export function labelPriorityOf(it: Pick<LabelItem, "kind" | "adminLevel">): number {
+export function labelPriorityOf(it: Pick<LabelItem, "kind" | "adminLevel" | "placeType">): number {
   switch (it.kind) {
     case "admin": return 100 + (3 - Math.min(3, Math.max(1, it.adminLevel || 3)));
     case "road_trunk": return 60;
     case "road_secondary": return 40;
-    case "place": return 30;
+    /* 片区：**区片**（suburb/quarter/borough）比**小区**（neighbourhood）高一点点 ——
+       两者同属 `place` 档，但视野里同时有"渝中区/上清寺街道"和"某某小区"时，先保大的。
+       注意仍然低于次干道（40）—— 父代理定的顺序：行政 > 主干 > 次干 > 片区 > 楼名。 */
+    case "place": return placeTierOf(it.placeType) === "area" ? 34 : 30;
     case "building": return 20;
     default: return 0;
   }
+}
+
+/**
+ * 一个**具体标签**在当前 plan 下允不允许显示（比 `labelKindAllowed` 更细：`place` 还要看**类型档**）。
+ * `suburb/quarter/borough` 看 `plan.placeArea`；`neighbourhood` 看 `plan.placeLocal`；
+ * 类型不认得（`placeTierOf` 返回 null）⇒ **不显示**（宁可少显示，不许显示错的东西）。
+ */
+export function labelItemAllowed(it: Pick<LabelItem, "kind" | "placeType">, plan: LabelPlan): boolean {
+  if (!labelKindAllowed(it.kind, plan)) return false;
+  if (it.kind !== "place") return true;
+  const tier = placeTierOf(it.placeType);
+  if (tier === "area") return plan.placeArea;
+  if (tier === "local") return plan.placeLocal;
+  return false;
 }
 
 /** 某一类在当前 plan 下允不允许显示 */
@@ -148,7 +192,7 @@ export function pickLabels(
   for (const it of items) {
     if (!it || String(it.name || "").trim() === "") { out.skippedNoName++; continue; }   // **缺名字不显示，也不编**
     if (!allowSketch && it.source === "sketch") { out.skippedSketch++; continue; }       // 判断用的只有 real
-    if (!labelKindAllowed(it.kind, plan)) continue;
+    if (!labelItemAllowed(it, plan)) continue;      // place 还要看类型档（区片 / 小区）
     const pt = project(it.lng, it.lat);
     if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) { out.skippedOffscreen++; continue; }
     if (pt.x < -margin || pt.y < -margin || pt.x > W + margin || pt.y > H + margin) { out.skippedOffscreen++; continue; }
@@ -212,6 +256,31 @@ export function buildingLabelsFrom(features: readonly any[]): LabelItem[] {
     out.push({
       id: "bld:" + (props.osm_id || f.id || name), kind: "building", name,
       lng: sx / ring.length, lat: sy / ring.length, source: "real",
+    });
+  }
+  return out;
+}
+
+/**
+ * 🏷 **片区/小区名**（来自离线包 `/placesbundle/<格>.json` 的 `{n,k,p,i}`）。
+ * 🔴 **没有名字的不进**（`skippedNoName` 由 `pickLabels` 统一计数；这里直接丢掉，双保险）；
+ *    **不认得的 place 类型也不进**（宁可少显示，不许显示错的东西）。
+ */
+export function placeLabelsFrom(
+  list: readonly { n?: string; name?: string; k?: string; kind?: string; p?: number[]; lng?: number; lat?: number; i?: string; id?: string }[],
+): LabelItem[] {
+  const out: LabelItem[] = [];
+  for (const it of list || []) {
+    const name = String((it && (it.n !== undefined ? it.n : it.name)) || "").trim();
+    if (!name) continue;                                   // **缺名字不显示**（编名字 = 幻觉源）
+    const type = String((it && (it.k !== undefined ? it.k : it.kind)) || "").trim().toLowerCase();
+    if (placeTierOf(type) === null) continue;               // 不认得的类型不显示
+    const lng = it && it.p && Number.isFinite(it.p[0]) ? Number(it.p[0]) : Number((it || {}).lng);
+    const lat = it && it.p && Number.isFinite(it.p[1]) ? Number(it.p[1]) : Number((it || {}).lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    out.push({
+      id: "place:" + (it.i || it.id || (type + ":" + name)), kind: "place", name,
+      lng: lng, lat: lat, source: "real", placeType: type,
     });
   }
   return out;

@@ -337,7 +337,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v49";
+      const BUILD = "ws3dshow-2026-09-25-v50";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -3870,9 +3870,11 @@
               (document.getElementById("map") || document.body).appendChild(lcOffEl);
             }
             if (outside) {
-              const m = 22;
-              const cx = Math.min(w - m, Math.max(m, p.x));
-              const cy = Math.min(h - m, Math.max(m, p.y));
+              /* 边距按**指示牌自身宽度**算：固定 22px 会让药丸被屏幕边缘裁掉一半（v49 实测） */
+              const mw = Math.max(24, Math.round((lcOffEl.offsetWidth || 130) / 2) + 8);
+              const mh = Math.max(16, Math.round((lcOffEl.offsetHeight || 22) / 2) + 6);
+              const cx = Math.min(w - mw, Math.max(mw, p.x));
+              const cy = Math.min(h - mh, Math.max(mh, p.y));
               let distM2 = null;
               try {
                 const c = map.getCenter();

@@ -415,15 +415,40 @@ export function roadsRadiusFor(buildingsRadius: number | null | undefined): {
   return { radius: WS_ROADS_R_MAX, wanted: capped ? want : WS_ROADS_R_MAX, capped, why: capped ? WS_ROADS_LIMIT_WHY : null };
 }
 
+/* ══ 🛣 live 取路的**开关策略**（2026-09-25 机主第二张截图：live 超时 ⇒ 路又没了）════════
+   机主截图里的 HUD 原文：
+     「路 失败：Error: 超时 12s（撞可用上限）⚠ 策略要 7350m ⇒ 源上限 2000m，"远景不取数"」
+   两条实测摆在一起看：
+     · 600m **命中缓存** 0.1~1s（暖格），但**冷查是分钟级** —— 分块实测 17.6~56.2s/块，且 4 块里 1 块直接 `ok:false`；
+     · 所以"先打一条 600m 试试"在**冷缓存/新区域**下必然撞 12s 超时 ⇒ 用户看到的就是"路没了"。
+   ⇒ 结论：**现场 Overpass 不适合当首屏数据源**（它的耗时分布是分钟级 + 非零失败率，不是"偶尔慢"）。
+     · **默认 0 条 Overpass**：路从**离线路面包**（静态 `/roadsbundle/<格>.json`，69 格/23,984 条/5.9MB）
+       与**预渲染瓦片**来 —— 这两条都是"本地/静态"，耗时与失败都可控；
+     · 想现场取数（补新区域、调试）：**`?live=1` 显式开**，且照旧**不阻塞**别层（12s 超时后如实报失败）。
+   🔴 不许把默认再改回"先打一条试试" —— 冷缓存下它做的就是**堵住首屏 + 把"没取到"呈现成"路没了"**。 */
+export const WS_ROADS_LIVE_DEFAULT = false;
+export const WS_ROADS_LIVE_VERDICT =
+  "默认不发 /api/roads：现场 Overpass 冷查是分钟级（分块实测 17.6~56.2s/块、4 块 1 失败）"
+  + "，600m 只有**缓存命中**才 0.1~1s ⇒ 默认 0 条，路走离线路面包 + 预渲染瓦片；要现场取数加 ?live=1";
+
+/** live 取路**要不要打**：规则在这里（页面只读结论 + 如实写 HUD），默认 `false` */
+export function roadsLiveDecision(input?: { forceLive?: boolean | null }): { live: boolean; why: string } {
+  if (input && input.forceLive === true) {
+    return { live: true, why: "URL 显式 ?live=1 ⇒ 现场取数（明知冷查可能撞 12s 超时，失败会如实报出来）" };
+  }
+  return { live: false, why: WS_ROADS_LIVE_VERDICT };
+}
+
 /**
- * 取路那一格的**判词**（三态 + "没取"与"没数据"必须分得开）。
+ * 取路那一格的**判词**（"没取"与"没数据"必须分得开）。
  *
  * 机主真机回归的第二个坑：路取不到时页面写的是「这一带没有路网数据」——**把"没取到"说成了"没有"**。
- * 五态各说各的话：`pending` 取数中 / `ok` 正数 / `empty` 0（已量：后端在这些块都回 0）/
- * `failed` 取数失败（带原因）/ `off` 未开（?roads=0）。
+ * 六态各说各的话：`pending` 取数中 / `ok` 正数 / `empty` 0（已量：后端在这些块都回 0）/
+ * `failed` 取数失败（带原因）/ `off` 未开（?roads=0）/
+ * `bundle` **live 未开**（默认：路走离线路面包 + 预渲染瓦片 —— 不是"没有路"，也不是"取失败"）。
  */
 export function roadsVerdictText(input: {
-  state: "pending" | "ok" | "empty" | "failed" | "off";
+  state: "pending" | "ok" | "empty" | "failed" | "off" | "bundle";
   n?: number | null;
   radius?: number | null;
   capped?: boolean;
@@ -436,6 +461,11 @@ export function roadsVerdictText(input: {
   const r = input.radius === null || input.radius === undefined ? "?" : String(Math.round(input.radius));
   const cap = input.capped ? `（半径已封顶；本想要 ${Math.round(Number(input.wanted) || 0)}m —— ${input.why || ""}）` : "";
   if (input.state === "off") return "🛣 未开（?roads=0）";
+  if (input.state === "bundle") {
+    /* ⚠️ 这一态**必须**与"没有路""取失败"分得开：它说的是"我们没发现场请求，路在离线包里" */
+    const nb = input.n === null || input.n === undefined ? "数不出来" : String(input.n);
+    return `🛣 离线包 offline-first（仓库 ${nb} 条；**默认不发 /api/roads**：冷查分钟级 ⇒ 要现场取数加 ?live=1）`;
+  }
   if (input.state === "pending") return `🛣 取数中…（r=${r}m${cap}）`;
   if (input.state === "failed") return `🛣 取数**失败**：${input.err || "原因未知"}（r=${r}m${cap}）—— 不是「这一带没有路」`;
   const n = input.n === null || input.n === undefined ? "数不出来" : (input.n === 0 ? "0（已量：后端返回 0 条）" : String(input.n));

@@ -188,7 +188,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-25-v22";
+      const BUILD = "ws3dshow-2026-09-25-v23";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -982,6 +982,12 @@
          规则/样式/生成逻辑都在 `wsTransportRules.ts` + `wsTransport.ts`（**唯一真源**），
          页面只调**生成物** `/vendor/wsTransport.mjs`（`scripts/build-ws-vendor.sh` 产出）。 */
       const TFON = (function () { try { return /[?&]tf=1\b/.test(location.search); } catch (e) { return false; } })();
+
+      /* ══ 🛣 **live 取路开关**（2026-09-25 机主第二张截图：`路 失败：超时 12s` ⇒ 路又没了）══════
+         规则**不在这里**（单一真源）：`wsScene.roadsLiveDecision()` —— 默认 **false（0 条 Overpass）**，
+         路走**离线路面包** + **预渲染瓦片**；要现场取数才 `?live=1`。
+         ⚠️ 这一行只是把 URL 读出来喂给真源，别在页面里再写一套"要不要取"的判断。 */
+      const LIVEON = (function () { try { return /[?&]live=1\b/.test(location.search); } catch (e) { return false; } })();
       let tfDone = false;
 
       /** 取路网中心线（与 App 同一个后端口径：`/api/roads?lat&lng&r`）。
@@ -999,6 +1005,8 @@
           : { radius: 600, wanted: wantR, capped: (wantR || 0) > 600, why: "模块缺 roadsRadiusFor（旧 vendor）" };
         const r = cap.radius;
         const t0 = Date.now();
+        /* 🧾 可数口径：**这一轮到底打了几条 live**（默认应当是 0；`?live=1` 才是 1）—— 自检钉它 */
+        window.__ROADS_OVERPASS_N__ = (window.__ROADS_OVERPASS_N__ || 0) + 1;
         const res = await fetchWithTimeout(`${API}/api/roads?lat=${c.lat.toFixed(5)}&lng=${c.lng.toFixed(5)}&r=${r}`, ROADS_TIMEOUT_MS);
         const body = await res.json();
         const ms = Date.now() - t0;
@@ -1007,7 +1015,7 @@
           r: Number(body.radius) || r,
           n: Number(body.count) || ((body.geojson && body.geojson.features) || []).length,
           cached: typeof body.cached === "boolean" ? body.cached : null, ms, err: "",
-          capped: cap.capped, wanted: cap.wanted, why: cap.why,
+          capped: cap.capped, wanted: cap.wanted, why: cap.why, live: true, skipped: false,
         };
         renderFetchHud();
         return body;
@@ -1105,6 +1113,35 @@
                            capped: capR.capped, wanted: capR.wanted, why: capR.why };
         renderFetchHud();
         window.__ROAD_HUD_PREFIX__ = "";
+        /* ══ 🛣 **offline-first**：默认**不发** `/api/roads`（2026-09-25 机主截图：冷查撞 12s 超时 ⇒ 路没了）══
+           规则在 `wsScene.roadsLiveDecision()`；这里只做三件事：读结论 → 走对应的那条路 → 如实写 HUD。
+           离线包那一条**照走**（静态文件），所以"没发现场请求" ≠ "没有路"。 */
+        const dec = (TFr && typeof TFr.roadsLiveDecision === "function")
+          ? TFr.roadsLiveDecision({ forceLive: LIVEON })
+          : { live: LIVEON, why: "模块缺 roadsLiveDecision（旧 vendor）" };
+        window.__ROADS_LIVE__ = !!dec.live;
+        window.__ROADS_LIVE_WHY__ = String(dec.why || "");
+        if (!dec.live) {
+          /* 层先建起来（离线包可能一格都没有，但层在 ⇒ 后面并进仓库就能看见） */
+          try { roadLayerSpecsAdd(); } catch (e) { errs.push("roadLayers " + e); }
+          let bundleErr = null;
+          try { await refreshRoadsBundle(); } catch (e2) { bundleErr = String(e2); errs.push("bundle " + e2); }
+          flushRoads("bundle-only");
+          window.__ROAD_N__ = roadN;
+          window.__ROADS_OVERPASS_N__ = 0;
+          const stb = roadsStoreOf();
+          const nb = stb ? stb.stats().n : null;
+          fetchStat.road = { r: capR.radius, n: nb, cached: null, ms: null, err: null,
+                             capped: capR.capped, wanted: capR.wanted, why: capR.why,
+                             live: false, skipped: true, liveWhy: dec.why };
+          renderFetchHud();
+          window.__ROAD_HUD_PREFIX__ = vtext("bundle", { n: nb });
+          if (roadEl()) roadEl().textContent = window.__ROAD_HUD_PREFIX__;
+          renderRoadHud();
+          /* 包也失败（网络/解析）时才额外说一句 —— 但**仍然不说**"这一带没有路" */
+          if (bundleErr) errs.push("bundle-only " + bundleErr.slice(0, 60));
+          return;
+        }
         if (roadEl()) roadEl().textContent = vtext("pending");
         let roads = { features: [] };
         try { roads = await fetchRoads(rRoads); } catch (e) {
@@ -2078,12 +2115,18 @@
             所以每一步都有**超时**（AbortController）+ 失败可见（写 errs 与 HUD），绝不静默空着。 */
       const FETCH_TIMEOUT_MS = 45000; // 单次**取楼**上限（冷查 27~33s 是常态；45s 留冗余，超了**说出来**）
       /* 🛣 取路单独一个更短的上限：600m 命中缓存 1s、冷查十几秒；而**>600m 后端要跑 ~94s 才回 0 条**
-         （2026-09-25 实测）⇒ 路的超时给 12s：慢的立刻放弃并**可见地**说失败，绝不拖着整条初始化链。 */
+         （2026-09-25 实测）⇒ 路的超时给 12s：慢的立刻放弃并**可见地**说失败，绝不拖着整条初始化链。
+         🔴 **2026-09-25 补**：机主截图的 `路 失败：超时 12s` 说明"先打一条 600m 试试"在**冷缓存**下
+            必然超时（冷查分钟级）⇒ 现在**默认根本不打 live**（`?live=1` 才打，规则在
+            `wsScene.roadsLiveDecision`），路从**离线路面包 + 预渲染瓦片**来。 */
       const ROADS_TIMEOUT_MS = 12000;
+      /* 🧱 离线包是**静态文件**（本地/静态托管）⇒ 给它一个更短的上限：拿不到就记 failed 并说出来，
+         绝不占用 12s 的 live 预算、也绝不拖住首屏（它一直是后台的）。 */
+      const BUNDLE_TIMEOUT_MS = 6000;
       /* ══ 🧱 **累积式路网**（机主 2026-09-25：「过一会加载的楼房虽然加载，但是之前的没了，
             必须保证视野内的楼房完整，道路完整」）═══════════════════════════════════
          两条来源都往**同一个仓库**里并（`wsFeatureStore` 的纯逻辑）：
-           · live：一条 `/api/roads?r=600`（源上限；**一次刷新只打一条**，任务 A 已否决分块）；
+           · live：一条 `/api/roads?r=600`（源上限；**默认不发**，`?live=1` 才打；任务 A 已否决分块）；
            · **离线路面包** `/roadsbundle/<格>.json`（静态文件，按视野取最近的几格，**不打 Overpass**）。
          ⇒ 路不会"新的一来旧的没了"；视野走过的格子都留着（`retainNear` 只丢"视野外一圈"之外的）。
          🔴 上限（帧率护栏）：`ROADS_STORE_CAP` 条；超了按离视野中心距离淘汰（可数的口径，HUD 报出来）。 */
@@ -2174,7 +2217,7 @@
         bundleState.pending += batch.length;
         for (const cell of batch) {
           try {
-            const r = await fetchWithTimeout("/roadsbundle/" + cell.key + ".json", ROADS_TIMEOUT_MS);
+            const r = await fetchWithTimeout("/roadsbundle/" + cell.key + ".json", BUNDLE_TIMEOUT_MS);
             if (r.status === 404) { bundleState.missing.add(cell.key); continue; }
             if (!r.ok) throw new Error("HTTP " + r.status);
             const j = await r.json();
@@ -2317,6 +2360,12 @@
         const tag = (s) => {
           if (!s) return "未取";
           if (s.err) return `失败：${s.err}`;
+          /* 🛣 **live 默认不发**（offline-first）：这一格不许写"未取"（那是"没做"的意思），
+             要写清"没发现场请求 + 路从哪来"—— 判词纪律：没取 ≠ 没有 ≠ 失败。 */
+          if (s.skipped) {
+            const nn = s.n === null || s.n === undefined ? "数不出来" : String(s.n);
+            return `离线包 offline-first（**未发 /api/roads**；仓库 ${nn} 条；要现场取数加 ?live=1）`;
+          }
           const n = s.n === null || s.n === undefined ? "数不出来" : (s.n === 0 ? "0（已量）" : String(s.n));
           const secs = s.ms === null || s.ms === undefined ? "?" : (s.ms / 1000).toFixed(1) + "s";
           const ch = s.cached === true ? "缓存命中" : (s.cached === false ? "实时取数" : "缓存：数不出来");
@@ -2342,6 +2391,8 @@
           `可用上限 ${lim === null ? "数不出来" : lim + "m"}` + (v && v.limitWhy ? "：" + v.limitWhy : ""),
           "远景**不靠实时取数**（源扛不住）：看预渲染瓦片（`?lod=1`）",
           "🛣 取路另有更严的源上限 600m（实测 ≥800m 后端 79~100s 后回空）—— 所以路的半径**不与楼共用**",
+          "🛣 **默认 0 条 Overpass**（offline-first）：现场冷查是分钟级（分块实测 17.6~56.2s/块、4 块 1 失败），"
+            + "600m 只有缓存命中才 0.1~1s ⇒ 路走**离线路面包**（静态文件）+ **预渲染瓦片**；`?live=1` 才现场取数",
           "🧩 **不做分块**（把 600m 的块铺 9 块凑出 1.3km）：冷块 17.6~56.2s、4 块里 1 块失败，"
             + "而缓存只对「回到同一格」有效（视野一平移就换冷格子）⇒ 远处的路**看预渲染瓦片**",
         ].filter(Boolean).join("\n");
@@ -2949,6 +3000,9 @@
           fetch: { view: fetchStat.view, bld: fetchStat.bld, road: fetchStat.road, hud: (function () { try { return $("m-fetch").textContent; } catch (e) { return null; } })() },
           /* 🧱 累积仓库 + 离线路面包（机主 2026-09-25：「之前的没了…必须保证视野内完整」） */
           roads: {
+            live: { param: LIVEON, on: window.__ROADS_LIVE__ === undefined ? null : !!window.__ROADS_LIVE__,
+                    overpass: (window.__ROADS_OVERPASS_N__ === undefined ? null : window.__ROADS_OVERPASS_N__),
+                    why: window.__ROADS_LIVE_WHY__ || null },
             store: (function () { try { const st = roadsStoreOf(); return st ? st.stats() : null; } catch (e) { return null; } })(),
             noStore: window.__ROADS_NO_STORE__ || null,
             bundle: { have: bundleState.have.size, missing: bundleState.missing.size, failed: bundleState.failed.size, pending: bundleState.pending },

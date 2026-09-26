@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v67";
+      const BUILD = "ws3dshow-2026-09-26-v69";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1793,94 +1793,46 @@
       }
 
       /* ══════════════════════════════════════════════════════════════════════════
-         🌊🌳 **真水系 / 绿地**（机主选的方向：「我们**自己画**」）
+         🌊🌳 **真水系 / 绿地** —— 规则**全在共享真源** `wsGwLayer`（PR 门禁 C1：宿主不许有第二份实现）。
          · 数据 = `/gwbundle/<格>.json`（`world_map/gw_bundle.py` 从 OSM/Overpass 取的真多边形，ODbL）；
          · 为什么必须自己画：Esri 底图在 z17 这一带两个服务都只给占位图（实测同一张 2521B）；
-         · 颜色**只从主题取**（`ai.water` / `ai.park` —— 与预渲染瓦片里的示意水绿同色系）；
-           主题里取不到 ⇒ **如实报错、不画**（绝不硬编码色号，也绝不悄悄用别的颜色）；
-         · 图层压在**楼与路下面**（先建 water/green，再让 `bld-*` 盖上）。
+         · 格键 / 取数 / 归一化 / 配色 / 层序 / 署名 / 判词**都在模块里**（这一页一行规则都不写）；
+         · 这一页只做三件**结构性**的事：把 map/视野/主题/取数递进去 → 判词写进 HUD → 快照挂 `__GW__`。
+         ⚠️ 2026-09-26「抽共享真源」：抽之前这段是**内联原型**（这一页 = 试验台，App 才是 PR 结构）。
+            抽的动作**只搬规则、不动观感**：HUD 文案与数字逐字不变（判词那一行由 `gwVerdictLine()` 给）。
          ══════════════════════════════════════════════════════════════════════════ */
       const GW_ON = !/[?&]gw=0/.test(location.search);
-      let gwIndex = null, gwLoaded = null, gwErr = 0;
-      function gwPick(o, path) {
-        let cur = o;
-        for (const k of path.split(".")) { if (!cur || typeof cur !== "object") return null; cur = cur[k]; }
-        return typeof cur === "string" ? cur : null;
-      }
-      function gwColors() {
-        const first = (paths) => { for (const p of paths) { const v = gwPick(THEME, p); if (v) return v; } return null; };
-        return {
-          water: first(["themes.anime.ai.water", "ai.water", "look.ai.water", "themes.night.ai.water"]),
-          green: first(["themes.anime.ai.park", "ai.park", "look.ai.park", "themes.night.ai.park"]),
-        };
-      }
+      let gwLayer = null;
       function gwHud(text) { const el = $("m-gw"); if (el) el.textContent = text; }
+      /** 建那**一个** gw 实例（规则全在模块里；这里只递宿主自己的四样东西：地图/视野/主题/取数） */
+      function gwEnsure() {
+        if (gwLayer) return gwLayer;
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.createGwLayer !== "function") {
+          /* 自愈口径与别的层一致：缺符号时**说清是"模块旧"还是"真没有"**（`tfState` 是自愈记录） */
+          gwHud("🌊🌳 水/绿地 数不出来：模块缺 createGwLayer（" + tfState + "）");
+          return null;
+        }
+        gwLayer = TFx.createGwLayer({
+          enabled: function () { return GW_ON; },
+          map: function () { return map; },
+          view: bundleView,
+          theme: function () { return THEME; },
+          fetchCell: bundleFetchCell,
+          onHud: function (line) { gwHud(line); },
+          onSnapshot: function (s) { window.__GW__ = s; },
+          onError: function (why) { errs.push(why); },
+        });
+        return gwLayer;
+      }
       async function refreshGw(why) {
-        if (!GW_ON) { gwHud("🌊🌳 水/绿地 关（?gw=0）"); return; }
-        const hud = $("m-gw");
-        try {
-          if (!gwIndex) {
-            const r = await fetch("/gwbundle/index.json?v=" + encodeURIComponent(BUILD), { cache: "no-store" });
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            gwIndex = await r.json();
-          }
-        } catch (e) { gwHud("🌊🌳 水/绿地 数不出来：索引取不到（" + String(e).slice(0, 60) + "）"); return; }
-        const deg = Number(gwIndex.cellSize) || 0.05;
-        const b = map.getBounds();
-        const keys = [];
-        for (let w = Math.floor(b.getWest() / deg) * deg; w <= b.getEast(); w = +(w + deg).toFixed(6)) {
-          for (let s = Math.floor(b.getSouth() / deg) * deg; s <= b.getNorth(); s = +(s + deg).toFixed(6)) {
-            const k = w.toFixed(5) + "_" + s.toFixed(5) + "_" + deg.toFixed(2);
-            if (gwIndex.cells && gwIndex.cells[k]) keys.push(k);
-          }
+        const L = gwEnsure();
+        if (!L) return;
+        try { await L.refresh(why); }
+        catch (e) {
+          /* 模块**永不抛**（失败都变成判词里的"数不出来：…"）；这一层是最后一道兜底，绝不静默 */
+          gwHud("🌊🌳 水/绿地 数不出来：" + String(e).slice(0, 60));
         }
-        const used = keys.slice(0, 6);
-        const feats = { water: [], green: [] };
-        let got = 0; gwErr = 0;
-        for (const k of used) {
-          try {
-            const d = await (await fetch("/gwbundle/" + k + ".json", { cache: "no-store" })).json();
-            got++;
-            for (const f of (d.f || [])) {
-              const kind = f.k === "water" ? "water" : "green";
-              for (const ring of (f.r || [])) {
-                if (!Array.isArray(ring) || ring.length < 3) continue;
-                const first = ring[0], last = ring[ring.length - 1];
-                const closed = (first[0] === last[0] && first[1] === last[1]) ? ring : ring.concat([first]);
-                feats[kind].push({ type: "Feature", properties: { n: f.n || null }, geometry: { type: "Polygon", coordinates: [closed] } });
-              }
-            }
-          } catch (e) { gwErr++; }
-        }
-        const col = gwColors();
-        if (!col.water || !col.green) {
-          gwHud("🌊🌳 水/绿地 数不出来：主题里没有 ai.water / ai.park（不硬编码色号）");
-          return;
-        }
-        const specs = [
-          { id: "gw-water", color: col.water, data: feats.water },
-          { id: "gw-green", color: col.green, data: feats.green },
-        ];
-        let beforeId = null;
-        try {
-          const ls = (map.getStyle() || {}).layers || [];
-          const b0 = ls.find(function (l) { return String(l.id).indexOf("bld") === 0; });
-          beforeId = b0 ? b0.id : null;
-        } catch (e) { beforeId = null; }
-        for (const sp of specs) {
-          const src = { type: "geojson", data: { type: "FeatureCollection", features: sp.data } };
-          try {
-            if (map.getSource(sp.id)) map.getSource(sp.id).setData(src.data);
-            else {
-              map.addSource(sp.id, src);
-              map.addLayer({ id: sp.id, type: "fill", source: sp.id,
-                paint: { "fill-color": sp.color, "fill-outline-color": sp.color } }, beforeId || undefined);
-            }
-          } catch (e) { errs.push("gw " + e); }
-        }
-        gwLoaded = { cells: used.length, hit: got, err: gwErr, water: feats.water.length, green: feats.green.length };
-        window.__GW__ = Object.assign({ on: GW_ON, index: (gwIndex && gwIndex.cellCount) || null, attribution: (gwIndex && gwIndex.attribution) || null }, gwLoaded);
-        gwHud("🌊🌳 水 " + feats.water.length + " 面 · 绿 " + feats.green.length + " 面（真数据 · 格 " + got + "/" + used.length + (gwErr ? " · 失败 " + gwErr : "") + "）");
       }
 
       function refreshLabels(why) {
@@ -3189,12 +3141,39 @@
       }
 
       /** 三条管道的**共同装配**（少一处能写歪的地方）：store / 视野 / fetch / flush / 淘汰半径 */
+      /* 🧊♻️ 两个耗时开关的**取值**：默认按批准值（300ms / 3 格），但**可以从 URL 覆盖** ——
+         为什么必须有这个口：这两个开关的效果只能**同机同版本 A/B** 才算数
+         （跨进程跑两次的绝对时间会被后台编译之类的东西污染，我第一轮就撞上过）。
+         口径：`?coal=0` / `?pcache=0` ⇒ **逐字节退回老行为**（也是出问题时的逃生门）；`?coal=600` 之类照给。 */
+      function qnum(name, dflt) {
+        try {
+          const m = new RegExp("[?&]" + name + "=(-?[0-9.]+)").exec(location.search);
+          if (!m) return dflt;
+          const v = Number(m[1]);
+          return isFinite(v) && v >= 0 ? v : dflt;
+        } catch (e) { return dflt; }
+      }
+      const COAL_MS = qnum("coal", 300);
+      const PCACHE_CELLS = qnum("pcache", 3);
+
       function makeFeed(kind, store, flush, margin) {
         const TFx = window.__TF__;
+        /* 🧊♻️ **两个耗时开关**（机主 2026-09-26「加载慢/卡顿」；同日实测后的接线）：
+           · `flushCoalesceMs: 300`（`?coal=`）—— 一次 flush = 把**整仓**再交给 MapLibre 一次
+             （实测路 637ms / 楼 253ms 中位）；一次变焦连着到好几批 ⇒ 300ms 窗口里到齐的**只画一次**。
+             画出来的最终内容一样，只是少搬几次（k 批的累计搬运量从 k²/2 降到约 k/2）。
+             ⚠️ **每一条管道的第一次 flush 不走窗口**（首屏关键路径），模块里钉着这条。
+           · `parsedCacheCells: 3`（`?pcache=`）—— 仓库有上限（楼 12,000 栋 ≈ 2~4 格），一格被淘汰后
+             回头就是一次完整的"下载 1.78MB + `JSON.parse` 350ms"；缓存最近 3 格的**已解析要素**
+             ⇒ 直接并回（实测中位 **8.5ms**）。
+             ⚠️ 这是**拿内存换时间**（3 格 ≈ 最多 3 万个要素对象）；不想要就 `?pcache=0`。
+           两个开关的实况都能在 `feed.facts()` / `pmSnapshot().context` 里核（不是嘴上说开了）。 */
         return TFx.createBundleFeed({
           kind: kind, store: store, view: bundleView, fetchCell: bundleFetchCell, flush: flush,
           retainRadiusM: function () { return Math.max(2000, Math.round((viewHalfMeters() || 0) * margin)); },
           onError: function (why) { errs.push(why); },
+          flushCoalesceMs: COAL_MS,
+          parsedCacheCells: PCACHE_CELLS,
         });
       }
 

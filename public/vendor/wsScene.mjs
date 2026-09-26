@@ -1396,6 +1396,10 @@ var WS_BLD_CELL_DEG = 0.02;
 function capBuildingsPerCell(feats, input = {}) {
   const size = Number.isFinite(input.cellDeg) && input.cellDeg > 0 ? input.cellDeg : WS_BLD_CELL_DEG;
   const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
+  const rawMin = Number(input.minInView ?? 0);
+  const minInView = Number.isFinite(rawMin) ? Math.max(0, Math.floor(rawMin)) : 0;
+  const b = input.bounds ?? null;
+  const hasBounds = !!(b && typeof b.getWest === "function" && typeof b.getSouth === "function" && typeof b.getEast === "function" && typeof b.getNorth === "function" && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
   const byCell = /* @__PURE__ */ new Map();
   let noPoint = 0;
   for (const f of feats) {
@@ -1407,34 +1411,69 @@ function capBuildingsPerCell(feats, input = {}) {
     const w = Math.floor(pt[0] / size) * size;
     const s = Math.floor(pt[1] / size) * size;
     const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? "") };
+    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? ""), pt };
     const arr = byCell.get(cell);
     if (arr) arr.push(it);
     else byCell.set(cell, [it]);
   }
-  const chosen = [];
+  const base = [];
+  const wantFloor = hasBounds && minInView > 0;
+  const leftovers = [];
   const rows = [];
   let dropped = 0;
   for (const cell of [...byCell.keys()].sort()) {
     const arr = byCell.get(cell);
     arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
     const take = arr.slice(0, cap);
-    for (const x of take) chosen.push(x.f);
+    for (const x of take) base.push(x);
+    if (wantFloor) leftovers.push(arr.slice(cap));
     rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
     dropped += arr.length - take.length;
   }
+  let inView = null;
+  let floorAdded = 0;
+  let floorShort = null;
+  const added = [];
+  if (hasBounds) {
+    const west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
+    const inside = (pt) => pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
+    inView = 0;
+    for (const x of base) if (inside(x.pt)) inView += 1;
+    let need = Math.max(0, minInView - inView);
+    if (wantFloor) {
+      for (const arr of leftovers) {
+        if (need <= 0) break;
+        for (const x of arr) {
+          if (!inside(x.pt)) continue;
+          added.push(x.f);
+          floorAdded += 1;
+          need -= 1;
+          if (need <= 0) break;
+        }
+      }
+    }
+    floorShort = need;
+  }
+  const baseFeats = base.map((x) => x.f);
+  const out = floorAdded > 0 ? baseFeats.concat(added) : baseFeats;
+  const viewSeg = hasBounds ? ` · 视野内 ${inView}（下限 ${minInView} · 补 +${floorAdded} / 仍差 ${floorShort}）` : minInView > 0 ? ` · 视野内 **数不出来**（没给 bounds ⇒ 补不了，一栋没补）` : "";
   return {
-    features: chosen,
+    features: out,
     stats: {
       considered: feats.length,
       cells: byCell.size,
       cap,
       cellDeg: size,
       byCell: rows,
-      chosen: chosen.length,
+      chosen: out.length,
+      baseChosen: baseFeats.length,
       dropped,
       noPoint,
-      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${chosen.length} 栋（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`
+      inView,
+      minInView,
+      floorAdded,
+      floorShort,
+      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${out.length} 栋` + (floorAdded > 0 ? `（冻结 ${baseFeats.length} + 视野补 ${floorAdded}）` : "") + `（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km` + viewSeg
     }
   };
 }

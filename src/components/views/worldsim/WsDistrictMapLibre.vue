@@ -242,7 +242,23 @@
     LOD_NEAR_ZOOM,
   } from "./wsScene";
 import { WS_BLD_VECTOR_MINZOOM } from "./wsDistrictScene";
-import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
+/* 🏙🎨 **挑选/冻结编排 + 美术取参**（2026-09-26 抽出的两份共享真源，**代拍页调的就是这一份**）：
+   机主真机原话：「**App 页用的建筑模型不是 art1，每次滑动建筑都变了，名字也没有**」——
+   实测两半都在这两行上：① App 原来用 `pickBuildingsForView`（**按视野**挑、没有冻结）⇒ 视野一变楼就变；
+   ② App 只有 `bldLayerSpecsFor(theme, tier)` 两个参数，而代拍页还带 `artRamp`/outline/vgrad/opacity/stops
+   ⇒ 同一个主题、两页喂进同一份装配函数的**输入不同**。现在两边调**同一份**：
+   `createBldPickStore()` / `bldArtParamsOf()` / `bldCapForCellDeg()` / `parseBldnParam()` / `parseInViewParam()`。 */
+import {
+  createBldPickStore,
+  bldCapForCellDeg,
+  parseBldnParam,
+  parseInViewParam,
+  WS_BLD_CELL_CAP_REF_DEG,
+  type BldPickStats,
+} from "./wsBldPickStore";
+import { bldArtParamsOf, parseArtParam, type BldArtThemeLike } from "./wsArtParams";
+/* 🏙 挑选的**入参类型**（`wsBuildingPick` 的纯函数类型）；实际编排在上一行那个 store 里 */
+import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* 🎬🏢 **小区级 3D 装配的共享真源**（`wsDistrictScene.ts`，2026-09-25 切片 A 从本组件**搬家**过去）：
      `districtStyleOf`（原本地 `makeStyle`）、`bldLayerSpecsFor`（原 `bldLayerSpecs`）、
      `applyBuildingsTo` + `flushBldStore` / `flushRoadsStore`（原 `applyBuildings`/`flushBld`/`flushRoads`）。
@@ -298,6 +314,23 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     readDemGrid,
     tileContours,
   } from "@/composables/wsContour";
+
+  /* ══ 🏙🎨 **两页一致的取参**（2026-09-26）—— App 侧不再自己发明「画几栋 / 什么美术」 ══════════
+     机主拍板口径：**代拍页和 App 页必须完全一样**（两页共用同一份实现 + 同一套参数）。
+     所以这里的三个数**全部由共享真源解析**，默认值与代拍页**逐字相同**：
+       · `?art=`      → `parseArtParam`（默认 1；2 = 高调平涂 + 近白高段，3 = 再加天空/raster 调色）
+       · `?bldn=`     → `parseBldnParam`（默认 null = 按格面积等比缩：0.05° ⇒ 100、0.01° ⇒ 4）
+       · `?inview=`   → `parseInViewParam`（默认 10 —— 机主「视野内最少有十栋房」）
+     ⚠️ App 是 hash 路由（`#/worldsim?art=2`）⇒ 查询串可能在 **hash 里**，所以两处都读。
+     ⚠️ 这是**调试口**（A/B 用），不是"App 里塞状态出口"：默认值 = 代拍页默认值，不传就零影响。 */
+  function wsQuery(): string {
+    try { return String(location.search || "") + "&" + String(location.hash || ""); } catch { return ""; }
+  }
+  const WS_ART_LEVEL = parseArtParam(wsQuery());
+  /** `?bldn=` 显式钉住的值（null = 按面积算）；两个宿主读的是**同一个解析器** */
+  const WS_BLDN_PIN = parseBldnParam(wsQuery());
+  /** 视野内至少几栋（机主「最少十栋房」；`?inview=` 可 A/B） */
+  const WS_BLD_INVIEW = parseInViewParam(wsQuery());
 
   const props = withDefaults(
     defineProps<{
@@ -2873,6 +2906,45 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     }
   }
 
+  /* ══ 🏙🎨 与代拍页**共用**的两件取参（2026-09-26 抽真源后接线；这边只留"从哪读"） ══════════ */
+
+  /**
+   * 🎨 把 **art 档**应用到主题上再交给 `bldLayerSpecsFor`（页面那边也是"先取参、再建 specs"）。
+   * `art=1` ⇒ `bldArtParamsOf().ramp` 就是 `theme.ramp` **那个引用**（恒等）⇒ 返回的主题逐字段与原来相同。
+   * 取参失败（主题为 null 等）⇒ 原样返回，不编一个主题出来。
+   */
+  function artTheme(t: WsMapTheme | null): WsMapTheme {
+    if (!t) return t as unknown as WsMapTheme;
+    try {
+      const p = bldArtParamsOf(t as unknown as BldArtThemeLike, { art: WS_ART_LEVEL });
+      return p.ramp === (t as unknown as BldArtThemeLike).ramp ? t : { ...t, ramp: p.ramp };
+    } catch {
+      return t;
+    }
+  }
+
+  /** 🏙 挑选/冻结编排器（**整屏一份实例** ⇒ 冻结集跨帧、跨视野保持 —— 这就是"同一格永远同一批"）。 */
+  let bldPickStoreInst: ReturnType<typeof createBldPickStore> | null = null;
+  function bldPickStore(): ReturnType<typeof createBldPickStore> | null {
+    try {
+      if (!bldPickStoreInst) bldPickStoreInst = createBldPickStore();
+      return bldPickStoreInst;
+    } catch { return null; }
+  }
+
+  /**
+   * 🧱 **区块/数据格边长（度）** —— 与代拍页 `bldCellDeg()` **同一口径**：
+   * 包自报的 `index.cellSize`（`feed.facts().cellDeg`）优先，读不到才退回 0.05（老包 / 索引还没读到）。
+   * 🔴 绝不写死：分片包里格是 0.01°，写死 0.05 会让"同一个子格"的键两页对不上。
+   */
+  function bldCellDegNow(): number {
+    try {
+      const d = bldFeed.facts().cellDeg;
+      if (typeof d === "number" && isFinite(d) && d > 0) return d;
+    } catch { /* 落兜底 */ }
+    return WS_BLD_CELL_CAP_REF_DEG;
+  }
+
   /**
    * 🧱 **落图（楼）**：仓库并集 →（宿主上妆 `dressBld`）→ **一次 `setData`**。
    * 落图通路本身在共享真源 `wsDistrictScene.flushBldStore()`（PR 标准门禁 C1 要求"宿主只接线"）；
@@ -2888,17 +2960,33 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
         dress: (feats) => dressBld({ features: feats as unknown as BldFeature[] }),
         /* 2D 降级路没有可落的图（临时降级时 map 其实还在，但那时画的是自绘那块） */
         map: () => (renderKind.value === "fallback2d" ? null : (map as BldMapLike | null)),
-        specs: () => bldLayerSpecsFor(theme.value, themeTier.value),
+        /* 🎨 **美术取参**：与代拍页同一份（`bldArtParamsOf`）—— `?art=2` 把色阶高段推近白；
+           `art=1` 时 `ramp` 是**主题那个引用**（恒等）⇒ 默认观感一个字段都不变。
+           为什么要在宿主这一层换 ramp：`bldLayerSpecsFor(theme, tier)` 只吃主题，
+           而"art 档"是**取参**（页面那边也是先取参再建 specs）⇒ 两边喂进去的主题逐字段相同。 */
+        specs: () => bldLayerSpecsFor(artTheme(theme.value), themeTier.value),
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
-        /* 🏙 **近景按视野挑楼**（机主：上限 100 栋、随视野刷新）：只有近景才挑；远景走预渲染瓦片，挑它没意义。
-           规则在共享真源 `wsBuildingPick`，这里只给"当前视野 + 上限"。 */
-        pickNearView: (() => {
+        /* 🏙 **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`：**按格挑 + 按格冻结 + 视野补齐**）。
+           🔴 2026-09-26 改（机主真机「**每次滑动建筑都变了**」）：原来这里是
+           `pickNearView` → `pickBuildingsForView`（**按视野**挑、**没有冻结**）⇒ 视野一变那批楼就换了一批，
+           而代拍页早就是"按格挑 + 按格冻结"那套 ⇒ 两页不是一个东西。现在两页调**同一个** store。
+           近景才挑（远景走预渲染瓦片，挑它没意义）—— 阈值与楼房矢量层**同一个共享常量**。 */
+        pick: (() => {
           try {
             const z = map ? map.getZoom() : null;
-            /* 与楼房矢量层的 minzoom 用**同一个共享常量**（别再各写一份 —— 13.5 那次就是两处阈值不一致） */
             if (z === null || z < WS_BLD_VECTOR_MINZOOM) return null;
-            const b = map!.getBounds();
-            return { bounds: b, center: map!.getCenter(), cap: WS_BLD_VIEW_CAP };
+            const store = bldPickStore();
+            if (!store) return null;
+            /* 一轮只读一次（与代拍页 `BLDCELL`/`BLDN` 同一口径）：保证"冻结键 / 挑选 / 分组"三者同值 */
+            const cellDeg = bldCellDegNow();
+            const cap = bldCapForCellDeg(cellDeg, WS_BLDN_PIN);
+            return (feats: readonly BundleBuildingFeature[]) => store.pick({
+              features: feats as unknown as PickFeature[],
+              cap,
+              cellDeg,
+              bounds: map ? (map.getBounds() as unknown as PickBounds) : null,
+              minInView: WS_BLD_INVIEW,
+            }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
           } catch { return null; }
         })(),
         onPicked: (s) => { bldPickWhy = s.why; try { renderBundleHud(); } catch { /* HUD 失败不影响落图 */ } },
@@ -3028,20 +3116,50 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     renderBundleHud();
   }
 
+  /**
+   * 📦 **取一个包的署名原句** —— **目录由 feed 的候选表决定**，这里不许自己拼路径。
+   *
+   * 🔴 2026-09-26 修的真 bug：这里原来三处**直连** `loadBundleIndex(fetchCell, kind)`（不传 dir）
+   * ⇒ 它只用 `spec.dir`（**老包目录那一个**），而**页面走的是 feed 的候选表**
+   * （`bldbundle-002` 细格包在前、退回 `bldbundle`）。
+   * ⇒ 后果：**老包一删，App 会"署名取不到"而页面正常**（署名是 ODbL 合规项，不能少）。
+   *
+   * 现在：① 先读 feed 自己已经读到的索引事实（`facts().index.attribution`，它走的就是候选表，已读 ⇒ 零请求）；
+   *      ② feed 还没读（首屏 `refreshBundles` 与署名是**并发**的）⇒ 按 **feed 给出的候选表**
+   *         （`facts().dirs`）逐个目录试读 —— 顺序与 feed 完全一致，**不在这里写第二份目录名单**。
+   */
+  async function attributionOfFeed(
+    feed: { facts(): { dirs?: string[]; index: { attribution: string | null } } },
+    kind: string
+  ): Promise<string> {
+    try {
+      const a = feed.facts().index.attribution;
+      if (a) return a;
+    } catch { /* 落 ② */ }
+    let dirs: string[] = [];
+    try { dirs = feed.facts().dirs || []; } catch { dirs = []; }
+    for (const d of dirs) {
+      try {
+        const f = await loadBundleIndex(fetchCell, kind as never, d);
+        const a = f.attribution || f.source;
+        if (a) return a;
+      } catch { /* 试下一个目录 */ }
+    }
+    return "";
+  }
+
   /** 🔴 署名（ODbL 硬要求）：句子**取自包里的 `index.json`**（导出脚本写的那句原话），不在这里重写 */
   async function loadBundleAttribution(): Promise<void> {
     try {
-      /* 🌊 水/绿地也一起念（同一个 `loadBundleIndex`，第三句也是包里的原话；
-         `/gwbundle/index.json` 与 gw 模块读的是**同一个 URL** ⇒ 同一页里不会真下第二遍） */
-      const [b, r, g] = await Promise.all([
-        loadBundleIndex(fetchCell, "bld"),
-        loadBundleIndex(fetchCell, "roads"),
-        loadBundleIndex(fetchCell, "gw"),
+      /* 🌊 水/绿地那句由 **gw 层自己的 facts** 给（它内部读的就是同一个 `/gwbundle/index.json`，
+         且已经走完候选目录判定 ⇒ 这里再读一遍等于第二份口径）。 */
+      const [b, r] = await Promise.all([
+        attributionOfFeed(bldFeed, "bld"),
+        attributionOfFeed(roadsFeed, "roads"),
       ]);
-      /* ⚠️ 优先用**可机读的** `attribution`（导出器写的那句常量），老包没有该字段才退回 `source`
-         —— 两处口径必须一致：代拍页读的也是同一对字段。 */
-      const lines = [b.attribution || b.source, r.attribution || r.source, g.attribution || g.source]
-        .filter((x): x is string => !!x);
+      let g = "";
+      try { g = gwLayer.facts().attribution || ""; } catch { g = ""; }
+      const lines = [b, r, g].filter((x): x is string => !!x);
       stats.attribution = lines.join(" · ");
       /* 取不到就**如实说取不到**（不编一句"© Overture"充数；署名是合规项，不能猜） */
       if (!lines.length) stats.attribution = "离线包署名取不到（index.json 没拿到）";

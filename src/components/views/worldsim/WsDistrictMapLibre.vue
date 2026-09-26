@@ -3611,6 +3611,14 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
         } catch {
           /* 收不了相机就保持默认视野 */
         }
+      } else {
+        /* 🆕 2026-09-26（父代理批准的一行，**读数诚实**问题）：
+           上面那段只在"给了 adcode"（有驻地/区界 bbox）时才跑，而**新入口 `/worldsim`
+           故意不传 adcode**（城市数据按城市包来，没有"区县"这一级）⇒ `stats.mode` 会一直停在
+           初值「初始化…」，尽管地图早就跑起来了（离线格/楼/水绿都在动）。
+           用户与探针都会把「初始化…」读成"还没就绪" —— 那是一句**会骗人的读数**。
+           这里如实换一句：默认机位、没有指定区县。**不改任何行为**（只是给读数赋值）。 */
+        stats.mode = "默认机位（未指定区县）";
       }
       /* 🗄 2026-09-24 已移除：区县边界（`dist-fill` / `dist-line`，"整区铺满"的可读性）。
          代拍页那一屏没有它；机主要"只留代拍页代码"⇒ 这一层不挂。
@@ -3802,7 +3810,21 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     left: 8px;
     bottom: 8px;
     display: flex;
-    gap: 8px;
+    /* 🆕 2026-09-26（机主真机/浏览器截图报「HUD 挤成一团、文字互相压」）：
+       原来这里**没有 `flex-wrap`、也没给子项 `flex-shrink: 0`** ——
+       一行塞不下时浏览器会把每一格**压到内容宽度以下**，文字就溢出自己的盒子、
+       和邻格**互相压**（截图里「初 00 1 18 73」「失败 633 0」这种就是溢出不是两个数）。
+       修法两条（都只是"别压"和"放不下就换行"，**一个信息都没删**）：
+         ① 容器 `flex-wrap: wrap` + `max-width`（右边也留 8px，不许顶出屏幕）；
+         ② 子项 `flex: 0 0 auto` + `white-space: nowrap`（保持原样不压缩）。
+       ⚠️ 句子型的两格（告警 / AI 示意说明）单独放行换行 —— 它们可能比一屏还长，
+          `nowrap` 会把它们顶出屏幕（窄屏 360px 必现）。 */
+    flex-wrap: wrap;
+    align-items: baseline;
+    max-width: calc(100% - 16px);
+    box-sizing: border-box;
+    overflow: hidden;
+    gap: 2px 8px;
     padding: 3px 8px;
     border-radius: 8px;
     background: rgba(10, 16, 24, 0.6);
@@ -3822,6 +3844,24 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     font-size: 11px;
     line-height: 1.6;
     pointer-events: none;
+  }
+  /* 🔴 子项**一律不许被压缩**（见上面 `.ws-dml__hud` 里 2026-09-26 那段）：
+     一压缩文字就溢出盒子 ⇒ 与邻格视觉重叠。
+     `max-width: 100%` 是兜底：单格再长也不会比容器还宽。 */
+  .ws-dml__hud > span,
+  .ws-dml__hud > .ws-dml__theme {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  /* 句子型的两格（告警 `.is-warn` / AI 示意说明 `.is-ai`）允许**格内换行**：
+     它们可能远长于一屏，`nowrap` 会把整条 HUD 顶出屏幕（窄屏 360px 必现）。 */
+  .ws-dml__hud > .is-warn,
+  .ws-dml__hud > .is-ai {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .ws-dml__hud .is-warn {
     color: #ffd28a;

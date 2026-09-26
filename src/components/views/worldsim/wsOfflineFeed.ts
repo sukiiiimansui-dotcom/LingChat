@@ -29,6 +29,9 @@ import type { FeatureStore, LngLat } from "./wsFeatureStore";
 import {
   BLD_BUNDLE_CELL_DEG, PLACES_BUNDLE_CELL_DEG, ROADS_BUNDLE_CELL_DEG,
   bldBundleCellsForView, placesBundleCellsForView, roadsBundleCellsForView,
+  /* 🌊 水/绿地与别的包**同一套格数学**（`floor(x/deg)*deg`）；它没有自己的 `*BundleCellsForView`
+     包装（不加第二个名字 = 少一处能写歪的地方），直接在 `SPECS.gw.plan` 里传格边长。 */
+  bundleCellsForView,
 } from "./wsFeatureStore";
 /* ⏱ 计时尺子（唯一一份，见 `wsPerfMeter`）：管道里"每格取多久 / 解析多久 / 并仓多久"必须可数，
    否则机主那句「加载慢」只能靠感觉 —— 有了它，首屏能拆成"网络 vs 解析 vs 计算"三段。 */
@@ -50,7 +53,11 @@ function netBytesOf(url: string): number | null {
   } catch { return null; }
 }
 
-export type BundleKind = "bld" | "roads" | "places";
+/* 🌊🌳 **水/绿地**也走同一条管道（2026-09-26「搬进 lingchat」）：它是**第四种离线包**，不是特例 ——
+   目录名 / 格尺寸 / 计划 / 解析 / 预算全在下面 `SPECS.gw` 里，于是"索引优先 / 串行取格 / 每格独立超时 /
+   包外与失败分开计"这些规矩**一份都不用再写**（机主选的方向是「自己画」：Esri 底图在这一带
+   两个服务都只给占位图，屏上就没有水也没有绿植）。 */
+export type BundleKind = "bld" | "roads" | "places" | "gw";
 
 /* ══ 与代拍页**同名同值**的接线常量 ═══════════════════════════════════════════════
    它们不是"规则"（规则在 `wsScene`），是这层管道的**预算**：一次取几格、等多久、仓库上限。
@@ -72,6 +79,19 @@ export const PLACES_BUNDLE_MAX_CELLS = 6;
 export const PLACES_STORE_CAP = 3000;
 export const BLD_STORE_CAP = 12000;
 export const ROADS_STORE_CAP = 6000;
+
+/* 🌊🌳 水/绿地的**格边长**：0.05° —— 与 `public/gwbundle/*.json` 里每一格自报的 `cellSize` **实测一致**
+   （index 5 格 / 359 面）。🔴 这个数**只此一份**：前端算格键与"包自报口径"对拍都用它，
+   绝不允许"包里写多少就按多少算"（2026-09-25 那次 0.02/0.05 两套口径的事故，
+   后果是把**有数据**的格说成「包外」—— 把有说成没有）。 */
+export const GW_BUNDLE_CELL_DEG = 0.05;
+/* 水/绿包很小（实测 5 格 / 359 面、单格几十 KB）⇒ 一轮**一次取完**：与代拍页原来"一轮取完再报数"同口径，
+   少一次"格 2/6"的中间态（判词那一行也就不会在首屏闪一下）。 */
+export const GW_BUNDLE_PER_REFRESH = 6;
+/** 视野里最多留几格（与代拍页 `keys.slice(0, 6)` 同值） */
+export const GW_BUNDLE_MAX_CELLS = 6;
+/** 水/绿的仓库上限（帧率护栏的一部分；实测全城 359 面，给足余量） */
+export const GW_STORE_CAP = 4000;
 
 /* ══ 离线包的静态路径（**只这一份**：App 侧谁都不许再拼字面量） ═════════════════════ */
 
@@ -245,6 +265,87 @@ export function bundleRoadsOf(json: unknown): BundleRoadFeature[] {
   return out;
 }
 
+/* ══ 🌊🌳 **水/绿地**：一格包 → 要素（与代拍页抽共享前那段内联代码**逐字同口径**） ═══════════
+   包里的形状（见 `world_map/gw_bundle.py`）：`{ key, cellSize, source, attribution, f: [{k, r, n}] }`
+     · `k` = `"water"` / `"green"`（**只认 water，其余一律算绿地** —— 与页面原实现同一条判断）；
+     · `r` = 环数组；**扁形** = 一环一个要素（多边形），**嵌套形** = `[[外环, 洞…]]` 一组一个要素；
+     · `n` = 名字（可空 —— 名字取不到就不编，填空）。
+   两条纪律：
+     ① **环一定闭合**（首尾点相同；页面原来就是这么补的，闭合与否决定 MapLibre 填不填这一块）；
+     ② **单格自报的 `cellSize` 与常量不符 ⇒ 抛错**（宁可这一格记"失败"，也不把异口径的数字当成正常水面）。 */
+
+export interface BundleGwFeature {
+  type: "Feature";
+  id: string;
+  properties: { name: string | null; kind: "water" | "green"; src: "bundle"; bsrc: "osm" };
+  geometry: { type: "Polygon"; coordinates: number[][][] };
+}
+
+/** 一环（`[[lng,lat], …]`）；空数组/坏形状都返回 false（调用方按"跳过"处理，不抛） */
+function isRing(v: unknown): v is number[][] {
+  return Array.isArray(v) && v.length > 0 && Array.isArray(v[0]) && typeof (v[0] as unknown[])[0] === "number";
+}
+/** 闭合一个环（首尾不同才补第一个点；**不改原数组** —— 包还在别处用） */
+function closeRing(ring: number[][]): number[][] {
+  const first = ring[0], last = ring[ring.length - 1];
+  return first && last && first[0] === last[0] && first[1] === last[1] ? ring.slice() : ring.concat([first]);
+}
+
+export function bundleGwOf(json: unknown): BundleGwFeature[] {
+  const j = json as { key?: unknown; cellSize?: unknown; f?: unknown } | null;
+  const arr = j?.f;
+  /* 🔴 缺 `f` 字段 = **包坏了/取错了** ⇒ 抛错记 failed（可见）；空数组才是"这格确实没有水/绿" */
+  if (!Array.isArray(arr)) throw new Error("gwbundle 里没有 f 数组");
+  /* 🔴 **单格口径对拍**：索引那一层已经拦过一次（`wsGwLayer`），这里再拦一次 ——
+     因为"索引是旧的、格子文件被按新格尺寸重导过"这种情况只有逐格看才看得见。 */
+  const cs = j?.cellSize;
+  if (cs !== undefined && cs !== null && Math.abs(Number(cs) - GW_BUNDLE_CELL_DEG) > 1e-9) {
+    throw new Error(`gwbundle 格尺寸口径不符：包 ${cs}° / 前端 ${GW_BUNDLE_CELL_DEG}°`);
+  }
+  const cell = typeof j?.key === "string" && j.key ? j.key : "";
+  const out: BundleGwFeature[] = [];
+  for (let fi = 0; fi < arr.length; fi++) {
+    const raw = arr[fi] as { k?: unknown; r?: unknown; n?: unknown } | null;
+    if (!raw) continue;
+    const kind: "water" | "green" = raw.k === "water" ? "water" : "green";
+    const rings = Array.isArray(raw.r) ? (raw.r as unknown[]) : [];
+    const name = raw.n === undefined || raw.n === null ? null : String(raw.n);
+    const props = { name, kind, src: "bundle" as const, bsrc: "osm" as const };
+    /* 嵌套形（MultiPolygon：第一个元素是"环"而不是"点"）⇒ **一组一个要素**，带洞；扁形 ⇒ 一环一个要素 */
+    const nested = rings.length > 0 && !isRing(rings[0]);
+    const groups: unknown[][] = nested ? (rings as unknown[][]) : rings.map((r) => [r]);
+    for (let gi = 0; gi < groups.length; gi++) {
+      const parts = groups[gi].filter((r): r is number[][] => isRing(r) && (r as number[][]).length >= 3);
+      if (!parts.length) continue;
+      out.push({
+        type: "Feature",
+        /* 稳定 id 用**包自己的格键** + 位置 ⇒ 同一格重取时能去重（仓库 `merge` 靠它），
+           且不同格之间不会撞（撞了就会被当成重复要素丢掉 —— 那是**少画**，属于"把有说成没有"）。 */
+        id: cell ? `${cell}#${fi}:${gi}` : `${kind}|${parts[0].length}|${parts[0][0][0]},${parts[0][0][1]}`,
+        properties: props,
+        geometry: { type: "Polygon", coordinates: parts.map(closeRing) },
+      });
+    }
+  }
+  return out;
+}
+
+/** 🌊 水/绿要素的 id（`bundleGwOf` 已经给了稳定 id；没有就返回 null ⇒ 仓库如实计 `noId`） */
+export function gwIdOf(f: BundleGwFeature): string | null {
+  return f && f.id ? String(f.id) : null;
+}
+
+/** 🌊 水/绿要素的代表点：**外环**各点平均（淘汰按"离视野中心多远"；取不到 ⇒ null，不参与淘汰也不丢） */
+export function gwPointOf(f: BundleGwFeature): LngLat | null {
+  const ring = f?.geometry?.coordinates?.[0];
+  if (!Array.isArray(ring) || !ring.length) return null;
+  let x = 0, y = 0, n = 0;
+  for (const q of ring) {
+    if (Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1])) { x += q[0]; y += q[1]; n++; }
+  }
+  return n ? [x / n, y / n] : null;
+}
+
 /* ══ 仓库的去重键 / 代表点（`createFeatureStore` 只吃这三个参数 —— 合并与淘汰规则不在这里） ══ */
 
 /** 楼房：稳定 id（取不到返回 null ⇒ 仓库如实计 `noId`，不去重也不丢） */
@@ -370,6 +471,19 @@ const SPECS = {
     sourceKey: (k: string) => `bundle:${k}`,
     unit: "条",
   } as unknown as BundleKindSpec<BundleRoadFeature>,
+  /* 🌊🌳 **水/绿地**（第四种包）：目录 `gwbundle`、格边长 `GW_BUNDLE_CELL_DEG`（= 0.05°）、
+     计划走**同一个** `bundleCellsForView` —— 也就是说"取哪些格"与楼/路/片区名是同一套格数学，
+     差别只有"格边长"这一个参数（口径要漂就一起漂，不会各漂一半）。 */
+  gw: {
+    dir: "gwbundle",
+    cellDeg: GW_BUNDLE_CELL_DEG,
+    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => bundleCellsForView(b, c, maxCells, GW_BUNDLE_CELL_DEG),
+    parse: bundleGwOf,
+    perRefresh: GW_BUNDLE_PER_REFRESH,
+    maxCells: GW_BUNDLE_MAX_CELLS,
+    sourceKey: (k: string) => `gwbundle:${k}`,
+    unit: "面",
+  } as unknown as BundleKindSpec<BundleGwFeature>,
 };
 
 /* ══ 可数口径（HUD/面板只读它 —— 页面不自己数、更不自己编） ═══════════════════════════ */
@@ -500,15 +614,21 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingFlushWhy = "";
   let coalescedFlushes = 0;                  // 被合并掉（没真的 flush）的次数 —— 可数
+  let flushDone = 0;                         // 真 flush 过几次（第一条**不并窗口**，见下）
 
   /** 真的 flush 一次（计时在这里，**合并窗口下的那次也照样记账**） */
   function doFlush(why: string): void {
     const t = pmNow();
+    flushDone += 1;
     try { opts.flush(why); } finally { pmSpan(`feed.flush:${spec.dir}`, pmNow() - t, null, why); }
   }
-  /** 请求 flush：窗口为 0 ⇒ 立即（与老行为逐字节相同）；否则并进窗口 */
+  /**
+   * 请求 flush：窗口为 0 ⇒ 立即（与老行为逐字节相同）；否则并进窗口。
+   * 🔴 **第一条不并**（`flushDone === 0`）：开页那一格是"首屏能不能看见楼"的关键路径，
+   * 合并窗口会白白把它推迟一个窗口（实测 300ms）。首屏要快、后面才谈省。
+   */
   function requestFlush(why: string): void {
-    if (coalesceMs <= 0) { doFlush(why); return; }
+    if (coalesceMs <= 0 || flushDone === 0) { doFlush(why); return; }
     pendingFlushWhy = pendingFlushWhy ? pendingFlushWhy + "+" + why : why;
     if (flushTimer) { coalescedFlushes += 1; return; }        // 已在窗口里 ⇒ 只记账，不再排一个
     flushTimer = setTimeout(() => {

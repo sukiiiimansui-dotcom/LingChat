@@ -33,6 +33,11 @@ export * from "./wsFeatureStore";
    ⚠️ 页面上一次就是因为没走这里、自己写了一套（`bundleIndexOf`/`splitBundleCells`），
    被 `pr_standard_check.py` 的 C1（单一真源）逮住 —— 别再犯。 */
 export * from "./wsOfflineFeed";
+/* 🌊🌳 **真水系 / 绿地**（机主选的"自己画"）：`createGwLayer` / `gwVerdictLine` / `gwColorsOf` /
+   `applyGwLayers` / `gwPlanForView` —— 取格、归一化、配色、层序、署名、判词的**唯一真源**。
+   ⚠️ 页面（`public/ws3dshow.html` 的 `refreshGw()`）与 App 宿主（`WsDistrictMapLibre.vue`）
+   共用这一份；页面那一份从内联改成"只接线"就是为了这条（PR 门禁 C1：不许第二份实现）。 */
+export * from "./wsGwLayer";
 /* 🏷 **地名/楼名标签层**（机主 2026-09-25：「如何实现楼房及区域名字喵」）：分层规则 + 避让 + 优先级 + 只用真名字。
    ⚠️ 纯逻辑；页面只做 DOM 渲染与接线（MapLibre 的 glyphs 文字层在本项目是禁用项）。 */
 export * from "./wsLabels";

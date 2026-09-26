@@ -999,8 +999,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     features: unknown[];
   } {
     /* 色阶跟着主题走（暗色=深蓝→冰蓝；二次元=淡天蓝→近白）。
-       必须在**这里**（渲染前）算好：`color3d` 是写进要素属性的，图层的 paint 只读它。 */
-    const { features, count } = decorateBuildings(fc, theme.value.ramp);
+       必须在**这里**（渲染前）算好：`color3d` 是写进要素属性的，图层的 paint 只读它。
+       🎨 **必须用"取参之后"的色阶**（`artTheme().ramp`）：代拍页 `?bld=2` 那条路传给
+       `decorateBuildings` 的就是 `artRamp(...)`；这里传原始主题的话，`?art=2` 时 App 的 `color3d`
+       与页面**不是同一张色阶**（`art=1` 时 `artTheme().ramp` 就是主题那个引用 ⇒ 默认零改动）——
+       这正是"两页喂进同一份函数的输入不同"那一类，属于本次要消灭的东西。 */
+    const { features, count } = decorateBuildings(fc, artTheme(theme.value).ramp);
     stats.count = count.n;
     stats.height = count.real;
     stats.levels = count.levels;

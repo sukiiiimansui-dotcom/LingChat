@@ -32,7 +32,7 @@ import {
 } from "./wsFeatureStore";
 /* ⏱ 计时尺子（唯一一份，见 `wsPerfMeter`）：管道里"每格取多久 / 解析多久 / 并仓多久"必须可数，
    否则机主那句「加载慢」只能靠感觉 —— 有了它，首屏能拆成"网络 vs 解析 vs 计算"三段。 */
-import { pmMark, pmNow, pmSpan, pmTimeAsync } from "./wsPerfMeter";
+import { pmMark, pmNow, pmSetContext, pmSpan, pmTimeAsync } from "./wsPerfMeter";
 
 /**
  * 这条 URL 的**真实字节数**（从 Resource Timing 读；同源 ⇒ `decodedBodySize` 可用）。
@@ -399,6 +399,13 @@ export interface BundleFeedFacts {
   got: number;
   /** 有没有为这一种包**真的计划过取数**（false ⇒ HUD 写"未取"，而不是编一个 0） */
   asked: boolean;
+  /** 🔴 **被淘汰连累而作废、下一轮会重取的格数**（历史累计）。
+   *  为什么可数：这是"楼没了"的修复代价 —— 每次作废都意味着可能再来一次下载（有解析缓存则只并内存）。 */
+  evictedSources: number;
+  /** ♻️ 已解析要素缓存实况（关着时 `maxCells=0`、命中恒 0 —— **不写"数不出来"**，因为它真是 0） */
+  cache: { cells: number; feats: number; hits: number; maxCells: number };
+  /** 🧊 flush 合并窗口实况（`ms=0` = 老行为：逐批 flush） */
+  coalesce: { ms: number; merged: number };
 }
 
 export interface BundleRefreshReport {
@@ -433,6 +440,25 @@ export interface BundleFeedOptions<T> {
   retainRadiusM: () => number;
   /** 失败原文（给 HUD/面板 —— 不静默空着） */
   onError?: (why: string) => void;
+  /**
+   * 🧊 **flush 合并窗口（ms）**：窗口内到齐的几批**只 flush 一次**（默认 `0` = 老行为，逐批 flush）。
+   *
+   * 为什么（2026-09-26 实测，`~/chk/_perf_base2.json`）：`flush` 是这条管道最贵的一段 ——
+   * 页面侧一次 flush = **全仓库** `setData`（路实测中位 **637ms**、楼 **253ms**），
+   * 而一次变焦会连着到好几批 ⇒ 同一份全量数据被反复交给 MapLibre（k 批 ⇒ 约 k²/2 份）。
+   * 合并窗口把"到齐就画"改成"稍微等一下一起画"：**画出来的最终内容一模一样**，只是少做几次全量搬运。
+   * ⚠️ 窗口越大越省，但"楼出现"的延迟也越大 ⇒ 建议 200~400ms（页面口径自己定，模块不猜）。
+   */
+  flushCoalesceMs?: number;
+  /**
+   * ♻️ **已解析要素缓存（最多几格）**：淘汰之后回头再取同一格时，**直接从内存里拿**，
+   * 不重新下载、更不重新 `JSON.parse`（实测单格 1.78MB / 解析中位 350ms）。
+   *
+   * 为什么需要：仓库有上限（楼 12,000 栋 ≈ 2~4 格），一格被淘汰后回头就是一次完整的"下载 + 解析"。
+   * ⚠️ 这是**拿内存换时间**：默认 `0`（关）。开的话自己评估单格体量 —— 以本机实测的楼包为例，
+   * 一格 ≈ 3,000~11,000 个要素，建议 2~3 格封顶。
+   */
+  parsedCacheCells?: number;
 }
 
 /**
@@ -459,10 +485,68 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
      先读一次 `<包>/index.json` ⇒ 只对"索引里有的格"发请求；索引里没有的格直接记 `missing`（**包外**，
      零请求、且是**读来的事实**）。索引取不到 ⇒ **如实退回**试格子（`indexState="失败"`，HUD 写出来）。 */
   let refused = false;
+  let evictedSources = 0;                     // 被淘汰连累作废、下一轮要重取的格（历史累计）
   let indexFact: BundleIndexFact | null = null;
   let indexState: "未读" | "读取中" | "已读" | "失败" | "口径不符" = "未读";
   let indexWhy: string | null = null;
   let indexPromise: Promise<BundleIndexFact> | null = null;
+
+  /* ══ 🧊 flush 合并窗口（默认 0 = 老行为；见 `BundleFeedOptions.flushCoalesceMs`） ═══════════
+     为什么需要：一次 flush = 页面把**整个仓库**再交给 MapLibre 一次（路实测中位 637ms）。
+     一次变焦会连着到好几批 ⇒ 同一份全量数据被搬 k 次（k 批时累计搬运量 ≈ k²/2 格）。
+     合并窗口把"到齐就画"变成"稍等一起画"：**最终画面一模一样**，只是少搬几次。
+     ⚠️ 窗口里只保留**一条** pending 记录（把 why 串起来），不做队列 —— 队列会让延迟无界。 */
+  const coalesceMs = Math.max(0, Math.floor(Number(opts.flushCoalesceMs || 0)));
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingFlushWhy = "";
+  let coalescedFlushes = 0;                  // 被合并掉（没真的 flush）的次数 —— 可数
+
+  /** 真的 flush 一次（计时在这里，**合并窗口下的那次也照样记账**） */
+  function doFlush(why: string): void {
+    const t = pmNow();
+    try { opts.flush(why); } finally { pmSpan(`feed.flush:${spec.dir}`, pmNow() - t, null, why); }
+  }
+  /** 请求 flush：窗口为 0 ⇒ 立即（与老行为逐字节相同）；否则并进窗口 */
+  function requestFlush(why: string): void {
+    if (coalesceMs <= 0) { doFlush(why); return; }
+    pendingFlushWhy = pendingFlushWhy ? pendingFlushWhy + "+" + why : why;
+    if (flushTimer) { coalescedFlushes += 1; return; }        // 已在窗口里 ⇒ 只记账，不再排一个
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const w = pendingFlushWhy; pendingFlushWhy = "";
+      try { doFlush(w); } catch { /* flush 抛错不影响管道（页面自己会记 errs） */ }
+    }, coalesceMs);
+  }
+
+  /* ══ ♻️ 已解析要素缓存（默认 0 = 关；见 `BundleFeedOptions.parsedCacheCells`） ═══════════════
+     只缓存"取到并解析成功"的格子要素；**已经解析过的东西不该因为仓库淘汰而重来一遍**
+     （实测单格 1.78MB / `JSON.parse` 中位 350ms）。Map 的插入序当 LRU 用（取用即刷新）。 */
+  const cacheCells = Math.max(0, Math.floor(Number(opts.parsedCacheCells || 0)));
+  const parsedCache = new Map<string, T[]>();
+  let cacheHits = 0;
+  function cacheTake(k: string): T[] | null {
+    const v = parsedCache.get(k);
+    if (!v) return null;
+    parsedCache.delete(k); parsedCache.set(k, v);            // 刷新 LRU 位置
+    return v;
+  }
+  function cachePut(k: string, v: T[]): void {
+    if (cacheCells <= 0) return;
+    parsedCache.delete(k); parsedCache.set(k, v);
+    while (parsedCache.size > cacheCells) {
+      const first = parsedCache.keys().next();
+      if (first.done) break;
+      parsedCache.delete(first.value);
+    }
+  }
+  /** 缓存里现在有几格 / 合计几个要素（可数口径，进快照与 facts） */
+  function cacheStats(): { cells: number; feats: number; hits: number; maxCells: number } {
+    let feats = 0;
+    for (const v of parsedCache.values()) feats += v.length;
+    return { cells: parsedCache.size, feats, hits: cacheHits, maxCells: cacheCells };
+  }
+  if (cacheCells > 0) pmSetContext(`feed.parsedCache:${spec.dir}`, cacheCells);
+  if (coalesceMs > 0) pmSetContext(`feed.flushCoalesce:${spec.dir}`, coalesceMs);
 
   function ensureIndex(): Promise<BundleIndexFact> {
     if (indexPromise) return indexPromise;
@@ -514,6 +598,9 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       n, have: have.size, missing: missing.size, failed: failed.size,
       pending, cap, wanted, capped, got, asked,
       refused: refused, cellDeg: spec.cellDeg,
+      evictedSources,
+      cache: cacheStats(),
+      coalesce: { ms: coalesceMs, merged: coalescedFlushes },
       index: {
         state: indexState,
         cellSize: indexFact ? indexFact.cellSize : null,
@@ -568,6 +655,18 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       const url = bundleCellUrl(opts.kind, cell.key);
       const t0 = pmNow();
       try {
+        /* ♻️ **先看缓存**（默认关）：淘汰之后回头再取同一格 ⇒ 不下载、不解析，直接并回去。
+           ⚠️ 走缓存也要如实记一笔 span（不然"这一格花了多少"会凭空消失）。 */
+        const hit = cacheTake(cell.key);
+        if (hit) {
+          opts.store.merge(hit, spec.sourceKey(cell.key));
+          cacheHits += 1;
+          have.add(cell.key);
+          got += hit.length;
+          n += hit.length;
+          pmSpan(`feed.cacheHit:${spec.dir}`, pmNow() - t0, null, `${hit.length} 个要素`);
+          continue;
+        }
         const r = await opts.fetchCell(url, BUNDLE_TIMEOUT_MS);
         const tNet = pmNow();
         if (r.status === 404) {
@@ -587,6 +686,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
         pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
+        /* ♻️ 存进"已解析"缓存（默认关）：下次这一格被淘汰后再入镜时，省掉下载 + 解析 */
+        cachePut(cell.key, feats);
         if (have.size === 0) pmMark(`feed.firstCell:${spec.dir}`, { cell: cell.key, bytes: by, n: feats.length });
         have.add(cell.key);
         got += feats.length;
@@ -600,19 +701,22 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         pending -= 1;
       }
     }
-    /* 淘汰只在**超出保留半径/上限**时动手（保留"视野外一圈" ⇒ 来回挪不该重取） */
+    /* 淘汰只在**超出保留半径/上限**时动手（保留"视野外一圈" ⇒ 来回挪不该重取）。
+       🔴 2026-09-26：仓库现在会**连被淘汰波及的来源键一起作废**（`wsFeatureStore.retainNear`）⇒
+       下一轮 `todo` 会把那一格重新排进来（有解析缓存就直接从内存并回去）。 */
     try {
       const c = opts.view().center;
       if (c && Number.isFinite(c.lng) && Number.isFinite(c.lat)) {
-        opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
+        const ev = opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
+        const ds = (ev as { droppedSources?: number } | null)?.droppedSources;
+        if (ds) evictedSources += Number(ds) || 0;
       }
     } catch {
       /* 淘汰失败不影响显示（下一轮再试） */
     }
-    /* ⏱ `flush` 是这条管道最贵的一段嫌疑（页面在里面挑楼 + 上妆 + setData）⇒ 单独记 */
-    const tF = pmNow();
-    opts.flush(`${why}+${batch.length}`);
-    pmSpan(`feed.flush:${spec.dir}`, pmNow() - tF, null, `${batch.length} 格`);
+    /* ⏱ `flush` 是这条管道最贵的一段嫌疑（页面在里面挑楼 + 上妆 + setData）⇒ 单独记。
+       合并窗口开时，这一段会**挪到定时器里**（`requestFlush`），延迟但只做一次。 */
+    requestFlush(`${why}+${batch.length}`);
     return { planned: true, batch: batch.length, got: n, capped: p.capped };
   }
 

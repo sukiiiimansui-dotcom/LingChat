@@ -28,10 +28,15 @@
     <section class="wscg__card">
       <header class="wscg__head">
         <h2 class="wscg__title">{{ t("worldsim.city.title") }}</h2>
-        <p class="wscg__lead">{{ t("worldsim.city.lead") }}</p>
-        <p class="wscg__src">{{ t("worldsim.city.source") }}：<code>{{ store.base }}</code></p>
-        <!-- 🔴 下载源没配（= 默认示例占位）/ 覆盖值坏掉回落时：**说清原因 + 怎么办**（见 srcHint 注释） -->
-        <p v-if="srcHint" class="wscg__srchint">⚠️ {{ srcHint }}</p>
+        <!-- 🔴 正文必须与**真实状态**一致：已装过就不许再说"首次进入需要下载…装过就不再问"
+             （2026-09-26 机主截图抓到：底栏写着「已装：重庆」，正文还在说"首次进入需要下载"） -->
+        <p class="wscg__lead">{{ leadText }}</p>
+        <!-- 🔴 「下载源」这行要能一眼看出"**没配**"：`from === "default"`（占位）时同行补一句
+             「原因 + 怎么办」；配过（param/env/option）就不显示（见 srcHint 注释） -->
+        <p class="wscg__src">
+          {{ t("worldsim.city.source") }}：<code>{{ store.base }}</code>
+          <span v-if="srcHint" class="wscg__srcwarn">{{ srcHint }}</span>
+        </p>
       </header>
 
       <div class="wscg__body">
@@ -168,15 +173,34 @@
   );
 
   /**
-   * 🔴 下载源没配（默认示例占位）/ 覆盖值坏掉回落时的**一行提示** —— 必须**同时**说清
-   * ① **原因**（"未配置下载源，当前是示例占位" / "覆盖值不可用，已回落"）
+   * 🔴 正文（`lead`）**随真实状态变**，不许自相矛盾：
+   *   · 一个都没装 ⇒ 原来那句"首次进入需要下载…装过就直接进地图，不再问"（这一屏的存在理由）；
+   *   · **已装过** ⇒ 改成"已装：<城市名> —— …"，并且**分两种**：
+   *       - 清单读到了（`ok`）：改选 / 重新下载 / 删除就在下面的列表里（确实"在这张表里"）；
+   *       - 清单没读到（`unknown` / `empty`，含正在读）：**不能说"在这张表里"**（那张表根本没渲染），
+   *         改说"已装的数据不受影响，可直接进入地图；可选城市列表状态见下方"。
+   *   ⇒ 底栏那句 `installedSummary` 与这里说的是**同一件事**，两处不会再打架。
+   */
+  const leadText = computed(() => {
+    if (!installed.value.length) return t("worldsim.city.lead");
+    const list = installed.value.map((c) => c.name).join("、");
+    return phase.value === "ok"
+      ? t("worldsim.city.leadInstalled", { list })
+      : t("worldsim.city.leadInstalledNoList", { list });
+  });
+
+  /**
+   * 🔴 下载源**没配**（默认示例占位）/ 覆盖值坏掉回落时的**同一行**提示 —— 必须**同时**说清
+   * ① **原因**（"未配置：占位地址，取不到属预期" / "覆盖值不可用，已回落占位"）
    * ② **怎么办**（`?citybase=` 或构建期 `VITE_WS_CITY_PACK_BASE`）
    * ⇒ 不许含糊成"网络错误"：那会把"没人配真源"说成"网络不好"，用户照着修网络永远修不好。
-   * 判断只看 `store.baseInfo.from`（`wsCityStore` 里已按"参数 > 构建期 > 默认占位"解析并如实标注）。
+   * 判断只看 `store.baseInfo.from`（`wsCityStore` 已按"参数 > 构建期 > 默认占位"解析并如实标注）：
+   *   · `default`（谁都没配）⇒ 显示；· `fallback`（配了但值坏、已回落）⇒ **也显示**（那不是"配好了"，
+   *     且理由必须上屏）；· `param` / `env` / `option`（配好了）⇒ 不显示、不打扰。
    */
   const srcHint = computed(() => {
     const b = props.store.baseInfo;
-    if (b.from === "default") return t("worldsim.city.srcUnset", { base: props.store.base });
+    if (b.from === "default") return t("worldsim.city.srcUnset");
     if (b.from === "fallback") return t("worldsim.city.srcFallback", { why: b.why || b.requested || "" });
     return "";
   });
@@ -341,11 +365,9 @@
   .wscg__src code {
     color: #9fd8ef;
   }
-  /* "下载源没配/坏掉"的那一行：跟警告色，但不抢列表（小字、可换行） */
-  .wscg__srchint {
-    margin: 6px 0 0;
+  /* 「下载源」**同一行**的"未配置/覆盖值坏掉"提示：跟警告色，但不抢列表（小字、可换行） */
+  .wscg__srcwarn {
     color: #ffd479;
-    font-size: 11px;
     word-break: break-all;
   }
   .wscg__body {

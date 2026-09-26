@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v70";
+      const BUILD = "ws3dshow-2026-09-26-v71";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1005,12 +1005,27 @@
       const BST = (function () { try { return /[?&]bst=2\b/.test(location.search) ? 2 : 1; } catch (e) { return 1; } })();
       /* 🏙 **近景画多少栋**（机主 2026-09-25：「楼房过于密集…**上限 100 栋根据视野来显示**」）。
          `?bldn=N` 可调（A/B 用）；`?bldn=0` = 近景一栋不画（只剩路/标签/瓦片）。规则在共享真源 `wsBuildingPick`。 */
-      const BLDN = (function () {
+      /** `?bldn=` **显式钉住**的值（没给 ⇒ null）；`0` = 近景一栋不画（原有语义，保留） */
+      const BLDN_PIN = (function () {
         try {
           const m = /[?&]bldn=(\d+)/.exec(location.search);
-          return m ? Math.max(0, Math.min(5000, parseInt(m[1], 10))) : 100;
-        } catch (e) { return 100; }
+          return m ? Math.max(0, Math.min(5000, parseInt(m[1], 10))) : null;
+        } catch (e) { return null; }
       })();
+      /**
+       * 每块最多几栋 —— **跟着"块"的面积等比缩**（2026-09-26 分片改造；机主批的"等密度"算法）。
+       *
+       * 依据就是本页自己写过的那句原话（`bldCellDeg()` 上方那段注释）：
+       * 「区块边长默认 0.05°≈5.5km，**与离线楼包的格完全对齐**；若区块比数据格小…画面自己会变」。
+       * 分片之后数据格变成 0.01°（格面积 1/25），若上限照旧 100 ⇒ 屏上密度会**暴涨 25 倍**（那是改观感）；
+       * ⇒ 上限按面积缩：`100 × (deg/0.05)²`。**老包（0.05°）⇒ 仍是 100，逐字节与今天相同**；
+       * 新包（0.01°）⇒ 自动变 **4**，**密度与今天同量级**（这是算出来的，不是手调的）。
+       */
+      function bldnEff() {
+        if (BLDN_PIN !== null) return BLDN_PIN;
+        const deg = bldCellDeg();
+        return Math.max(1, Math.round(100 * Math.pow(deg / 0.05, 2)));
+      }
       /* 🏢 **楼房矢量层从哪一档开始画**（= 挑楼闸门）= **共享真源里的那一个数**
          （`wsDistrictScene.WS_BLD_VECTOR_MINZOOM`，App 宿主读的是同一个）。
          🔴🔴 2026-09-26 真机事故（机主 12 级截图「整屏空」）——本页曾经把这两个数**各写死一份**：
@@ -1053,10 +1068,27 @@
          ⇒ 同一块里后来到了更大的楼，就会把已画的那批挤掉几栋 ⇒ **画面自己会变**。
          对齐之后：一个数据格**要么没到、要么整格到** ⇒ 格内选出的 100 栋**一旦选定永远不变**。
          `?bldcell=` 仍可调（调了就要接受"可能变"的代价）。 */
-      const BLDCELL = (function () {
-        try { const m = /[?&]bldcell=([0-9.]+)/.exec(location.search); return m ? Math.max(0.002, Math.min(0.2, parseFloat(m[1]))) : 0.05; }
-        catch (e) { return 0.05; }
-      })();
+      /**
+       * 区块边长（度）= **数据格边长**（取数单位 = 挑选单位，这条不能各写一份）。
+       *
+       * 🔴 **必须"用时才读"**（所以是个函数，不是 `const`）：页面脚本求值时 vendor / 离线包管道
+       * 都还没就绪，读一次存下来就会**静默退回写死值** —— 这个坑今天已经栽过一次
+       * （`WS_BLD_VECTOR_MINZOOM` 在真源里改了 11，页面却在求值时读到 undefined 退回 14 ⇒ z11~13 整屏空）。
+       * 优先级：`?bldcell=` 显式给 → **包自报的 `index.cellSize`**（`feed.facts().cellDeg`，
+       * 0.05 / 0.02 / 0.01 都能跑）→ 兜底 0.05（老包 / 索引还没读到）。
+       */
+      function bldCellDeg() {
+        try {
+          const m = /[?&]bldcell=([0-9.]+)/.exec(location.search);
+          if (m) return Math.max(0.002, Math.min(0.2, parseFloat(m[1])));
+        } catch (e) { /* 落下面 */ }
+        try {
+          const f = bldFeedOf();
+          const d = f && f.facts ? f.facts().cellDeg : null;
+          if (typeof d === "number" && isFinite(d) && d > 0) return d;
+        } catch (e) { /* 落兜底 */ }
+        return 0.05;
+      }
       /* （原 `BLDN_NEAR_ZOOM` 已删：别名会变成第二处真相 —— 阈值只有 `bldMinzoom()` 一处） */
       /** 小楼阈值：脚印面积 < 这个（m²）就**只填充不描边**（≈15×15m；z16 下约 38px²） */
       const BST_SMALL_M2 = 220;
@@ -2967,6 +2999,9 @@
              ⚠️ 补的那批**不进冻结集**（`stats.baseChosen` 之前是 base、之后是补充件）——
              否则"同一块永远同一批"会被视野污染（机主明确否过"挪一下就乱变"）。 */
           const bldMz = bldMinzoom();   /* 每次用时才读真源（页面初始化时 vendor 还没到 ⇒ 那时读是错的） */
+          /* ⚠️ **一轮里只读一次**（`bldCellDeg()` 每次都问管道）—— 保证"冻结键 / 挑选 / 分组"三者同值 */
+          const BLDCELL = bldCellDeg();
+          const BLDN = bldnEff();
           if (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && bldMz !== null && z >= bldMz) {
             /* 🧊 **按格冻结**：同一格的结果缓存住（键 = 格 + 上限）⇒ ① 重复落图不再重排（省算力）；
                ② "永远不变"变成可断言的：同一格任何时候取到的都是同一批（`window.__BLD_FROZEN__` 可核）。
@@ -3015,7 +3050,7 @@
           } else {
             /* ⚠️ 文案必须与事实一致：瓦片已撤到 z<11 ⇒ 这一档**不再有"瓦片兜底"**。
                2026-09-26 之前这里写的是「远景走瓦片，不挑」—— 那句在瓦片撤掉后就变成假话了。 */
-            window.__BLD_PICK__ = { skipped: true, why: BLDN === 0 ? "?bldn=0：近景不画楼" : (bldMz === null ? "数不出来：vendor 缺 WS_BLD_VECTOR_MINZOOM / LOD_NEAR_ZOOM（旧产物？）" : ("zoom " + z.toFixed(1) + " < " + bldMz + "：远景（瓦片只服务 z<" + bldMz + "，这一档本就不画矢量楼）")) };
+            window.__BLD_PICK__ = { skipped: true, why: bldnEff() === 0 ? "?bldn=0：近景不画楼" : (bldMz === null ? "数不出来：vendor 缺 WS_BLD_VECTOR_MINZOOM / LOD_NEAR_ZOOM（旧产物？）" : ("zoom " + z.toFixed(1) + " < " + bldMz + "：远景（瓦片只服务 z<" + bldMz + "，这一档本就不画矢量楼）")) };
             pickWhy = "（未挑：" + window.__BLD_PICK__.why + "）";
           }
         } catch (e) { errs.push("pick " + e); }

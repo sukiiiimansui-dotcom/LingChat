@@ -2560,9 +2560,21 @@ var GW_LAYER_ID_OF = { water: "gw-water", green: "gw-green" };
 var GW_LAYER_IDS = [GW_LAYER_ID_OF.water, GW_LAYER_ID_OF.green];
 var GW_BUNDLE_DIR = "gwbundle";
 var GW_SOURCE_KEY_PREFIX = GW_BUNDLE_DIR + ":";
-var GW_RETAIN_RADIUS_M = 3e3;
 function gwSourceKeyOf(cellKey) {
   return GW_SOURCE_KEY_PREFIX + cellKey;
+}
+var GW_RETAIN_RADIUS_M = 12e3;
+function gwRetainRadiusM(bounds) {
+  try {
+    if (!bounds) return GW_RETAIN_RADIUS_M;
+    const w = bounds.getWest(), e = bounds.getEast(), s = bounds.getSouth(), n = bounds.getNorth();
+    if (![w, e, s, n].every((v) => Number.isFinite(v))) return GW_RETAIN_RADIUS_M;
+    const viewDiag = metersBetween([w, s], [e, n]);
+    const cellDiag = metersBetween([0, 0], [GW_BUNDLE_CELL_DEG, GW_BUNDLE_CELL_DEG]);
+    return Math.max(GW_RETAIN_RADIUS_M, Math.round(viewDiag * 1.2 + cellDiag));
+  } catch {
+    return GW_RETAIN_RADIUS_M;
+  }
 }
 var GW_COLOR_PATHS = {
   water: ["themes.anime.ai.water", "ai.water", "look.ai.water", "themes.night.ai.water"],
@@ -2756,7 +2768,7 @@ function createGwLayer(host) {
     flush: () => {
       draw();
     },
-    retainRadiusM: host.retainRadiusM || (() => GW_RETAIN_RADIUS_M),
+    retainRadiusM: host.retainRadiusM || (() => gwRetainRadiusM(host.view().bounds)),
     onError: (why) => host.onError?.(why)
   });
   async function refresh(why = "view") {
@@ -2802,20 +2814,46 @@ function createGwLayer(host) {
       const view = host.view();
       const plan = gwPlanForView(idx.cells, view.bounds, view.center);
       const facts = feed.facts();
-      const keys = plan ? plan.keys : [];
+      if (!plan) {
+        last = nextFacts(last, true, {
+          state: "uncounted",
+          cells: 0,
+          hit: 0,
+          failed: facts.failed,
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: "视野拿不到（地图还没就绪）"
+        });
+        return emit();
+      }
+      const keys = plan.keys;
       const hit = keys.reduce((n, k) => n + (store.has(gwSourceKeyOf(k)) ? 1 : 0), 0);
       const uncounted = keys.length > 0 && hit === 0;
-      last = nextFacts(last, true, {
-        state: uncounted ? "uncounted" : "counted",
-        cells: keys.length,
-        hit,
-        failed: facts.failed,
-        indexCells: idx.cellCount,
-        cellSize: idx.cellSize,
-        attribution: gwAttributionOf(idx),
-        why: uncounted ? "视野里的格一格都没取到" : null
-      });
-      recount();
+      if (uncounted) {
+        last = nextFacts(last, true, {
+          state: "uncounted",
+          cells: keys.length,
+          hit,
+          failed: facts.failed,
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: "视野里的格一格都没取到"
+        });
+      } else {
+        last = nextFacts(last, true, {
+          state: "counted",
+          cells: keys.length,
+          hit,
+          failed: facts.failed,
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: null
+        });
+        recount();
+      }
       return emit();
     } catch (e) {
       last = nextFacts(last, true, {
@@ -4509,6 +4547,7 @@ export {
   gwMissingColors,
   gwPlanForView,
   gwPointOf,
+  gwRetainRadiusM,
   gwSnapshotOf,
   gwSourceKeyOf,
   gwVerdictLine,

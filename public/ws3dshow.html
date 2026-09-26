@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v66";
+      const BUILD = "ws3dshow-2026-09-26-v67";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1928,9 +1928,31 @@
       }
 
       /** 写 DOM（复用节点池；一次更新完，不逐条 insert） */
+      /** 🧈 **真名标签的"只挪位置"**（缩放/旋转途中每帧调它；**不要**调 `renderLabelDom()`：
+          后者会重建每个节点的 `cssText` = 每帧几十次样式重算，正是"卡"的来源之一）。
+          🔴 2026-09-26 之前这一层**只有 moveend/zoomend 才更新** ⇒ 拖动时整层钉在屏幕上
+          （机主：「名字显示是滑动刷新一次，**不能跟随，错位严重**」）。 */
+      function positionLabelNodes() {
+        try {
+          const box = labelContainer();
+          /* 这里写的是**绝对**屏幕坐标 ⇒ 先把拖动时的容器平移归零，否则叠加两次 */
+          if (box.style.transform) box.style.transform = "";
+          for (let i = 0; i < labelShown.length; i++) {
+            const node = box.childNodes[i];
+            const l = labelShown[i];
+            if (!node || !l || !Number.isFinite(l.lng) || !Number.isFinite(l.lat)) continue;
+            let p; try { p = map.project([l.lng, l.lat]); } catch (e) { continue; }
+            node.style.left = p.x.toFixed(1) + "px";
+            node.style.top = p.y.toFixed(1) + "px";
+          }
+        } catch (e) { /* 忽略：标签挪位失败不该影响地图 */ }
+      }
+
       function renderLabelDom() {
         try {
           const box = labelContainer();
+          /* 绝对坐标写入前先归零容器平移（否则拖动中途重建会叠加两次） */
+          if (box.style.transform) box.style.transform = "";
           while (box.childNodes.length > labelShown.length) box.removeChild(box.lastChild);
           for (let i = 0; i < labelShown.length; i++) {
             const l = labelShown[i];
@@ -3926,36 +3948,51 @@
            ⇒ 改法：**纯平移是一次刚体变换**，在**容器上写一次** `translate3d`（O(1)，与标签数无关），
            松手或缩放/旋转时再逐标签精确重投影一次。标签、锚点、引线都在同一个容器里 ⇒ 一起平移。
            ⚠️ 缩放/旋转**不是**刚体平移（标签要保持字号不变）⇒ 那两种情况仍走逐标签重投影（下面 zoom 分支）。 */
-        let genPanRef = null;          // 拖动起点参考（含当时的 zoom/bearing：变了就不走刚体路）
-        function genStartPan() {
-          try {
-            const c = map.getCenter();
-            const p = map.project(c);
-            genPanRef = { lng: c.lng, lat: c.lat, x: p.x, y: p.y, zoom: map.getZoom(), bearing: map.getBearing() };
-            const L = genLayerOf();
-            if (L && L.style.transform) L.style.transform = "";   // 起点位置是精确的 ⇒ 先归零
-          } catch (e) { genPanRef = null; }
+        /* 🧈 **两个标签层共用一份"跟手"实现**（生成名层 + **真名标签层** `renderLabelDom`）。
+           🔴 2026-09-26 机主真机：「名字显示是滑动刷新一次，**不能跟随，错位严重**」——
+           真名标签层原先**根本没挂 `move`**（只挂 moveend/zoomend；它自己的注释就写着
+           「只在 moveend/zoomend 更新」）⇒ 拖动时**整层钉在屏幕上**，那才是"错位严重"的主体。
+           现在两层都走这一份：拖动 = 容器一次 translate3d（O(1)，与标签数无关）；
+           缩放/旋转/松手 才逐标签精确重投影（那不是刚体变换，标签要保字号）。 */
+        function attachPanFollow(containerOf, reposition) {
+          let ref = null;
+          const clear = () => { try { const L = containerOf(); if (L && L.style.transform) L.style.transform = ""; } catch (e) { /* 忽略 */ } };
+          return {
+            start() {
+              try {
+                const L = containerOf();
+                if (!L) { ref = null; return; }
+                const c = map.getCenter();
+                const p = map.project(c);
+                ref = { lng: c.lng, lat: c.lat, x: p.x, y: p.y, zoom: map.getZoom(), bearing: map.getBearing() };
+                clear();                       // 起点位置是精确的 ⇒ 先归零，否则坐标叠加两次
+              } catch (e) { ref = null; }
+            },
+            follow() {
+              if (!ref) return;
+              try {
+                const L = containerOf();
+                if (!L) { ref = null; return; }
+                if (Math.abs(map.getZoom() - ref.zoom) > 0.001 || Math.abs(map.getBearing() - ref.bearing) > 0.01) { ref = null; reposition(); return; }
+                const p = map.project([ref.lng, ref.lat]);
+                L.style.transform = "translate3d(" + (p.x - ref.x).toFixed(1) + "px," + (p.y - ref.y).toFixed(1) + "px,0)";
+              } catch (e) { ref = null; }
+            },
+            end() { clear(); ref = null; reposition(); },
+            active() { return !!ref; },
+          };
         }
-        function genFollowPan() {
-          if (!genPanRef) return;
-          try {
-            /* 缩放/旋转变了 ⇒ 不是刚体平移，交给逐标签那条路 */
-            if (Math.abs(map.getZoom() - genPanRef.zoom) > 0.001 || Math.abs(map.getBearing() - genPanRef.bearing) > 0.01) { genPanRef = null; positionGenNames(); return; }
-            const p = map.project([genPanRef.lng, genPanRef.lat]);
-            const dx = (p.x - genPanRef.x).toFixed(1), dy = (p.y - genPanRef.y).toFixed(1);
-            genLayerOf().style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
-          } catch (e) { genPanRef = null; }
-        }
-        map.on("movestart", () => { try { genStartPan(); } catch (e) { /* 忽略 */ } });
-        /* 🧈 丝滑：拖动**每帧只写一次容器 transform**（O(1)）；缩放/旋转仍逐标签重投影 */
-        map.on("move", () => { try { genFollowPan(); } catch (e) { /* 忽略 */ } });
-        map.on("zoom", () => { try { if (!genPanRef) positionGenNames(); } catch (e) { /* 忽略 */ } });
-        map.on("rotate", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
-        map.on("moveend", () => {
-          try { const L = genLayerOf(); if (L && L.style.transform) L.style.transform = ""; } catch (e) { /* 忽略 */ }
-          genPanRef = null;
-          try { positionGenNames(); } catch (e) { /* 忽略 */ }
+        const genFollow = attachPanFollow(genLayerOf, positionGenNames);
+        const labFollow = attachPanFollow(labelContainer, positionLabelNodes);
+        map.on("movestart", () => { try { genFollow.start(); labFollow.start(); } catch (e) { /* 忽略 */ } });
+        /* 🧈 丝滑：拖动**每帧只写一次容器 transform**（O(1)） */
+        map.on("move", () => { try { genFollow.follow(); labFollow.follow(); } catch (e) { /* 忽略 */ } });
+        map.on("zoom", () => {
+          try { if (!genFollow.active()) positionGenNames(); } catch (e) { /* 忽略 */ }
+          try { if (!labFollow.active()) positionLabelNodes(); } catch (e) { /* 忽略 */ }
         });
+        map.on("rotate", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } try { positionLabelNodes(); } catch (e) { /* 忽略 */ } });
+        map.on("moveend", () => { try { genFollow.end(); } catch (e) { /* 忽略 */ } try { labFollow.end(); } catch (e) { /* 忽略 */ } });
 
         /* ══════════════════════════════════════════════════════════════════════════════
          * 💬 **角色接入 LingChat 本身的对话**（机主 2026-09-25：「我最[想]把角色做进去喵

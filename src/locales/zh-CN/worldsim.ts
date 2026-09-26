@@ -374,4 +374,52 @@ export default {
       unknown: "事件",
     },
   },
+
+  /** ══ 2026-09-26：App 入口替换 + 初始引导（选城市 → 下载楼房数据 → 进地图）══
+   * 机主原话：「**App页与代拍页完全不一样，多余的UI，按钮，甚至初始显示的城市都不一样
+   * （加个初始引导，选择下载哪个城市的楼房数据）**」。
+   * 词条口径同上：这一屏的可见文字全部在这里，模板里不留中文。
+   * ⚠️ 三条**判词**文案（`unknown` / `empty` / 各 `stage*`）不许含糊：
+   *    「数不出来」和「确实是 0」必须一眼分得开（机主定的三态纪律）。
+   * ⚠️ 只写 zh-CN：本文件头部写的官方规矩是"其余语言缺键时回落中文"，别自己造翻译。 */
+  city: {
+    /** 顶栏那个按钮 + 引导 sheet 的标题 */
+    data: "城市数据",
+    title: "选择城市楼房数据",
+    lead: "首次进入需要下载一座城市的楼房数据（离线包）。装过就直接进地图，不再问。",
+    source: "下载源",
+    /** 顶栏状态标签 / 常驻提示：一个城市都没装时 */
+    noCityTag: "未装城市数据",
+    noCity: "未装城市数据 · 点这里选",
+    loading: "正在读取城市清单…",
+    listed: "可用城市",
+    retry: "重试",
+    enterAnyway: "仍然进入地图",
+    enterAnywayHint: "清单取不到也能进：地图会用已经装好的包；一个都没装时，楼房数据可能是空的。",
+    unknown: "数不出来",
+    empty: "清单里没有任何城市（这是清单给出的答案，不是读取失败）",
+    dropped: "清单里有 {n} 条记录不可用（已忽略）",
+    size: "包 {s}",
+    cells: "{n} 格",
+    features: "{n} 个要素",
+    attr: "含署名",
+    defaultTag: "默认",
+    installedTag: "已装",
+    installedLine: "已装 {n} 格 · {got}",
+    installedNone: "已装：0 个城市（已量）",
+    installedSummary: "已装：{list}",
+    shaOk: "sha256 已校验",
+    shaNone: "清单没给 sha256（未校验）",
+    download: "下载并进入",
+    redownload: "重新下载",
+    remove: "删除",
+    /** 下载的四个阶段（与 `InstallProgress.stage` 一一对应） */
+    stageDownload: "下载中",
+    stageVerify: "校验 sha256",
+    stageUnpack: "解包",
+    stageStore: "写入",
+    gotOfTotal: "已下载 {got} / {total}",
+    gotNoTotal: "已下载 {got} · 总大小未知",
+    failed: "失败",
+  },
 };

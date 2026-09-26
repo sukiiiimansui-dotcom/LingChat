@@ -21,15 +21,21 @@ const WorkshopPage = () => import("../components/views/WorkshopPage.vue");
 //   · `/world` + `/world/*` —— 地图**工具页**（总览 / 街区实况 / 街区可视化 /
 //     地图库 / 手机悬浮窗）。App.vue 里那个角落小窗的「⛶ 打开世界地图」按钮
 //     就是 `router.push('/world')`，所以这条必须存在。
-//   · `/worldsim` —— 玩家实际用的**引导主线**页面（选国家 → 省 → 市 → 区县 → 小区）。
-// 全部懒加载：WorldSim 自带一套皮肤和四个子组件，工具页各自上千行，
+//   · `/worldsim` —— 玩家实际用的**主线**页面。2026-09-26 机主拍板「**彻底替掉官方那套 UI**」
+//     ⇒ 它现在是 `WsCityEntry.vue`：**直接进 MapLibre 3D 地图**（与代拍页同一份共享真源）
+//     + 首次引导「选城市 → 下载该城市楼房数据 → 进地图」。
+// 全部懒加载：自带一套皮肤和若干子组件，工具页各自上千行，
 // 不该进主 chunk（本项目没配 manualChunks）。
 const WorldMap = () => import("../components/views/WorldMap.vue");
 const WorldDistrictLive = () => import("../components/views/worldmap/DistrictLive.vue");
 const WorldDistrictViz = () => import("../components/views/worldmap/DistrictViz.vue");
 const WorldMapLibrary = () => import("../components/views/worldmap/MapLibrary.vue");
 const WorldPhoneOverlay = () => import("../components/views/worldmap/PhoneOverlay.vue");
+const WsCityEntry = () => import("../components/views/worldsim/WsCityEntry.vue");
+/* 🗄 老入口（DataV 全国 SVG 下钻那一套）**文件还在、一行没改**，只是不再被引用。
+   回退 = 把上面那行换成这一行（一行改动）：
 const WorldSim = () => import("../components/views/worldsim/WorldSim.vue");
+*/
 
 // 1. 定义路由表
 const routes = [
@@ -105,11 +111,14 @@ const routes = [
     name: "WorldPhoneOverlay",
     component: WorldPhoneOverlay,
   },
-  // 世界模拟主线页面（P1）：与上面的 /world/* 是两回事
+  // 世界模拟主线页面：与上面的 /world/* 是两回事。
+  // 2026-09-26 起 = 「3D 地图 + 城市数据引导」（`WsCityEntry.vue`），不再是 DataV 下钻那一屏。
+  // ⚠️ 路由 **name 保持 `WorldSim`** 不动：别处是按 path 跳的（`/worldsim`），改 name 没有收益、
+  //    只会让"老代码里按名字跳"变成运行期 404（搜索过一次：全仓 0 处按 name 跳）。
   {
     path: "/worldsim",
     name: "WorldSim",
-    component: WorldSim,
+    component: WsCityEntry,
   },
 ];
 

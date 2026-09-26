@@ -50,6 +50,17 @@ export * from "./wsLog";
    所以"首屏 X 秒里 Y 秒花在哪"能直接对上）。页面只接线，**不自己写第二套计时**。 */
 export * from "./wsPerfMeter";
 export * from "./wsBuildingPick";
+/* 🎨🏙 **挑选/冻结编排 + 美术取参**（2026-09-26 抽出的两份新真源，页面与 App 宿主**共用同一份**）：
+   · `wsBldPickStore`：`createBldPickStore()` —— 先算 base → **只冻结 base** → 补齐件每帧重算。
+     页面原来把这段编排内联在自己身上（`const ckey = …` → `window.__BLD_PICK__`），
+     于是 App 宿主拿不到它 ⇒ 机主真机：「**每次滑动建筑都变了**」。
+   · `wsArtParams`：`bldArtParamsOf()` / `artRamp` / `outlineWidthAt` / `bldRampColorExpr` /
+     `WS_ART_PATCHES` / `WS_BLD_FALLBACK_RAMP` / `WS_BLD_OUTLINE_STOPS` —— 取参（art/look/描边/渐变/
+     不透明度/色阶）原来**只长在页面里**（`ws3dshow.html:1314`）⇒ 机主真机：「**不是 art1**」。
+   🔴 页面侧新增依赖必须同步进页面的符号清单（`FEED_NEEDED`/`TF_NEEDED`）——
+   否则"模块是旧的"只会表现成"这个开关没反应"，而不是报"缺符号"。 */
+export * from "./wsBldPickStore";
+export * from "./wsArtParams";
 export * from "./wsBldGl";
 export * from "./wsDaily"; // 日常循环（我的家 + 今日三件事）
 export * from "./wsNameGen"; // 🏷 生成名层（**示意·非真实**：确定性楼名 + 沿街小摊） // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）

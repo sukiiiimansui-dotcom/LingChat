@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v62";
+      const BUILD = "ws3dshow-2026-09-26-v63";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -473,6 +473,47 @@
         if (q === "night" || q === "anime") THEME_ID = q;
       } catch { /* 参数坏了就用默认，不因为一个开关把页面搞崩 */ }
 
+      /* ── 🗺 候选底图 `?bm=<id>`（2026-09-26，机主：「放太大了只能看到线路，**水，绿植啥的都看不到**」）──
+         🔴 **不给 `?bm` = 这一页逐字段与原来一样**（`THEME = g || t` 那条路一个字没动）。
+         候选（源 / 亮度基准 / 淡出 / 色罩比例 / 逐档 curl 证据）**全在共享主题文件**里
+         （`wsMapTheme.ts` 的 `WS_BASEMAP_CANDIDATES`），由快照生成器落进 `/wstheme.json` 的
+         `basemaps.<id>.<主题id>`（与 `themes.*` **同构**）⇒ 本页依旧只做"换一个对象读"，
+         **不写第二份色号/瓦片地址**。
+         A/B：`?bm=gray`（对照，= 现状）· `?bm=topo`（有绿/水）· `?bm=street` · `?bm=imagery` ·
+              `?bm=gray16`（同一张灰底图但不淡出 —— 用来分离"看不见瓦片"和"瓦片没颜色"）。
+         ⚠️ 认不出的 id ⇒ **当没给**（宁可什么都不换，也绝不悄悄换一张底图）。 */
+      let BM_ID = null;
+      try {
+        const q = new URLSearchParams(location.search).get("bm");
+        BM_ID = q ? q : null;
+      } catch { /* 参数坏了就当没给 */ }
+      /** 底图状态（三态判词）：off 没开 / ok 用上了 / fallback:原因 快照里没有这一档 */
+      let bmState = BM_ID ? "待载入主题" : "未开（要 ?bm=topo 之类）";
+
+      /* ── 🎥 `?z=<zoom>`：只改**这一页的初始机位**（2026-09-26）─────────────────────────────
+         机主两次被问都没答的那件：「**默认机位要不要拉远一档**」。
+         这一页**不许**自己写死机位（唯一真源是 `wsScene.cameraDefaults()`，见下面建图那段），
+         所以这里只做一个**对比用的覆盖**：不给 `?z` ⇒ 还是真源那个数，一个字节都不变。
+         用途：同一页、同一个 URL 只差一个参数 ⇒ 机主能并排看"拉远一档"到底多看到什么。 */
+      const CAM_ZOOM_OVERRIDE = (function () {
+        try {
+          const m = /[?&]z=([0-9]+(?:\.[0-9]+)?)/.exec(location.search);
+          if (!m) return null;
+          const v = parseFloat(m[1]);
+          return Number.isFinite(v) ? Math.max(3, Math.min(19, v)) : null;
+        } catch (e) { return null; }
+      })();
+      /** 这一页**实际**用的初始机位：覆盖优先，否则**用时才读**共享真源
+       *  （⚠️ 页面内联脚本比 `defer` 的 vendor 模块先跑 ⇒ **不许在解析期缓存**这个数，
+       *   否则读到的永远是兜底值、还会把"取自真源"这件事说成假的）。 */
+      function camZoom() {
+        if (CAM_ZOOM_OVERRIDE !== null) return CAM_ZOOM_OVERRIDE;
+        try {
+          if (window.__TF__ && window.__TF__.cameraDefaults) return window.__TF__.cameraDefaults().zoom;
+        } catch (e) { /* 读不到就用与真源同值的兜底（`__SCENE_CONSUMED__` 会标成"页面自带"） */ }
+        return 16.4;
+      }
+
       /* 🔴 2026-09-25 机主事故：5212 的 runsv 监督进程死掉 ⇒ `/wstheme.json` 取不到 ⇒ 页面**静默**换成
          另一套观感（兜底配方在 z16+ 是 Esri 卫星影像）⇒ 他以为"你把自绘地图换成卫星图了"。
          ⇒ 三条规矩（本页从此遵守）：
@@ -585,13 +626,62 @@
               : "回退：快照里没有 looks." + LOOK_ID + "." + THEME_ID +
                 "（多半是 /wstheme.json 是旧的 ⇒ 跑 node ws_map_theme_selftest.mjs --write-theme-json，或强刷）";
           }
-          THEME = g || t;
+          /* 🗺 候选底图 `?bm=<id>`：同一份快照、**同一个形状**，只是换成 `basemaps.<id>.<主题id>` 那一份。
+             ⚠️ 快照里没有这一档（老 /wstheme.json / 认不出的 id）⇒ **如实回退基准主题**并把原因写进徽标
+             —— 不许"开了却什么都没变"（这一页反复踩过的"静默失效"）。 */
+          const bm = BM_ID ? ((j && j.basemaps) ? j.basemaps[BM_ID] : null) : null;
+          const bmT = (bm && bm[THEME_ID]) ? bm[THEME_ID] : null;
+          if (BM_ID) {
+            bmState = bmT
+              ? "已换底图（basemaps." + BM_ID + "." + THEME_ID + "）"
+              : "回退：快照里没有 basemaps." + BM_ID + "." + THEME_ID +
+                "（老的 /wstheme.json ⇒ 跑 node ws_map_theme_selftest.mjs --write-theme-json，或强刷）";
+          }
+          /* 优先级：底图（`?bm=`）> 观感（`?look=2`）> 基准主题。
+             ⚠️ `?bm` 与 `?look=2` **叠加这一版没做**（候选表是按基准主题派生的）⇒
+                同时给时**如实**写在徽标里，不假装叠上了。 */
+          if (BM_ID && LOOK === 2 && bmT) lookState = "未叠（?bm= 优先）：" + lookState;
+          THEME = bmT || g || t;
           THEME_BASE = t; // 基准那一份永远留着（回证要能对比"改了什么"）
+          /* 🗺 底图自证（探针读它）—— **读的是真·主题对象里的值**，不是页面自己的变量 */
+          try {
+            const sb = (THEME && THEME.sources && THEME.sources.base) || null;
+            window.__BM__ = {
+              req: BM_ID,
+              state: bmState,
+              tile: sb && sb.tiles ? sb.tiles[0] : null,
+              maxzoom: sb ? sb.maxzoom : null,
+              attribution: sb ? (sb.attribution || null) : null,
+              baseFade: (THEME && THEME.baseFade) || null,
+              /* ⚠️ 色罩的**真值在 `layers` 里**（快照的主题对象没有顶层 `tint` 字段 ——
+                 它已经在生成时被物化进那条 `tint` 图层了）。第一版我读的是 `THEME.tint`
+                 ⇒ 恒 `null`（**典型的自证字段撒谎**），所以这里改成读图层 paint。 */
+              tintOpacity: (function () {
+                try {
+                  const ls = (THEME && THEME.layers) || [];
+                  for (const l of ls) {
+                    if (l && l.id === "tint" && l.paint) return l.paint["background-opacity"];
+                  }
+                } catch (e) { /* 忽略 */ }
+                return null;
+              })(),
+              basePaint: (function () {
+                try {
+                  const ls = (THEME && THEME.layers) || [];
+                  for (const l of ls) { if (l && l.id === "base") return l.paint; }
+                } catch (e) { /* 读不到就算了，别因为自证把页面搞崩 */ }
+                return null;
+              })(),
+              metrics: (THEME && THEME.metrics) || null,
+              cameraZoom: camZoom(),
+              opacityAtCameraZoom: baseOpacityAt(camZoom()),
+            };
+          } catch (e) { /* 自证失败不影响作图 */ }
           window.__LOOK_DEBUG__ = { look: LOOK, id: LOOK_ID, themeKeys: Object.keys(THEME || {}), lookKeys: Object.keys((THEME && THEME.look) || {}), outline: (THEME && THEME.outline) || null, isGame: !!g };
           /* 版本戳带上主题名 —— 代拍回来的图一眼能看出"跑的是哪一套"（缓存坑踩过） */
           themeState = /上次缓存/.test(String(note)) ? "cached" : "ok";
           themeNote = String(note);
-          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label + " · " + artHud() + " · " + lookHud(); } catch {}
+          try { document.getElementById("m-build").textContent = BUILD + " · " + t.label + " · " + artHud() + " · " + lookHud() + " · " + bmHud(); } catch {}
           renderThemeHud();
         } catch (e) {
           /* 快照形状坏了（不是"取不到"）—— 同样**如实**标出来，让 loadTheme 的下一档去兜 */
@@ -1591,50 +1681,13 @@
         const cv = map.getCanvas ? map.getCanvas() : null;
         const W = (cv && cv.clientWidth) || 400, H = (cv && cv.clientHeight) || 400;
         const t0 = Date.now();
-        /* ── 楼名：从**楼房仓库**的 id 生成（代表点取脚印第一个顶点） ── */
+        /* ── 楼名：只从**画出来的那批楼**（`drawnBldPts`，由 `setBldData` 记）里挑 ──
+           🔴 机主 2026-09-26：「楼名对不上位置」= 以前从**仓库**里挑名字 ⇒ 名字指到没画的楼上。
+           现在 `drawnBldPts === null`（还没落过图）时**不画楼名**，并在 HUD 说明，绝不退回仓库口径。 */
         let bldPts = [];
         try {
-          const st = bldStoreOf();
-          const feats = (st && st.features) ? st.features() : [];
-          let skipped = 0;
-          bldPts = feats.map(function (f) {
-            if (!f) return null;
-            /* 🔴 形状**两种都要认**（实测踩过）：楼房仓库里是 **GeoJSON**（`geometry.coordinates`
-               + `properties.store_id/osm_id`），而离线包的原始项是扁平的 `{i, p}`。
-               只认一种 ⇒ 楼名恒为 0（自检/真浏览器抓到的）。 */
-            const props = f.properties || {};
-            const id = f.i || f.id || props.store_id || props.osm_id || props.id || null;
-            let ring = null;
-            if (Array.isArray(f.p) && Array.isArray(f.p[0])) ring = f.p[0];
-            else {
-              const g = f.geometry || null;
-              const c = g && g.coordinates;
-              if (Array.isArray(c)) ring = (Array.isArray(c[0]) && Array.isArray(c[0][0])) ? c[0] : c;
-            }
-            if (!id || !ring || !Array.isArray(ring[0])) { skipped++; return null; }
-            /* 🔴 机主：「连线不准确」—— 根因是我原来取**脚印第一个顶点**（大楼的角，离楼心几十米）。
-               改成共享模块的**代表点** `bldPointOf`（外环质心）；拿不到才自己算质心。 */
-            let pt = null;
-            try { if (TFx && typeof TFx.bldPointOf === "function") pt = TFx.bldPointOf(f); } catch (e3) { pt = null; }
-            if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) {
-              /* 🔴 机主「还是连不准」：MultiPolygon 的嵌套会让「取第一个环」取错（甚至取到 NaN）。
-                 这里**递归摊平**所有 [lng,lat]，取**顶点均值**当代表点 —— Polygon / MultiPolygon /
-                 GeometryCollection 都成立（小 footprint 上等价于质心）。 */
-              let coords = null;
-              if (Array.isArray(f.p)) coords = f.p;
-              else if (f.geometry && f.geometry.coordinates) coords = f.geometry.coordinates;
-              const acc = [0, 0, 0];
-              (function walk(c) {
-                if (!Array.isArray(c)) return;
-                if (typeof c[0] === "number" && typeof c[1] === "number") { acc[0] += Number(c[0]); acc[1] += Number(c[1]); acc[2]++; return; }
-                for (let i = 0; i < c.length; i++) walk(c[i]);
-              })(coords);
-              pt = acc[2] > 0 ? [acc[0] / acc[2], acc[1] / acc[2]] : null;
-            }
-            if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) { skipped++; return null; }
-            return { id: String(id), lng: Number(pt[0]), lat: Number(pt[1]) };
-          }).filter(Boolean);
-          try { window.__GENN_SKIP__ = skipped; } catch (e2) { /* 忽略 */ }
+          if (Array.isArray(drawnBldPts)) bldPts = drawnBldPts;
+          window.__GENN_SKIP__ = 0;
         } catch (e) { bldPts = []; }
         const byId = new Map(bldPts.map(function (b) { return [b.id, b]; }));
         const pickedBld = TFx.planGenNames(bldPts.map(function (b) { return b.id; }), GEN_BLD_MAX).map(function (g) {
@@ -1696,9 +1749,13 @@
         positionGenNames();          // 立刻摆一次（新节点不能停在 0,0）
         if (hud) {
           const realN = (labelStat && typeof labelStat.shown === "number") ? labelStat.shown : NaN;
-          hud.textContent = (typeof TFx.genCountsLine === "function")
+          /* 🔴 锚点来源必须写在 HUD 上（可核对）：`画出的楼 N 栋` = 只锚**真画出来的那批**（一一对应）；
+             `等落图` = 还没落过图 ⇒ 楼名一个都不画（绝不退回"从仓库挑名字"的旧口径）。 */
+          const anchor = Array.isArray(drawnBldPts) ? ("锚=画出的楼 " + drawnBldPts.length + " 栋") : "锚=等落图（未画楼名）";
+          const base = (typeof TFx.genCountsLine === "function")
             ? TFx.genCountsLine(realN, kept.filter(function (k) { return !k.stall; }).length, kept.filter(function (k) { return k.stall; }).length)
             : ("🏷 生成名 " + kept.length + "（" + why + "）");
+          hud.textContent = base + " · " + anchor;
         }
         try { window.__GENN__ = { on: GENNAMES_ON, bld: genShownBld, stall: genShownStall, shown: kept.length, ms: Date.now() - t0, roads: roads.length, lines: kept.length }; } catch (e) { /* 忽略 */ }
       }
@@ -2372,6 +2429,25 @@
 
       /** HUD 上的一句"这一版观感是什么"（**自证**，别让人猜）。
        *  🔴 口径 = 机主 2026-09-24 返工后定的三件：**地面 Δ（不许变暗）/ cel 档数 / 暗角强度**。 */
+      /** 底图在某个 zoom 的**不透明度**（读的是共享主题那份淡出窗口，不是页面自己编的数）。
+       *  为什么要有它：默认机位 16.4 而二次元的 `baseFade` 是 13.6→14.8 ⇒ **默认机位瓦片全透明**，
+       *  机主看到的"纯色地面"就是这么来的。这个函数让那件事在 HUD 上变成一个**能读的数**。 */
+      function baseOpacityAt(z) {
+        const f = THEME && THEME.baseFade;
+        if (!f || typeof z !== "number" || !Number.isFinite(z)) return 1;
+        if (z <= f.from) return 1;
+        if (z >= f.to) return 0;
+        return +((f.to - z) / (f.to - f.from)).toFixed(4);
+      }
+      /** 底图那一格 HUD（`?bm=` 开了才占位；没开就说"未开"，不是失败） */
+      function bmHud() {
+        if (!BM_ID) return "bm=未开";
+        const t = (THEME && THEME.sources && THEME.sources.base) || null;
+        const nm = t && t.tiles ? String(t.tiles[0]).split("/services/")[1] : "?";
+        return "bm=" + BM_ID + (nm ? "（" + String(nm).split("/MapServer")[0] + "）" : "") +
+          " · 瓦片@机位 " + baseOpacityAt(camZoom()).toFixed(2) + (bmState.indexOf("回退") === 0 ? " · ⚠️" + bmState : "");
+      }
+
       function lookHud() {
         if (LOOK !== 2) return "look=1（基准）";
         const m = THEME && THEME.metrics;
@@ -2748,6 +2824,51 @@
       /** 拆件（`?bld=2`）异步上妆的**代际号**：防"旧的一次 setData 覆盖新的" */
       let bldDressGen = 0;
 
+      /** 楼脚印的**代表点**（模块的 `bldPointOf`；拿不到就递归摊平取**顶点均值** —— Polygon / MultiPolygon 都成立）。
+          唯一一份：生成名锚点与"名字↔楼"连线都用它，别在两处各写一套（机主两次报"连不准"都是因为两套口径）。 */
+      function bldRepPt(f) {
+        const TFx2 = window.__TF__;
+        try {
+          if (TFx2 && typeof TFx2.bldPointOf === "function") {
+            const p = TFx2.bldPointOf(f);
+            if (p && isFinite(p[0]) && isFinite(p[1])) return [Number(p[0]), Number(p[1])];
+          }
+        } catch (e) { /* 落兜底 */ }
+        let coords = null;
+        if (Array.isArray(f && f.p)) coords = f.p;
+        else if (f && f.geometry && f.geometry.coordinates) coords = f.geometry.coordinates;
+        const acc = [0, 0, 0];
+        (function walk(c) {
+          if (!Array.isArray(c)) return;
+          if (typeof c[0] === "number" && typeof c[1] === "number") { acc[0] += Number(c[0]); acc[1] += Number(c[1]); acc[2]++; return; }
+          for (let i = 0; i < c.length; i++) walk(c[i]);
+        })(coords);
+        return acc[2] > 0 ? [acc[0] / acc[2], acc[1] / acc[2]] : null;
+      }
+
+      /** 🔴🔴 **生成名的锚点 = 这一帧真正画出来的那批楼**（机主 2026-09-26：「楼名对不上位置」）。
+          病根：生成名原来从**楼房仓库**（3210~12000 栋）里挑名字，而屏上按"每块 ≤100 栋"只画几百栋
+          ⇒ 名字会指到**没画出来的楼**上（屏上就是"线指向空地"）。
+          现在：只在**落图那一刻**（`setBldData`）把画出来的那批的代表点记下来，生成名只从这里挑 ⇒ 一一对应。
+          `null` = 还没落过图（那时**不画名字**，并在 HUD 如实写"等落图"，绝不退回仓库口径）。 */
+      let drawnBldPts = null;
+
+      /** 楼房源的**唯一落图口**：记账（锚点）+ setData。两条通路（离线/live）都必须走这里。 */
+      function setBldData(fc, why) {
+        try {
+          const feats = (fc && fc.features) ? fc.features : [];
+          drawnBldPts = feats.map(function (f) {
+            const props = (f && f.properties) || {};
+            const id = f.i || f.id || props.store_id || props.osm_id || props.id || null;
+            const pt = f ? bldRepPt(f) : null;
+            return (id && pt) ? { id: String(id), lng: pt[0], lat: pt[1] } : null;
+          }).filter(Boolean);
+          window.__GENN_ANCHOR__ = { source: "drawn", n: drawnBldPts.length, of: feats.length, why: String(why || "") };
+        } catch (e) { drawnBldPts = []; }
+        if (map.getSource("bld")) map.getSource("bld").setData(fc);
+        else { map.addSource("bld", { type: "geojson", data: fc }); addBldLayers(); }
+      }
+
       /** 🌐 直画 GL 的层实例（`?glbld=1` 才建；建过就一直复用，只换实例数据） */
       let glBldLayer = null;
 
@@ -2804,7 +2925,12 @@
         /* 🏙 **近景按视野挑楼**（机主口径：上限 100 栋、随视野刷新；小区/基础设施自然浮出来）。
            ⚠️ 挑的只是"画哪些"：**仓库仍是全量真数据**，HUD 的「仓库 N 栋」照旧报全量，另加一行挑楼口径。
            规则全在共享真源 `wsBuildingPick.pickBuildingsForView`（纯函数，自检 30/0），页面只给视野与上限。 */
-        let data = all, pickWhy = "";
+        /* 🔴🔴 **初始 data 是空的，不是全量**（机主 2026-09-26：「放大缩小后有概率一次性出现全部楼房」）。
+           病根就是这里原来写 `let data = all`：任何一次"没挑成"（zoom < 阈值 / 模块还没到 / 挑楼抛错）
+           都会把**整个仓库 12,000 栋**塞进数据源 ⇒ 图层一旦可见就"一次性全出现"，
+           既违反"每块 ≤100 栋"的口径，也是"有概率"的来源（取决于你在哪一档 zoom 上结束）。
+           ⇒ 现在：**只有挑出来的那批才落图**；没挑成就是空 + 如实说明原因。 */
+        let data = { type: "FeatureCollection", features: [] }, pickWhy = "";
         try {
           const TFp = window.__TF__;
           const z = map.getZoom();
@@ -2864,7 +2990,7 @@
                 window.__BLD_COUNT__ = dec.count || null;
                 window.__BLD_FALLBACK__ = null;
                 const dd = { type: "FeatureCollection", features: dec.features };
-                if (map.getSource("bld")) map.getSource("bld").setData(dd);
+                setBldData(dd, "离线拆件(" + (why || "") + ")");
                 stats.n = dec.count ? dec.count.n : dec.features.length;
                 window.__BLD_BUNDLE_FC__ = dec.features.length;
                 try { $("m-n").textContent = String(stats.n); } catch (e2) { /* 忽略 */ }
@@ -2887,8 +3013,7 @@
         try { $("m-n").textContent = String(stats.n); } catch (e2) { /* HUD 失败不影响落图 */ }
         try {
           if (BLD_OFF) { window.__BLD_BUNDLE_FC__ = data.features.length; return; }  // ?bld=0：数据备好但不画
-          if (map.getSource("bld")) map.getSource("bld").setData(data);
-          else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
+          setBldData(data, "离线" + (why || ""));
         } catch (e) { errs.push("bld.setData " + e); }
         window.__BLD_BUNDLE_FC__ = data.features.length;
         stats.parts = data.features.length;
@@ -3487,8 +3612,7 @@
           renderBldBadge();
           return;
         }
-        if (map.getSource("bld")) map.getSource("bld").setData(data);
-        else { map.addSource("bld", { type: "geojson", data }); addBldLayers(); }
+        setBldData(data, "live 取数");
         renderBldBadge(); // 🏢 回证（各细节生成了多少 + 档位）随每次取楼刷新
         try { refreshLabels("buildings"); } catch (e) { /* 标签失败不影响地图 */ }   // 🏷 楼名到位后重排一次
         try { refreshGenNames("buildings"); } catch (e2) { /* 生成名失败不影响地图 */ }
@@ -3579,7 +3703,17 @@
             window.__SCENE_CONSUMED__ = !!cam;      // 相机取自公共模块
           window.__SCENE_LAYER_CONSUMED__ = false; // 层序换用时由 planBefore() 置真
             const c = cam || { zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 70, minZoom: 3, maxZoom: 19 };
-            return { zoom: c.zoom, pitch: c.pitch, bearing: c.bearing, maxPitch: c.maxPitch, minZoom: c.minZoom, maxZoom: c.maxZoom };
+            /* 🎥 `?z=` 只覆盖**初始机位**这一个字段（其它仍全部取自真源）；
+               不给 `?z` ⇒ `camZoom() === c.zoom`，逐字段与原来一样。
+               自证：`__CAM__` 让探针能读出"这个机位是哪来的"（真源 / 覆盖 / 页面兜底）。 */
+            const z = camZoom();
+            window.__CAM__ = {
+              source: cam ? "wsScene.cameraDefaults()" : "页面兜底（vendor 未就绪）",
+              moduleZoom: cam ? cam.zoom : null,
+              override: CAM_ZOOM_OVERRIDE,
+              used: z,
+            };
+            return { zoom: z, pitch: c.pitch, bearing: c.bearing, maxPitch: c.maxPitch, minZoom: c.minZoom, maxZoom: c.maxZoom };
           })(),
           attributionControl: false, fadeDuration: 120,
           /* 🔴 **`preserveDrawingBuffer` 必须写在 `canvasContextAttributes` 里面**（2026-09-25 父代理逐字核

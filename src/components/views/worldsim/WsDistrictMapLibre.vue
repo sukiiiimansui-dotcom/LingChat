@@ -334,6 +334,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   const WS_BLDN_PIN = parseBldnParam(wsQuery());
   /** 视野内至少几栋（机主「最少十栋房」；`?inview=` 可 A/B） */
   const WS_BLD_INVIEW = parseInViewParam(wsQuery());
+  /**
+   * 🏢 **楼房形体档**（与代拍页同一个开关，2026-09-26 机主 (a′)）：
+   * · 默认（不给参数）= **原始脚印**（基准上妆，**不拆件**）—— 与代拍页默认档**逐字段同源**；
+   * · `?bld=2` = **拆件档**（裙楼/塔楼/退台/女儿墙/设备箱/天线，跑 `decorateBuildings(mode:"detail")`）。
+   *
+   * 🔴 为什么要有它（机主那句「**代拍页和App页完全一样喵**」的另一半）：让 App 默认档向代拍页看齐、
+   * 同时**不永久丢掉** App 已有的形体细节 —— 细节改成"要看才开"的档，页面本来就有 `?bld=2`。
+   * ⚠️ 默认档**不能**再走 `decorateBuildings`：那份 base 档**照样拆 roof/antenna**，
+   * 于是 App 的层清单比页面多两条、`bld-ext` 还带 `part` 过滤（套到页面数据上会一栋都不画）。
+   */
+  const WS_BLD_MODE = (function () {
+    try { return /[?&]bld=2\b/.test(wsQuery()) ? 2 : 1; } catch { return 1; }
+  })();
 
   const props = withDefaults(
     defineProps<{
@@ -859,6 +872,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     roadStore: "",
     /** 🏢 离线楼房包那一行（`🏢 离线格 已取 x / 包外 y / 失败 z · 仓库 N 栋`） */
     bldBundle: "",
+    /** 🏢 形体档：1 = 原始脚印（默认，与代拍页同源）· 2 = 拆件（`?bld=2`）—— 探针/回证要读它 */
+    bldMode: 1,
+    /** 🏢 拆件档拆出来几个要素（`ShapeCounts.parts`；默认档不拆 ⇒ 0） */
+    parts: 0,
     /** 🛣 离线路网包那一行（同式） */
     roadsBundle: "",
     /** 🏢 判词（**真源** `wsScene.bldVerdictText`：包外 / 取数失败 / 正常，三态不混） */
@@ -878,6 +895,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /** 低档的原因（被**实际渲染路**压下来的，见 `wsPerf.forceLowTier`）。空串 = 没被压 */
     perf: "",
   });
+  /* 🏢 形体档写进 stats：探针/HUD 要能读出"这一屏是默认档还是拆件档"（回证） */
+  stats.bldMode = WS_BLD_MODE;
 
   /* ── 长等待可视化：三段**真实**阶段 + 已等秒数（机主 2026-09-19）────────────
      · `fetch` 是唯一的长尾（Overpass 现取，十秒到一分半都见过）；
@@ -1009,7 +1028,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        ⚠️ 以前这里调 `decorateBuildings(fc, ramp)`（base 档）—— 那份**照样拆出 roof/antenna**，
        于是 App 默认档比页面多两条层、还多一套 `part` 过滤（同一条 `bld-ext` 的过滤在页面上会
        匹配 0 栋 = 一栋都不画）。这是"凑 id 式假绿"的根，别再走回去。
-       颜色不再写进要素属性（`color3d` 是拆件档的产物）⇒ 色阶回到**图层 paint** 里算，与页面同一条路。 */
+       🏢 **`?bld=2` = 拆件档**（与代拍页同一个开关）：走 `decorateBuildings(..., {mode:"detail"})`，
+       颜色写进要素属性 `color3d` ⇒ 图层那边用 `mode:"parts"` 的规格（三条 part 层）读它。 */
+    if (WS_BLD_MODE === 2) {
+      const { features, count } = decorateBuildings(fc, artTheme(theme.value).ramp, { mode: "detail" });
+      stats.count = count.n;
+      stats.height = count.real;
+      stats.levels = count.levels;
+      stats.default = count.kind; // HUD 里这一列叫「按类型估」
+      stats.parts = count.parts;
+      return { type: "FeatureCollection", features };
+    }
     const { features, counts } = dressBase(fc?.features as readonly BldFeature[] | undefined);
     stats.count = counts.n;
     stats.height = counts.real;
@@ -2973,7 +3002,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         /* 🎨 **美术取参**：与代拍页同一份（`bldLayerSpecsFor` 内部调 `bldArtParamsOf`）——
            `?art=2` 把色阶高段推近白；`art=1` 时 `ramp` 是**主题那个引用**（恒等）⇒ 默认零改动。
            形体档 `mode:"base"` = 不拆件（机主 (a′) ⇒ 两页默认档同一条规格）。 */
-        specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL }),
+        specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" }),
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
         /* 🏙 **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`：**按格挑 + 按格冻结 + 视野补齐**）。
            🔴 2026-09-26 改（机主真机「**每次滑动建筑都变了**」）：原来这里是

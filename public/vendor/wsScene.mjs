@@ -5569,6 +5569,7 @@ function createNameLayer(host) {
       const zonePickCalc = pickZoneNames(zoneCalc, Math.max(0, NAMES_ZONE_CAP - zonePickReal.shown.length));
       const zoneShown = [...zonePickReal.shown, ...zonePickCalc.shown];
       const nodes = [];
+      let zoneDroppedOffscreen = 0;
       const nodeOfLabel = (s) => {
         const a = anchorOf.get(s.id);
         return {
@@ -5593,7 +5594,18 @@ function createNameLayer(host) {
         } else {
           const big = picked.shown.filter((s) => s.kind === "admin" || s.kind === "place").slice(0, NAMES_BIG_KEEP);
           for (const s of big) nodes.push(nodeOfLabel(s));
-          for (const z of zoneShown) nodes.push(nodeOfZone(z));
+          for (const z of zoneShown) {
+            const n = nodeOfZone(z);
+            if (vp) {
+              const pad = 24;
+              const inView = n.x >= -pad && n.y >= -pad && n.x <= vp.width + pad && n.y <= vp.height + pad;
+              if (!inView) {
+                zoneDroppedOffscreen++;
+                continue;
+              }
+            }
+            nodes.push(n);
+          }
         }
       }
       nodes.forEach((n, i) => {
@@ -5625,7 +5637,8 @@ function createNameLayer(host) {
         droppedByCap: picked?.droppedByCap ?? 0,
         capped: !!picked?.capped,
         skippedNoName: picked?.skippedNoName ?? 0,
-        skippedOffscreen: picked?.skippedOffscreen ?? 0,
+        /* **视野外丢弃** = 真名候选被 `pickLabels` 丢的 + 区名锚点在画布外被丢的（同一口径，一个数） */
+        skippedOffscreen: (picked?.skippedOffscreen ?? 0) + zoneDroppedOffscreen,
         density,
         mode,
         cells: wanted.length,
@@ -5649,14 +5662,27 @@ function createNameLayer(host) {
     }
   }
   function nodeOfZone(z) {
+    let x = 0;
+    let y = 0;
+    try {
+      const m = host.map?.();
+      if (m && Number.isFinite(z.lng) && Number.isFinite(z.lat)) {
+        const p = m.project([z.lng, z.lat]);
+        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+          x = p.x;
+          y = p.y;
+        }
+      }
+    } catch {
+    }
     return {
       slot: 0,
       id: z.id,
       text: z.label,
       style: z.style,
       sketch: z.sketch,
-      x: 0,
-      y: 0,
+      x,
+      y,
       w: 0,
       h: 0,
       lng: z.lng,

@@ -43,7 +43,7 @@ import {
   gwPointOf,
   loadBundleIndex,
 } from "./wsOfflineFeed";
-import { type FeatureStore, bundleCellsForView, createFeatureStore } from "./wsFeatureStore";
+import { type FeatureStore, bundleCellsForView, createFeatureStore, metersBetween } from "./wsFeatureStore";
 
 /* ══ ① 术语与常量（图层 id / 格尺寸只有一个来源：这里与 `wsOfflineFeed` 的 SPECS.gw） ═══════ */
 
@@ -57,11 +57,33 @@ export const GW_LAYER_IDS: readonly string[] = [GW_LAYER_ID_OF.water, GW_LAYER_I
 export const GW_BUNDLE_DIR = "gwbundle";
 /** 点/面的来源键前缀（与 `SPECS.gw.sourceKey` 同式） */
 export const GW_SOURCE_KEY_PREFIX = GW_BUNDLE_DIR + ":";
-/** 保留半径（米；水/绿的点很稀、包很小 ⇒ 保留"视野外一圈"就够，来回挪地图不该反复重取） */
-export const GW_RETAIN_RADIUS_M = 3000;
 
 export function gwSourceKeyOf(cellKey: string): string {
   return GW_SOURCE_KEY_PREFIX + cellKey;
+}
+
+/** 保留半径的下限（米）。🔴 **不能给小**：一格 0.05° 在纬度上就有 **~5.6 km**（经度 ~4.8 km，对角线 ~7.4 km），
+ *  给 3 km 时仓库会把**刚取回来那一格自己的要素**当成"太远"当场淘汰 ⇒ 判词少报。
+ *  这不是推测：2026-09-26 真浏览器 A/B 实测（同 URL、同机位）抽前 `水 6 面 · 绿 132 面`、
+ *  抽后 `水 4 面 · 绿 84 面` —— 差的那批正是被淘汰的（见 `gwRetainRadiusM()`）。 */
+export const GW_RETAIN_RADIUS_M = 12000;
+
+/**
+ * 默认保留半径（米）= **至少装得下"视野 + 一整格"**：`max(12km, 视野对角线 × 1.2 + 一格对角线)`。
+ * 为什么要视野那一项：视野越大，被算进计划、因而会被取回来的格子离中心越远；
+ * 只按格对角线给常量的话，大视野下照样会"取回来就淘汰"。
+ */
+export function gwRetainRadiusM(bounds: BundleBoundsLike | null): number {
+  try {
+    if (!bounds) return GW_RETAIN_RADIUS_M;
+    const w = bounds.getWest(), e = bounds.getEast(), s = bounds.getSouth(), n = bounds.getNorth();
+    if (![w, e, s, n].every((v) => Number.isFinite(v))) return GW_RETAIN_RADIUS_M;
+    const viewDiag = metersBetween([w, s], [e, n]);
+    const cellDiag = metersBetween([0, 0], [GW_BUNDLE_CELL_DEG, GW_BUNDLE_CELL_DEG]);
+    return Math.max(GW_RETAIN_RADIUS_M, Math.round(viewDiag * 1.2 + cellDiag));
+  } catch {
+    return GW_RETAIN_RADIUS_M;
+  }
 }
 
 /* ══ ② 颜色：**只从主题拿**（同一个主题对象在页面与 App 里形状不同 ⇒ 两条路径都认） ═════════
@@ -468,7 +490,7 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
     flush: () => {
       draw();
     },
-    retainRadiusM: host.retainRadiusM || (() => GW_RETAIN_RADIUS_M),
+    retainRadiusM: host.retainRadiusM || (() => gwRetainRadiusM(host.view().bounds)),
     onError: (why) => host.onError?.(why),
   });
 

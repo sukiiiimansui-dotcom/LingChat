@@ -537,6 +537,265 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * 🗺 候选底图（页面 `?bm=<id>`）—— **不给参数 = 逐字段与原来一样**
+ * ══════════════════════════════════════════════════════════════════════════
+ * 机主原话（2026-09-26）：「**放太大了只能看到线路，水，绿植啥的都看不到**」。
+ *
+ * ## 🔴 先说清"换底图"这件事为什么必须带证据（两条血泪）
+ * ① 底图源与**亮度基准**是绑在一起的：`measuredLuma.base` 是 `rasterBrightness()/groundLuma()/
+ *    groundHex()` 唯一的输入，它一错，"地面多亮"就全错，楼/地明度关系与描边对比度跟着错。
+ * ② 2026-09-25 有人把底图换成 `World_Street_Map` 但**没动基准** ⇒ 机主看到「地图直接变白/没了」，
+ *    当天 revert。我 2026-09-26 逐档 curl 才量出**真因不是亮度基准**：
+ *      · `World_Street_Map` / `World_Topo_Map` 在这一带 **z≥14 只返回 2521 字节的占位图**
+ *        （ArcGIS 的 "Map data not yet available"，四个服务返回的是**同一张图**，sha256 相同）；
+ *      · 页面默认机位是 **z16.4** ⇒ 整屏都是占位图 ⇒ 那才是"变白"。
+ *    ⇒ 规矩：**每个候选必须带 `realZooms`（curl 实测过有真内容的档位）**，
+ *      `source.maxzoom` 不许超过它的上界 —— 自检会断言（写死在代码里，不靠人记得）。
+ *
+ * ## 亮度基准怎么来的（不是估的）
+ * 每个候选的 `measuredLuma` / `measuredRgb` 都是把 curl 下来的**真瓦片逐像素**量出来的
+ * （口径 = Rec.709，带 alpha 加权；脚本 `~/chk/bm_tile_probe.py`）。实测（SPOT 渝中区）：
+ *
+ * | 服务 | 真内容档 | 平均亮度 | 均 RGB | 彩色像素占比 |
+ * |---|---|---|---|---|
+ * | `Canvas/World_Light_Gray_Base`（现状） | z11/13/15/16（z17 占位） | 0.9274 | (237,237,237) | **0.000** |
+ * | `World_Topo_Map`（候选 topo） | z11/13（z14+ 占位） | 0.8849 | (222,227,226) | 0.067~0.262 |
+ * | `World_Street_Map`（候选 street） | z11/13（z14+ 占位） | 0.7921 | (219,200,177) | 0.793~0.839 |
+ * | `World_Imagery`（候选 imagery） | z11/13/16/17 | 0.3714 | (99,95,78) | 0.74~0.99 |
+ *
+ * 📌 **彩色像素占比 = 0.000** 就是"看不到绿植"的**数字证据**：现用底图（灰度）里一个有色像素都没有
+ *    —— 在灰度上做色相旋转、加饱和度**都是空操作**，再怎么调参数也调不出植被色（这一点本文件
+ *    下面的 `ai` 字段注释早就写过，现在有了实测数）。
+ *
+ * ## 为什么这些候选**只在页面**（`?bm=`）而不改默认
+ * 观感只有机主真机能判（本机无头无 WebGL）。所以这里只**提供可对比的候选**，
+ * 默认路径（不给 `?bm`）**逐字段不走这里**（`withBasemapCandidate(t, null) === t`，同一对象）。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** 一个候选底图（**纯数据**；颜色/亮度/淡出/署名全在这里，页面不许自己写第二份） */
+export interface WsBasemapCandidate {
+  id: string;
+  label: string;
+  /** HUD 上那一行（机主看得懂的话） */
+  hud: string;
+  /** 这个候选想解决什么（写清楚，免得下一个人以为它是随便加的） */
+  why: string;
+  /** 栅格源（**必须**带 attribution —— 换源不许把署名弄丢） */
+  source: WsMapRasterSource;
+  /** 栅格 paint。**不给 = 沿用主题那一份**（对照候选就靠这个做到"逐字段 = 现状"） */
+  raster?: WsMapRasterPaint;
+  /** 色罩"留多少"（1 = 与主题一致，0.35 = 只留三成）。**颜色仍取自主题**，这里只说比例 */
+  tintScale?: number;
+  /** 高 zoom 淡出。**不给 = 沿用主题**；`null` = 全程不淡出（默认机位也要看得见瓦片） */
+  baseFade?: { from: number; to: number } | null;
+  /** 实测平均亮度（0~1）。不给 = 沿用主题那一个（对照候选） */
+  measuredLuma?: number;
+  /** 实测平均色（0~255，仅存档/自检用；地图库的 `raster-*` 只吃亮度） */
+  measuredRgb?: [number, number, number];
+  /** 🔴 **curl 实测**有真内容的档位（占位图不算）。`source.maxzoom` 必须 ≤ 这里最大值 */
+  realZooms: number[];
+  /** 逐档实测证据（HTTP/字节/是否 2521B 占位图）—— 报告与自检都读它 */
+  evidence: string;
+  /** 如实写清这个候选的代价/未知（三态纪律：不把没验的写成好的） */
+  risk?: string;
+}
+
+/** 占位图字节数（ArcGIS "Map data not yet available"）。**换源前必须比对这个数**。 */
+export const WS_TILE_PLACEHOLDER_BYTES = 2521;
+
+/**
+ * 候选表。`gray` 是**对照组**（= 现状那一张），靠"raster/baseFade/measuredLuma 全不给"
+ * 做到与主题逐字段一致 ⇒ 自检能断言"开关机制本身是零改动"。
+ */
+export const WS_BASEMAP_CANDIDATES: Record<string, WsBasemapCandidate> = {
+  gray: {
+    id: "gray",
+    label: "对照·现状（灰度）",
+    hud: "底图对照 = 现状（灰度，无植被/水体色）",
+    why: "对照组：与主题逐字段一致（用来证明 ?bm 开关本身不改任何东西）",
+    source: {
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+      ],
+      maxzoom: 16,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+    },
+    realZooms: [11, 13, 15, 16],
+    evidence:
+      "z11 200/10951B 否 · z13 200/12492B 否 · z15 200/15115B 否 · z16 200/9370B 否 · z17 200/2521B **是占位图** " +
+      "⇒ maxzoom 必须 ≤16（沿用主题现值）",
+    risk: "实测彩色像素占比 0.000（纯灰度）⇒ 这张底图**永远调不出植被/水体色**（在灰度上做色相/饱和是空操作）",
+  },
+  gray16: {
+    id: "gray16",
+    label: "对照·灰底图不淡出",
+    hud: "底图对照 = 同一张灰底图，但**默认机位不淡出**（分离变量用）",
+    why:
+      "把「看不见瓦片」和「瓦片没颜色」两个原因**分开**：这一档只改淡出（源与主题同一张），" +
+      "用来证明机主在默认机位看到的是「纯色地面」而不是「灰瓦片」",
+    source: {
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+      ],
+      maxzoom: 16,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+    },
+    baseFade: null,
+    measuredLuma: 0.9274,
+    measuredRgb: [237, 237, 237],
+    realZooms: [11, 13, 15, 16],
+    evidence: "同 gray（z16 真图 9370B、z17 2521B 占位）⇒ z≤16 有真图、默认机位 z16.4 用 z16 放大即可",
+    risk: "仍是灰度 ⇒ 只解决「看不看得见瓦片」，**不解决「有没有绿植」**",
+  },
+  topo: {
+    id: "topo",
+    label: "候选·地形图（有绿/水）",
+    hud: "底图候选 = 地形图（**有植被绿 / 水体蓝**，但本区最高只到 z13）",
+    why: "机主要的「看得到水/绿植」：这张底图**真的有**植被色与水体色（实测彩色占比 6.7%~26%）",
+    source: {
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+      ],
+      /* 🔴 13 是**实测上限**：z14 起全是 2521B 占位图。写 13 让地图库把 z13 放大复用
+         （略糊，但远好过整屏占位图 —— 上次换源的翻车就是这么来的）。 */
+      maxzoom: 13,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+    },
+    raster: {
+      "raster-opacity": 1,
+      "raster-saturation": 0.55,
+      "raster-contrast": 0.06,
+      "raster-brightness-max": 1.0,
+    },
+    /* 彩色底图再压 45% 的青罩会把绿/蓝洗掉 ⇒ 色罩只留三成五（**颜色仍取自主题**）。 */
+    tintScale: 0.35,
+    /* 全程不淡出：默认机位（街区级）也要看得见这张底图 —— 淡出正是"看不到水/绿植"的一半原因。 */
+    baseFade: null,
+    measuredLuma: 0.8849,
+    measuredRgb: [222, 227, 226],
+    realZooms: [11, 13],
+    evidence:
+      "z11 200/31960B 否 · z13 200/28164B 否 · z14 200/2521B **是占位图** · z15 200/2521B **是** · " +
+      "z16 200/2521B **是** · z17 200/2521B **是**（与另外三个服务返回的是同一张图：sha256 9eafd300…）",
+    risk:
+      "本区最高只到 z13 ⇒ 默认机位（z16.4）是 **3.4 档过放大**（糊；要清晰需把机位拉到 z≤14）。" +
+      "⚪ 未验：它自带地名，主题的注记层（Light_Gray_Reference）是否与它重叠 —— 只有真机图能判",
+  },
+  street: {
+    id: "street",
+    label: "候选·街道图（有绿/水）",
+    hud: "底图候选 = 街道图（暖色路网 + 绿/水；**上次「变白」的元凶**，留作反面对照）",
+    why:
+      "2026-09-25 换它导致「地图变白」的那一张。现在有实测：真因是 **z≥14 占位图**（不是亮度基准），" +
+      "所以这一档把 maxzoom 钉在 13 再放一次，用作「占位图」教训的对照",
+    source: {
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+      ],
+      maxzoom: 13,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+    },
+    raster: {
+      "raster-opacity": 1,
+      "raster-saturation": 0.35,
+      "raster-contrast": 0.04,
+      "raster-brightness-max": 1.0,
+    },
+    tintScale: 0.3,
+    baseFade: null,
+    measuredLuma: 0.7921,
+    measuredRgb: [219, 200, 177],
+    realZooms: [11, 13],
+    evidence:
+      "z11 200/47702B 否 · z13 200/38743B 否 · z14 200/2521B **是占位图** · z15 200/2521B **是** · " +
+      "z16 curl 失败(rc=56) · z17 200/2521B **是**",
+    risk: "路网是大面积暖橙（饱和度 0.79~0.84）⇒ 与 BA 平涂风格的冲突比 topo 大；同样只到 z13",
+  },
+  imagery: {
+    id: "imagery",
+    label: "候选·卫星影像",
+    hud: "底图候选 = 卫星影像（**唯一撑到 z17 的**；写实，改美术方向）",
+    why:
+      "本机网络实测里**唯一**在 z17 仍有真图的栅格源（水体/植被都是真的），" +
+      "留作「要清晰又要真色」的兜底；但它是写实路线，与 BA 平涂冲突 ⇒ 要不要它属于**美术方向**，得机主定",
+    source: {
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      maxzoom: 19,
+      attribution: "Sources: Esri, Maxar, Earthstar Geographics",
+    },
+    raster: {
+      "raster-opacity": 1,
+      "raster-saturation": 0.3,
+      "raster-contrast": 0.08,
+      "raster-brightness-min": 0.18,
+      "raster-brightness-max": 1.0,
+    },
+    /* 卫星本来就暗且写实 ⇒ 不再叠 BA 的青罩（叠了就是"糊上一层蓝"）。 */
+    tintScale: 0,
+    baseFade: null,
+    measuredLuma: 0.3714,
+    measuredRgb: [99, 95, 78],
+    realZooms: [11, 13, 16, 17, 18, 19],
+    evidence:
+      "z11 200/20536B 否 · z13 200/17067B 否 · z15 curl 超时(rc=28) · z16 200/17301B 否 · z17 200/12718B 否 · " +
+      "z18 200/10424B 否 · z19 200/10598B 否 ⇒ 实测到 z19 都有真图（唯一撑过 z17 的服务）",
+    risk:
+      "写实影像 + 实测亮度 0.371（BA 亮底目标 0.92）⇒ **色调与二次元主题冲突**；" +
+      "抬到 BA 的亮度需要 brightness-min 0.18 以上，会把远处糊成灰雾（本次未做真机确认）",
+  },
+};
+
+/** 候选 id 列表（页面徽标/自检用） */
+export function wsBasemapIds(): string[] {
+  return Object.keys(WS_BASEMAP_CANDIDATES);
+}
+
+/**
+ * 从 URL 读候选底图（`?bm=topo`）。返回 `null` = "URL 没说"或"认不出的 id"
+ * （**认不出不许当默认候选用** —— 宁可什么都不换，也别悄悄换一张底图）。
+ */
+export function parseWsBasemapParam(search: string | null | undefined): string | null {
+  try {
+    const v = new URLSearchParams(String(search || "")).get("bm");
+    if (!v) return null;
+    return v in WS_BASEMAP_CANDIDATES ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把一个候选底图**套到主题上**（纯函数）。
+ *
+ * 🔴 `id` 为空/认不出 ⇒ **原样返回入参那一个对象**（`===` 成立）。
+ *    这是"默认行为一个字节都不许变"的**结构性保证**：默认路径根本不进这个函数的分支，
+ *    不靠"我记得别改"。
+ *
+ * 只覆盖这五个字段（其余一律不动 —— 楼体色阶/描边/路网/AI 层都不是底图的事）：
+ *   `sources.base` · `raster.base` · `tint`（按 `tintScale` 缩放**不透明度**，颜色仍取自主题）·
+ *   `baseFade` · `measuredLuma.base`，外加 `label`/`hud` 两行给人看的字。
+ */
+export function withBasemapCandidate(theme: WsMapTheme, id: string | null | undefined): WsMapTheme {
+  const c = id ? WS_BASEMAP_CANDIDATES[String(id)] : null;
+  if (!c) return theme;
+  const tint = theme.tint
+    ? { color: theme.tint.color, opacity: +(theme.tint.opacity * (c.tintScale === undefined ? 1 : c.tintScale)).toFixed(4) }
+    : null;
+  return {
+    ...theme,
+    label: `${theme.label} · 底图 ${c.label}`,
+    hud: c.hud,
+    sources: { ...theme.sources, base: c.source },
+    raster: c.raster ? { ...theme.raster, base: c.raster } : theme.raster,
+    tint,
+    baseFade: c.baseFade === undefined ? theme.baseFade : c.baseFade,
+    measuredLuma: c.measuredLuma === undefined ? theme.measuredLuma : { ...theme.measuredLuma, base: c.measuredLuma },
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * 🎮 「游戏过场」观感：**由基准主题派生**出来的第二版（代拍页 `?look=2`）
  * ══════════════════════════════════════════════════════════════════════════
  * 机主原话（2026-09-24 早）：「**这个好难看，去网上学**」⇒ 第一版做成了"深底亮线"。

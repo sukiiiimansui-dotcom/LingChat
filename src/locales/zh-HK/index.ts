@@ -11,6 +11,7 @@ import settings from "./settings";
 import stores from "./stores";
 import ui from "./ui";
 import views from "./views";
+import worldsim from "./worldsim";
 
 export default {
   advance,
@@ -25,4 +26,5 @@ export default {
   stores,
   ui,
   views,
+  worldsim,
 };

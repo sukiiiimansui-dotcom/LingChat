@@ -452,6 +452,30 @@ export function cardEnterStyle(o: CardOrigin | null): Record<string, string> {
   return { opacity: "0" };
 }
 
+/**
+ * 卡片的**基准 transform**（居中）。🔴 生长位移是**相对**终态位置的增量，
+ * 所以宿主写 inline `transform` 时必须把它拼在基准之后 —— 否则会把居中一起覆盖掉
+ * （卡片会跳到屏幕左上角，看起来像"从角落飞出来"）。
+ * 页面与 App **必须**都用 `cardComposeTransform()` 拼，别各写一遍字符串（那正是"两套语言"的开端）。
+ */
+export const CARD_BASE_TRANSFORM = "translate(-50%, -50%)";
+
+/** 把基准居中与生长/升起分量拼成一个 transform（分量缺省 = `translate3d(0,0,0)`） */
+export function cardComposeTransform(extra?: string | null): string {
+  const e = String(extra || "").trim();
+  return e ? `${CARD_BASE_TRANSFORM} ${e}` : `${CARD_BASE_TRANSFORM} translate3d(0, 0, 0)`;
+}
+
+/** 终态 transform（生长位移归零；必须显式写出来，否则卡片会停在被夹紧的位置上） */
+export function cardRestTransform(): string {
+  return cardComposeTransform("translate3d(0, 0, 0) scale(1)");
+}
+
+/** 退场 transform（§4.3 ④：`opacity → 0` + `scale → 0.96` + 下移 8px） */
+export function cardExitTransform(): string {
+  return cardComposeTransform(`translate3d(0, ${CARD_MOTION.exitShiftPx}px, 0) scale(${CARD_MOTION.exitScaleTo})`);
+}
+
 /* ══ ⑦ 进对话的文本（🔴 红线的**可执行**版本：生成名在这里被替换掉） ═════════════════ */
 
 /**

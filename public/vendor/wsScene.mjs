@@ -3478,6 +3478,182 @@ function envSnapshot(extra = {}) {
   };
 }
 
+// src/components/views/worldsim/wsBldPickStore.ts
+function pointOfFeature(f) {
+  const p = f.geometry && f.geometry.coordinates && f.geometry.coordinates[0] && f.geometry.coordinates[0][0] || null;
+  return p;
+}
+function createBldPickStore(opts) {
+  const frozen = opts?.frozen ?? {};
+  return {
+    pick(input) {
+      const r = capBuildingsPerCell(input.features, {
+        cap: input.cap,
+        cellDeg: input.cellDeg,
+        bounds: input.bounds ?? null,
+        minInView: input.minInView
+      });
+      const size = r.stats.cellDeg;
+      const cap = r.stats.cap;
+      const ckey = size + "|" + cap;
+      const baseN = typeof r.stats.baseChosen === "number" ? r.stats.baseChosen : r.features.length;
+      const baseFeats = r.features.slice(0, baseN);
+      const addedNow = r.features.slice(baseN);
+      const byCellNow = /* @__PURE__ */ new Map();
+      for (const f of baseFeats) {
+        const pt = pointOfFeature(f);
+        if (!pt) continue;
+        const w = Math.floor(pt[0] / size) * size, s = Math.floor(pt[1] / size) * size;
+        const k = ckey + "@" + w.toFixed(5) + "_" + s.toFixed(5);
+        const arr = byCellNow.get(k);
+        if (arr) arr.push(f);
+        else byCellNow.set(k, [f]);
+      }
+      const stableFeats = [];
+      let frozenCells = 0, newCells = 0;
+      for (const [k, arr] of byCellNow) {
+        const fr = frozen[k];
+        if (fr) {
+          frozenCells++;
+          for (const f of fr) stableFeats.push(f);
+        } else {
+          frozen[k] = arr;
+          newCells++;
+          for (const f of arr) stableFeats.push(f);
+        }
+      }
+      const stats = {
+        ...r.stats,
+        frozenCells,
+        newCells,
+        frozenBase: stableFeats.length
+      };
+      return { features: stableFeats.concat(addedNow), stats };
+    },
+    frozenTotal() {
+      return Object.keys(frozen).length;
+    },
+    frozenObject() {
+      return frozen;
+    },
+    snapshot() {
+      const keys = Object.keys(frozen);
+      const cells = [];
+      for (const k of keys) {
+        const arr = frozen[k];
+        cells.push({ key: k, n: arr.length, ids: arr.map((f) => String(f.id ?? "")) });
+      }
+      return { frozenTotal: keys.length, keys, cells };
+    },
+    clear() {
+      for (const k of Object.keys(frozen)) delete frozen[k];
+    }
+  };
+}
+
+// src/components/views/worldsim/wsArtParams.ts
+var WS_ART_RAMP_HI = ["#CFEDFF", "#E2F6FF", "#F2FCFF", "#FFFFFF"];
+var WS_BLD_FALLBACK_RAMP = [
+  [3, "#23323e"],
+  [8, "#2d4356"],
+  [16, "#3a586f"],
+  [30, "#4a7290"],
+  [60, "#5f93b0"],
+  [110, "#7fbcd4"],
+  [200, "#b6e2f2"],
+  [320, "#e8f7ff"]
+];
+var WS_BLD_FALLBACK_OUTLINE = { color: "rgba(190,235,255,0.22)", width: 0.5 };
+var WS_BLD_FALLBACK_OPACITY = 0.97;
+var WS_BLD_OUTLINE_STOPS = [
+  [13, 0.5],
+  [15, 1.6],
+  [16.5, 3.4],
+  [18, 4.2]
+];
+var WS_ART_PATCHES = [
+  /* 🆕 art=3：底图整体往"水青"推（**我们没有水系矢量数据** —— 河/湖是栅格底图里的像素，
+     所以只能调 raster 的整体饱和度/亮度，**不能假装给水体单独上色**） */
+  { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.6, why: "底图更青（**保守**：0.72 洗掉了路与注记）" },
+  { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 0.94, why: "底图更亮但**不顶到 1**（顶到 1 吃掉层次）" },
+  { id: "tint", key: "background-color", art2: "#EEF9FF", why: "地面色罩更近白" },
+  { id: "tint", key: "background-opacity", art2: 0.5, why: "色罩**保守值**：0.8 会把地面糊成一片白" },
+  { id: "bg", key: "background-color", art2: "#F7FCFF", why: "底色更亮" },
+  { id: "base", key: "raster-opacity", art2: 0.52, why: "照片更淡但**底图承载路与注记**：0.32 就「没有路」了" }
+];
+function parseArtParam(search) {
+  const s = String(search ?? "");
+  if (/[?&]art=3\b/.test(s)) return 3;
+  if (/[?&]art=2\b/.test(s)) return 2;
+  return 1;
+}
+function parseLookParam(search) {
+  const s = String(search ?? "");
+  return /[?&]look=2\b/.test(s) ? 2 : 1;
+}
+function lookIdOf(look) {
+  return look === 2 ? "game" : null;
+}
+function artRamp(ramp, art) {
+  if (art !== 2 || !ramp || !ramp.length) return ramp;
+  const r = ramp.map((p) => [p[0], p[1]]);
+  const hi = WS_ART_RAMP_HI;
+  for (let i = 0; i < hi.length && i < r.length; i++) r[r.length - 1 - i][1] = hi[hi.length - 1 - i];
+  return r;
+}
+function outlineWidthAt(z) {
+  const st = WS_BLD_OUTLINE_STOPS;
+  if (z <= st[0][0]) return st[0][1];
+  for (let i = 1; i < st.length; i++) {
+    if (z <= st[i][0]) {
+      const [z0, w0] = st[i - 1], [z1, w1] = st[i];
+      return +(w0 + (w1 - w0) * (z - z0) / (z1 - z0)).toFixed(2);
+    }
+  }
+  return st[st.length - 1][1];
+}
+function outlineWidthExpr() {
+  const out = ["interpolate", ["linear"], ["zoom"]];
+  for (const [z, w] of WS_BLD_OUTLINE_STOPS) out.push(z, w);
+  return out;
+}
+function bldRampColorExpr(stops, ramp, look) {
+  if (look === 2 && ramp && ramp.length >= 2) {
+    const out = ["step", ["get", "h3d"], ramp[0][1]];
+    for (let i = 1; i < ramp.length; i++) out.push(ramp[i][0], ramp[i][1]);
+    return out;
+  }
+  return ["interpolate", ["linear"], ["get", "h3d"], ...stops];
+}
+function artPatchValueOf(row, art) {
+  if (art < 2) return null;
+  return art === 3 && row.art3 !== void 0 ? row.art3 : row.art2;
+}
+function bldArtParamsOf(theme, opts) {
+  const art = opts?.art ?? 1;
+  const look = opts?.look ?? 1;
+  const fallbackRamp = opts?.fallbackRamp ?? WS_BLD_FALLBACK_RAMP;
+  const ramp = artRamp(theme && theme.ramp || fallbackRamp, art);
+  const outline = theme && theme.outline || WS_BLD_FALLBACK_OUTLINE;
+  const vgrad = theme ? theme.verticalGradient : true;
+  const opacity = theme && theme.extrudOpacity || WS_BLD_FALLBACK_OPACITY;
+  const stops = [];
+  for (const [h, c] of ramp) stops.push(h, c);
+  return {
+    art,
+    look,
+    ramp,
+    /* ⚠️ **原样透传**（不补默认值）：页面旧实现就是 `THEME?.outline || 兜底` 两步，
+       这里多补一次 `??` 就会让"主题缺 width"时与旧实现不同 ⇒ 逐字段对拍会红。 */
+    outline,
+    vgrad,
+    opacity,
+    stops,
+    lineWidth: art >= 2 ? outlineWidthExpr() : outline.width,
+    rampColor: bldRampColorExpr(stops, ramp, look)
+  };
+}
+
 // src/components/views/worldsim/wsBldGl.ts
 var R = 6378137;
 var D2R = Math.PI / 180;
@@ -4651,11 +4827,17 @@ export {
   WHEEL_ZOOM_RATE,
   WIN_MIN_H,
   WIN_PATTERN_SIZE,
+  WS_ART_PATCHES,
+  WS_ART_RAMP_HI,
   WS_BLD_CELL_CAP,
   WS_BLD_CELL_DEG,
+  WS_BLD_FALLBACK_OPACITY,
+  WS_BLD_FALLBACK_OUTLINE,
+  WS_BLD_FALLBACK_RAMP,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
   WS_BLD_OUTLINE_FULL_ZOOM,
+  WS_BLD_OUTLINE_STOPS,
   WS_BLD_VECTOR_MINZOOM,
   WS_BLD_VIEW_CAP,
   WS_FETCH_R_BACKEND_MAX,
@@ -4676,6 +4858,9 @@ export {
   applyGwLayers,
   applyPitchGuard,
   art3Summary,
+  artPatchValueOf,
+  artRamp,
+  bldArtParamsOf,
   bldBundleCellKey,
   bldBundleCellOf,
   bldBundleCellsForView,
@@ -4684,6 +4869,7 @@ export {
   bldLiveDecision,
   bldPointOf,
   bldPointOfRaw,
+  bldRampColorExpr,
   bldVerdictState,
   bldVerdictText,
   buildBldBoxes,
@@ -4709,6 +4895,7 @@ export {
   contrastRatio,
   contrastReport,
   createBldGlLayer,
+  createBldPickStore,
   createBundleFeed,
   createFeatureStore,
   createGwLayer,
@@ -4777,12 +4964,17 @@ export {
   lodTileX,
   lodTileY,
   lodViewTiles,
+  lookIdOf,
   mercatorXOf,
   mercatorYOf,
   metersBetween,
   metersToMercator,
   nearestOnLine,
+  outlineWidthAt,
+  outlineWidthExpr,
   panDamping,
+  parseArtParam,
+  parseLookParam,
   pickBuildingsForView,
   pickHome,
   pickLabels,

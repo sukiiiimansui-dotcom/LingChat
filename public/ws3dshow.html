@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v72";
+      const BUILD = "ws3dshow-2026-09-26-v73";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -755,21 +755,13 @@
        * 规矩：**样式里只写"一开始就存在的东西"**；随数据来的图层一律 `addLayer` 后加。
        */
       /**
-       * 🎮 楼体色阶表达式。
-       * · 基准版 = 平滑插值（`interpolate`，8 档）；
-       * · `?look=2` = **硬边 `step`（cel 分档）** —— 抄 cel shading 的"三档之间是硬边"。
+       * 🎮 楼体色阶表达式 —— **已搬到共享真源**（`wsArtParams.bldRampColorExpr`，2026-09-26）。
        *
-       * ⚠️ **停靠点与颜色都来自主题**（`THEME.ramp`），这里只决定"**插值形式**"
-       * ⇒ 换观感换的是关系，不是又一份配色（页面里没有一个楼体色号）。
+       * 为什么搬（机主真机原话：「App 页用的建筑模型**不是 art1**」）：本页原来有一份内联实现
+       * （`?look=2` ⇒ 硬边 `step`，否则 `interpolate`），而 **App 宿主一份都没有** ⇒ 同一个主题、同一个
+       * `?look=`，两页出来的 `fill-extrusion-color` 不是一个东西。判据是"换宿主、调同样的函数"。
+       * 自检 `ws_art_params_selftest.mjs` 第②组把这一段的**旧实现原文**（git 锚点）与共享版逐字段对拍过。
        */
-      function rampExpr(stops, ramp) {
-        if (LOOK === 2 && ramp && ramp.length >= 2) {
-          const out = ["step", ["get", "h3d"], ramp[0][1]];
-          for (let i = 1; i < ramp.length; i++) out.push(ramp[i][0], ramp[i][1]);
-          return out;
-        }
-        return ["interpolate", ["linear"], ["get", "h3d"], ...stops];
-      }
 
       /**
        * 🎮 **接触阴影**（`?look=2`）：把同一份楼脚印再画两遍，压在楼体**之下**。
@@ -814,20 +806,19 @@
       function bldLayerSpecs() {
         /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数 */
         if (bldMinzoom() === null) return [];
-        /* 色阶/描边/平涂开关**全部跟着主题走**（和产品组件同源，见 `wsMapTheme.ts`）。
-           兜底值 = 本页原来那套暗色配方（与「一页一主题」原则一致：只在 `FALLBACK_RAMP` 写一份）。 */
-        const ramp = artRamp(THEME?.ramp || FALLBACK_RAMP); // 🎨 art=2 把高段推到近白（`artRamp` 在 art=1 时**原样返回**）
-        const outline = THEME?.outline || { color: "rgba(190,235,255,0.22)", width: 0.5 };
-        /* 平涂（二次元）= 关掉竖向渐变；写实（暗色）= 开着。 */
-        const vgrad = THEME ? THEME.verticalGradient : true;
-        const opacity = THEME?.extrudOpacity || 0.97;
-        const stops = [];
-        for (const [h, c] of ramp) stops.push(h, c);
+        /* 🎨 **取参只有一份**（2026-09-26 抽真源）：色阶（含 `artRamp`）/ 描边 / 平涂开关 / 不透明度 /
+           铺平的停靠点 / 描边 zoom 插值 / 高度分档表达式 —— 全从 `wsArtParams.bldArtParamsOf()` 来，
+           本页**不再持有第二份**（原来那 5 行内联就是"两页观感不同"的来源：App 侧根本没有它们）。
+           ⚠️ 模块没到 ⇒ 与 `bldMinzoom() === null` **同一条判词**：这批图层不建（HUD 会写原因），
+              绝不拿一份内联拷贝顶上（拷贝就是下一次"两边不一致"）。 */
+        const M = artMod();
+        if (!M) return [];
+        const P = M.bldArtParamsOf(THEME, { art: ART, look: LOOK });
         /* 🔘 `?bld=0`：**一层都不建**（调用方也会跳过 addLayer；这里返回空数组是双保险） */
         if (BLD_OFF) return [];
         /* 🏢 `?bld=2` 走"拆件"那套图层（颜色读要素自带的 `color3d`、底座读 `h_base`） */
-        if (BLD === 2) return bldShadowLayers().concat(bldLayerSpecsDetail(outline, vgrad, opacity, stops, ramp));
-        if (BST === 2) return bldShadowLayers().concat(bstLayers(outline, vgrad, opacity, stops, ramp));
+        if (BLD === 2) return bldShadowLayers().concat(bldLayerSpecsDetail(P));
+        if (BST === 2) return bldShadowLayers().concat(bstLayers(P));
         return bldShadowLayers().concat([
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
@@ -836,14 +827,14 @@
               /* 按**渲染高度**上色：矮的沉下去、高的亮起来 ⇒ 一眼看出天际线的高低起伏。
                  （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。）
                  🎮 `?look=2`：同一张色阶，但换成**硬边分档**（cel）。 */
-              "fill-extrusion-color": rampExpr(stops, ramp),
+              "fill-extrusion-color": P.rampColor,
               "fill-extrusion-height": ["get", "h3d"],
               "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-              "fill-extrusion-opacity": opacity,
+              "fill-extrusion-opacity": P.opacity,
               /* 墙面竖向渐变：楼顶比楼底亮一点，体块才有"立起来"的感觉；
                  二次元的**平涂**要关掉它（楼是一块纯色板才"动画"）。
                  🎮 `?look=2` 把主题的 `verticalGradient` 打开了（受光面/背光面 + 落地感）。 */
-              "fill-extrusion-vertical-gradient": vgrad,
+              "fill-extrusion-vertical-gradient": P.vgrad,
             },
           },
           {
@@ -853,10 +844,10 @@
             id: "bld-line", type: "line", source: "bld",
             minzoom: bldMinzoomSpec(),   /* 🔴 同上：起点 = 共享真源（不许写死）*/
             paint: {
-              "line-color": outline.color,
+              "line-color": P.outline.color,
               /* 🎨 art=2：描边**随 zoom 变细/变粗**（近粗 ⇒ 动画感；远细 ⇒ 不糊成一片）。
-                 art=1 保持主题给的固定宽度（旧版逐字节不变）。停靠点只有一份（`OUTLINE_STOPS`）。 */
-              "line-width": ART >= 2 ? outlineWidthExpr() : outline.width,
+                 art=1 保持主题给的固定宽度（旧版逐字节不变）。停靠点只有一份（`WS_BLD_OUTLINE_STOPS`）。 */
+              "line-width": P.lineWidth,
             },
           },
         ]);
@@ -875,7 +866,8 @@
        *     很小的楼（< ~15×15m）在屏幕上只有几像素，给它描边就等于在整片地上画网格线
        *     —— 这是"一地瓷砖"感的最大来源（父代理的押注，我复算后同意）。
        */
-      function bstLayers(outline, vgrad, opacity, stops, ramp) {
+      function bstLayers(P) {
+        const outline = P.outline, opacity = P.opacity, ramp = P.ramp;
         const ground = (THEME && THEME.metrics && THEME.metrics.groundHex) || "#dceff7";
         const shadeFn = (window.__TF__ && window.__TF__["shade"]) || null;
         const shadowCol = shadeFn ? shadeFn(ground, 0.82) : "rgba(0,0,0,0.12)";
@@ -916,13 +908,13 @@
       }
 
       /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
-      function bldLineLayer(outline) {
+      function bldLineLayer(P) {
         return {
           id: "bld-line", type: "line", source: "bld",
             minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
           paint: {
-            "line-color": outline.color,
-            "line-width": ART >= 2 ? outlineWidthExpr() : outline.width,
+            "line-color": P.outline.color,
+            "line-width": P.lineWidth,   /* 🎨 art≥2 ⇒ zoom 插值；art=1 ⇒ 主题固定宽度（都在共享取参里决定） */
           },
         };
       }
@@ -937,15 +929,15 @@
        *  · `bld-ext`：`win != 1` → 走色阶（与基准版同一张色阶，逐要素取 `color3d`）。
        * 互补由**要素上的 0/1 标记**保证（不是在图层的 filter 里拼表达式 —— 表达式报错是静默的）。
        */
-      function bldLayerSpecsDetail(outline, vgrad, opacity, stops, ramp) {
+      function bldLayerSpecsDetail(P) {
         /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数 */
         if (bldMinzoom() === null) return [];
         const paintCommon = {
           "fill-extrusion-height": ["get", "h3d"],
           /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
           "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
-          "fill-extrusion-opacity": opacity,
-          "fill-extrusion-vertical-gradient": vgrad,
+          "fill-extrusion-opacity": P.opacity,
+          "fill-extrusion-vertical-gradient": P.vgrad,
         };
         const colorLayer = {
           id: "bld-ext", type: "fill-extrusion", source: "bld",
@@ -954,7 +946,7 @@
             ...paintCommon,
             /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）。
                🎮 `?look=2` 时兜底那条换成硬边分档（`color3d` 缺席的要素才走它）。 */
-            "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpr(stops, ramp)],
+            "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
           },
         };
         if (WINS) colorLayer.filter = ["!=", ["get", "win"], 1]; // 与窗格层互补
@@ -964,7 +956,7 @@
           filter: ["==", ["get", "win"], 1],
           paint: { ...paintCommon, "fill-extrusion-pattern": WIN_IMAGE_ID },
         };
-        return WINS ? [colorLayer, winLayer, bldLineLayer(outline)] : [colorLayer, bldLineLayer(outline)];
+        return WINS ? [colorLayer, winLayer, bldLineLayer(P)] : [colorLayer, bldLineLayer(P)];
       }
 
       /* ══ 🎨 美术变体 `?art=2`（机主 2026-09-21：先在**代拍页**做一版，别碰 App 与角色）════
@@ -1153,7 +1145,11 @@
          浏览器缓存里那份旧模块就一直用着（HUD 写「模块缺 createBundleFeed（旧 vendor?）」，
          而兜底逻辑自己却不知道要去找它）。
          规矩：**凡页面真会调的符号，都必须进这张表**（漏一个 = 那次缓存永远修不回来）。 */
-      const FEED_NEEDED = ["createBundleFeed", "bundleCountsLine", "bundleCellUrl", "loadBundleIndex"];
+      const FEED_NEEDED = ["createBundleFeed", "bundleCountsLine", "bundleCellUrl", "loadBundleIndex",
+        /* 🎨🏙 2026-09-26 抽真源后**本页新增依赖的符号**（挑选/冻结编排 + 美术取参）：
+           它们是**函数**（`tfMissing()` 的判据就是 `typeof === "function"`，常量**不能**进这张表）。
+           进了这张表 ⇒ 浏览器缓存里的旧产物会被"带版本号重取"治好，而不是表现成"这个开关没反应"。 */
+        "createBldPickStore", "bldArtParamsOf"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
         "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",
@@ -1229,33 +1225,35 @@
         }
         return have;
       }
-      /** 取不到主题时的色阶兜底（与 `wsMapTheme.ANIME` 同源）。**只在这一处写**，别在两处抄。 */
-      const FALLBACK_RAMP = [
-        [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
-        [60, "#5f93b0"], [110, "#7fbcd4"], [200, "#b6e2f2"], [320, "#e8f7ff"],
-      ];
-
-      /** 描边的 zoom→宽度 停靠点（**单一真源**：样式表达式与 HUD 显示都从这一份来，别写两遍） */
-      const OUTLINE_STOPS = [
-        [13, 0.5], [15, 1.6], [16.5, 3.4], [18, 4.2],
-      ]; // 机主反馈"看不出变化" ⇒ 近景放大一档（远景仍保持细）
-      /** 按 zoom 求描边宽度（纯函数；用于 HUD 显示"现在多粗"） */
-      function outlineWidthAt(z) {
-        const st = OUTLINE_STOPS;
-        if (z <= st[0][0]) return st[0][1];
-        for (let i = 1; i < st.length; i++) {
-          if (z <= st[i][0]) {
-            const [z0, w0] = st[i - 1], [z1, w1] = st[i];
-            return +(w0 + ((w1 - w0) * (z - z0)) / (z1 - z0)).toFixed(2);
-          }
-        }
-        return st[st.length - 1][1];
+      /* ══ 🎨 美术取参（`wsArtParams`）——**本页不再持有第二份** ══════════════════════════════
+         2026-09-26 抽真源。这一段原来在本页内联着六件东西，而 **App 宿主一件都没有**：
+           · 兜底色阶 `FALLBACK_RAMP`（`wsArtParams.WS_BLD_FALLBACK_RAMP`）
+           · 描边停靠点 `OUTLINE_STOPS` + `outlineWidthAt` + `outlineWidthExpr`（同名导出）
+           · 补丁表 `ART_PATCHES` + `ART_RAMP_HI` + `artRamp`（`WS_ART_PATCHES` / `WS_ART_RAMP_HI` / `artRamp`）
+         ⇒ 机主真机看到的就是「**App 页不是 art1**」：同一个主题，两页喂进同一份装配函数的**输入不同**。
+         现在只留两个"取用口"：`artMod()`（模块在不在）+ 需要时读模块上的常量/函数。
+         🔴 **判词三态**：模块没到 ⇒ `artMod()` 返回 null，调用点各自**如实说明**（不建这批图层 /
+            HUD 写"数不出来"），**绝不**拿一份内联拷贝顶上（拷贝就是下一次"两边不一致"）。
+         ⚠️ `WIN_IMAGE_ID` 之类**本页自己的** id 不算取参，仍留在页面。 */
+      /** 取用口：模块没到（vendor 是旧的 / 还没 import 完）⇒ null */
+      function artMod() {
+        try {
+          const T = window.__TF__;
+          return (T && typeof T.bldArtParamsOf === "function") ? T : null;
+        } catch (e) { return null; }
       }
-      /** 由停靠点生成 MapLibre 的 zoom 插值表达式（与 `outlineWidthAt` 同源） */
-      function outlineWidthExpr() {
-        const out = ["interpolate", ["linear"], ["zoom"]];
-        for (const [z, w] of OUTLINE_STOPS) out.push(z, w);
-        return out;
+      /** 🏙 **挑选/冻结编排器**（`wsBldPickStore`）：整页一份实例 ⇒ 冻结集跨帧、跨视野保持。
+          原来这段编排内联在本页（`const ckey = …` → `window.__BLD_PICK__`），App 侧因此**根本没有**它。
+          `window.__BLD_FROZEN__` 就是模块内部那个冻结缓存对象**本身**（不是拷贝，形状与旧版逐字节相同）。 */
+      let BLD_PICK_STORE = null;
+      function bldPickStore() {
+        const T = window.__TF__;
+        if (!T || typeof T.createBldPickStore !== "function") return null;
+        if (!BLD_PICK_STORE) {
+          BLD_PICK_STORE = T.createBldPickStore();
+          window.__BLD_FROZEN__ = BLD_PICK_STORE.frozenObject();
+        }
+        return BLD_PICK_STORE;
       }
 
       /**
@@ -1270,29 +1268,18 @@
       }
 
       /**
-       * 🎨 **补丁表（单一真源）**：art=2 要改的"图层 → 键 → 值"。
-       * `applyArt()` 按它改样式；`artReadback()` 按它**读回实时值**做回证 —— **同一份表**，
-       * 所以"改了但没生效"这种情况一定会在回证表里露出来（机主第一反馈："这变了个啥"）。
+       * 造这一版美术（art=2 才动；art=1 原样返回 ⇒ **旧版一个字节都不变**）。
+       * 补丁表从共享真源取（`wsArtParams.WS_ART_PATCHES` + `artPatchValueOf`，回证表读的是同一份）。
+       * 🔴 模块没到 ⇒ **不改样式并如实报 -1**（`window.__ART_CHANGED__ = -1` ⇒ HUD 写"变体改=-1 处"），
+       *    不静默跳过 —— "改了但没生效"这个项目付过代价（机主第一反馈就是"这变了个啥"）。
        */
-      const ART_PATCHES = [
-        /* 🆕 art=3：底图整体往"水青"推（**我们没有水系矢量数据** —— 河/湖是栅格底图里的像素，
-           所以只能调 raster 的整体饱和度/亮度，**不能假装给水体单独上色**） */
-        { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.6, why: "底图更青（**保守**：0.72 洗掉了路与注记）" },
-        { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 0.94, why: "底图更亮但**不顶到 1**（顶到 1 吃掉层次）" },
-        { id: "tint", key: "background-color", art2: "#EEF9FF", why: "地面色罩更近白" },
-        { id: "tint", key: "background-opacity", art2: 0.5, why: "色罩**保守值**：0.8 会把地面糊成一片白" },
-        { id: "bg", key: "background-color", art2: "#F7FCFF", why: "底色更亮" },
-        { id: "base", key: "raster-opacity", art2: 0.52, why: "照片更淡但**底图承载路与注记**：0.32 就「没有路」了" },
-      ];
-      /** 楼体色阶要推近白的档数（`artRamp` 用；也进回证表） */
-      const ART_RAMP_HI = ["#CFEDFF", "#E2F6FF", "#F2FCFF", "#FFFFFF"];
-
-      /** 造这一版美术（art=2 才动；art=1 原样返回 ⇒ **旧版一个字节都不变**） */
       function applyArt(style) {
         if (ART < 2) return { style: style, changed: 0 };
+        const M = artMod();
+        if (!M) return { style: style, changed: -1 };
         let n = 0;
         const set = function (id, k, v) { if (patchPaint(style, id, k, v)) n++; };
-        for (const q of ART_PATCHES) set(q.id, q.key, ART3 && q.art3 !== undefined ? q.art3 : q.art2);
+        for (const q of M.WS_ART_PATCHES) set(q.id, q.key, M.artPatchValueOf(q, ART));
 
         /* ① 描边随 zoom 变细（近粗远细）—— 楼层的 `bld-line` 在 addLayer 时加，见 bldLayerSpecs() */
         /* ② 基沃托斯的天：**根级 sky 只动白名单里的键**（sky-color/horizon-color/fog-color 等 7 个） */
@@ -1310,13 +1297,16 @@
         return { style: style, changed: n };
       }
 
-      /** 楼体色阶：art=2 把高段推到近白（**不动 ANIME 基准**，只在这一页换一份 ramp） */
-      function artRamp(ramp) {
-        if (ART !== 2 || !ramp || !ramp.length) return ramp;
-        const r = ramp.map(function (p) { return [p[0], p[1]]; });
-        const hi = ART_RAMP_HI;
-        for (let i = 0; i < hi.length && i < r.length; i++) r[r.length - 1 - i][1] = hi[hi.length - 1 - i];
-        return r;
+      /**
+       * 楼体色阶：art=2 把高段推到近白（**不动主题基准**，只换这一屏用的那一份拷贝）。
+       * **已搬到共享真源**（`wsArtParams.artRamp`）—— `art=1` 时**恒等返回**（同一个引用），
+       * 所以"不给参数 = 旧版一个字节都不变"这条有 `ws_art_params_selftest.mjs` 第①组钉着。
+       * 页面这一层只是"按 art 档取参"：`bldArtRamp()`（模块没到 ⇒ 返回 null，调用点各自如实判词）。
+       */
+      function bldArtRamp() {
+        const M = artMod();
+        if (!M) return null;
+        return M.bldArtParamsOf(THEME, { art: ART, look: LOOK }).ramp;
       }
 
       /** HUD 上的"这一版是什么"：art 档位 + 描边当前宽度 + 变体生效处数（**自证**，别让人猜） */
@@ -1324,8 +1314,10 @@
         try {
           let z = 0;
           try { z = map && map.getZoom ? map.getZoom() : 0; } catch (e) { z = 0; }
+          const M = artMod();
           const w = map && map.getPaintProperty ? map.getPaintProperty("bld-line", "line-width") : null;
-          const wTxt = w && w.length ? ("zoom插值→" + outlineWidthAt(z)) : String(w);
+          /* 描边宽度按 zoom 插出来的那个数**只有共享真源会算**；模块没到 ⇒ 如实写"数不出来" */
+          const wTxt = w && w.length ? ("zoom插值→" + (M ? M.outlineWidthAt(z) : "数不出来（vendor 缺 bldArtParamsOf）")) : String(w);
           const ch = window.__ART_CHANGED__;
           return "art=" + ART + " 描边=" + wTxt + (ch === undefined ? "" : " 变体改=" + ch + "处");
         } catch (e) {
@@ -1334,24 +1326,28 @@
       }
 
       /**
-       * 🎨 **回证表**：按 `ART_PATCHES` 逐条读**地图上真实的** paint 值，与 art=2 期望值对照。
+       * 🎨 **回证表**：按共享真源的补丁表逐条读**地图上真实的** paint 值，与 art=2 期望值对照。
        * 为什么必须有：上一版我只做了"拿 JSON 空跑"的自验 —— 那**不等于页面上生效**
        * （真页面的图层/键可能与 JSON 不一致）。机主第一句反馈就是"这变了个啥"。
-       * 返回 `[{图层, 键, 现在, 期望, 命中}]`，命中/跳过**都列**。
+       * 返回 `[{图层, 键, 现在, 期望, 命中}]`，命中/跳过**都列**；模块没到 ⇒ **返回空表 + 一行说明**
+       * （空表会被读的人当成"没问题"，所以下面补一行 `id:"（模块）"` 的说明行）。
        */
       function artReadback() {
         const rows = [];
-        for (const q of ART_PATCHES) {
+        const M = artMod();
+        if (!M) return [{ id: "（模块）", key: "-", now: null, want: null, hit: "no-module", why: "读不到 wsArtParams（旧 vendor / 还没到）⇒ 取参表与描边停靠点都数不出来" }];
+        for (const q of M.WS_ART_PATCHES) {
           let now = null, has = false;
           try {
             has = !!(map && map.getLayer && map.getLayer(q.id));
             now = map && map.getPaintProperty ? map.getPaintProperty(q.id, q.key) : null;
           } catch (e) { now = "(取值抛错)"; }
+          const want = M.artPatchValueOf(q, ART);   /* art<2 ⇒ null（这一行只是"基准值"）；与 applyArt 同一份表 */
           rows.push({
             id: q.id, key: q.key, now: now,
-            want: ART >= 2 ? (ART3 && q.art3 !== undefined ? q.art3 : q.art2) : null,
+            want: want,
             /** art=1 时这一行只是"基准值"；art=2 时才判命中 */
-            hit: ART < 2 ? null : (!has ? "no-layer" : JSON.stringify(now) === JSON.stringify(ART3 && q.art3 !== undefined ? q.art3 : q.art2)),
+            hit: ART < 2 ? null : (!has ? "no-layer" : JSON.stringify(now) === JSON.stringify(want)),
             why: q.why,
           });
         }
@@ -1360,8 +1356,8 @@
           const w = map && map.getPaintProperty ? map.getPaintProperty("bld-line", "line-width") : null;
           rows.push({
             id: "bld-line", key: "line-width",
-            now: w && w.length ? ("zoom插值→现在 " + outlineWidthAt(map.getZoom())) : w,
-            want: ART === 2 ? ("zoom插值→" + JSON.stringify(OUTLINE_STOPS)) : "主题固定值",
+            now: w && w.length ? ("zoom插值→现在 " + M.outlineWidthAt(map.getZoom())) : w,
+            want: ART === 2 ? ("zoom插值→" + JSON.stringify(M.WS_BLD_OUTLINE_STOPS)) : "主题固定值",
             hit: ART !== 2 ? null : (w && w.length ? true : false),
             why: "描边随 zoom（近粗远细）",
           });
@@ -3003,50 +2999,37 @@
           const BLDCELL = bldCellDeg();
           const BLDN = bldnEff();
           if (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && bldMz !== null && z >= bldMz) {
-            /* 🧊 **按格冻结**：同一格的结果缓存住（键 = 格 + 上限）⇒ ① 重复落图不再重排（省算力）；
-               ② "永远不变"变成可断言的：同一格任何时候取到的都是同一批（`window.__BLD_FROZEN__` 可核）。
-               ⚠️ **只冻结 base**（`r.features.slice(0, stats.baseChosen)`）：视野补齐的那几栋每帧重算，
-               不进冻结集、也不覆盖冻结集（两条口径都要：块内固定 + 视野内够 10）。 */
-            const ckey = BLDCELL + "|" + BLDN;
-            if (!window.__BLD_FROZEN__) window.__BLD_FROZEN__ = {};
-            const frozen = window.__BLD_FROZEN__;
-            const r = pmTime("bld.pick", function () {
-              return TFp.capBuildingsPerCell(all.features, {
-                cap: BLDN, cellDeg: BLDCELL,
-                bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
-                minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
-              });
-            }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });
-            const baseN = (typeof r.stats.baseChosen === "number") ? r.stats.baseChosen : r.features.length;
-            const baseFeats = r.features.slice(0, baseN);
-            const addedNow = r.features.slice(baseN);
-            /* 逐格冻结：已经冻结过的格，用冻结那批（新格照常加入）——**只对 base 做** */
-            const byCellNow = new Map();
-            for (const f of baseFeats) {
-              const pt = (f.geometry && f.geometry.coordinates && f.geometry.coordinates[0] && f.geometry.coordinates[0][0]) || null;
-              if (!pt) continue;
-              const w = Math.floor(pt[0] / BLDCELL) * BLDCELL, s = Math.floor(pt[1] / BLDCELL) * BLDCELL;
-              const k = ckey + "@" + w.toFixed(5) + "_" + s.toFixed(5);
-              if (!byCellNow.has(k)) byCellNow.set(k, []);
-              byCellNow.get(k).push(f);
+            /* 🧊 **按格冻结**（**编排已搬到共享真源** `wsBldPickStore`，2026-09-26）：
+               原来这 40 行内联在本页 ⇒ **App 宿主拿不到它** ⇒ 机主真机「每次滑动建筑都变了」。
+               现在页面只接线：给「仓库全量 + 上限 + 格尺寸 + 视野 + 视野下限」，拿回 `{features, stats}`。
+               · 模块内部口径（自检 `ws_bld_pick_store_selftest.mjs` 与**本页旧实现原文**逐字节对拍过）：
+                 先算 base（每块 ≤cap、只依赖固定经纬格）→ **只冻结 base** →
+                 视野补齐件每帧重算、**不进冻结集**（补进冻结集就会"挪一下就乱变"，机主明确否过）。
+               · `window.__BLD_FROZEN__` 仍可核 —— 它就是模块内部那个冻结缓存对象**本身**（不是拷贝）。 */
+            const store = bldPickStore();
+            if (!store) {
+              /* 🔴 模块在、但这个符号不在（**旧 vendor**）⇒ **如实报"数不出来"**，不静默退化。
+                 `FEED_NEEDED` 里有 `createBldPickStore` ⇒ `ensureVendor()` 会带版本号重取一次。 */
+              window.__BLD_PICK__ = { skipped: true, why: "数不出来：vendor 缺 createBldPickStore（旧产物？会在下一次取数时带版本号重取）" };
+              pickWhy = "（未挑：" + window.__BLD_PICK__.why + "）";
+            } else {
+              const r = pmTime("bld.pick", function () {
+                return store.pick({
+                  features: all.features,           /* 仓库**全量**（含视野外）——"画面可以编，事实不许编" */
+                  cap: BLDN,                        /* 每块上限（跟格面积等比缩，见 `bldnEff()`） */
+                  cellDeg: BLDCELL,                 /* 区块边长 = 数据格边长（`bldCellDeg()` 一轮只读一次） */
+                  bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
+                  minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
+                });
+              }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });
+              window.__BLD_FROZEN_N__ = store.frozenTotal();
+              data = { type: "FeatureCollection", features: r.features };
+              /* ⚠️ 这条人话串**只由共享模块产出**（`stats.why` 里已经含"冻结 N + 视野补 M / 视野内 X（下限 10 · 补 +M / 仍差 Y）"）
+                 —— 页面**不许**再拼第二份（拼两份就是下一次"两边口径不一致"）。 */
+              pickWhy = r.stats.why;
+              window.__BLD_PICK__ = r.stats;
+              try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", pickWhy, r.stats); } catch (e2) { /* 忽略 */ }
             }
-            const stableFeats = [];
-            let frozenCells = 0, newCells = 0;
-            for (const [k, arr] of byCellNow) {
-              if (frozen[k]) { frozenCells++; for (const f of frozen[k]) stableFeats.push(f); }
-              else { frozen[k] = arr; newCells++; for (const f of arr) stableFeats.push(f); }
-            }
-            /* base（冻结后）在前、视野补充件在后 —— 顺序稳定，便于"冻结集"独立核对 */
-            r.features = stableFeats.concat(addedNow);
-            r.stats.frozenCells = frozenCells; r.stats.newCells = newCells;
-            r.stats.frozenBase = stableFeats.length;
-            window.__BLD_FROZEN_N__ = Object.keys(frozen).length;
-            data = { type: "FeatureCollection", features: r.features };
-            /* ⚠️ 这条人话串**只由共享模块产出**（`stats.why` 里已经含"冻结 N + 视野补 M / 视野内 X（下限 10 · 补 +M / 仍差 Y）"）
-               —— 页面**不许**再拼第二份（拼两份就是下一次"两边口径不一致"）。 */
-            pickWhy = r.stats.why;
-            window.__BLD_PICK__ = r.stats;
-            try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", pickWhy, r.stats); } catch (e2) { /* 忽略 */ }
           } else {
             /* ⚠️ 文案必须与事实一致：瓦片已撤到 z<11 ⇒ 这一档**不再有"瓦片兜底"**。
                2026-09-26 之前这里写的是「远景走瓦片，不挑」—— 那句在瓦片撤掉后就变成假话了。 */
@@ -3065,8 +3048,9 @@
               const TFb = await ensureVendor();
               if (gen !== bldDressGen) return;                    // 期间又刷新过 ⇒ 丢弃这一次
               if (TFb && typeof TFb.decorateBuildings === "function") {
+                const ramp = bldArtRamp();   /* 🎨 色阶取参 = 共享真源（`wsArtParams.bldArtParamsOf`）；模块就在手边 ⇒ 必有 */
                 const dec = TFb.decorateBuildings({ type: "FeatureCollection", features: data.features },
-                                                  artRamp((THEME && THEME.ramp) || FALLBACK_RAMP), { mode: "detail", low: BLD_LOW });
+                                                  ramp, { mode: "detail", low: BLD_LOW });
                 window.__BLD_COUNT__ = dec.count || null;
                 window.__BLD_FALLBACK__ = null;
                 const dd = { type: "FeatureCollection", features: dec.features };
@@ -3651,7 +3635,8 @@
           const TFb = await ensureVendor();
           if (TFb && typeof TFb.decorateBuildings === "function") {
             try {
-              const dec = TFb.decorateBuildings(fc, artRamp((THEME && THEME.ramp) || FALLBACK_RAMP), { mode: "detail", low: BLD_LOW });
+              const ramp = bldArtRamp();   /* 🎨 色阶取参 = 共享真源（`wsArtParams.bldArtParamsOf`） */
+              const dec = TFb.decorateBuildings(fc, ramp, { mode: "detail", low: BLD_LOW });
               feats = dec.features;
               bldCount = dec.count;
             } catch (e) {
@@ -3749,7 +3734,8 @@
         try {
           const TFb = window.__TF__;
           if (!TFb || typeof TFb.windowPatternSpec !== "function") throw new Error("模块里没有 windowPatternSpec");
-          const ramp = artRamp((THEME && THEME.ramp) || FALLBACK_RAMP);
+          const ramp = bldArtRamp();   /* 🎨 色阶取参 = 共享真源（`wsArtParams.bldArtParamsOf`） */
+          if (!ramp) throw new Error("模块里没有 bldArtParamsOf（旧 vendor？）");
           /* 配色**从主题色阶派生**（不写第二套配色）：墙面取高段色，窗格 = 墙面压暗 18% */
           const wall = TFb.rampColorOf ? TFb.rampColorOf(60, ramp) : "#F2FAFF";
           const pane = TFb.shade ? TFb.shade(wall, 0.82) : "#C9DDEA";
@@ -3811,6 +3797,15 @@
           return;
         }
         hideLoading();
+
+        /* ⚠️ 这里**故意不** `await ensureVendor()`（2026-09-26 试过，撤回）：
+           `makeStyle()` 的取参现在只有共享真源那一份（`wsArtParams`），理论上"建图前等模块"更稳；
+           但实测两件事 ⇒ 撤：① `ws_bld_page_selftest.mjs` 的桩**假定建图不依赖 vendor**
+           （先 import 页面 classic 块、再 import 模块块）⇒ 一 await 就变成"页面没有建图"；
+           ② 那一 await 会在模块块还没跑时**用带版本号的 URL 再 import 一次** ⇒ 同一次会话里两份模块实例。
+           实测模块块在 **9~11ms** 就绪（页面自己的日志 `vendor: 关键符号齐`），远早于 `loadTheme()` 的网络往返。
+           真遇到"模块还没到"的窗口，`bldLayerSpecs()` 与 `applyArt()` 各自**如实判词**（不建层 / 变体改=-1），
+           不静默降级。 */
 
         map = new maplibregl.Map({
           container: "map", style: makeStyle(),

@@ -355,8 +355,31 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v64";
+      const BUILD = "ws3dshow-2026-09-26-v66";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
+
+      /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
+         机主 2026-09-26：「现在就是加载慢，且…渲染不全，卡顿喵」。观感要能拆成毫秒才谈得上"修没修好"。
+         · 时间原点 = `performance.timeOrigin`（= Resource Timing 的 `startTime` 量纲）⇒ 网络与计算同尺；
+         · ⚠️ **用时才读** `window.__TF__`：页面脚本跑在内联块里时 vendor 还没到（读一次存下来就是 undefined）；
+         · 旧 vendor 缺符号 ⇒ 空实现（**绝不因此抛错**把地图拖下水），快照里如实写"数不出来"。 */
+      function pmSpan(name, ms, bytes) {
+        try { const T = window.__TF__; if (T && typeof T.pmSpan === "function") T.pmSpan(name, ms, bytes); } catch (e) { /* 忽略 */ }
+      }
+      function pmMark(name, extra) {
+        try { const T = window.__TF__; if (T && typeof T.pmMark === "function") T.pmMark(name, extra); } catch (e) { /* 忽略 */ }
+      }
+      /** 同步段落计时（返回 fn 的结果；抛错也照样记账） */
+      function pmTime(name, fn, bytesOf) {
+        const t0 = performance.now();
+        try {
+          const r = fn();
+          let by = null;
+          try { const x = bytesOf ? bytesOf(r) : null; if (typeof x === "number" && isFinite(x)) by = x; } catch (e) { by = null; }
+          pmSpan(name, performance.now() - t0, by);
+          return r;
+        } catch (e) { pmSpan(name, performance.now() - t0); throw e; }
+      }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
          为什么是它：IP 定位（`/api/location?fast=1`）当前解析出来的就是渝中区，
@@ -1624,6 +1647,11 @@
          ══════════════════════════════════════════════════════════════════════════ */
       const GENNAMES_ON = !/[?&]names=real/.test(location.search);
       const GEN_BLD_MAX = 40, GEN_STALL_MAX = 12;
+      /* 🔴 **沿街小摊层默认关**（机主 2026-09-26 真机：「有的压根没对应楼，有的甚至在水中，公路上」）。
+         离线实测（`~/chk/genname_audit.mjs`，5 格真包）：166 个小摊**全部压在路面上**
+         （到路中心距离 中位 **4.0m** / max 4.0m，而城市道路半宽 3~8m）、且**它本来就没有对应的楼**。
+         ⇒ 那两条反馈说的就是这一层。默认关，`?stalls=1` 才开（开了也会带「摊·」前缀与独立样式）。 */
+      const STALLS_ON = /[?&]stalls=1/.test(location.search);
       let genLayerEl = null, genShownBld = null, genShownStall = null;
       /** 当前画出来的生成名节点（带**地理坐标**）—— 拖动时只重投影它们，不重建、不重挑 */
       let genNodes = [];
@@ -1635,6 +1663,8 @@
        */
       function positionGenNames() {
         if (!genNodes.length) return;
+        /* ⚠️ 这里写的是**绝对**屏幕坐标 ⇒ 必须先把"拖动时的容器平移"归零，否则坐标被叠加两次 */
+        try { if (genLayerEl && genLayerEl.style.transform) genLayerEl.style.transform = ""; } catch (e) { /* 忽略 */ }
         const cv = map.getCanvas ? map.getCanvas() : null;
         const W = (cv && cv.clientWidth) || 400, H = (cv && cv.clientHeight) || 400;
         for (const n of genNodes) {
@@ -1706,7 +1736,7 @@
             return (id && line && line.length >= 2) ? { id: String(id), coords: line } : null;
           }).filter(Boolean);
         } catch (e) { roads = []; }
-        const stalls = TFx.planStalls(roads, GEN_STALL_MAX, 2);
+        const stalls = STALLS_ON ? TFx.planStalls(roads, GEN_STALL_MAX, 2) : [];   /* 默认关（见 STALLS_ON 注释） */
         /* ── 投影 + 稀疏 + 落 DOM（只改 left/top，不重建元素） ── */
         const items = [];
         for (const b of pickedBld) {
@@ -1718,7 +1748,7 @@
         for (const s of stalls) {
           const p = map.project([s.lng, s.lat]);
           if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
-          items.push({ x: p.x, y: p.y, lng: s.lng, lat: s.lat, text: s.name, stall: true });
+          items.push({ x: p.x, y: p.y, lng: s.lng, lat: s.lat, text: "摊·" + s.name, stall: true });
         }
         genShownStall = items.filter(function (i) { return i.stall; }).length;
         /* ⚠️ 试过用 `map.queryRenderedFeatures` 只在「屏幕真有楼」处挂名 —— **撤回**：
@@ -1755,7 +1785,9 @@
           const base = (typeof TFx.genCountsLine === "function")
             ? TFx.genCountsLine(realN, kept.filter(function (k) { return !k.stall; }).length, kept.filter(function (k) { return k.stall; }).length)
             : ("🏷 生成名 " + kept.length + "（" + why + "）");
-          hud.textContent = base + " · " + anchor;
+          /* 小摊层关着时**明说**（别让人以为"小摊 0 个"= 城里没有摊位） */
+          const stallNote = STALLS_ON ? "" : " · 小摊层默认关（?stalls=1 才开）";
+          hud.textContent = base + " · " + anchor + stallNote;
         }
         try { window.__GENN__ = { on: GENNAMES_ON, bld: genShownBld, stall: genShownStall, shown: kept.length, ms: Date.now() - t0, roads: roads.length, lines: kept.length }; } catch (e) { /* 忽略 */ }
       }
@@ -2875,7 +2907,8 @@
       function flushBld(why) {
         const st = bldStoreOf();
         if (!st) return;
-        const all = { type: "FeatureCollection", features: st.features() };
+        /* ⏱ `st.features()` 每次 flush 都要**整份取一遍**（上限 12,000 栋）⇒ 量它 */
+        const all = { type: "FeatureCollection", features: pmTime("bld.store.features", function () { return st.features(); }) };
         /* 🌐 **直画分支**（`?glbld=1`）：不挑 100，画**全量**方盒；现有 bld-ext/bld-line 只藏不删（可随时对照） */
         if (GLBLD) {
           try {
@@ -2950,11 +2983,13 @@
             const ckey = BLDCELL + "|" + BLDN;
             if (!window.__BLD_FROZEN__) window.__BLD_FROZEN__ = {};
             const frozen = window.__BLD_FROZEN__;
-            const r = TFp.capBuildingsPerCell(all.features, {
-              cap: BLDN, cellDeg: BLDCELL,
-              bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
-              minInView: 10,                    /* 页面口径：视野内至少 10 栋（数不出来时模块给 null） */
-            });
+            const r = pmTime("bld.pick", function () {
+              return TFp.capBuildingsPerCell(all.features, {
+                cap: BLDN, cellDeg: BLDCELL,
+                bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
+                minInView: 10,                    /* 页面口径：视野内至少 10 栋（数不出来时模块给 null） */
+              });
+            }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });
             const baseN = (typeof r.stats.baseChosen === "number") ? r.stats.baseChosen : r.features.length;
             const baseFeats = r.features.slice(0, baseN);
             const addedNow = r.features.slice(baseN);
@@ -3022,7 +3057,7 @@
           return;                                                   // 异步那次负责落图，这里不再 setData
         }
         /* 🎨 **上妆（补 h3d）**：没有这一步，`fill-extrusion-height: ["get","h3d"]` 取不到 = 高度 0 = 平躺的板 */
-        const dressed = dressBldBase(data.features);
+        const dressed = pmTime("bld.dress", function () { return dressBldBase(data.features); });
         data = { type: "FeatureCollection", features: dressed };
         stats.n = dressed.length;
         stats.real = dressed.filter((f) => f.properties.h_from === "real").length;
@@ -3031,7 +3066,10 @@
         try { $("m-n").textContent = String(stats.n); } catch (e2) { /* HUD 失败不影响落图 */ }
         try {
           if (BLD_OFF) { window.__BLD_BUNDLE_FC__ = data.features.length; return; }  // ?bld=0：数据备好但不画
-          setBldData(data, "离线" + (why || ""));
+          /* ⏱ `setData` = 真正把要素交给 MapLibre（含它自己的解析/建索引），单独量 —— 
+             它是"每格取完都整份换一次"的那一笔，机主说的"卡顿"最可能是这里。 */
+          pmTime("bld.setData", function () { setBldData(data, "离线" + (why || "")); });
+          if (!window.__PM_FIRST_DRAW__) { window.__PM_FIRST_DRAW__ = true; pmMark("bld.firstDraw", { n: data.features.length, why: String(why || "") }); }
         } catch (e) { errs.push("bld.setData " + e); }
         window.__BLD_BUNDLE_FC__ = data.features.length;
         stats.parts = data.features.length;
@@ -3798,6 +3836,10 @@
 
         let busy = false;
         map.on("load", async () => {
+          /* ⏱ 记两个上游阶段边界 + 挂长任务观察器（浏览器自己的"卡顿"口径：>50ms 的主线程任务）。
+             为什么在这里挂：`load` 之后才是取数/建楼/挑楼那段最贵的路 —— 早挂会把样式解析也算进来。 */
+          pmMark("map.load", { zoom: (function () { try { return Number(map.getZoom().toFixed(2)); } catch (e2) { return null; } })() });
+          try { const T = window.__TF__; if (T && typeof T.pmObserveLongTasks === "function") T.pmObserveLongTasks(); } catch (e3) { /* 忽略 */ }
           try {
             const L = window.__WSLOG__;
             if (L) L.info("map", "地图 load（样式校验通过、可以建层了）", {
@@ -3877,9 +3919,43 @@
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
         map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("moveend"); } catch (e2) { errs.push("gennames " + e2); } try { void refreshGw("moveend"); } catch (e3) { errs.push("gw " + e3); } });
-        /* 🧈 丝滑：拖动/缩放**每帧**只重投影（不重建、不重挑） */
-        map.on("move", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
-        map.on("zoom", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
+        /* 🔴🔴 名字"跟手"（机主 2026-09-26 真机：「名字显示是滑动刷新一次，**不能跟随，错位严重**」）。
+           实测代价：`positionGenNames()` 一次 = 每个标签 4~6 次 DOM 写；本机（无头同机）测到
+           **3 个标签 3.48ms/帧**（60 次 move 共 208.5ms）⇒ 真机 30+ 个标签必然 >16.7ms 的 60fps 预算
+           ⇒ **拖动时叠加的错位越来越大、松手（moveend）才归位** —— 正是他描述的现象。
+           ⇒ 改法：**纯平移是一次刚体变换**，在**容器上写一次** `translate3d`（O(1)，与标签数无关），
+           松手或缩放/旋转时再逐标签精确重投影一次。标签、锚点、引线都在同一个容器里 ⇒ 一起平移。
+           ⚠️ 缩放/旋转**不是**刚体平移（标签要保持字号不变）⇒ 那两种情况仍走逐标签重投影（下面 zoom 分支）。 */
+        let genPanRef = null;          // 拖动起点参考（含当时的 zoom/bearing：变了就不走刚体路）
+        function genStartPan() {
+          try {
+            const c = map.getCenter();
+            const p = map.project(c);
+            genPanRef = { lng: c.lng, lat: c.lat, x: p.x, y: p.y, zoom: map.getZoom(), bearing: map.getBearing() };
+            const L = genLayerOf();
+            if (L && L.style.transform) L.style.transform = "";   // 起点位置是精确的 ⇒ 先归零
+          } catch (e) { genPanRef = null; }
+        }
+        function genFollowPan() {
+          if (!genPanRef) return;
+          try {
+            /* 缩放/旋转变了 ⇒ 不是刚体平移，交给逐标签那条路 */
+            if (Math.abs(map.getZoom() - genPanRef.zoom) > 0.001 || Math.abs(map.getBearing() - genPanRef.bearing) > 0.01) { genPanRef = null; positionGenNames(); return; }
+            const p = map.project([genPanRef.lng, genPanRef.lat]);
+            const dx = (p.x - genPanRef.x).toFixed(1), dy = (p.y - genPanRef.y).toFixed(1);
+            genLayerOf().style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
+          } catch (e) { genPanRef = null; }
+        }
+        map.on("movestart", () => { try { genStartPan(); } catch (e) { /* 忽略 */ } });
+        /* 🧈 丝滑：拖动**每帧只写一次容器 transform**（O(1)）；缩放/旋转仍逐标签重投影 */
+        map.on("move", () => { try { genFollowPan(); } catch (e) { /* 忽略 */ } });
+        map.on("zoom", () => { try { if (!genPanRef) positionGenNames(); } catch (e) { /* 忽略 */ } });
+        map.on("rotate", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
+        map.on("moveend", () => {
+          try { const L = genLayerOf(); if (L && L.style.transform) L.style.transform = ""; } catch (e) { /* 忽略 */ }
+          genPanRef = null;
+          try { positionGenNames(); } catch (e) { /* 忽略 */ }
+        });
 
         /* ══════════════════════════════════════════════════════════════════════════════
          * 💬 **角色接入 LingChat 本身的对话**（机主 2026-09-25：「我最[想]把角色做进去喵

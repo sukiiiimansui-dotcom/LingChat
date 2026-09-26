@@ -39,6 +39,11 @@ export * from "./wsLabels";
 /* 📋 **超级详细日志上报**（机主 2026-09-25：「在页面做超级详细的日志上报喵」）：
    环形缓冲 + fetch/全局错误自动收 + 截图友好的整份报告 —— 规则只有这一份，页面只接线。 */
 export * from "./wsLog";
+/* ⏱ **耗时可数口径**（机主 2026-09-26：「现在就是加载慢，且…渲染不全，卡顿喵」）：
+   `pmTime/pmSpan/pmMark/pmSnapshot/pmObserveLongTasks` —— 页面与 App 共用同一把尺子
+   （时间原点 = `performance.timeOrigin`，与 Resource Timing 的 `startTime` 同量纲，
+   所以"首屏 X 秒里 Y 秒花在哪"能直接对上）。页面只接线，**不自己写第二套计时**。 */
+export * from "./wsPerfMeter";
 export * from "./wsBuildingPick";
 export * from "./wsBldGl";
 export * from "./wsDaily"; // 日常循环（我的家 + 今日三件事）

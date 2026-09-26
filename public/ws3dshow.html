@@ -303,6 +303,7 @@
            显示 N / 丢弃 M（避让）/ 上限 L —— 可数口径，便于对着 fps 判断。 -->
       <span class="w" id="m-labels">🏷 标签 —</span>
       <span class="w" id="m-gennames">🏷 生成名 —</span>
+      <span class="w" id="m-gw">🌊🌳 水/绿地 —</span>
       <span><b id="m-z">-</b> 级</span>
       <span><b id="m-fps">-</b> fps</span>
       <!-- 🏢 形体的**一行回证**：`?bld=2` 时写清"各细节生成了多少 + 当前档位"（截图里就能读到）。
@@ -354,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v60";
+      const BUILD = "ws3dshow-2026-09-26-v61";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -1673,6 +1674,97 @@
             : ("🏷 生成名 " + kept.length + "（" + why + "）");
         }
         try { window.__GENN__ = { on: GENNAMES_ON, bld: genShownBld, stall: genShownStall, shown: kept.length, ms: Date.now() - t0, roads: roads.length, lines: kept.length }; } catch (e) { /* 忽略 */ }
+      }
+
+      /* ══════════════════════════════════════════════════════════════════════════
+         🌊🌳 **真水系 / 绿地**（机主选的方向：「我们**自己画**」）
+         · 数据 = `/gwbundle/<格>.json`（`world_map/gw_bundle.py` 从 OSM/Overpass 取的真多边形，ODbL）；
+         · 为什么必须自己画：Esri 底图在 z17 这一带两个服务都只给占位图（实测同一张 2521B）；
+         · 颜色**只从主题取**（`ai.water` / `ai.park` —— 与预渲染瓦片里的示意水绿同色系）；
+           主题里取不到 ⇒ **如实报错、不画**（绝不硬编码色号，也绝不悄悄用别的颜色）；
+         · 图层压在**楼与路下面**（先建 water/green，再让 `bld-*` 盖上）。
+         ══════════════════════════════════════════════════════════════════════════ */
+      const GW_ON = !/[?&]gw=0/.test(location.search);
+      let gwIndex = null, gwLoaded = null, gwErr = 0;
+      function gwPick(o, path) {
+        let cur = o;
+        for (const k of path.split(".")) { if (!cur || typeof cur !== "object") return null; cur = cur[k]; }
+        return typeof cur === "string" ? cur : null;
+      }
+      function gwColors() {
+        const first = (paths) => { for (const p of paths) { const v = gwPick(THEME, p); if (v) return v; } return null; };
+        return {
+          water: first(["themes.anime.ai.water", "ai.water", "look.ai.water", "themes.night.ai.water"]),
+          green: first(["themes.anime.ai.park", "ai.park", "look.ai.park", "themes.night.ai.park"]),
+        };
+      }
+      function gwHud(text) { const el = $("m-gw"); if (el) el.textContent = text; }
+      async function refreshGw(why) {
+        if (!GW_ON) { gwHud("🌊🌳 水/绿地 关（?gw=0）"); return; }
+        const hud = $("m-gw");
+        try {
+          if (!gwIndex) {
+            const r = await fetch("/gwbundle/index.json?v=" + encodeURIComponent(BUILD), { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            gwIndex = await r.json();
+          }
+        } catch (e) { gwHud("🌊🌳 水/绿地 数不出来：索引取不到（" + String(e).slice(0, 60) + "）"); return; }
+        const deg = Number(gwIndex.cellSize) || 0.05;
+        const b = map.getBounds();
+        const keys = [];
+        for (let w = Math.floor(b.getWest() / deg) * deg; w <= b.getEast(); w = +(w + deg).toFixed(6)) {
+          for (let s = Math.floor(b.getSouth() / deg) * deg; s <= b.getNorth(); s = +(s + deg).toFixed(6)) {
+            const k = w.toFixed(5) + "_" + s.toFixed(5) + "_" + deg.toFixed(2);
+            if (gwIndex.cells && gwIndex.cells[k]) keys.push(k);
+          }
+        }
+        const used = keys.slice(0, 6);
+        const feats = { water: [], green: [] };
+        let got = 0; gwErr = 0;
+        for (const k of used) {
+          try {
+            const d = await (await fetch("/gwbundle/" + k + ".json", { cache: "no-store" })).json();
+            got++;
+            for (const f of (d.f || [])) {
+              const kind = f.k === "water" ? "water" : "green";
+              for (const ring of (f.r || [])) {
+                if (!Array.isArray(ring) || ring.length < 3) continue;
+                const first = ring[0], last = ring[ring.length - 1];
+                const closed = (first[0] === last[0] && first[1] === last[1]) ? ring : ring.concat([first]);
+                feats[kind].push({ type: "Feature", properties: { n: f.n || null }, geometry: { type: "Polygon", coordinates: [closed] } });
+              }
+            }
+          } catch (e) { gwErr++; }
+        }
+        const col = gwColors();
+        if (!col.water || !col.green) {
+          gwHud("🌊🌳 水/绿地 数不出来：主题里没有 ai.water / ai.park（不硬编码色号）");
+          return;
+        }
+        const specs = [
+          { id: "gw-water", color: col.water, data: feats.water },
+          { id: "gw-green", color: col.green, data: feats.green },
+        ];
+        let beforeId = null;
+        try {
+          const ls = (map.getStyle() || {}).layers || [];
+          const b0 = ls.find(function (l) { return String(l.id).indexOf("bld") === 0; });
+          beforeId = b0 ? b0.id : null;
+        } catch (e) { beforeId = null; }
+        for (const sp of specs) {
+          const src = { type: "geojson", data: { type: "FeatureCollection", features: sp.data } };
+          try {
+            if (map.getSource(sp.id)) map.getSource(sp.id).setData(src.data);
+            else {
+              map.addSource(sp.id, src);
+              map.addLayer({ id: sp.id, type: "fill", source: sp.id,
+                paint: { "fill-color": sp.color, "fill-outline-color": sp.color } }, beforeId || undefined);
+            }
+          } catch (e) { errs.push("gw " + e); }
+        }
+        gwLoaded = { cells: used.length, hit: got, err: gwErr, water: feats.water.length, green: feats.green.length };
+        window.__GW__ = Object.assign({ on: GW_ON, index: (gwIndex && gwIndex.cellCount) || null, attribution: (gwIndex && gwIndex.attribution) || null }, gwLoaded);
+        gwHud("🌊🌳 水 " + feats.water.length + " 面 · 绿 " + feats.green.length + " 面（真数据 · 格 " + got + "/" + used.length + (gwErr ? " · 失败 " + gwErr : "") + "）");
       }
 
       function refreshLabels(why) {
@@ -3599,7 +3691,7 @@
         /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
-        map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("moveend"); } catch (e2) { errs.push("gennames " + e2); } });
+        map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("moveend"); } catch (e2) { errs.push("gennames " + e2); } try { void refreshGw("moveend"); } catch (e3) { errs.push("gw " + e3); } });
         /* 🧈 丝滑：拖动/缩放**每帧**只重投影（不重建、不重挑） */
         map.on("move", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });
         map.on("zoom", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } });

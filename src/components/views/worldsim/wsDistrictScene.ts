@@ -103,7 +103,7 @@ export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number)
  * 2026-09-25 二次更正（机主「**小范围一个区块最高 100 栋**」）后**统一到 14**：
  * `z < 14` 由**预渲染瓦片**负责（瓦片不透明度也延到 14 才归零），`z ≥ 14` 才画矢量楼并按区块封顶。
  */
-export const WS_BLD_VECTOR_MINZOOM = 14;   /* ← 2026-09-25 与 `LOD_NEAR_ZOOM` 对齐 */
+export const WS_BLD_VECTOR_MINZOOM = 11;   /* ← 2026-09-26 与 `LOD_NEAR_ZOOM` 对齐（机主：楼要一直显示） */
 
 /** 🖊 描边从哪一档才开始**可见**：小比例下每栋只有 1~3px，深色描边会把填充整个盖住（"灯芯绒"）。
  *  与 AI 绘制管线里那条经验同源（z12 小楼不许描边）；这里用 zoom 插值让线从 12.8 的 0 平滑长到 15 的正常宽。 */

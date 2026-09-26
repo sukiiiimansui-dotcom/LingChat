@@ -11,9 +11,19 @@
  *   · `install(id, onProgress)` —— 下载 → 校 sha256 → 解包 → 存；每一步都有真进度与真失败原因
  *   · `remove(id)`              —— 卸载（元数据 + 内容一起清）
  *
- * ## 🔴 换真源只改一处
- * `WS_CITY_PACK_BASE`（下面那个常量）是**下载源唯一可替换点**：机主拍的
- * 「下载源先用本机预览服务（5212）」就是它。以后换成 CDN 只改这一行 —— 别在别处再写一个地址。
+ * ## 🔴 下载源：一处可替换 + 两条覆盖途径（本文件是唯一入口）
+ * `WS_CITY_PACK_BASE_DEFAULT` 是**唯一的常量行**，默认值 = **示例占位**
+ * （RFC 2606 保留域名 `.invalid`，永远不会解析成真服务器）：
+ * **真源由维护者或用户自建**（GitHub Release / 自己的静态服务器都行），
+ * 见 `world_map/CITY-PACK-FORMAT.md` 的「托管与自建」。优先级从高到低：
+ *
+ *   ① **运行时** `?citybase=<url>`：不改码、不重编译就能换源（浏览器预览、给 reviewer 试自己的源用）；
+ *   ② **构建期** `VITE_WS_CITY_PACK_BASE`：fork / 自建打包的人写进 `.env`，一次配好、永久生效；
+ *   ③ `WS_CITY_PACK_BASE_DEFAULT`：示例占位（**谁都没配**时的诚实默认值：取不到清单 ⇒ "数不出来"）。
+ *
+ * 坏值（空 / 不是 URL / 非 http(s) 协议）⇒ **回落到默认占位**，并把原因记进
+ * `WS_CITY_PACK_BASE_INFO`（`from: "fallback"` + `why` + `requested`）—— 不静默、不猜、不当成"没配"。
+ * 「按顺序取三个来源」这个判断是**纯函数** `resolveCityPackBase()`（自检逐条验它，不依赖真 location）。
  *
  * ## 🔴 下一片（真机落盘）要接的接口点
  * 真机是 Tauri 壳，**没有 HTTP 服务**（`/bldbundle/<格>.json` 这类相对路径在真机上取不到，
@@ -50,8 +60,92 @@ import {
   type ZipEntry,
 } from "./wsCityPack";
 
-/** 🔴 下载源唯一可替换点（机主：先用本机预览服务 5212）。换 CDN 只改这一行。 */
-export const WS_CITY_PACK_BASE = "http://127.0.0.1:5212";
+/**
+ * 🔴 下载源默认值 = **示例占位**（RFC 2606 保留域名 `.invalid`：永远不会解析成真服务器，
+ * 所以"忘了配"会**响亮地**失败成"数不出来"，而不是静默打到某台真服务器上）。
+ * ⇒ 真源不随代码走：维护者用 GitHub Release / 用户自建静态服务器，见 `CITY-PACK-FORMAT.md`「托管与自建」。
+ */
+export const WS_CITY_PACK_BASE_DEFAULT = "https://example.invalid/lingchat-citypacks";
+
+/** 运行时覆盖的参数名：`?citybase=<url>`（值里有 `&` 请自己 URL 编码） */
+export const WS_CITY_PACK_BASE_PARAM = "citybase";
+
+/** 构建期覆盖：`VITE_WS_CITY_PACK_BASE`（fork/自建打包写进 `.env`；没配就是 undefined） */
+const ENV_BASE = import.meta.env?.VITE_WS_CITY_PACK_BASE as string | undefined;
+
+/** 下载源是"谁给的"（`fallback` = 覆盖值坏掉、已回落默认，**原因在 `why`**） */
+export interface CityPackBaseInfo {
+  /** 最终生效的下载源（已去掉末尾 `/`；客户端拼 `{base}/citypacks/<rel>`，base = 服务器根） */
+  base: string;
+  from: "param" | "env" | "default" | "fallback" | "option";
+  /** 被拒绝的原值（只在 `from === "fallback"` 时有）—— 可定位是谁配错的 */
+  requested?: string;
+  /** 为什么回落（只在 `from === "fallback"` 时有） */
+  why?: string;
+}
+
+/** 校验并归一化一条候选下载源（**只接受 http(s) 绝对地址**；`{base}/citypacks/` 那个口径由调用方拼） */
+function normalizeBase(raw: string): { ok: true; base: string } | { ok: false; why: string } {
+  const v = raw.trim();
+  if (!v) return { ok: false, why: "是空值" };
+  if (/\s/.test(v)) return { ok: false, why: "含空白字符" };
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return { ok: false, why: "不是合法 URL（要写成 http(s)://主机[:端口][/路径]）" };
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return { ok: false, why: "协议是 " + u.protocol + "（只接受 http/https）" };
+  }
+  return { ok: true, base: v.replace(/\/+$/, "") };
+}
+
+/** 读当前地址栏的查询串（Node/无 location 环境返回 `""`；取 location 抛异常也不许把模块加载搞挂） */
+function locationSearch(): string {
+  try {
+    return typeof location !== "undefined" && location ? String(location.search || "") : "";
+  } catch {
+    return "";
+  }
+}
+
+function judged(raw: string, from: "param" | "env"): CityPackBaseInfo {
+  const n = normalizeBase(raw);
+  if (n.ok) return { base: n.base, from };
+  const who = from === "param" ? "?citybase=" : "VITE_WS_CITY_PACK_BASE";
+  return {
+    base: WS_CITY_PACK_BASE_DEFAULT,
+    from: "fallback",
+    requested: raw,
+    why: "覆盖源 " + who + " " + n.why + " ⇒ 回落到默认占位（没配过真源时取不到清单会如实报「数不出来」）",
+  };
+}
+
+/**
+ * 解析下载源（**纯函数**：`search` / `env` 都能注入 ⇒ 自检可以逐条验，不必依赖真 `location` 与真构建期变量）。
+ * 省略 `search` = 读 `location.search`；省略 `env` = 读构建期常量 `VITE_WS_CITY_PACK_BASE`。
+ */
+export function resolveCityPackBase(input: { search?: string; env?: string } = {}): CityPackBaseInfo {
+  const search = input.search !== undefined ? input.search : locationSearch();
+  const env = input.env !== undefined ? input.env : ENV_BASE;
+  let asked: string | undefined;
+  try {
+    const params = new URLSearchParams(search || "");
+    if (params.has(WS_CITY_PACK_BASE_PARAM)) asked = params.get(WS_CITY_PACK_BASE_PARAM) || "";
+  } catch {
+    asked = undefined; // 参数串坏到连 URLSearchParams 都读不动 ⇒ 当作"没给"（不改默认行为）
+  }
+  if (asked !== undefined) return judged(asked, "param");
+  if (typeof env === "string" && env.trim()) return judged(env, "env");
+  return { base: WS_CITY_PACK_BASE_DEFAULT, from: "default" };
+}
+
+/** 当前生效的下载源**与它的来路**（坏值回落时这里带着 `why`/`requested`，界面/自检据此如实说明） */
+export const WS_CITY_PACK_BASE_INFO: CityPackBaseInfo = resolveCityPackBase();
+
+/** 🔴 下载源（解析结果）。换默认值改 `WS_CITY_PACK_BASE_DEFAULT`；临时换源走 `?citybase=` / 构建期常量。 */
+export const WS_CITY_PACK_BASE = WS_CITY_PACK_BASE_INFO.base;
 
 /** 清单与包的路径口径（`{BASE}/citypacks/...`）——同样只有这一份 */
 export function cityPackUrl(rel: string, base = WS_CITY_PACK_BASE): string {
@@ -189,8 +283,10 @@ export interface CityStoreOptions {
 }
 
 export interface CityStore {
-  /** 当前下载源（只读；改它请改 `WS_CITY_PACK_BASE`） */
+  /** 当前下载源（只读：默认占位 / `?citybase=` / 构建期常量 / 坏值回落，见 `baseInfo.from`） */
   readonly base: string;
+  /** 这个 base 是**怎么来的**（坏值回落时 `why`/`requested` 有值 ⇒ 界面可以如实说明，别当无事发生） */
+  readonly baseInfo: CityPackBaseInfo;
   list(force?: boolean): Promise<CityListState>;
   installed(): InstalledCity[];
   install(id: string, onProgress?: (p: InstallProgress) => void): Promise<InstallOutcome>;
@@ -203,7 +299,12 @@ export interface CityStore {
 
 /** 造一个门面。App 里请用 `cityStore()`（单例）；自检传自己的 backend/fetch。 */
 export function createCityStore(opts: CityStoreOptions = {}): CityStore {
-  const base = (opts.base || WS_CITY_PACK_BASE).replace(/\/+$/, "");
+  /* `opts.base` 是**编程接口**（自检/将来的 Tauri 后端注入）：照旧只去末尾斜杠；
+     而"用户能配的两条路"（`?citybase=` / 构建期常量）走 `resolveCityPackBase()` ⇒ 那里才做严格校验与回落。 */
+  const baseInfo: CityPackBaseInfo = opts.base
+    ? { base: opts.base.replace(/\/+$/, ""), from: "option" }
+    : WS_CITY_PACK_BASE_INFO;
+  const base = baseInfo.base;
   const backend = opts.backend || browserBackend();
   const doFetch = opts.fetchImpl || ((...a: Parameters<typeof fetch>) => fetch(...a));
   const ttl = opts.listTtlMs ?? 60_000;
@@ -417,6 +518,7 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
 
   return {
     base,
+    baseInfo,
     list,
     installed,
     install,

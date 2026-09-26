@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v85";
+      const BUILD = "ws3dshow-2026-09-26-v88";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -3954,6 +3954,27 @@
         } catch (e) { errs.push("healColorLayer " + e); }
       }
 
+      /** 🔴 2026-09-26「有名字，无建筑」的**有界自愈**（不依赖任何事件时序）：
+          真机上那次**迟到的样式落地**会把先加的 `bld` 源与 `bld-ext`/`bld-line` 一起带走
+          （无头环境时序不同，所以本地量不出来）。这里只做一件事：**源在层不在就补层，源不在就建源再补层**。
+          调用点：样式落地（style.load）/ 每次视野事件（moveend/zoomend）/ 开页后三次有界重试（成功即停，不常驻轮询）。 */
+      function bldLayerHeal(why) {
+        try {
+          /* ⛔ 样式没就绪时**什么都别做**：那一刻 addSource/addLayer 会抛
+             `Error: Style is not done loading.`（实测 errs 里就是这样一条噪声）——
+             等 style.load / moveend / 三次重试里的下一次即可。 */
+          if (map.isStyleLoaded && !map.isStyleLoaded()) return false;
+          if (map.getLayer("bld-ext") && map.getLayer("bld-line")) return false;
+          if (!map.getSource("bld")) {
+            map.addSource("bld", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+          }
+          addBldLayers();
+          try { const L = window.__WSLOG__; if (L) L.warn("bld-layers", "补层自愈（源/层被样式换掉过）", { why: String(why || ""), have: (map.getStyle().layers || []).length }); } catch (e) { /* 忽略 */ }
+          try { flushBld("heal:" + String(why || "")); } catch (e2) { errs.push("heal.flush " + e2); }
+          return true;
+        } catch (e3) { errs.push("heal " + e3); return false; }
+      }
+
       function addBldLayers() {
         /* 插在注记层之前 ⇒ 街名压在楼上面 */
         const before = map.getLayer("ref") ? "ref" : undefined;
@@ -4147,22 +4168,7 @@
            ⚠️ **顺序不能反**：`bld-ext`/`bld-line` 引用的 `bld` 源必须**先存在**，否则
            `layers.bld-ext: source "bld" not found`（实测：先 addBldLayers 再 flush ⇒ 三条错 + "Source already exists"）。
            ⇒ 先确保源（空 FeatureCollection 也合法），剩下的交给 `flushBld`（它 setData + 建层）。 */
-        map.on("style.load", function () {
-          try {
-            if (!map.getLayer("bld-ext")) {
-              /* 源在、层不在 ⇒ 直接补层（**别**再 addSource：`setBldData` 里 `map.getSource("bld").setData()` 之外
-                 唯一建源的分支会 `addSource`，重复建源会抛 `Source "bld" already exists` 把链打断 —— 实测踩过）。 */
-              if (map.getSource && map.getSource("bld")) {
-                try { addBldLayers(); } catch (e1) { errs.push("styleHeal.layers " + e1); }
-                try { flushBld("style.load-heal"); } catch (e2) { errs.push("styleHeal.flush " + e2); }
-              } else {
-                /* 源都没有 ⇒ 走正规入口（它一并把层建起来） */
-                try { const st = bldStoreOf(); if (st) setBldData({ type: "FeatureCollection", features: st.features() }, "style.load-heal"); } catch (e3) { errs.push("styleHeal.data " + e3); }
-              }
-              try { const L = window.__WSLOG__; if (L) L.warn("bld-layers", "样式落地后补层（之前被迟到样式抹掉）", { have: (map.getStyle().layers || []).length, src: !!map.getSource("bld") }); } catch (e4) { /* 忽略 */ }
-            }
-          } catch (e5) { errs.push("styleHeal " + e5); }
-        });
+        map.on("style.load", function () { try { bldLayerHeal("style.load"); } catch (e) { errs.push("styleHeal " + e); } });
         map.on("load", async () => {
           /* ⛔ ① 先等样式真落地（见上面那段血案）——不等的话这一整链的加层会被抹掉 */
           try { await whenStyleReady(); } catch (e0) { errs.push("styleReady " + e0); }
@@ -4230,6 +4236,8 @@
            而唯一的挂钩是 `moveend`（用户一动才有）⇒ 首屏空白，缩放后才补上。
            修法：**有界重试**的开页 kick（最多 20 次 × 400ms ≈ 8s，成功即停、无轮询常驻）。
            判词如实：kick 了几次、成没成，都写进 `__BLD_KICK__` 供核验。 */
+        /* 开页三次有界重试（1.5s / 4s / 8s）—— 迟到样式最常见的落点是这几秒内，成功即停 */
+        [1500, 4000, 8000].forEach(function (ms) { setTimeout(function () { try { bldLayerHeal("t" + ms); } catch (e) { /* 忽略 */ } }, ms); });
         (function kickBldBundle(tries) {
           const n = tries || 0;
           let ready = false;
@@ -4262,7 +4270,7 @@
         /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
-        map.on("moveend", () => { try { void refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { void refreshGw("moveend"); } catch (e3) { errs.push("gw " + e3); } });
+        map.on("moveend", () => { try { void refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { void refreshGw("moveend"); } catch (e3) { errs.push("gw " + e3); } try { bldLayerHeal("moveend"); } catch (e4) { errs.push("heal " + e4); } });
         /* 🔴🔴 名字"跟手"（机主 2026-09-26 真机：「名字显示是滑动刷新一次，**不能跟随，错位严重**」）。
            实测代价：`positionGenNames()` 一次 = 每个标签 4~6 次 DOM 写；本机（无头同机）测到
            **3 个标签 3.48ms/帧**（60 次 move 共 208.5ms）⇒ 真机 30+ 个标签必然 >16.7ms 的 60fps 预算
@@ -5099,6 +5107,36 @@
         }
 
         async function autoshot() {
+          /* 🔴 2026-09-26：代拍**同时回传一份"图层账"**（JSON，`shotd` 按内容认类型存成 .json）。
+             为什么必须加：机主真机「有名字，无建筑」时，我在这边无头环境量到楼层都在、32 栋要素，
+             **但他手机上一栋都没有** —— 设备与无头的时序不同（迟到样式抹层那条路只在真机上必然发生）。
+             有了这份 JSON，他的**一次点击**就能把设备上的 `layers/sources/errs/取楼数` 全带回来，不用再猜。 */
+          const postState = async (tag) => {
+            try {
+              const st = {
+                build: BUILD, url: location.href, t: new Date().toISOString(),
+                layers: (map.getStyle()?.layers || []).map((l) => l.id),
+                sources: Object.keys((map.getStyle() || {}).sources || {}),
+                styleName: (map.getStyle() || {}).name || null,
+                styleLoaded: (() => { try { return map.isStyleLoaded(); } catch (e) { return null; } })(),
+                mapLoaded: (() => { try { return map.loaded(); } catch (e) { return null; } })(),
+                zoom: (() => { try { return +(map.getZoom() || 0).toFixed(2); } catch (e) { return null; } })(),
+                drawn: window.__BLD_BUNDLE_FC__ === undefined ? null : window.__BLD_BUNDLE_FC__,
+                bldLayers: window.__BLD_LAYERS__ || null,
+                kick: window.__BLD_KICK__ || null,
+                frozen: window.__BLD_FROZEN_N__ || null,
+                gw: window.__GW__ || null,
+                gwHud: (() => { try { return $("m-gw") ? String($("m-gw").textContent).slice(0, 160) : null; } catch (e) { return null; } })(),
+                hudBldb: (() => { try { return $("m-bldb") ? String($("m-bldb").textContent).slice(0, 200) : null; } catch (e) { return null; } })(),
+                hudLabels: (() => { try { return $("m-labels") ? String($("m-labels").textContent).slice(0, 200) : null; } catch (e) { return null; } })(),
+                errs: (window.__W3D_ERRS__ || errs || []).slice(0, 20),
+                styleLog: (window.__STYLE_LOG__ || []).slice(0, 40),
+              };
+              await fetch("http://127.0.0.1:8789/shot?name=" + encodeURIComponent(tag + "-STATE"), {
+                method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(st),
+              });
+            } catch (e) { /* 回传失败不影响代拍本身 */ }
+          };
           const snap = async (name) => {
             const cv = map.getCanvas();
             /* ① **先抓帧**：在 `render` 的那一刻抓 —— Android 上 `idle`+两帧 rAF 之后
@@ -5135,6 +5173,8 @@
           const n0 = await waitForBuildings(100000);
           $("m-msg").textContent = n0 > 0 ? `楼已到齐：${n0} 栋（${stats.r}m）⇒ 开始拍` : "等了 100s 仍是 0 栋 ⇒ 照拍（如实记录）";
           await settle();
+          /* 📋 **先回传一份图层账**（在拍第一张之前记：这时楼该建好、错该报出来） */
+          await postState("show");
           let ok = await snap("show-near");
           map.easeTo({ zoom: 15.0, pitch: 48, duration: 900 }); await settle();
           ok = (await snap("show-far")) || ok;
@@ -5148,7 +5188,8 @@
           await settle();
           ok = (await snap("show-side-nosat")) || ok;
           satOn = true; applySat();
-          $("m-msg").textContent = ok ? "代拍完成：4 张已回传 ~/chk/live/" : $("m-msg").textContent;
+          await postState("show-end");   // 拍完再记一份（对比"拍之前/之后"有没有变化）
+          $("m-msg").textContent = ok ? "代拍完成：4 张 + 图层账已回传 ~/chk/live/" : $("m-msg").textContent;
           try { localStorage.removeItem("wsm:v1:autoshot"); } catch {}
         }
         try {

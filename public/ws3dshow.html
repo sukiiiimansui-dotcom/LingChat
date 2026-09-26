@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v69";
+      const BUILD = "ws3dshow-2026-09-26-v70";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -2753,10 +2753,28 @@
          实测 **55 盘 → 720,087 栋 → 373 格 / 102.6MB**，单格中位 205KB / 最大 1.9MB。
          🔴 铁律不变：包里全是 **Overture 真脚印（real，ODbL 署名）**；**sketch 只在预渲染 PNG 的像素里**。 */
       const BLD_BUNDLE_PER_REFRESH = 2;     // 一次 moveend 最多取几格（后台、串行）
-      /* 帧率护栏：累积仓库上限（超了按"离视野中心距离"淘汰）。12,000 是**保守值**：
-         实测渝中一格 10,852 栋（1.78MB），而 `retainNear` 本来就只保留"视野外一圈"内的
-         ⇒ 上限很少真的用满；真要画得动多少**只有真机能判**（本机无头无 WebGL，我们不写 fps 结论）。 */
-      const BLD_STORE_CAP = 12000;
+      /* 帧率护栏：累积仓库上限（超了按"离视野中心距离"淘汰）。
+         🔴 **2026-09-26 机主拍板「远景容量放宽到 30000~50000」⇒ 默认 12,000 → 30,000（区间低端）**。
+         实测（`~/chk/_cap_cost.mjs`，真包 + 每档独立子进程 + gc；z13 样保留半径 14km）：
+           · 12,000 ⇒ 4 格 / heapUsed +23.0MB / 热挑楼 27ms / 画 307
+           · 30,000 ⇒ **10 格 / +33.8MB / 热挑楼 63ms / 画 813**（挑楼比"改之前的 12k"还快 —— 见 `wsBuildingPick` 的记忆化）
+           · 50,000 ⇒ 14 格 / +48.6MB / 热挑楼 185ms（区间高端**没批**：边际收益差、真机手感风险大）
+         ⚠️ **保留半径 2km（默认机位）时上限根本不生效**：任何上限都是 2,544 栋 / 3 格
+         ⇒ 翻这个默认**不影响默认机位的观感与内存**，只影响 z ≤ 13.5 那一档。
+         🔴 这个数**与共享真源的 `BLD_STORE_CAP` 必须同值**（`ws_app_offline_selftest` 第⑦组钉着），
+         两边一起改；`?cap=` 是 A/B 口（走 `resolveBldStoreCap()` 收进合法区间）。 */
+      const BLD_STORE_CAP = 30000;
+      /* `?cap=` **A/B 口**（机主/排查用）：默认就是上面那个数，坏值/缺省 ⇒ 还是它。
+         ⚠️ 上面那行必须保持**字面量**（`ws_app_offline_selftest` 第⑦组用 `const BLD_STORE_CAP = <数字>` 抓它，
+         钉着"页面与共享真源同值"）—— 所以覆盖值另起一个名字，别把字面量包进函数里。 */
+      const BLD_STORE_CAP_EFF = (function () {
+        try {
+          const T = window.__TF__;
+          const m = /[?&]cap=([0-9]+)/.exec(location.search);
+          if (T && typeof T.resolveBldStoreCap === "function") return T.resolveBldStoreCap(m ? Number(m[1]) : BLD_STORE_CAP);
+        } catch (e) { /* 忽略：旧 vendor 缺符号 ⇒ 用写死值 */ }
+        return BLD_STORE_CAP;
+      })();
       let roadsStore = null;
       /* 可数口径的计数器：**页面加载时归零**（自检每个场景都是新的页面 ⇒ 不跨场景泄漏） */
       window.__BLD_SRC_LIVE__ = 0;
@@ -2770,7 +2788,7 @@
         if (!TFx || typeof TFx.createFeatureStore !== "function") return null;
         if (!bldStore) {
           bldStore = TFx.createFeatureStore({
-            cap: BLD_STORE_CAP,
+            cap: BLD_STORE_CAP_EFF,      // = BLD_STORE_CAP（默认 30000），`?cap=` 可覆盖
             /* 🔴 去重键优先 `store_id`：`?bld=2` 会把一栋楼**拆成多个要素**（裙楼/塔楼/女儿墙/设备箱…），
                它们共用同一个 `osm_id` —— 若按 `osm_id` 去重，拆件会被**互相顶掉**，形体就"生成完看不见"
                （自检 ws_bld_page ①那里抓到过：3 栋楼只剩 3 个要素、podium 只剩 1 个）。 */
@@ -2961,7 +2979,7 @@
               return TFp.capBuildingsPerCell(all.features, {
                 cap: BLDN, cellDeg: BLDCELL,
                 bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
-                minInView: 10,                    /* 页面口径：视野内至少 10 栋（数不出来时模块给 null） */
+                minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
               });
             }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });
             const baseN = (typeof r.stats.baseChosen === "number") ? r.stats.baseChosen : r.features.length;
@@ -3155,6 +3173,11 @@
       }
       const COAL_MS = qnum("coal", 300);
       const PCACHE_CELLS = qnum("pcache", 3);
+      /* 🔎 **近景密度 A/B 口**（默认 10 = **不改观感**；机主在手机上比完再定默认值）。
+         实测默认机位：视野矩形里真有 **629 栋**，而"每块(0.05°≈5.6km) ≤100 栋"+`minInView:10`
+         ⇒ 屏上只有 **10 栋**。`?inview=30` / `?inview=100` 就是让他看密度差多少。
+         补进来的那批**不进冻结集**（模块里钉着）⇒ 不破坏"同一块永远同一批"。 */
+      const INVIEW_N = qnum("inview", 10);
 
       function makeFeed(kind, store, flush, margin) {
         const TFx = window.__TF__;

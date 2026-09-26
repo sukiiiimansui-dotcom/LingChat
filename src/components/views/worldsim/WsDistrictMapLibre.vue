@@ -71,6 +71,39 @@
       @toggle="verifyOpen = $event"
     />
 
+    <!-- 🏷🗺 **名字层**（真名标签 + 区名标签）—— 规则全在共享真源 `wsNameLayer` 里，这里只画。
+         ## 为什么是 DOM 而不是地图库的文字层
+         我们的样式里 `glyphs` 是**明令禁止**的（`glyphs: undefined` ⇒ 样式校验失败 ⇒ `load` 永不触发、
+         整张地图全白且零报错，项目里栽过）。要中文就得自托管 glyphs PBF 字体 + 工具链，不划算。
+         ## 动效（`DESIGN-MG-MOTION.md` §4.0/§4.1/§4.2 的红线，逐条落在这里）
+         · **位置只在 `moveend` 批量写一次**：节点用 `transform: translate3d(x px, y px, 0)`
+           （**不是** `left/top` 百分比 —— 那是布局属性，每帧改一个就是一次 layout）；
+         · **相机运动期间只写 1 个节点**：给容器加 `is-camera-moving`（一次 class + 一次 opacity 0.25），
+           跟手靠**容器的一次 `translate3d`**（`map.project(锚点)` 算位移，O(1)）；
+         · **节点池复用**：换名字发生在 `switching`（整层 opacity≈0）那一帧，**不是**看着旧名字变新名字；
+         · 三档样式（真名 / 数据驱动区名 / 示意区名）**必须不同** —— 由 `style` → class 决定。 -->
+    <div
+      ref="labRootEl"
+      class="ws-labs"
+      :class="labRootClass"
+    >
+      <button
+        v-for="n in nameNodes"
+        :key="n.slot + ':' + n.id"
+        type="button"
+        class="ws-lab"
+        :class="[labClassOf(n.style), { 'is-sketch': n.sketch }]"
+        :data-ws-lab="n.pick.kind"
+        :data-ws-lab-id="n.id"
+        :data-ws-lab-style="n.style"
+        :style="{ transform: `translate3d(${n.x}px, ${n.y}px, 0)` }"
+        :title="n.why"
+        @click.stop="openCardFromNode(n)"
+      >
+        {{ n.text }}
+      </button>
+    </div>
+
     <!-- 2D 降级路的"人"（WebGL 路用地图库 Marker，不在这里画） -->
     <div v-if="!mapAvailable" class="ws-dml__pins">
       <i
@@ -83,6 +116,11 @@
         >{{ (p.name || '我').slice(0, 1) }}</i
       >
     </div>
+
+    <!-- 🪪 **信息卡**：点楼体 / 点名字 / 点区名 ⇒ **同一张卡**（`wsBuildingCard.buildingCardData`）。
+         动效令牌全部来自 `CARD_MOTION`（一处定义）；组件里**没有** `backdrop-filter`
+         （全局 `.ws-card` 类自带 `blur(var(--ws-blur))`，玻璃主题下是 10px ⇒ 一用就掉帧，所以不套它）。 -->
+    <WsBuildingCard :data="cardData" :open="cardOpen" :low="perfLow" @close="closeCard" />
 
     <!-- 指标条：验证用（也让人一眼看到"这是真数据还是降级"）。
          `ref="hudEl"`：样式自检 JSON 里要带上 **HUD 原话**（机主看到的就是这一行，逐字带回，
@@ -108,6 +146,10 @@
            可数一行：已取 x 格 / 包外 y / 失败 z + 仓库 N 栋（**数不出来不写 0**）。
            `title` 是真源判词（`wsScene.bldVerdictText`）——"包外"必须与"这里没有楼"分得开。 -->
       <span v-if="stats.bldBundle" :title="stats.bldVerdict">{{ stats.bldBundle }}</span>
+      <!-- 🏷🗺 **名字层**那一行（真源判词，三态：正数 / 0（已量）/ 数不出来 + 原因）。
+           🔴 三档**分开计数**（真名 / 数据驱动 / 示意），并明写 **生成名上屏 0**
+           —— 机主拍板"生成名只进信息卡"，这一条在这里是**看得见的**机器证据。 -->
+      <span v-if="stats.names" :title="stats.names">{{ stats.names }}</span>
       <!-- 🧱🛣 离线路网包：同式（默认**不发 `/api/roads`**；仓库是**累积**的，换视野不减） -->
       <span v-if="stats.roadsBundle" :title="stats.roadsVerdict">{{ stats.roadsBundle }}</span>
       <!-- 🏪 设施：**必须写"示意布局"**——这些点的经纬度是按 /api/facilities 的
@@ -301,6 +343,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      的**唯一真源**。代拍页那段内联的 `refreshGw()` 与这里**共用同一份** —— App 宿主里
      **一行规则都不写**（PR 门禁 C1 的红线：宿主不许有第二份实现），这里只接线。 */
   import { type GwMapLike, createGwLayer } from "./wsGwLayer";
+  /* 🏷🗺 **名字层**（机主 2026-09-26：「我要求**每个显示的楼房都要有名字喵**，如果太密集了就根据类型
+     划定区域（如经济区，美食区），**每个名字和楼房都能点击查看信息**」）。
+     🔴 **宿主只接线**（PR 门禁 C1：App 不许有第二份实现）：取数 / 真名标签 / 区名聚合 / 迟滞闸门 /
+     动效参数全在共享真源 `wsNameLayer`（它再用 `wsLabels` + `wsZoneNames`）⇒ 代拍页接的是同一份。 */
+  import {
+    LABEL_CAMERA_CLASS,
+    LABEL_MOTION,
+    type NameMapLike,
+    type NameRenderNode,
+    type NameRenderPlan,
+    createNameLayer,
+    nameVerdictLine,
+  } from "./wsNameLayer";
+  /* 🪪 **信息卡**（点楼体 / 点名字 / 点区名 ⇒ **同一张卡**；数据部分在纯逻辑 `wsBuildingCard` 里）。 */
+  import { buildingCardData, type CardData } from "./wsBuildingCard";
+  import WsBuildingCard from "./WsBuildingCard.vue";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -697,6 +755,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let alive = true;
   /** 「放大才取楼」的去抖定时器（moveend 里用；卸载时要清） */
   let bldTimer = 0;
+  /** 🏷 名字层在 `zoomend` 之后的去抖（缩放会改变避让结果与区名模式，必须重排一次；卸载时要清） */
+  let zoomNameTimer = 0;
+  /** 🏷 换批（"先隐后改字"）的定时器：新的一批到了要把它清掉（旧的不许覆盖新的）；卸载时要清 */
+  let switchTimer = 0;
   /** 「地图库多久没画出第一帧就降级」的看门狗（卸载时要清，见 onBeforeUnmount） */
   let watchdog = 0;
   /** 地图库**真的出过一帧**没有？（`render` 事件；看门狗"别只看时间"就靠它） */
@@ -856,6 +918,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     height: 0,
     levels: 0,
     default: 0,
+    /** 🏷🗺 名字层那一行（**真源判词**：真名 N · 区名 M=数据驱动+示意 · **生成名上屏 0** · 点/格/D/模式）
+     *  —— 三档**分开计数**，且"生成名上屏"恒为 0（机主拍板：生成名只进信息卡） */
+    names: "",
+    /** 🪪 信息卡：当前开着没有（探针读 DOM，不靠调试出口） */
+    card: "",
     fps: 0,
     note: "",
     /** 等高线段数：>0 有效、0 还没画、-1 取不到（HUD 上如实显示） */
@@ -3004,6 +3071,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
            形体档 `mode:"base"` = 不拆件（机主 (a′) ⇒ 两页默认档同一条规格）。 */
         specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" }),
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
+        /* 🏷 **记下"真正画出去的那批楼"**：名字层的锚点/点选降级都只认这一批 ——
+           否则会出现机主报过的「有的压根没对应楼」（名字指到没画的楼）。
+           这里存的是**引用**，不复制（一轮一次，开销可忽略）。 */
+        afterDraw: (_why0, data) => {
+          drawnBld = (data as { features?: unknown[] })?.features || [];
+        },
         /* 🏙 **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`：**按格挑 + 按格冻结 + 视野补齐**）。
            🔴 2026-09-26 改（机主真机「**每次滑动建筑都变了**」）：原来这里是
            `pickNearView` → `pickBuildingsForView`（**按视野**挑、**没有冻结**）⇒ 视野一变那批楼就换了一批，
@@ -3125,6 +3198,243 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       stats.note = stats.note ? `${stats.note} · ${why}` : why;
     },
   });
+
+  /* ══ 🏷🗺 名字层（真名标签 + 区名标签）═══════════════════════════════════════════════
+     宿主只做四件事：**给它地图/取数/行政区名/画出去的楼**，拿回渲染计划后**照着写 DOM**。
+     取数、避让、区名聚合、迟滞闸门、动效参数**一行都不在这里**（全在 `wsNameLayer`，PR 门禁 C1）。
+     ⚠️ 跟手（§4.0）：相机运动期间**只写 1 个节点**（容器）——`translate3d` 由 `onMove` 写一次，
+        节点自身的 `transform` 只在 `refreshNames()`（= moveend/load 之后）批量写一次。 */
+
+  /** 上一轮 flush 真正**画出去**的楼（标签锚点必须落在"屏幕上那批"上，
+   *  否则会出现机主报过的「有的压根没对应楼」——名字指到没画的楼）。 */
+  let drawnBld: readonly unknown[] = [];
+  /** 名字层开关：`?names=0` 关（排查用；默认开）。
+   *  🔴 **必须声明在 `createNameLayer()` 之前**：`createNameLayer` 里会**同步**调一次
+   *  `host.enabled()`（初始化事实）⇒ 声明在后就是 TDZ `ReferenceError`，
+   *  而它会**整块炸掉地图的 setup**（真浏览器实测：`Cannot access 'er' before initialization`
+   *  ⇒ `.ws-dml` 根本没挂上 ⇒ 整屏只剩顶栏）。这条是探针抓出来的，不是推出来的。 */
+  const namesOn = ref(!/[?&]names=0/.test(String(typeof location !== "undefined" ? location.search : "")));
+  const nameLayer = createNameLayer({
+    map: () => (renderKind.value === "fallback2d" ? null : (map as unknown as NameMapLike | null)),
+    fetchCell,
+    enabled: () => namesOn.value,
+    /* 行政区名：街区级这一屏**没有**名册（城市包线还没给）⇒ 如实传空（不是"这里没有行政区"） */
+    admins: () => [],
+    drawnBuildings: () => drawnBld,
+    onPlan: (plan, facts) => { applyNamePlanWithHud(plan, nameVerdictLine(facts)); },
+    onError: (why) => {
+      stats.note = stats.note ? `${stats.note} · ${why}` : why;
+    },
+  });
+  /** 名字层开关：`?names=0` 关（排查用；默认开；**声明见上**，在 `createNameLayer` 之前） */
+  const namePlan = ref<NameRenderPlan>({ mode: "names", nodes: [], batch: 0, lite: false, cameraOpacity: LABEL_MOTION.cameraOpacity });
+  /** 屏上的节点（**节点池复用**：只在"换批"时替换数组内容） */
+  const nameNodes = ref<NameRenderNode[]>([]);
+  /** 相机运动中（整层淡化：一次 class + 一次 opacity，**只写 1 个节点**） */
+  const cameraMoving = ref(false);
+  /** 换批中（"先隐后改字"：整层 opacity≈0 的那一帧才改 textContent） */
+  const switching = ref(false);
+  const labRootEl = ref<HTMLElement | null>(null);
+
+  function labClassOf(style: NameRenderNode["style"]): string {
+    return style === "real" ? "is-real" : style === "derived" ? "is-derived" : "is-generated";
+  }
+  /** 容器 class（相机运动 / 换批 / 整层降级）—— 类名来自真源常量，宿主不写字面量 */
+  const labRootClass = computed(() => ({
+    [LABEL_CAMERA_CLASS]: cameraMoving.value,
+    "is-switching": switching.value,
+    "is-lite": namePlan.value.lite,
+  }));
+
+  /**
+   * 把**渲染计划**落到 DOM。🔴 两条纪律：
+   * ① **位置只在此时写一次**（`translate3d`），相机运动期间一个字都不许再写节点；
+   * ② **先隐后改字**：如果这一批的"名字集合"变了 ⇒ 先进 `switching`（整层 opacity→0，120ms），
+   *    等它真的看不见了才换 `nameNodes`，然后退出去（区名 200ms 进场）。
+   *    绝不允许"看着旧名字变成新名字"（那是最廉价的一种观感）。
+   */
+  function applyNamePlan(plan: NameRenderPlan): void { applyNamePlanWithHud(plan, ""); }
+  /**
+   * 把**渲染计划**落到 DOM，并**在同一刻**写 HUD 那一行。
+   *
+   * 🔴 为什么 HUD 必须跟着节点一起写（2026-09-26 真浏览器实测的坑）：
+   *   原来是 `refresh()` 里回调落节点（换批时**延迟 120ms** 做"先隐后改字"）、
+   *   而 `stats.names` 在 `refresh()` 返回后**立刻**写 ⇒ 有 120ms 的窗口里
+   *   **HUD 说的是新一批、屏上是旧一批**（实测抓到 `区名模式` 与"屏上 8 个真名"同时出现，
+   *   其实是两批数据）。探针/机主读到的就是这种自相矛盾的一行。
+   *   ⇒ 现在 HUD 文本随节点一起赋值，**两者永远描述同一批**。
+   *   ⚠️ 同时把"上一批的切换定时器"清掉：否则后到的批会被先到的定时器覆盖（旧覆盖新）。
+   */
+  function applyNamePlanWithHud(plan: NameRenderPlan, hud: string): void {
+    const changed = plan.batch !== namePlan.value.batch;
+    namePlan.value = plan;
+    if (switchTimer) { window.clearTimeout(switchTimer); switchTimer = 0; }
+    const commit = (afterPaint = false): void => {
+      nameNodes.value = plan.nodes;
+      if (hud) stats.names = hud;                 // ← 与节点同一批（不许 HUD 领先屏上）
+      /* 🔴 `switching` **必须在这里也清掉**：新的一批会 `clearTimeout(上一批的定时器)`，
+         被清掉的那一批的"收尾 16ms"就永远不会跑 ⇒ 容器永久停在 `is-switching`（opacity 0）
+         ⇒ 名字层**看不见了**（真浏览器实测抓到 `rootClass: "ws-labs is-switching"`）。
+         现在：只有走了"延迟换字"的路径才需要等一帧再摘类，其余路径立刻摘。 */
+      if (afterPaint) window.setTimeout(() => { if (alive) switching.value = false; }, 16);
+      else switching.value = false;
+    };
+    if (!changed) {
+      /* 同一批：数量/名字都没变 ⇒ 只更新坐标（**一次批量写**，moveend 才走到这里） */
+      commit();
+      return;
+    }
+    if (perfLow.value || reducedMotion()) {
+      /* 降级（§4.1 降级表）：**保留三幕结构但去掉错峰**；reduced-motion 下纯淡入淡出（不缩时长） */
+      commit();
+      return;
+    }
+    switching.value = true;
+    switchTimer = window.setTimeout(() => {
+      switchTimer = 0;
+      if (!alive) return;
+      commit(true);                                 // ← 换字发生在整层看不见的那一帧
+    }, LABEL_MOTION.nameOutMs);
+  }
+
+  /** 名字层刷新（moveend / load 之后调；**不阻塞首屏**） */
+  async function refreshNames(why = "view"): Promise<void> {
+    if (!namesOn.value || !alive) return;
+    try {
+      /* 判词由**真源**给；它跟着节点一起落进 HUD（见 `applyNamePlanWithHud`）⇒ 不用再写一次 */
+      await nameLayer.refresh(why);
+    } catch (e) {
+      stats.note = stats.note ? `${stats.note} · 名字层：${String((e as Error)?.message || e).slice(0, 40)}` : `名字层：${e}`;
+    }
+  }
+
+  /* ── 🪪 信息卡：三条入口（点楼体 / 点名字 / 点区名）⇒ 同一张卡 ───────────────── */
+  const cardData = ref<CardData | null>(null);
+  const cardOpen = ref(false);
+  const perfLow = computed(() => !!perf.low.value);
+  function reducedMotion(): boolean {
+    try {
+      return typeof window !== "undefined" && !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch { return false; }
+  }
+  /** 打开卡片：**唯一入口** —— 三条点击路径都走它，卡片数据只由 `buildingCardData` 生成 */
+  function openCard(input: Parameters<typeof buildingCardData>[0], click?: { x: number; y: number } | null): void {
+    try {
+      const rect = { x: 0, y: 0, w: 0, h: 0 };
+      /* 卡片最终矩形：与 `WsBuildingCard.vue` 的 CSS 同一口径（min(88%, 420px) 宽、居中） */
+      const host = labRootEl.value?.parentElement;
+      const W = host?.clientWidth || 0, H = host?.clientHeight || 0;
+      rect.w = Math.min(W * 0.88, 420);
+      rect.h = Math.min(H * 0.76, 260);
+      rect.x = (W - rect.w) / 2;
+      rect.y = (H - rect.h) / 2;
+      cardData.value = buildingCardData({ ...input, click: click || input.click || null, cardRect: rect, index: indexFactOfNames() });
+      cardOpen.value = true;
+      stats.card = `${cardData.value.kind}/${cardData.value.state}`;
+    } catch (e) {
+      stats.note = stats.note ? `${stats.note} · 卡片：${String((e as Error)?.message || e).slice(0, 40)}` : `卡片：${e}`;
+    }
+  }
+  function closeCard(): void { cardOpen.value = false; stats.card = ""; }
+  /** 署名（ODbL）原句：**只念包索引里的**（取不到 = null ⇒ 卡片如实写"署名取不到"） */
+  function indexFactOfNames(): { attribution: string | null; real: boolean | null } | null {
+    const f = nameLayer.facts();
+    return f.attribution ? { attribution: f.attribution, real: true } : (f.state === "counted" ? { attribution: null, real: null } : null);
+  }
+
+  /** 点**标签**（真名 / 区名）—— 与点楼体弹**同一张卡** */
+  function openCardFromNode(n: NameRenderNode): void {
+    const p = n.pick;
+    if (p.kind === "zone") { openCard({ kind: "zone", zone: p.zone }); return; }
+    if (p.kind === "place") { openCard({ kind: "place", place: p.place }); return; }
+    openCard({ kind: "building", building: { id: p.buildingId, lng: p.lng, lat: p.lat, properties: { name: p.name, osm_id: p.buildingId } } });
+  }
+
+  /** 点**楼体**（地图上的挤出层）—— 与点标签弹**同一张卡** */
+  function onMapClick(e: { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number }; features?: unknown[] }): void {
+    try {
+      const m = map as unknown as { queryRenderedFeatures?: (p: unknown, o?: unknown) => Array<{ properties?: Record<string, unknown>; id?: unknown }> } | null;
+      const pt = e?.point;
+      let feats: Array<{ properties?: Record<string, unknown>; id?: unknown }> = [];
+      if (m?.queryRenderedFeatures && pt) {
+        try { feats = m.queryRenderedFeatures(pt, { layers: ["bld-ext"] }) || []; } catch { feats = []; }
+      }
+      /* 🔴 无头/无 WebGL 下 `queryRenderedFeatures` 恒空（本项目栽过的**假阴性闸**）⇒ 如实降级：
+         用**屏幕距离**在"这一轮真画出去的那批楼"里找最近的一栋（锚点来自 `afterDraw`，不是猜的）。 */
+      if (!feats.length) {
+        const nearest = nearestDrawnBuilding(pt);
+        if (nearest) feats = [{ properties: nearest.properties, id: nearest.id }];
+      }
+      const f = feats[0];
+      if (!f) return;                                   // 点到空处：什么都不弹（不编一栋楼出来）
+      openCard({ kind: "building", building: { id: String((f.properties || {}).osm_id || f.id || ""), properties: (f.properties || {}) as Record<string, unknown> }, click: pt || null });
+    } catch (err) {
+      stats.note = stats.note ? `${stats.note} · 点楼：${String((err as Error)?.message || err).slice(0, 40)}` : `点楼：${err}`;
+    }
+  }
+
+  /** 屏幕距离最近的一栋**已画**的楼（`queryRenderedFeatures` 拿不到时的**可见降级**，不编数据） */
+  function nearestDrawnBuilding(pt: { x?: number; y?: number } | undefined): { id: string; properties: Record<string, unknown> } | null {
+    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number }; getZoom?: () => number } | null;
+    if (!m?.project || !pt || !Number.isFinite(Number(pt.x)) || !Number.isFinite(Number(pt.y))) return null;
+    const zoom = m.getZoom ? m.getZoom() : 16;
+    if (zoom < 13) return null;                          // 远景下楼是亚像素，不该被点到
+    const maxPx = 26;                                    // 命中半径（≈ 一栋近景楼的屏幕上尺寸）
+    let best: { id: string; properties: Record<string, unknown> } | null = null;
+    let bestD = maxPx;
+    for (const raw of drawnBld) {
+      const f = raw as { id?: unknown; properties?: Record<string, unknown>; geometry?: { coordinates?: unknown } };
+      const props = f.properties || {};
+      if (String(props.part || "body") !== "body") continue;   // 只认主体（屋顶/天线不该被点）
+      const ll = firstCoordOf(f.geometry);
+      if (!ll) continue;
+      const p = m.project(ll);
+      if (!p || !Number.isFinite(p.x)) continue;
+      const d = Math.hypot(p.x - Number(pt.x), p.y - Number(pt.y));
+      if (d < bestD) { bestD = d; best = { id: String(props.osm_id || f.id || ""), properties: props }; }
+    }
+    return best;
+  }
+  function firstCoordOf(g: { coordinates?: unknown } | null | undefined): [number, number] | null {
+    let v: unknown = g?.coordinates;
+    for (let i = 0; i < 6 && Array.isArray(v); i++) {
+      if (typeof v[0] === "number" && typeof v[1] === "number") return [v[0] as number, v[1] as number];
+      v = v[0];
+    }
+    return null;
+  }
+
+  /* ── 跟手（§4.0）：相机运动期间**只写容器**；节点位置一个字都不写 ─────────────────
+     算法：`movestart` 时记下"第一个节点的锚点此刻在屏幕上的位置"，
+     之后每帧算它现在在哪 ⇒ 差值就是整层的位移（地图平移 = 全体标签同位移，所以这是**精确**的）。
+     ⚠️ 只在**平移**（pan）时这么做；旋转/俯仰不是平移，那时整层淡到 0.25 就够（§4.2）。 */
+  let panAnchor: { lng: number; lat: number; x: number; y: number } | null = null;
+  function onMoveStart(): void {
+    if (!namesOn.value || !nameNodes.value.length) return;
+    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+    const n0 = nameNodes.value[0];
+    if (!m?.project || !n0) return;
+    const p = m.project([n0.lng, n0.lat]);
+    if (!p) return;
+    panAnchor = { lng: n0.lng, lat: n0.lat, x: p.x, y: p.y };
+    cameraMoving.value = true;                           // 一次 class + 一次 opacity（**只写 1 个节点**）
+  }
+  function onMove(): void {
+    if (!panAnchor || !cameraMoving.value) return;
+    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+    if (!m?.project) return;
+    const p = m.project([panAnchor.lng, panAnchor.lat]);
+    const el = labRootEl.value;
+    if (!p || !el) return;
+    /* 🔴 一次 transform 写在一个容器上（O(1)），**不是** N 个节点 —— 这就是"不卡"的全部秘密 */
+    el.style.transform = `translate3d(${(p.x - panAnchor.x).toFixed(2)}px, ${(p.y - panAnchor.y).toFixed(2)}px, 0)`;
+  }
+  function onMoveEndNames(): void {
+    cameraMoving.value = false;
+    panAnchor = null;
+    const el = labRootEl.value;
+    if (el) el.style.transform = "translate3d(0, 0, 0)";   // 节点自身已经是新位置 ⇒ 容器归零
+  }
 
   /** HUD/面板那一行（**可数口径只有一份**：`wsOfflineFeed.bundleCountsLine`）
    *  · `stats.bldBundle/roadsBundle` = 机主看的**可数一行**（已取/包外/失败 + 仓库数）；
@@ -3582,8 +3892,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     try {
       const mod = await import(/* @vite-ignore */ ML_URL);
       maplibregl = mod?.default || mod;
-    } catch {
-      fallback2d("2D 降级（地图库加载失败）", null, "vendor/maplibre 缺失？");
+    } catch (e) {
+      /* 🔴 原文必须带出来（原来写的是**猜的**一句「vendor/maplibre 缺失？」+ 把异常吞掉）。
+         代价：HUD 上那句猜的话把"到底是 404、语法错、还是 worker 起不来"盖住了 ——
+         2026-09-26 实测就吃过这个亏：控制台里手动 `import()` **成功**（hasMap=true），
+         而宿主里这一句失败、且**一个字的原因都没有**，只能靠翻源码猜。
+         现在把异常原文写进 `fallbackWhy`（面板/样式 JSON 都会带它）——失败不许静默。 */
+      const why = String((e as Error)?.message || e).slice(0, 140);
+      fallback2d("2D 降级（地图库加载失败）", null, `vendor/maplibre 加载失败：${why || "（无 message）"}`);
       return;
     }
     mlMod = maplibregl; // Marker 在它身上，setup 作用域的 syncPins 要用
@@ -3819,6 +4135,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          `/api/buildings` 十几秒到 91.7s，现在首屏一出来楼就一批批补进来）。
          ⚠️ 楼/路走同一条管道（`refreshBundles`），live 只在 `?live=1` 时另外打。 */
       void refreshBundles("init");
+      /* 🏷🗺 **名字层首刷**（与楼同一个道理：只挂 `moveend` 会"开页没有名字"——本项目栽过三次的
+         「挂钩只在用户事件上 ⇒ 首屏空白」）⇒ 这里 kick 一次，成功即停、不常驻轮询。
+         放在 `refreshBundles` 之后：先有楼（锚点只认**画出去的那批**），再挂名字。 */
+      void refreshBundles("init").then(() => (alive ? refreshNames("init") : undefined));
       /* 🔴 署名（ODbL）**随数据一起显示**：句子取自包里的 `index.json`（导出脚本那句原话） */
       void loadBundleAttribution();
       /* 🎬 场景就绪 ⇒ 把地图与**真楼栋**交给外层（交通设施要用楼脚印；见 `emit` 的说明）。
@@ -3830,17 +4150,35 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       maybeAppSelfShot("webgl");
     });
 
+    /* 🏷🗺 **名字层的相机联动**（`DESIGN-MG-MOTION.md` §4.0/§4.2 —— 这一段的每一条都是红线）
+       · `movestart`：容器加 `is-camera-moving`（**一次 class + 一次 opacity**，整层 1 → 0.25）；
+       · `move`（每帧）：**只写 1 个容器**的 `translate3d`（跟手），N 个节点一个字都不写；
+       · `moveend`：容器归零 + 节点位置**批量重排一次**（在 `refreshNames` 里）；
+       · `click`：点楼体 ⇒ 与点名字**同一张卡**（`queryRenderedFeatures` 拿不到时走"最近已画楼"降级）。 */
+    m.on("movestart", () => { onMoveStart(); });
+    m.on("move", () => { onMove(); });
+    m.on("click", (e: unknown) => { onMapClick(e as { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number } }); });
+
     /* 视野变化 → 按需补数据（去抖 600ms，避免拖动时把后端/磁盘打爆）。
        · **默认**：只补**离线格**（静态文件 ⇒ 不打 Overpass；换视野要素数**不减**：并进累积仓库）；
        · `?live=1`：另外走现场取数（楼/路各一条），失败照旧**可见**。 */
     m.on("moveend", () => {
+      /* 🔴 容器位移**必须**在这里归零：节点自身马上要被写成新位置，容器再留着旧位移就是"错位"
+         （机主真机报过的「名字显示是滑动刷新一次，不能跟随，**错位严重**」就是这一层没对齐）。 */
+      onMoveEndNames();
       if (bldTimer) window.clearTimeout(bldTimer);
       bldTimer = window.setTimeout(() => {
         bldTimer = 0;
-        void refreshBundles("move");
+        void refreshBundles("move").then(() => (alive ? refreshNames("move") : undefined));
         if (bldLive.live) void loadBuildingsForView(m as unknown as BldMapLike);
         if (roadsLive.live) void loadRoadsForView(m as unknown as BldMapLike);
       }, 600);
+    });
+    /* 缩放结束也要重排：zoom 变了 ⇒ 避让网格的候选/撞掉**全变**（区名模式的迟滞信号就是它） */
+    m.on("zoomend", () => {
+      onMoveEndNames();
+      if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
+      zoomNameTimer = window.setTimeout(() => { zoomNameTimer = 0; if (alive) void refreshNames("zoom"); }, 160);
     });
 
     /* fps 计数已提到 `startFps()`（在"分渲染路"之前启动，降级路也有数） */
@@ -3853,6 +4191,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     unlockPageGestures();
     stopTimer();
     if (bldTimer) window.clearTimeout(bldTimer);
+    if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
+    if (switchTimer) window.clearTimeout(switchTimer);
     if (watchdog) window.clearTimeout(watchdog);
     watchdog = 0;
     if (recoverTimer) window.clearTimeout(recoverTimer);
@@ -4116,6 +4456,112 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   .ws-root.ws-perf-low .ws-dml__zoom button {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+  }
+
+  /* ══ 🏷🗺 名字层（真名标签 + 区名标签）══════════════════════════════════════════════
+     🔴 三条硬约束（`DESIGN-MG-MOTION.md` §4.0/§4.2 的红线）：
+     ① 动画**只动 transform/opacity**（节点位置 = `translate3d`，绝不 `left/top`）；
+     ② 相机运动期间**只写容器这一个节点**（`transform` + `opacity`），节点自身一个字都不写；
+     ③ **禁 `backdrop-filter`**（浮在地图画布上 ⇒ 每帧读回底下像素；`blur(0px) ≠ 没有模糊`）。
+     所以下面只有"纯色底 + 1px 描边"，没有任何模糊。 */
+  .ws-labs {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;              /* 容器不吃事件；只有标签本身可点 */
+    /* 跟手期间由 JS 写一次 translate3d（O(1)）；用完即撤（[MDN] will-change 的要求） */
+    will-change: transform, opacity;
+    opacity: 1;
+    transition: opacity 80ms linear;   /* `LABEL_MOTION.cameraMs` 同口径（相机运动整层 1 → 0.25） */
+  }
+  .ws-labs.is-camera-moving {
+    opacity: 0.25;                     /* §4.2：整层淡化 = **1 个节点**，不是 N 个 */
+  }
+  .ws-labs.is-switching {
+    opacity: 0;                        /* "先隐后改字"：这一帧才允许换 textContent */
+    transition: opacity 120ms cubic-bezier(0.3, 0, 1, 1);  /* `nameOutMs` */
+  }
+  /* >60 个标签 ⇒ 换手段（整层淡出→重排→淡入），**不是**缩时长 */
+  .ws-labs.is-lite .ws-lab {
+    transition: none;
+  }
+  .ws-lab {
+    position: absolute;
+    left: 0;
+    top: 0;
+    /* 命中区 ≥44×44：**静态 padding** 撑出来（不许用动画改尺寸放大命中区） */
+    padding: 12px 10px;
+    margin: -14px 0 0 -10px;           /* 让"文字中心"落在锚点上（padding 的一半） */
+    background: transparent;
+    border: 0;
+    font: inherit;
+    font-size: 11px;
+    line-height: 14px;
+    color: #eaf2f6;
+    white-space: nowrap;
+    cursor: pointer;
+    pointer-events: auto;
+    transform-origin: 50% 100%;
+    /* 悬停 90ms / 松开 140ms；退让与复现都由 class 驱动（§4.2 参数表） */
+    transition: transform 90ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 120ms cubic-bezier(0.3, 0, 1, 1);
+  }
+  .ws-lab::before {
+    /* 文字底衬（纯色 + 1px 描边，**无模糊**）：只有实际文字大小，不吃命中区 */
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 10px;
+    bottom: 10px;
+    border-radius: 5px;
+    background: rgba(16, 24, 32, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    z-index: -1;
+  }
+  .ws-lab:hover,
+  .ws-lab:focus-visible {
+    transform: scale(1.05);            /* 强调只动 scale（**不许**改 font-size/padding） */
+  }
+  /* 🔴 三档样式**必须不同**（机主拍板）：真名 / 数据驱动区名 / 示意区名 */
+  .ws-lab.is-real {
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .ws-lab.is-derived {
+    color: #ffe9a8;                    /* 数据驱动：暖黄，字号略大（它是"算出来的结论"） */
+    font-size: 12px;
+  }
+  .ws-lab.is-derived::before {
+    background: rgba(58, 44, 12, 0.78);
+    border-color: rgba(255, 214, 120, 0.45);
+  }
+  .ws-lab.is-generated {
+    /* 示意件：**斜体 + 虚线边 + 低饱和** —— 与真名一眼可分（项目红线：样式必须不同） */
+    color: #cfe0d8;
+    font-style: italic;
+    font-weight: 400;
+  }
+  .ws-lab.is-generated::before {
+    background: rgba(24, 34, 30, 0.66);
+    border-style: dashed;
+    border-color: rgba(180, 214, 200, 0.4);
+  }
+  /* 低档 / 减少动效：换手段（去 hover 缩放），**不是**把时长缩短 */
+  .ws-root.ws-perf-low .ws-lab:hover,
+  .ws-root.ws-perf-low .ws-lab:focus-visible {
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ws-lab {
+      transition: opacity 120ms linear;  /* 只留一次很短的淡入（[MDN]），无位移无缩放 */
+    }
+    .ws-lab:hover,
+    .ws-lab:focus-visible {
+      transform: none;
+    }
+    .ws-labs {
+      transition: opacity 120ms linear;
+    }
   }
 
 </style>

@@ -127,6 +127,20 @@ export const ROADS_STORE_CAP = 6000;
    （index 5 格 / 359 面）。🔴 这个数**只此一份**：前端算格键与"包自报口径"对拍都用它，
    绝不允许"包里写多少就按多少算"（2026-09-25 那次 0.02/0.05 两套口径的事故，
    后果是把**有数据**的格说成「包外」—— 把有说成没有）。 */
+/* ══ 🔧 **两个耗时开关的默认值（唯一一份，两个宿主都不许再各写一遍）**════════════════════
+   机主 2026-09-26 硬指标：「**代拍页和 App 页完全一样**」，主对话拍板走
+   "同一实现 + 同一套参数 + **机器可查**的一致性检查"。
+   这两个开关原来只由**页面**显式传（300 / 3），而 App 那两处 `createBundleFeed` 没传
+   ⇒ App 实际是 **0 / 0（全关）**，与页面**不一致**（实测对照见
+   `world_map/PERF-20260926b-capacity-and-fetch-plan.md` §⑥）。
+   ⇒ 默认值搬到这里，**两个宿主都不再传**：由**构造**保证一致，且可用
+   `feed.facts().coalesce.ms` / `feed.facts().cache.maxCells` **机器核**。
+   ⚠️ 逃生门不变：显式传 `0` 仍然是"关"（`??` 只替换 null/undefined，不吞 0）。 */
+/** flush 合并窗口的默认值（ms）；`0` = 关（逐批 flush，老行为） */
+export const DEFAULT_FLUSH_COALESCE_MS = 300;
+/** 已解析要素缓存的默认格数；`0` = 关 */
+export const DEFAULT_PARSED_CACHE_CELLS = 3;
+
 export const GW_BUNDLE_CELL_DEG = 0.05;
 /* 水/绿包很小（实测 5 格 / 359 面、单格几十 KB）⇒ 一轮**一次取完**：与代拍页原来"一轮取完再报数"同口径，
    少一次"格 2/6"的中间态（判词那一行也就不会在首屏闪一下）。 */
@@ -686,7 +700,8 @@ export interface BundleFeedOptions<T> {
    * 页面侧一次 flush = **全仓库** `setData`（路实测中位 **637ms**、楼 **253ms**），
    * 而一次变焦会连着到好几批 ⇒ 同一份全量数据被反复交给 MapLibre（k 批 ⇒ 约 k²/2 份）。
    * 合并窗口把"到齐就画"改成"稍微等一下一起画"：**画出来的最终内容一模一样**，只是少做几次全量搬运。
-   * ⚠️ 窗口越大越省，但"楼出现"的延迟也越大 ⇒ 建议 200~400ms（页面口径自己定，模块不猜）。
+   * ⚠️ 窗口越大越省，但"楼出现"的延迟也越大 ⇒ 建议 200~400ms。
+   * 🔧 **不传 = `DEFAULT_FLUSH_COALESCE_MS`（300ms）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
    */
   flushCoalesceMs?: number;
   /**
@@ -694,8 +709,8 @@ export interface BundleFeedOptions<T> {
    * 不重新下载、更不重新 `JSON.parse`（实测单格 1.78MB / 解析中位 350ms）。
    *
    * 为什么需要：仓库有上限（楼 12,000 栋 ≈ 2~4 格），一格被淘汰后回头就是一次完整的"下载 + 解析"。
-   * ⚠️ 这是**拿内存换时间**：默认 `0`（关）。开的话自己评估单格体量 —— 以本机实测的楼包为例，
-   * 一格 ≈ 3,000~11,000 个要素，建议 2~3 格封顶。
+   * ⚠️ 这是**拿内存换时间**：以本机实测的楼包为例，一格 ≈ 3,000~11,000 个要素 ⇒ 建议 2~3 格封顶。
+   * 🔧 **不传 = `DEFAULT_PARSED_CACHE_CELLS`（3 格）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
    */
   parsedCacheCells?: number;
 }
@@ -738,7 +753,9 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
      一次变焦会连着到好几批 ⇒ 同一份全量数据被搬 k 次（k 批时累计搬运量 ≈ k²/2 格）。
      合并窗口把"到齐就画"变成"稍等一起画"：**最终画面一模一样**，只是少搬几次。
      ⚠️ 窗口里只保留**一条** pending 记录（把 why 串起来），不做队列 —— 队列会让延迟无界。 */
-  const coalesceMs = Math.max(0, Math.floor(Number(opts.flushCoalesceMs || 0)));
+  const coalesceMs = Math.max(0, Math.floor(Number(
+    opts.flushCoalesceMs === undefined || opts.flushCoalesceMs === null ? DEFAULT_FLUSH_COALESCE_MS : opts.flushCoalesceMs,
+  )));
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingFlushWhy = "";
   let coalescedFlushes = 0;                  // 被合并掉（没真的 flush）的次数 —— 可数
@@ -769,7 +786,9 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   /* ══ ♻️ 已解析要素缓存（默认 0 = 关；见 `BundleFeedOptions.parsedCacheCells`） ═══════════════
      只缓存"取到并解析成功"的格子要素；**已经解析过的东西不该因为仓库淘汰而重来一遍**
      （实测单格 1.78MB / `JSON.parse` 中位 350ms）。Map 的插入序当 LRU 用（取用即刷新）。 */
-  const cacheCells = Math.max(0, Math.floor(Number(opts.parsedCacheCells || 0)));
+  const cacheCells = Math.max(0, Math.floor(Number(
+    opts.parsedCacheCells === undefined || opts.parsedCacheCells === null ? DEFAULT_PARSED_CACHE_CELLS : opts.parsedCacheCells,
+  )));
   const parsedCache = new Map<string, T[]>();
   let cacheHits = 0;
   function cacheTake(k: string): T[] | null {

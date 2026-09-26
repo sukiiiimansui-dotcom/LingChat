@@ -267,6 +267,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   import {
     bldLayerSpecsFor,
     districtStyleOf,
+    /* 🎨 基准上妆（`h3d`/`h_from`/`fp`/`small`，**不拆件**）—— 两页默认档共用这一条（机主 (a′)）。
+       以前 App 用 `decorateBuildings` base 档，那份**照样拆 roof/antenna** ⇒ 两页默认档不是一个东西。 */
+    dressBase,
     flushBldStore,
     flushRoadsStore,
     scenePlanConsumed,
@@ -998,17 +1001,20 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     type: "FeatureCollection";
     features: unknown[];
   } {
-    /* 色阶跟着主题走（暗色=深蓝→冰蓝；二次元=淡天蓝→近白）。
-       必须在**这里**（渲染前）算好：`color3d` 是写进要素属性的，图层的 paint 只读它。
-       🎨 **必须用"取参之后"的色阶**（`artTheme().ramp`）：代拍页 `?bld=2` 那条路传给
-       `decorateBuildings` 的就是 `artRamp(...)`；这里传原始主题的话，`?art=2` 时 App 的 `color3d`
-       与页面**不是同一张色阶**（`art=1` 时 `artTheme().ramp` 就是主题那个引用 ⇒ 默认零改动）——
-       这正是"两页喂进同一份函数的输入不同"那一类，属于本次要消灭的东西。 */
-    const { features, count } = decorateBuildings(fc, artTheme(theme.value).ramp);
-    stats.count = count.n;
-    stats.height = count.real;
-    stats.levels = count.levels;
-    stats.default = count.kind; // HUD 里这一列叫「按类型估」
+    /* 🎨 **默认档 = 基准上妆（不拆件）** —— 机主拍板 **(a′)：App 向代拍页看齐**
+       （原话「**我的要求是代拍页和App页完全一样喵**」）。
+       两页默认档走**同一个** `dressBase()`（共享真源 `wsDistrictScene`）：只补
+       `h3d`/`h_from`/`fp`/`small`，**不拆件** ⇒ 图层清单与 paint 才可能逐字段相同
+       （`ws_pages_consistency.mjs` 的 ④a/④b 盯着）。
+       ⚠️ 以前这里调 `decorateBuildings(fc, ramp)`（base 档）—— 那份**照样拆出 roof/antenna**，
+       于是 App 默认档比页面多两条层、还多一套 `part` 过滤（同一条 `bld-ext` 的过滤在页面上会
+       匹配 0 栋 = 一栋都不画）。这是"凑 id 式假绿"的根，别再走回去。
+       颜色不再写进要素属性（`color3d` 是拆件档的产物）⇒ 色阶回到**图层 paint** 里算，与页面同一条路。 */
+    const { features, counts } = dressBase(fc?.features as readonly BldFeature[] | undefined);
+    stats.count = counts.n;
+    stats.height = counts.real;
+    stats.levels = counts.levels;
+    stats.default = counts.kind; // HUD 里这一列叫「按类型估」
     return { type: "FeatureCollection", features };
   }
 
@@ -2964,11 +2970,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         dress: (feats) => dressBld({ features: feats as unknown as BldFeature[] }),
         /* 2D 降级路没有可落的图（临时降级时 map 其实还在，但那时画的是自绘那块） */
         map: () => (renderKind.value === "fallback2d" ? null : (map as BldMapLike | null)),
-        /* 🎨 **美术取参**：与代拍页同一份（`bldArtParamsOf`）—— `?art=2` 把色阶高段推近白；
-           `art=1` 时 `ramp` 是**主题那个引用**（恒等）⇒ 默认观感一个字段都不变。
-           为什么要在宿主这一层换 ramp：`bldLayerSpecsFor(theme, tier)` 只吃主题，
-           而"art 档"是**取参**（页面那边也是先取参再建 specs）⇒ 两边喂进去的主题逐字段相同。 */
-        specs: () => bldLayerSpecsFor(artTheme(theme.value), themeTier.value),
+        /* 🎨 **美术取参**：与代拍页同一份（`bldLayerSpecsFor` 内部调 `bldArtParamsOf`）——
+           `?art=2` 把色阶高段推近白；`art=1` 时 `ramp` 是**主题那个引用**（恒等）⇒ 默认零改动。
+           形体档 `mode:"base"` = 不拆件（机主 (a′) ⇒ 两页默认档同一条规格）。 */
+        specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL }),
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
         /* 🏙 **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`：**按格挑 + 按格冻结 + 视野补齐**）。
            🔴 2026-09-26 改（机主真机「**每次滑动建筑都变了**」）：原来这里是

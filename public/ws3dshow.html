@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v78";
+      const BUILD = "ws3dshow-2026-09-26-v84";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -4017,6 +4017,30 @@
           })(),
         });
         window.__w3d = { ok: true, map, stats, probe: () => probe(), spot: SPOT };
+        /* 🔴 2026-09-26：**错误要能被整份读出来**（原来只有诊断图第一行）。
+           机主真机「有名字，无建筑」那次，图层账上只剩 road-*，而 `errs` 只印第一条（还是个无关的 contrast）
+           ⇒ 我在"样式是不是被换掉了"上猜了很久。规矩：`errs` 作为**活引用**露出来，探针能全量读。 */
+        try { window.__W3D_ERRS__ = errs; } catch (e) { /* 忽略 */ }
+        /* 🔬 **样式账本**（2026-09-26 机主「有名字，无建筑」查因用）：
+           实测页面最后只剩 `road-*` 12 层、`style.name=null`（不是 `makeStyle()` 那份），而 `errs` 里
+           **一条加层失败都没有** ⇒ 必须有"谁在什么时候加/删/换了什么"的时间线才判得出来。
+           只记录**调用与 id**，不改行为；`setStyle` 被换过就是这条时间线里最刺眼的一行。 */
+        try {
+          window.__STYLE_LOG__ = [];
+          const slog = function (op, arg) {
+            try { window.__STYLE_LOG__.push([Math.round(performance.now()), op, String(arg === undefined ? "" : arg).slice(0, 70)]); } catch (e) { /* 忽略 */ }
+          };
+          slog("init", (function () { try { return "name=" + ((map.getStyle() || {}).name || "null") + " layers=" + (((map.getStyle() || {}).layers) || []).length; } catch (e) { return "err"; } })());
+          const _add = map.addLayer.bind(map), _rm = map.removeLayer.bind(map), _ss = map.setStyle.bind(map);
+          map.addLayer = function (l, before) { slog("addLayer", (l && l.id) || l); return _add(l, before); };
+          map.removeLayer = function (id) { slog("removeLayer", id); return _rm(id); };
+          map.setStyle = function (s, o) {
+            slog("setStyle", (s && s.name) || typeof s);
+            /* 🔬 调用栈：全仓 grep 不到 `setStyle(` 却真的被调了 ⇒ 只有栈能指出调用者 */
+            try { slog("setStyle@", String(new Error().stack || "").split("\n").slice(1, 4).join(" ‖ ").slice(0, 240)); } catch (e2) { /* 忽略 */ }
+            return _ss(s, o);
+          };
+        } catch (e) { /* 账本装不上不影响地图 */ }
         map.on("error", (e) => {
           /* 🛰 预渲染瓦片的加载失败**单独计数**（HUD 的回证要它），同时保留一条到 errs（可见性优先）。
              ⚠️ 读 vendored 源码确认：**404 不抛 error 事件**（TileManager `_loadTile` 里 404 只 update）
@@ -4052,7 +4076,55 @@
         });
 
         let busy = false;
+        /* 🔴🔴 2026-09-26 机主真机「**有名字，无建筑**」的真因（样式账本 + 调用栈实测）：
+             2946 addLayer bld-ext / 2959 addLayer bld-line      ← 楼建好了
+             3352 setStyle ws-3d-show-anime                      ← 一次**迟到的**整份样式落地
+             4527 addLayer road-casing-0 …                       ← 之后才加的路 ⇒ 最后只剩 12 层路
+           `map.on("load")` 可能在**样式真正落地之前**就触发（构造期那次 setStyle 是延后的），
+           于是先加的楼被随后的样式应用**整份抹掉**，而 `errs` 里**一条失败都不报**（加层当时是成功的）。
+           ⇒ 两条规矩，缺一不可：
+             ① **加层之前必须等样式真的 loaded**（`isStyleLoaded()`；不是"load 事件"）；
+             ② **样式每次落地（`style.load`）都自愈补层** —— 迟到/被换掉的样式不会再把楼带走。 */
+        function whenStyleReady() {
+          return new Promise(function (resolve) {
+            try {
+              if (map.isStyleLoaded && map.isStyleLoaded()) return resolve(true);
+              let done = false;
+              const fin = function (ok) { if (!done) { done = true; resolve(!!ok); } };
+              try { map.once("style.load", function () { fin(true); }); } catch (e) { /* 忽略 */ }
+              /* 兜底：有些时序下 `style.load` 不会再发 ⇒ 有界轮询（成功即停，不常驻） */
+              let n = 0;
+              const t = setInterval(function () {
+                n++;
+                try { if (map.isStyleLoaded && map.isStyleLoaded()) { clearInterval(t); fin(true); return; } } catch (e) { /* 忽略 */ }
+                if (n >= 40) { clearInterval(t); fin(false); }   // 最多 8s
+              }, 200);
+            } catch (e) { resolve(false); }
+          });
+        }
+        /* 样式落地就补层（自愈）：有数据却没层 = 之前被抹掉过 ⇒ 立刻补回来，并如实记一笔。
+           ⚠️ **顺序不能反**：`bld-ext`/`bld-line` 引用的 `bld` 源必须**先存在**，否则
+           `layers.bld-ext: source "bld" not found`（实测：先 addBldLayers 再 flush ⇒ 三条错 + "Source already exists"）。
+           ⇒ 先确保源（空 FeatureCollection 也合法），剩下的交给 `flushBld`（它 setData + 建层）。 */
+        map.on("style.load", function () {
+          try {
+            if (!map.getLayer("bld-ext")) {
+              /* 源在、层不在 ⇒ 直接补层（**别**再 addSource：`setBldData` 里 `map.getSource("bld").setData()` 之外
+                 唯一建源的分支会 `addSource`，重复建源会抛 `Source "bld" already exists` 把链打断 —— 实测踩过）。 */
+              if (map.getSource && map.getSource("bld")) {
+                try { addBldLayers(); } catch (e1) { errs.push("styleHeal.layers " + e1); }
+                try { flushBld("style.load-heal"); } catch (e2) { errs.push("styleHeal.flush " + e2); }
+              } else {
+                /* 源都没有 ⇒ 走正规入口（它一并把层建起来） */
+                try { const st = bldStoreOf(); if (st) setBldData({ type: "FeatureCollection", features: st.features() }, "style.load-heal"); } catch (e3) { errs.push("styleHeal.data " + e3); }
+              }
+              try { const L = window.__WSLOG__; if (L) L.warn("bld-layers", "样式落地后补层（之前被迟到样式抹掉）", { have: (map.getStyle().layers || []).length, src: !!map.getSource("bld") }); } catch (e4) { /* 忽略 */ }
+            }
+          } catch (e5) { errs.push("styleHeal " + e5); }
+        });
         map.on("load", async () => {
+          /* ⛔ ① 先等样式真落地（见上面那段血案）——不等的话这一整链的加层会被抹掉 */
+          try { await whenStyleReady(); } catch (e0) { errs.push("styleReady " + e0); }
           /* ⏱ 记两个上游阶段边界 + 挂长任务观察器（浏览器自己的"卡顿"口径：>50ms 的主线程任务）。
              为什么在这里挂：`load` 之后才是取数/建楼/挑楼那段最贵的路 —— 早挂会把样式解析也算进来。 */
           pmMark("map.load", { zoom: (function () { try { return Number(map.getZoom().toFixed(2)); } catch (e2) { return null; } })() });

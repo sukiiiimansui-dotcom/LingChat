@@ -278,6 +278,10 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     roadsPointOf,
     roadsVerdictState,
   } from "./wsOfflineFeed";
+  /* 🌊🌳 **真水系 / 绿地**（机主选的"自己画"）：格键 / 取数 / 归一化 / 配色 / 层序 / 署名 / 判词
+     的**唯一真源**。代拍页那段内联的 `refreshGw()` 与这里**共用同一份** —— App 宿主里
+     **一行规则都不写**（PR 门禁 C1 的红线：宿主不许有第二份实现），这里只接线。 */
+  import { type GwMapLike, createGwLayer } from "./wsGwLayer";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -827,6 +831,8 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     roadsVerdict: "",
     /** 🔴 署名（**原句取自包里的 `index.json`**，不在这里重写第二版）—— ODbL 硬要求 */
     attribution: "",
+    /** 🌊🌳 水/绿地那一行（**真源** `wsGwLayer.gwVerdictLine`：正数 / 0（已量）/ 数不出来，三态不混） */
+    gwVerdict: "",
     /** 路网统计的一句话（主干几条 / 有几条有名字）—— 数据质量要看得见 */
     roadNote: "",
     /** 🏪 画在地图上的设施点（`/api/facilities` 的生活类 + 交通类） */
@@ -2972,6 +2978,28 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     return m ? viewHalf(m) : null;
   }
 
+  /* 🌊🌳 **水/绿地**：与代拍页**同一个模块、同一组参数**（格尺寸 / 取数 / 归一化 / 配色 / 层序 /
+     署名 / 判词全在共享真源 `wsGwLayer` 里）。这里只给宿主自己的四样：**地图 / 视野 / 主题 / 取数**。
+     ⚠️ 宿主里**一行规则都不写**（PR 门禁 C1 的红线：App 不许有第二份实现）——
+     以前这类"取格 + 拼要素 + 定颜色 + 判词"在页面里有过一份内联原型，现在两边跑的是同一份。
+     · **不设 zoom 闸门**：远景下它才最有用（机主 2026-09-26：「放太大了只能看到线路，
+       水、绿植啥的都看不到」）⇒ 与楼/路不同，它每一档都取；
+     · **层序**由共享真源给（`gwBeforeIdOf` = 第一个 `bld*` 图层之前 ⇒ 水/绿贴地面、楼盖在上面）。 */
+  const gwLayer = createGwLayer({
+    /* 2D 降级路没有可落的图（与 `bldFlush` 同一口径：那时画的是自绘那块） */
+    map: () => (renderKind.value === "fallback2d" ? null : (map as unknown as GwMapLike | null)),
+    view: bundleView,
+    theme: () => theme.value,
+    fetchCell,
+    onHud: (line) => {
+      /* 判词那一行由**真源**给（三态：正数 / 0（已量）/ 数不出来 + 原因），宿主只负责摆出来 */
+      stats.gwVerdict = line;
+    },
+    onError: (why) => {
+      stats.note = stats.note ? `${stats.note} · ${why}` : why;
+    },
+  });
+
   /** HUD/面板那一行（**可数口径只有一份**：`wsOfflineFeed.bundleCountsLine`）
    *  · `stats.bldBundle/roadsBundle` = 机主看的**可数一行**（已取/包外/失败 + 仓库数）；
    *  · `stats.bldVerdict/roadsVerdict` = **真源判词**（三态：包外 / 取数失败 / 正常；数不出来照实写）。 */
@@ -2986,7 +3014,7 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
 
   /**
    * 按视野补离线格（**后台、串行、每格独立超时**；一次最多 2 格，不堵首屏）。
-   * 楼/路各一条管道，两条互不阻塞；**都不打 `/api/*`**。
+   * 楼/路/水绿各一条管道，三条互不阻塞；**都不打 `/api/*`**。
    */
   async function refreshBundles(why = "view"): Promise<void> {
     const m = map as BldMapLike | null;
@@ -2995,16 +3023,25 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     /* 阈值与实时层对齐（楼 z≥13.5、路 z≥12）：整区视野下楼是亚像素，取它只是白花流量 */
     if (z >= BLD_MIN_ZOOM) await bldFeed.refresh(why);
     if (z >= ROAD_MIN_ZOOM) await roadsFeed.refresh(why);
+    /* 🌊🌳 水/绿地**不设 zoom 闸门**（远景下它才最有用；判词由真源回填 `stats.gwVerdict`） */
+    await gwLayer.refresh(why);
     renderBundleHud();
   }
 
   /** 🔴 署名（ODbL 硬要求）：句子**取自包里的 `index.json`**（导出脚本写的那句原话），不在这里重写 */
   async function loadBundleAttribution(): Promise<void> {
     try {
-      const [b, r] = await Promise.all([loadBundleIndex(fetchCell, "bld"), loadBundleIndex(fetchCell, "roads")]);
+      /* 🌊 水/绿地也一起念（同一个 `loadBundleIndex`，第三句也是包里的原话；
+         `/gwbundle/index.json` 与 gw 模块读的是**同一个 URL** ⇒ 同一页里不会真下第二遍） */
+      const [b, r, g] = await Promise.all([
+        loadBundleIndex(fetchCell, "bld"),
+        loadBundleIndex(fetchCell, "roads"),
+        loadBundleIndex(fetchCell, "gw"),
+      ]);
       /* ⚠️ 优先用**可机读的** `attribution`（导出器写的那句常量），老包没有该字段才退回 `source`
          —— 两处口径必须一致：代拍页读的也是同一对字段。 */
-      const lines = [b.attribution || b.source, r.attribution || r.source].filter((x): x is string => !!x);
+      const lines = [b.attribution || b.source, r.attribution || r.source, g.attribution || g.source]
+        .filter((x): x is string => !!x);
       stats.attribution = lines.join(" · ");
       /* 取不到就**如实说取不到**（不编一句"© Overture"充数；署名是合规项，不能猜） */
       if (!lines.length) stats.attribution = "离线包署名取不到（index.json 没拿到）";

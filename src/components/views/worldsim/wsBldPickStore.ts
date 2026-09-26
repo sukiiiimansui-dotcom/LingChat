@@ -82,11 +82,24 @@ export interface BldPickStore {
   pick<T extends PickFeature>(input: BldPickInput<T>): BldPickOutcome<T>;
   /** 冻结集里多少格（等价页面旧实现的 `window.__BLD_FROZEN_N__`） */
   frozenTotal(): number;
+  /**
+   * 🔴 **冻结缓存本身**（`{格键: 要素数组}`）——就是这份实例真正在用的那个对象，**不是拷贝**。
+   * 为什么给这个口子：页面以前把这个对象挂在 `window.__BLD_FROZEN__` 上做回证（"同一格永远同一批"可核），
+   * 接线后它应当**仍然是同一个对象**（拿它当 outlet ⇒ 零拷贝、也**不可能**出现第二份冻结点）。
+   */
+  frozenObject(): BldFrozenCellsObj<PickFeature>;
   /** 只读快照（确定性对拍 / HUD 回证） */
   snapshot(): BldPickSnapshot;
   /** 清空冻结集（换主题/换包/换口径时用；**不是**每帧该干的事） */
   clear(): void;
 }
+
+/**
+ * 冻结缓存：`{格键: 要素数组}` 的**普通对象**（页面旧实现就是它，所以拿它当 outlet 时形状逐字节相同）。
+ * ⚠️ 用普通对象而不是 `Map` 是有意的：键里含 `@` `|` `_` 与数字，**永远不是整数索引**
+ * ⇒ `Object.keys()` 的插入序是规范的，与页面旧实现完全一致。
+ */
+export type BldFrozenCellsObj<T extends PickFeature = PickFeature> = Record<string, readonly T[]>;
 
 /** 页面的旧实现就是拿这几个字段定位的（`geometry.coordinates[0][0]`）——**照搬，别"顺手整理"** */
 function pointOfFeature(f: PickFeature): [number, number] | null {
@@ -102,8 +115,8 @@ function pointOfFeature(f: PickFeature): [number, number] | null {
  * @param opts.frozen 传入既有的冻结缓存（`Map<格键, 要素数组>`）以便复用/外部核对；
  *                    不给就自己新建一份。
  */
-export function createBldPickStore(opts?: { frozen?: Map<string, readonly PickFeature[]> }): BldPickStore {
-  const frozen: Map<string, readonly PickFeature[]> = opts?.frozen ?? new Map<string, readonly PickFeature[]>();
+export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPickStore {
+  const frozen: BldFrozenCellsObj = opts?.frozen ?? {};
 
   return {
     pick<T extends PickFeature>(input: BldPickInput<T>): BldPickOutcome<T> {
@@ -141,13 +154,13 @@ export function createBldPickStore(opts?: { frozen?: Map<string, readonly PickFe
       const stableFeats: T[] = [];
       let frozenCells = 0, newCells = 0;
       for (const [k, arr] of byCellNow) {
-        const fr = frozen.get(k);
+        const fr = frozen[k];
         if (fr) {
           frozenCells++;
           /* 冻结集里的要素与本次的 `T` 是同一批（同一份仓库喂进来的）⇒ 这个收窄是安全的 */
           for (const f of fr) stableFeats.push(f as unknown as T);
         } else {
-          frozen.set(k, arr);
+          frozen[k] = arr;
           newCells++;
           for (const f of arr) stableFeats.push(f);
         }
@@ -163,21 +176,25 @@ export function createBldPickStore(opts?: { frozen?: Map<string, readonly PickFe
     },
 
     frozenTotal(): number {
-      return frozen.size;
+      return Object.keys(frozen).length;
+    },
+
+    frozenObject(): BldFrozenCellsObj {
+      return frozen;
     },
 
     snapshot(): BldPickSnapshot {
-      const keys: string[] = [];
+      const keys = Object.keys(frozen);
       const cells: Array<{ key: string; n: number; ids: string[] }> = [];
-      for (const [k, arr] of frozen) {
-        keys.push(k);
+      for (const k of keys) {
+        const arr = frozen[k];
         cells.push({ key: k, n: arr.length, ids: arr.map((f) => String(f.id ?? "")) });
       }
-      return { frozenTotal: frozen.size, keys, cells };
+      return { frozenTotal: keys.length, keys, cells };
     },
 
     clear(): void {
-      frozen.clear();
+      for (const k of Object.keys(frozen)) delete frozen[k];
     },
   };
 }

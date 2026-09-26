@@ -14,6 +14,15 @@ export * from "./wsRoads"; // 路网：分级样式 + 计数
 export * from "./wsLayerOrder"; // 层序保证（事后断言式自愈）
 export * from "./wsArtSky"; // art=3 天空几何（云/山影/雾带，纯函数）
 export * from "./wsScene";
+/* 🏙 **小区级 3D 街景装配的真源**（`WS_BLD_VECTOR_MINZOOM` / `bldLayerSpecsFor` / `makeStyle` / `flushBldStore` …）。
+   🔴 2026-09-26 补这一行，起因是**一次真机事故**：代拍页要用「楼房矢量层从哪一档开始画」这个数，
+   而它住在 `wsDistrictScene` 里，本入口**没导出** ⇒ 页面 `TF.WS_BLD_VECTOR_MINZOOM` 是 `undefined`
+   ⇒ 页面**静默退回自己写死的 `minzoom: 14`**（9 处）与挑楼闸门 `12.8`。
+   而共享真源已改 11 + 瓦片撤到 z<11 ⇒ **z11~13：瓦片没了、楼也不画 = 整屏空**
+   （机主真机截图「12 级」发现；自检 `ws_bld_page_selftest` 的"页面依赖契约"那一条也当场报"缺 WS_BLD_VECTOR_MINZOOM"）。
+   ⚠️ 它只 import 同目录兄弟模块（`wsMapTheme`/`wsScene`/`wsBuildingPick`），都已在产物里 ⇒
+   这一行是"多一个导出"，不是"多一条依赖链"。 */
+export * from "./wsDistrictScene";
 /* 🧱 **累积式要素仓库 + 离线路面包**（机主 2026-09-25：「之前的没了…必须保证视野内完整」）：
    `createFeatureStore()` 去重/淘汰/统计 + `roadsBundleCellsForView()` 算"视野需要哪些离线格"。
    ⚠️ 纯逻辑，页面与 App 共用同一份（不许第二套合并/淘汰）。 */

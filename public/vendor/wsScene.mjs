@@ -1200,6 +1200,409 @@ function applyPitchGuard(map) {
   }
 }
 
+// src/components/views/worldsim/wsMapTheme.ts
+function rampExpression(theme) {
+  const stops = [];
+  for (const [h, c] of theme.ramp) stops.push(h, c);
+  return ["interpolate", ["linear"], ["coalesce", ["get", "h3d"], 8], ...stops];
+}
+function themeForTier(theme, low) {
+  if (!low) return { sky: theme.sky, outlineWidth: theme.outline.width, tint: theme.tint };
+  return {
+    sky: theme.low.dropSky ? null : theme.sky,
+    outlineWidth: theme.low.outlineWidth,
+    tint: theme.low.dropTint ? null : theme.tint
+  };
+}
+function themeStyleParts(theme, low = false, transitionMs = 0) {
+  const tier = themeForTier(theme, low);
+  const sources = {
+    base: { type: "raster", ...theme.sources.base, tileSize: 256, crossOrigin: "anonymous" },
+    ref: { type: "raster", ...theme.sources.ref, tileSize: 256, crossOrigin: "anonymous" }
+  };
+  const layers = [
+    {
+      id: "bg",
+      type: "background",
+      paint: {
+        "background-color": theme.bg,
+        ...transitionMs > 0 ? { "background-color-transition": { duration: transitionMs, delay: 0 } } : {}
+      }
+    },
+    {
+      id: "base",
+      type: "raster",
+      source: "base",
+      /* 🔴 高 zoom 淡出（治「地面太糊」）：二次元的亮灰底图最高只到 z16，
+         小区级放大到 17~18 就是"把 z16 放大 4 倍" ⇒ 必糊。
+         淡出后露出 `bg` + `tint` 合成出来的纯色地面（和"有瓦片时"只差 0.002 亮度）
+         + 我们自己的路网 + 楼体 ⇒ 全是矢量，任何缩放都锐利。
+         ⚠️ `baseFade` 只覆盖 `raster-opacity` 这一个字段，**不动**主题里写的
+            saturation/contrast/brightness（那些在淡出区间里照样按 zoom 生效）。 */
+      paint: theme.baseFade ? {
+        ...theme.raster.base,
+        "raster-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          theme.baseFade.from,
+          1,
+          theme.baseFade.to,
+          0
+        ]
+      } : theme.raster.base
+    }
+  ];
+  if (theme.sources.hi && theme.raster.hi) {
+    sources.hi = { type: "raster", ...theme.sources.hi, tileSize: 256, crossOrigin: "anonymous" };
+    layers.push({ id: "hi", type: "raster", source: "hi", minzoom: 14.5, paint: theme.raster.hi });
+  }
+  if (tier.tint) {
+    layers.push({
+      id: "tint",
+      type: "background",
+      paint: {
+        "background-color": tier.tint.color,
+        "background-opacity": tier.tint.opacity,
+        ...transitionMs > 0 ? {
+          "background-color-transition": { duration: transitionMs, delay: 0 },
+          "background-opacity-transition": { duration: transitionMs, delay: 0 }
+        } : {}
+      }
+    });
+  }
+  layers.push({ id: "ref", type: "raster", source: "ref", paint: theme.raster.ref });
+  return { sky: tier.sky || void 0, sources, layers };
+}
+
+// src/components/views/worldsim/wsBuildingPick.ts
+var WS_BLD_VIEW_CAP = 100;
+function bboxArea(f) {
+  const g = f.geometry;
+  if (!g || !g.coordinates) return 0;
+  const rings = g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
+  for (const ring of rings) {
+    for (const pt of ring || []) {
+      const x = Number(pt?.[0]), y = Number(pt?.[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      n += 1;
+    }
+  }
+  if (!n) return 0;
+  return Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
+}
+function hasName(f) {
+  const p = f.properties || {};
+  const nm = p.name ?? p["name:zh"] ?? p.n ?? p.ref;
+  return typeof nm === "string" ? nm.trim().length > 0 : nm != null && String(nm).trim().length > 0;
+}
+function firstPoint(f) {
+  const g = f.geometry;
+  if (!g || !g.coordinates) return null;
+  const c = g.type === "Polygon" ? g.coordinates[0]?.[0] : g.type === "MultiPolygon" ? (g.coordinates[0] || [])[0]?.[0] : void 0;
+  const x = Number(c?.[0]), y = Number(c?.[1]);
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+}
+function pickBuildingsForView(feats, input) {
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_VIEW_CAP));
+  const nb = Math.max(1, Math.min(32, Math.floor(input.buckets ?? 8)));
+  const considered = feats.length;
+  const b = input.bounds;
+  const hasBounds = !!(b && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
+  const west = hasBounds ? b.getWest() : 0;
+  const south = hasBounds ? b.getSouth() : 0;
+  const east = hasBounds ? b.getEast() : 0;
+  const north = hasBounds ? b.getNorth() : 0;
+  const spanX = east - west;
+  const spanY = north - south;
+  const items = [];
+  let inView = 0;
+  let noPoint = 0;
+  for (const f of feats) {
+    const pt = firstPoint(f);
+    let bucket = -1;
+    if (hasBounds && !pt) {
+      noPoint += 1;
+      continue;
+    }
+    if (hasBounds && pt) {
+      const inside = pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
+      if (!inside) continue;
+      inView += 1;
+      const bx = spanX > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[0] - west) / spanX * nb))) : 0;
+      const by = spanY > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[1] - south) / spanY * nb))) : 0;
+      bucket = by * nb + bx;
+    } else {
+      bucket = 0;
+    }
+    items.push({
+      f,
+      bucket,
+      named: hasName(f) ? 1 : 0,
+      area: bboxArea(f),
+      key: String(f.id ?? "")
+    });
+  }
+  const byBucket = /* @__PURE__ */ new Map();
+  for (const it of items) {
+    const arr = byBucket.get(it.bucket);
+    if (arr) arr.push(it);
+    else byBucket.set(it.bucket, [it]);
+  }
+  for (const arr of byBucket.values()) {
+    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+  }
+  const buckets = [...byBucket.keys()].sort((a, z) => a - z);
+  const chosen = [];
+  const perBucket = hasBounds ? new Array(nb * nb).fill(0) : [];
+  for (let round = 0; chosen.length < cap; round++) {
+    let tookAny = false;
+    const order = buckets.slice().sort((b1, b2) => {
+      const x = byBucket.get(b1), y = byBucket.get(b2);
+      if (round >= x.length) return round >= y.length ? b1 - b2 : 1;
+      if (round >= y.length) return -1;
+      const a1 = x[round], a2 = y[round];
+      return a2.named - a1.named || a2.area - a1.area || b1 - b2;
+    });
+    for (const bk of order) {
+      const arr = byBucket.get(bk);
+      if (round >= arr.length) continue;
+      if (chosen.length >= cap) break;
+      chosen.push(arr[round].f);
+      if (hasBounds && perBucket[bk] !== void 0) perBucket[bk] += 1;
+      tookAny = true;
+    }
+    if (!tookAny) break;
+  }
+  const stats = {
+    considered,
+    inView: hasBounds ? inView : null,
+    noPoint,
+    chosen: chosen.length,
+    cap,
+    buckets: nb,
+    byBucket: hasBounds ? perBucket : null,
+    why: `显示 ${chosen.length} / ${hasBounds ? "视野内 " + inView : "视野内 **数不出来**（没有 bounds）"} 栋（仓库 ${considered} · 上限 ${cap} · ${nb}×${nb} 分桶轮转：有名字优先、底面大的优先` + (noPoint ? ` · **定位不到点 ${noPoint} 栋未画**` : "") + `）`
+  };
+  return { features: chosen, stats };
+}
+var WS_BLD_CELL_CAP = 100;
+var WS_BLD_CELL_DEG = 0.02;
+function capBuildingsPerCell(feats, input = {}) {
+  const size = Number.isFinite(input.cellDeg) && input.cellDeg > 0 ? input.cellDeg : WS_BLD_CELL_DEG;
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
+  const byCell = /* @__PURE__ */ new Map();
+  let noPoint = 0;
+  for (const f of feats) {
+    const pt = firstPoint(f);
+    if (!pt) {
+      noPoint++;
+      continue;
+    }
+    const w = Math.floor(pt[0] / size) * size;
+    const s = Math.floor(pt[1] / size) * size;
+    const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? "") };
+    const arr = byCell.get(cell);
+    if (arr) arr.push(it);
+    else byCell.set(cell, [it]);
+  }
+  const chosen = [];
+  const rows = [];
+  let dropped = 0;
+  for (const cell of [...byCell.keys()].sort()) {
+    const arr = byCell.get(cell);
+    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+    const take = arr.slice(0, cap);
+    for (const x of take) chosen.push(x.f);
+    rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
+    dropped += arr.length - take.length;
+  }
+  return {
+    features: chosen,
+    stats: {
+      considered: feats.length,
+      cells: byCell.size,
+      cap,
+      cellDeg: size,
+      byCell: rows,
+      chosen: chosen.length,
+      dropped,
+      noPoint,
+      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${chosen.length} 栋（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`
+    }
+  };
+}
+
+// src/components/views/worldsim/wsDistrictScene.ts
+function districtStyleOf(theme, low, fadeMs) {
+  const parts = themeStyleParts(theme, low, fadeMs);
+  return {
+    version: 8,
+    name: `ws-district-${theme.id}`,
+    /* `sky` 可能没有（低端档会关掉它）—— 用展开而不是写 `sky: undefined`，
+       免得给 style 里塞一个值为 undefined 的键（校验器会当它存在）。 */
+    ...parts.sky ? { sky: parts.sky } : {},
+    sources: parts.sources,
+    /* ⚠️ 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
+       楼房的图层由 `addLayer(l, "ref")` 插到 **ref 之前** ⇒ 自动落在线罩**之上**。
+       `ref` 必须留在最后一条：它是楼房层的插入锚点。 */
+    layers: parts.layers
+  };
+}
+var WS_BLD_VECTOR_MINZOOM = 11;
+var WS_BLD_OUTLINE_FULL_ZOOM = 15;
+function bldLayerSpecsFor(theme, tier) {
+  const th = theme;
+  const common = {
+    /* 主题/时间切换要**平滑**而不是「啪」一下：本构建的 paint 属性带 `transition: true`（spec 实测），
+       写上 `*-transition` 就由 MapLibre 自己做时长插值 —— **别自己写 rAF 插值动画**（那是重复劳动且更贵）。
+       三层（bld-ext / bld-roof / bld-antenna）共用这个对象 ⇒ 改一处覆盖三层。
+       900ms 是手感取值：太短像瞬变、太长像卡住。 */
+    "fill-extrusion-color-transition": { duration: 900, delay: 0 },
+    "fill-extrusion-opacity-transition": { duration: 900, delay: 0 },
+    "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
+    /* 底座统一读 `h_base`（拆件时每条都写了；老数据没有就退回 `min_height`） */
+    "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["get", "min_height"], 0],
+    /* 远景褪色（#8）：远处楼淡一点，近处实（曲线由主题给，见 `wsMapTheme.extrudOpacity`） */
+    "fill-extrusion-opacity": th.extrudOpacity,
+    /* 竖向渐变：楼顶比楼底亮一点 —— **写实**要它（墙面有明暗、体块才"立"得起来）；
+       **二次元要关掉它**（平涂/cell-shading：楼是一块纯色板，有渐变就不"动画"了）。
+       MapLibre 默认就是 true，但我们**显式写死**：默认值会随版本改，而这一条直接决定观感。 */
+    "fill-extrusion-vertical-gradient": th.verticalGradient
+  };
+  const showOutline = tier.outlineWidth !== null;
+  return [
+    {
+      id: "bld-ext",
+      type: "fill-extrusion",
+      source: "bld",
+      /* 性能（机主 2026-09-19：「能玩」优先）：
+         `fill-extrusion` 的开销**随要素数线性增长**（见 MapLibre 官方性能指南 /
+         Bavaria 矢量瓦片 3D 经验），而整区视野下楼只有亚像素 ⇒ 这一档**整层不画**。
+         取楼本来也要 zoom ≥ 13.5，两层阈值对齐（12.8 留一点余量，免得来回抖）。 */
+      minzoom: WS_BLD_VECTOR_MINZOOM,
+      /* 只画主体 —— 屋顶/天线是另外两条层（拆件后同一个源里有三种 `part`） */
+      filter: ["==", ["get", "part"], "body"],
+      paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpression(th)] }
+    },
+    {
+      /* 屋顶压顶：同一轮廓内缩 + 更深色 ⇒ 楼顶多一圈"女儿墙"的层次（#4）
+         ⚠️ 只在 `h3d ≥ 15m` 的楼上生成（`wsBuildingLook.ROOF_MIN_H`）——
+         矮平房压顶只会显脏，还白翻一倍要素数。 */
+      id: "bld-roof",
+      type: "fill-extrusion",
+      source: "bld",
+      minzoom: 14.5,
+      // 远景看不出这一层，不白画
+      filter: ["==", ["get", "part"], "roof"],
+      paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.roofFallback] }
+    },
+    {
+      /* 天线：>60m 的楼顶一根细挤出（#6）—— 城市轮廓里最抓眼的一档，要素数极少 */
+      id: "bld-antenna",
+      type: "fill-extrusion",
+      source: "bld",
+      minzoom: 14.5,
+      filter: ["==", ["get", "part"], "antenna"],
+      paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.antennaFallback] }
+    },
+    ...showOutline ? [
+      {
+        id: "bld-line",
+        type: "line",
+        source: "bld",
+        minzoom: WS_BLD_VECTOR_MINZOOM,
+        // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
+        /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
+        filter: ["==", ["get", "part"], "body"],
+        /* 二次元这层是"动画感"的主要来源（平涂 + 深藏青细线）；
+           暗色这层只是淡淡一圈，低端档直接不建。 */
+        /* 🖊 **描边宽度随 zoom 长起来**（2026-09-25 机主「黑色一坨」的真因）：
+           12.8~15 之间从 0 平滑到正常宽 —— 小比例下每栋 1~3px，深色描边会把填充整个盖住，
+           整片楼就变成"黑点地毯"；到 15+ 楼够大了，描边才恢复它该有的"动画感"分隔作用。 */
+        paint: {
+          "line-color": th.outline.color,
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            WS_BLD_VECTOR_MINZOOM,
+            0,
+            WS_BLD_OUTLINE_FULL_ZOOM,
+            tier.outlineWidth ?? th.outline.width
+          ]
+        }
+      }
+    ] : []
+  ];
+}
+var planConsumed = false;
+function scenePlanConsumed() {
+  return planConsumed;
+}
+function resetScenePlanConsumed() {
+  planConsumed = false;
+}
+function planBeforeOf(m, group) {
+  try {
+    const e = sceneLayerPlan().find((x) => x.group === group);
+    if (!e) return void 0;
+    planConsumed = true;
+    return e.beforeId && m.getLayer(e.beforeId) ? e.beforeId : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function applyBuildingsTo(m, data, specs) {
+  if (m.getSource("bld")) {
+    m.getSource("bld").setData(data);
+    return;
+  }
+  m.addSource("bld", { type: "geojson", data });
+  const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : void 0);
+  for (const l of specs) m.addLayer(l, before);
+}
+function flushBldStore(opts, why = "flush") {
+  let drawn = opts.features();
+  if (opts.pickNearView) {
+    const r = pickBuildingsForView(drawn, opts.pickNearView);
+    drawn = r.features;
+    try {
+      opts.onPicked?.(r.stats);
+    } catch {
+    }
+  }
+  const data = opts.dress(drawn);
+  opts.beforeDraw?.(why, data);
+  const m = opts.map();
+  if (!m) {
+    opts.onNoMap?.(data);
+    return;
+  }
+  applyBuildingsTo(m, data, opts.specs());
+  opts.afterDraw?.(why, data);
+}
+function flushRoadsStore(opts, why = "flush") {
+  const data = { type: "FeatureCollection", features: opts.features() };
+  opts.beforeDraw?.(why, data);
+  const m = opts.map();
+  if (!m) return;
+  if (m.getLayer("road-line-0")) {
+    m.getSource("roads")?.setData(data);
+  } else {
+    m.addSource("roads", { type: "geojson", data });
+    const before = m.getLayer("bld-ext") ? "bld-ext" : m.getLayer("ref") ? "ref" : void 0;
+    for (const l of opts.specs()) if (!m.getLayer(l.id)) m.addLayer(l, before);
+  }
+  opts.afterDraw?.(why, data);
+}
+
 // src/components/views/worldsim/wsFeatureStore.ts
 function metersBetween(a, b) {
   const kx = 111320 * Math.cos((a[1] + b[1]) / 2 * Math.PI / 180);
@@ -2164,170 +2567,6 @@ function envSnapshot(extra = {}) {
     heapLimitMB: mem?.jsHeapSizeLimit ? Math.round(mem.jsHeapSizeLimit / 1048576) : null,
     conn: conn?.effectiveType ?? null,
     ...extra
-  };
-}
-
-// src/components/views/worldsim/wsBuildingPick.ts
-var WS_BLD_VIEW_CAP = 100;
-function bboxArea(f) {
-  const g = f.geometry;
-  if (!g || !g.coordinates) return 0;
-  const rings = g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : [];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
-  for (const ring of rings) {
-    for (const pt of ring || []) {
-      const x = Number(pt?.[0]), y = Number(pt?.[1]);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-      n += 1;
-    }
-  }
-  if (!n) return 0;
-  return Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
-}
-function hasName(f) {
-  const p = f.properties || {};
-  const nm = p.name ?? p["name:zh"] ?? p.n ?? p.ref;
-  return typeof nm === "string" ? nm.trim().length > 0 : nm != null && String(nm).trim().length > 0;
-}
-function firstPoint(f) {
-  const g = f.geometry;
-  if (!g || !g.coordinates) return null;
-  const c = g.type === "Polygon" ? g.coordinates[0]?.[0] : g.type === "MultiPolygon" ? (g.coordinates[0] || [])[0]?.[0] : void 0;
-  const x = Number(c?.[0]), y = Number(c?.[1]);
-  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
-}
-function pickBuildingsForView(feats, input) {
-  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_VIEW_CAP));
-  const nb = Math.max(1, Math.min(32, Math.floor(input.buckets ?? 8)));
-  const considered = feats.length;
-  const b = input.bounds;
-  const hasBounds = !!(b && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
-  const west = hasBounds ? b.getWest() : 0;
-  const south = hasBounds ? b.getSouth() : 0;
-  const east = hasBounds ? b.getEast() : 0;
-  const north = hasBounds ? b.getNorth() : 0;
-  const spanX = east - west;
-  const spanY = north - south;
-  const items = [];
-  let inView = 0;
-  let noPoint = 0;
-  for (const f of feats) {
-    const pt = firstPoint(f);
-    let bucket = -1;
-    if (hasBounds && !pt) {
-      noPoint += 1;
-      continue;
-    }
-    if (hasBounds && pt) {
-      const inside = pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
-      if (!inside) continue;
-      inView += 1;
-      const bx = spanX > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[0] - west) / spanX * nb))) : 0;
-      const by = spanY > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[1] - south) / spanY * nb))) : 0;
-      bucket = by * nb + bx;
-    } else {
-      bucket = 0;
-    }
-    items.push({
-      f,
-      bucket,
-      named: hasName(f) ? 1 : 0,
-      area: bboxArea(f),
-      key: String(f.id ?? "")
-    });
-  }
-  const byBucket = /* @__PURE__ */ new Map();
-  for (const it of items) {
-    const arr = byBucket.get(it.bucket);
-    if (arr) arr.push(it);
-    else byBucket.set(it.bucket, [it]);
-  }
-  for (const arr of byBucket.values()) {
-    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
-  }
-  const buckets = [...byBucket.keys()].sort((a, z) => a - z);
-  const chosen = [];
-  const perBucket = hasBounds ? new Array(nb * nb).fill(0) : [];
-  for (let round = 0; chosen.length < cap; round++) {
-    let tookAny = false;
-    const order = buckets.slice().sort((b1, b2) => {
-      const x = byBucket.get(b1), y = byBucket.get(b2);
-      if (round >= x.length) return round >= y.length ? b1 - b2 : 1;
-      if (round >= y.length) return -1;
-      const a1 = x[round], a2 = y[round];
-      return a2.named - a1.named || a2.area - a1.area || b1 - b2;
-    });
-    for (const bk of order) {
-      const arr = byBucket.get(bk);
-      if (round >= arr.length) continue;
-      if (chosen.length >= cap) break;
-      chosen.push(arr[round].f);
-      if (hasBounds && perBucket[bk] !== void 0) perBucket[bk] += 1;
-      tookAny = true;
-    }
-    if (!tookAny) break;
-  }
-  const stats = {
-    considered,
-    inView: hasBounds ? inView : null,
-    noPoint,
-    chosen: chosen.length,
-    cap,
-    buckets: nb,
-    byBucket: hasBounds ? perBucket : null,
-    why: `显示 ${chosen.length} / ${hasBounds ? "视野内 " + inView : "视野内 **数不出来**（没有 bounds）"} 栋（仓库 ${considered} · 上限 ${cap} · ${nb}×${nb} 分桶轮转：有名字优先、底面大的优先` + (noPoint ? ` · **定位不到点 ${noPoint} 栋未画**` : "") + `）`
-  };
-  return { features: chosen, stats };
-}
-var WS_BLD_CELL_CAP = 100;
-var WS_BLD_CELL_DEG = 0.02;
-function capBuildingsPerCell(feats, input = {}) {
-  const size = Number.isFinite(input.cellDeg) && input.cellDeg > 0 ? input.cellDeg : WS_BLD_CELL_DEG;
-  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
-  const byCell = /* @__PURE__ */ new Map();
-  let noPoint = 0;
-  for (const f of feats) {
-    const pt = firstPoint(f);
-    if (!pt) {
-      noPoint++;
-      continue;
-    }
-    const w = Math.floor(pt[0] / size) * size;
-    const s = Math.floor(pt[1] / size) * size;
-    const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? "") };
-    const arr = byCell.get(cell);
-    if (arr) arr.push(it);
-    else byCell.set(cell, [it]);
-  }
-  const chosen = [];
-  const rows = [];
-  let dropped = 0;
-  for (const cell of [...byCell.keys()].sort()) {
-    const arr = byCell.get(cell);
-    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
-    const take = arr.slice(0, cap);
-    for (const x of take) chosen.push(x.f);
-    rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
-    dropped += arr.length - take.length;
-  }
-  return {
-    features: chosen,
-    stats: {
-      considered: feats.length,
-      cells: byCell.size,
-      cap,
-      cellDeg: size,
-      byCell: rows,
-      chosen: chosen.length,
-      dropped,
-      noPoint,
-      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${chosen.length} 栋（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`
-    }
   };
 }
 
@@ -3489,6 +3728,8 @@ export {
   WS_BLD_CELL_DEG,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
+  WS_BLD_OUTLINE_FULL_ZOOM,
+  WS_BLD_VECTOR_MINZOOM,
   WS_BLD_VIEW_CAP,
   WS_FETCH_R_BACKEND_MAX,
   WS_FETCH_R_LADDER,
@@ -3504,12 +3745,14 @@ export {
   WS_ROADS_R_MAX,
   WS_SCENE_SOURCE,
   adminLabelsFrom,
+  applyBuildingsTo,
   applyPitchGuard,
   art3Summary,
   bldBundleCellKey,
   bldBundleCellOf,
   bldBundleCellsForView,
   bldIdOf,
+  bldLayerSpecsFor,
   bldLiveDecision,
   bldPointOf,
   bldVerdictState,
@@ -3543,6 +3786,7 @@ export {
   dayKeyOf,
   decorateBuildings,
   distM,
+  districtStyleOf,
   envSnapshot,
   equipBoxes,
   fetchRadiusForView,
@@ -3550,6 +3794,8 @@ export {
   fetchRadiusLadder,
   fetchRadiusRound,
   fetchWithTimeout,
+  flushBldStore,
+  flushRoadsStore,
   fmtCount,
   footprintMetrics,
   genCountsLine,
@@ -3605,6 +3851,7 @@ export {
   placesBundleCellsForView,
   placesIdOf,
   placesPointOf,
+  planBeforeOf,
   planDaily,
   planEnsureRoadOrder,
   planGenNames,
@@ -3614,6 +3861,7 @@ export {
   rampColorOf,
   relLuminance,
   renderHeight,
+  resetScenePlanConsumed,
   ringAreaM2,
   ringBand,
   ringCentroid,
@@ -3637,6 +3885,7 @@ export {
   sceneGroupOf,
   sceneLayerPlan,
   sceneOrderViolations,
+  scenePlanConsumed,
   sceneSelfReport,
   shade,
   shapeCountRows,

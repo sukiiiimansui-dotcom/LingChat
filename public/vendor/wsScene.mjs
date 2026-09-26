@@ -2577,8 +2577,8 @@ function createBundleFeed(opts) {
     plan: planned
   };
 }
-async function loadBundleIndex(fetchCell, kind) {
-  const url = bundleIndexUrl(kind);
+async function loadBundleIndex(fetchCell, kind, dir) {
+  const url = bundleIndexUrl(kind, dir);
   try {
     const r = await fetchCell(url, BUNDLE_TIMEOUT_MS);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -2592,7 +2592,9 @@ async function loadBundleIndex(fetchCell, kind) {
       cells: rawCells ? new Set(rawCells) : null,
       attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
       real: typeof j?.real === "boolean" ? j.real : null,
-      cellSize: num(j?.cellSize)
+      /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
+         而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
+      cellSize: typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0 ? j.cellSize : null
     };
   } catch {
     return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };

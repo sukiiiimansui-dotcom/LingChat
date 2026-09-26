@@ -3863,6 +3863,24 @@ import { WS_BLD_VIEW_CAP } from "./wsBuildingPick";
     white-space: normal;
     overflow-wrap: anywhere;
   }
+  /* 🆕 2026-09-26 窄屏压缩（**只调字号/行高/间距，一格信息都不删**）：
+     实测 360×800（小型竖屏手机）下这条 HUD 占视口高 30%（判据上限 25%）——
+     行数由内容决定、改不了，能改的是**每行多高**与**格间留白**。
+     主题按钮要一起调：它自带 `font-size/line-height/padding`，
+     不跟下来的话它会成为每一行的最高元素（行高被它顶住，压缩白做）。 */
+  @media (max-width: 520px) {
+    .ws-dml__hud {
+      font-size: 10px;
+      line-height: 1.3;
+      gap: 1px 6px;
+      padding: 2px 6px;
+    }
+    .ws-dml__hud .ws-dml__theme {
+      font-size: 10px;
+      line-height: 1.3;
+      padding: 0 6px;
+    }
+  }
   .ws-dml__hud .is-warn {
     color: #ffd28a;
   }

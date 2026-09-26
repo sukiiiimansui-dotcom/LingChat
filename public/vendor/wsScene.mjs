@@ -1201,11 +1201,6 @@ function applyPitchGuard(map) {
 }
 
 // src/components/views/worldsim/wsMapTheme.ts
-function rampExpression(theme) {
-  const stops = [];
-  for (const [h, c] of theme.ramp) stops.push(h, c);
-  return ["interpolate", ["linear"], ["coalesce", ["get", "h3d"], 8], ...stops];
-}
 function themeForTier(theme, low) {
   if (!low) return { sky: theme.sky, outlineWidth: theme.outline.width, tint: theme.tint };
   return {
@@ -2011,105 +2006,46 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
         type: "line",
         source: "bld",
         minzoom: WS_BLD_VECTOR_MINZOOM,
-        /* ⚠️ 这一笔**故意先保留** App 原来的 zoom 插值（`0 → 主题宽`）。
-           "改成主题给的固定宽"是**可见变化**（z11~15 描边会变粗），主会话要求它**单独一笔**，
-           好让它能被单独审/单独回退 ⇒ 见紧接着的那一笔（本文件同一行的下一刀）。 */
+        /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
+           `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。
+           🔴 这是**可见变化**（2026-09-26 机主 (a′) 第 3 笔）：App 原来**一律** zoom 插值
+           （`z11 → 0` 平滑长到 `z15 → 主题宽`），现在 `art=1` 是**固定主题宽**
+           ⇒ **z11~15 的描边比原来粗**（真机观感只有机主能判）。 */
         paint: {
           "line-color": P.outline.color,
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            WS_BLD_VECTOR_MINZOOM,
-            0,
-            WS_BLD_OUTLINE_FULL_ZOOM,
-            tier.outlineWidth ?? th.outline.width
-          ]
+          "line-width": P.lineWidth
         }
       }] : []
     ];
   }
-  const common = {
-    /* 主题/时间切换要**平滑**而不是「啪」一下：本构建的 paint 属性带 `transition: true`（spec 实测），
-       写上 `*-transition` 就由 MapLibre 自己做时长插值 —— **别自己写 rAF 插值动画**（那是重复劳动且更贵）。
-       三层（bld-ext / bld-roof / bld-antenna）共用这个对象 ⇒ 改一处覆盖三层。
-       900ms 是手感取值：太短像瞬变、太长像卡住。 */
-    "fill-extrusion-color-transition": { duration: 900, delay: 0 },
-    "fill-extrusion-opacity-transition": { duration: 900, delay: 0 },
-    "fill-extrusion-height": ["coalesce", ["get", "h3d"], 8],
-    /* 底座统一读 `h_base`（拆件时每条都写了；老数据没有就退回 `min_height`） */
-    "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["get", "min_height"], 0],
-    /* 远景褪色（#8）：远处楼淡一点，近处实（曲线由主题给，见 `wsMapTheme.extrudOpacity`） */
-    "fill-extrusion-opacity": th.extrudOpacity,
-    /* 竖向渐变：楼顶比楼底亮一点 —— **写实**要它（墙面有明暗、体块才"立"得起来）；
-       **二次元要关掉它**（平涂/cell-shading：楼是一块纯色板，有渐变就不"动画"了）。
-       MapLibre 默认就是 true，但我们**显式写死**：默认值会随版本改，而这一条直接决定观感。 */
-    "fill-extrusion-vertical-gradient": th.verticalGradient
-  };
-  const showOutline = tier.outlineWidth !== null;
   return [
     {
       id: "bld-ext",
       type: "fill-extrusion",
       source: "bld",
-      /* 性能（机主 2026-09-19：「能玩」优先）：
-         `fill-extrusion` 的开销**随要素数线性增长**（见 MapLibre 官方性能指南 /
-         Bavaria 矢量瓦片 3D 经验），而整区视野下楼只有亚像素 ⇒ 这一档**整层不画**。
-         取楼本来也要 zoom ≥ 13.5，两层阈值对齐（12.8 留一点余量，免得来回抖）。 */
       minzoom: WS_BLD_VECTOR_MINZOOM,
-      /* 只画主体 —— 屋顶/天线是另外两条层（拆件后同一个源里有三种 `part`） */
-      filter: ["==", ["get", "part"], "body"],
-      paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], rampExpression(th)] }
-    },
-    {
-      /* 屋顶压顶：同一轮廓内缩 + 更深色 ⇒ 楼顶多一圈"女儿墙"的层次（#4）
-         ⚠️ 只在 `h3d ≥ 15m` 的楼上生成（`wsBuildingLook.ROOF_MIN_H`）——
-         矮平房压顶只会显脏，还白翻一倍要素数。 */
-      id: "bld-roof",
-      type: "fill-extrusion",
-      source: "bld",
-      minzoom: 14.5,
-      // 远景看不出这一层，不白画
-      filter: ["==", ["get", "part"], "roof"],
-      paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.roofFallback] }
-    },
-    {
-      /* 天线：>60m 的楼顶一根细挤出（#6）—— 城市轮廓里最抓眼的一档，要素数极少 */
-      id: "bld-antenna",
-      type: "fill-extrusion",
-      source: "bld",
-      minzoom: 14.5,
-      filter: ["==", ["get", "part"], "antenna"],
-      paint: { ...common, "fill-extrusion-color": ["coalesce", ["get", "color3d"], th.antennaFallback] }
-    },
-    ...showOutline ? [
-      {
-        id: "bld-line",
-        type: "line",
-        source: "bld",
-        minzoom: WS_BLD_VECTOR_MINZOOM,
-        // 与 bld-ext 同档（轮廓线也是按要素数算的，别在整区视野白画）
-        /* 只描主体的边：屋顶/天线也描的话，楼顶会糊成一团线（它们本来就是靠色差读的） */
-        filter: ["==", ["get", "part"], "body"],
-        /* 二次元这层是"动画感"的主要来源（平涂 + 深藏青细线）；
-           暗色这层只是淡淡一圈，低端档直接不建。 */
-        /* 🖊 **描边宽度随 zoom 长起来**（2026-09-25 机主「黑色一坨」的真因）：
-           12.8~15 之间从 0 平滑到正常宽 —— 小比例下每栋 1~3px，深色描边会把填充整个盖住，
-           整片楼就变成"黑点地毯"；到 15+ 楼够大了，描边才恢复它该有的"动画感"分隔作用。 */
-        paint: {
-          "line-color": th.outline.color,
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            WS_BLD_VECTOR_MINZOOM,
-            0,
-            WS_BLD_OUTLINE_FULL_ZOOM,
-            tier.outlineWidth ?? th.outline.width
-          ]
-        }
+      paint: {
+        "fill-extrusion-height": ["get", "h3d"],
+        /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
+        "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
+        "fill-extrusion-opacity": P.opacity,
+        "fill-extrusion-vertical-gradient": P.vgrad,
+        /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）；
+           `color3d` 缺席（没上妆的要素）才走高度色阶 —— 与页面同一条表达式。 */
+        "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor]
       }
-    ] : []
+    },
+    ...tier.outlineWidth !== null ? [{
+      id: "bld-line",
+      type: "line",
+      source: "bld",
+      minzoom: WS_BLD_VECTOR_MINZOOM,
+      paint: {
+        "line-color": P.outline.color,
+        /* 🖊 同 `base` 档：宽度取共享取参（`art=1` ⇒ 主题固定宽）—— 与代拍页逐字段相同 */
+        "line-width": P.lineWidth
+      }
+    }] : []
   ];
 }
 var planConsumed = false;

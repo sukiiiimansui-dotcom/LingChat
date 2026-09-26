@@ -45,6 +45,13 @@ import {
 } from "./wsOfflineFeed";
 import { type FeatureStore, bundleCellsForView, createFeatureStore, metersBetween } from "./wsFeatureStore";
 
+/* ══ ⓪ 归一化（`{k,r,n}` 扁平 → GeoJSON：环闭合 / 水绿按 `k` 分 / MultiPolygon 嵌套） ═══════════
+   实现**只有一份**，住在 `wsOfflineFeed` 里（与楼 / 路 / 片区名的解析器同族，也正因为在那儿，
+   离线管道 `SPECS.gw.parse` 才能直接用它）。这里**再导出一次**：好让"水/绿地的全部规则"从
+   **一个入口**就取得全 —— 页面、App 宿主、自检、以后别的宿主都只 import 这一个模块。
+   ⚠️ 是 re-export，**不是**第二份实现：改归一化只改 `wsOfflineFeed.bundleGwOf()` 一处。 */
+export { bundleGwOf, gwIdOf, gwPointOf } from "./wsOfflineFeed";
+
 /* ══ ① 术语与常量（图层 id / 格尺寸只有一个来源：这里与 `wsOfflineFeed` 的 SPECS.gw） ═══════ */
 
 export type GwKind = "water" | "green";

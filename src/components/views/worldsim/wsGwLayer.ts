@@ -525,17 +525,32 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
       const keys = plan ? plan.keys : [];
       const hit = keys.reduce((n, k) => n + (store.has(gwSourceKeyOf(k)) ? 1 : 0), 0);
       const uncounted = keys.length > 0 && hit === 0;
-      last = nextFacts(last, true, {
-        state: uncounted ? "uncounted" : "counted",
-        cells: keys.length,
-        hit,
-        failed: facts.failed,
-        indexCells: idx.cellCount,
-        cellSize: idx.cellSize,
-        attribution: gwAttributionOf(idx),
-        why: uncounted ? "视野里的格一格都没取到" : null,
-      });
-      recount();
+      /* 🔴 **三态**：一格都没取到 ⇒ `water/green` 保持 `null`（判词写"数不出来"，原因写明），
+         `recount()` **绝不能**在这一态跑 —— 它会把"数不出来"改写成 0 面，那就是**把没测出来说成没有**。 */
+      if (uncounted) {
+        last = nextFacts(last, true, {
+          state: "uncounted",
+          cells: keys.length,
+          hit,
+          failed: facts.failed,
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: "视野里的格一格都没取到",
+        });
+      } else {
+        last = nextFacts(last, true, {
+          state: "counted",
+          cells: keys.length,
+          hit,
+          failed: facts.failed,
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: null,
+        });
+        recount();
+      }
       return emit();
     } catch (e) {
       /* 判词纪律：任何异常都变成"数不出来 + 原因"，**绝不**留一个 0 在屏上 */

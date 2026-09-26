@@ -3,7 +3,7 @@
  "generatedBy": "world_map/prerender_pipeline.py",
  "style": "anime",
  "kinds": {
-  "real": 187
+  "real": 191
  },
  "kindsNote": "本目录只有 real（本轮管线用真楼脚印 + OSM 道路画的）。示意/占位瓦片在 /prerender-demo/，不在这里 —— 机主 2026-09-25 拍板「占位默认不画」。",
  "themeLabel": "二次元（蔚蓝档案）",
@@ -238,9 +238,9 @@
  ],
  "batchesNote": "分批跑的历史（每批一个 bbox；`--merge` 把各批并起来）。顶层 bbox/zoomRange 是**并集**，tiles 是**各批的并集**；顶层 cost/data 只是**最后一批**的，看历史请读 batches[]。",
  "tileCount": 191,
- "tileCountReal": 187,
- "totalBytes": 4008720,
- "bytesReal": 4008720,
+ "tileCountReal": 191,
+ "totalBytes": 4023732,
+ "bytesReal": 4023732,
  "staleFiles": [],
  "staleNote": "输出目录里**不在本轮计划内**的 PNG（大概是上一个 bbox/zoom 留下的）。**没有**并进 `tiles`：它们不是本轮真数据的产物，标成 real 就是撒谎；页面按清单判「缺图」，所以留它们会让那一格显示为「缺」——要么重跑覆盖，要么手工清掉。",
  "timings": {
@@ -292,15 +292,15 @@
   "discsOnDisk": 35,
   "discRadiusM": 9000,
   "tilesFull": 44,
-  "tilesPartial": 143,
-  "tilesUncovered": 0,
+  "tilesPartial": 145,
+  "tilesUncovered": 2,
   "note": "`cov` = 该瓦片被**盘上已有的圆**盖住的采样比例（4×4）。cov=0 是「这一片还没铺盘」（≠「这里没有楼房」）；cov=1 是「取样点全在某个盘里」。"
  },
  "cost": {
   "fetchSecs": 22.7,
   "drawSecs": 1271.1,
   "fetchSecsPerTile": 0.12,
-  "drawSecsPerTile": 6.797,
+  "drawSecsPerTile": 6.655,
   "disks": 34,
   "disksReusedFromCache": 0,
   "verdict": "取数 22.7s / 渲染 1271.1s"
@@ -325,8 +325,8 @@
   },
   "tilesByTier": {
    "blocks": 51,
-   "mixed": 12,
-   "footprint": 128
+   "footprint": 128,
+   "mixed": 12
   },
   "realBldDrawn": 5013031,
   "sketchBldDrawn": 44262,
@@ -2250,5 +2250,6 @@
    "covN": "1/16"
   }
  },
- "_mergeNote": "2026-09-25 合并：z8/z9 是后补的 4 张（原来只有 z10~12）。**为什么合并**：管线写清单时只写'本轮计划'的瓦片 ⇒ 单跑 z8~z9 会把 187 张的清单覆盖成 4 张（溯源凭据丢失）；而按默认 bbox 重跑又只覆盖小范围。这里用 git 里那份（清单入 git）为底、并入新瓦片，并把聚合计数按合并后的瓦片重算（不留旧总数）。"
+ "_mergeNote": "2026-09-25 合并：z8/z9 是后补的 4 张（原来只有 z10~12）。**为什么合并**：管线写清单时只写'本轮计划'的瓦片 ⇒ 单跑 z8~z9 会把 187 张的清单覆盖成 4 张（溯源凭据丢失）；而按默认 bbox 重跑又只覆盖小范围。这里用 git 里那份（清单入 git）为底、并入新瓦片，并把聚合计数按合并后的瓦片重算（不留旧总数）。",
+ "_recountNote": "2026-09-26 管线 `--recount` 重算：这份清单被半自动合并过（见 `_mergeNote`）而汇总数没跟着重算，以下 8 个字段与 `tiles` 逐张统计不一致，现已按 `tiles` 重算 —— `kinds`: {'real': 187} → {'real': 191}；`tileCountReal`: 187 → 191；`totalBytes`: 4008720 → 4023732；`bytesReal`: 4008720 → 4023732；`coverage.tilesPartial`: 143 → 145；`coverage.tilesUncovered`: 0 → 2；`cost.drawSecsPerTile`: 6.797 → 6.655；`provenance.tilesByTier`: {'blocks': 51, 'mixed': 12, 'footprint': 128} → {'blocks': 51, 'footprint': 128, 'mixed': 12}。**只动了 manifest.json：没有重取数据、没有重画任何 PNG**（画面不变，变的是计数）。"
 }

@@ -4008,6 +4008,40 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        而模板那块 `ws-dml__cv`（buffer 停在默认 300×150、CSS 拉满整屏、display:block）**压在它上面**
        ⇒ 机主看到的"浅色矩形"就是这块空壳。不清掉，地图画得再好也看不见。 */
     removeStrayCanvases();
+    /* 🔴 2026-09-26（与代拍页同一个病；App 自证原文：`路网落图失败：Style is not done loading.`）：
+       样式还没就绪时 `addSource`/`addLayer` **会直接抛**，而各调用点把异常吞进 `stats.note`/面板
+       ⇒ 楼/路/水绿**整层消失**，屏幕上只剩底图与名字 —— 机主原话「**有名字，无建筑**」。
+       修法：样式就绪前**先排队**；`style.load`/`load` 之后按原顺序补做（FIFO ⇒ addSource 一定先于依赖它的 addLayer）。
+       兜底再挂一个有界定时器（4s 一次，不常驻）。 */
+    const pendingStyleOps: Array<() => void> = [];
+    try {
+      const styleReady = (): boolean => {
+        try { return !!(m as unknown as { isStyleLoaded?: () => boolean }).isStyleLoaded?.(); } catch { return false; }
+      };
+      const _addLayer = m.addLayer.bind(m) as unknown as (s: unknown, b?: unknown) => unknown;
+      const _addSource = m.addSource.bind(m) as unknown as (i: string, s: unknown) => unknown;
+      const flushPending = (): void => {
+        const q = pendingStyleOps.splice(0);
+        for (const fn of q) {
+          try { fn(); } catch (e) {
+            stats.note = stats.note
+              ? `${stats.note} · 补层失败：${String((e as Error)?.message || e).slice(0, 40)}`
+              : `补层失败：${e}`;
+          }
+        }
+      };
+      (m as unknown as { addLayer: unknown }).addLayer = (spec: unknown, before?: unknown) => {
+        if (!styleReady()) { pendingStyleOps.push(() => { _addLayer(spec, before); }); return m; }
+        return _addLayer(spec, before);
+      };
+      (m as unknown as { addSource: unknown }).addSource = (id: string, spec: unknown) => {
+        if (!styleReady()) { pendingStyleOps.push(() => { _addSource(id, spec); }); return m; }
+        return _addSource(id, spec);
+      };
+      m.once("style.load", flushPending);
+      m.once("load", flushPending);
+      window.setTimeout(flushPending, 4000);
+    } catch { /* 包装失败不影响地图 */ }
     /* 建图后补 resize（含观察容器尺寸变化）—— 见上面那段"真 P0"的说明 */
     kickResize(m);
     watchdog = window.setTimeout(() => {

@@ -30,6 +30,25 @@ import {
   BLD_BUNDLE_CELL_DEG, PLACES_BUNDLE_CELL_DEG, ROADS_BUNDLE_CELL_DEG,
   bldBundleCellsForView, placesBundleCellsForView, roadsBundleCellsForView,
 } from "./wsFeatureStore";
+/* ⏱ 计时尺子（唯一一份，见 `wsPerfMeter`）：管道里"每格取多久 / 解析多久 / 并仓多久"必须可数，
+   否则机主那句「加载慢」只能靠感觉 —— 有了它，首屏能拆成"网络 vs 解析 vs 计算"三段。 */
+import { pmMark, pmNow, pmSpan, pmTimeAsync } from "./wsPerfMeter";
+
+/**
+ * 这条 URL 的**真实字节数**（从 Resource Timing 读；同源 ⇒ `decodedBodySize` 可用）。
+ * 为什么读它而不是自己 `text().length`：后者要**多读一遍 body**（首屏最不该加的那份工），
+ * 而 Resource Timing 是浏览器网络层的账本。取不到 ⇒ `null`（**不写 0 冒充"没字节"**）。
+ */
+function netBytesOf(url: string): number | null {
+  try {
+    if (typeof performance === "undefined" || typeof performance.getEntriesByName !== "function") return null;
+    const es = performance.getEntriesByName(url) as PerformanceResourceTiming[];
+    const e = es && es.length ? es[es.length - 1] : null;
+    if (!e) return null;
+    const n = Number(e.decodedBodySize || e.transferSize || 0);
+    return n > 0 ? n : null;
+  } catch { return null; }
+}
 
 export type BundleKind = "bld" | "roads" | "places";
 
@@ -448,7 +467,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   function ensureIndex(): Promise<BundleIndexFact> {
     if (indexPromise) return indexPromise;
     indexState = "读取中";
-    indexPromise = loadBundleIndex(opts.fetchCell, opts.kind).then((f) => {
+    /* ⏱ `index.json` 是**第一跳**（没有它连"哪些格存在"都不知道）⇒ 单独记时，别混进格子账里 */
+    indexPromise = pmTimeAsync(`feed.index:${spec.dir}`, () => loadBundleIndex(opts.fetchCell, opts.kind)).then((f) => {
       indexFact = f;
       if (!f.cells) {
         indexState = "失败";
@@ -542,23 +562,39 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     pending += batch.length;
     let n = 0;
     for (const cell of batch) {
+      /* ⏱ 每格四段拆开记：**网络 / 读流+JSON.parse / 紧凑字段→要素 / 并仓**。
+         为什么要拆：机主说的"加载慢"可能是网络（真慢），也可能是解析（我们自己写的循环慢）——
+         不拆开就会把锅甩给网络，那是猜。 */
+      const url = bundleCellUrl(opts.kind, cell.key);
+      const t0 = pmNow();
       try {
-        const r = await opts.fetchCell(bundleCellUrl(opts.kind, cell.key), BUNDLE_TIMEOUT_MS);
+        const r = await opts.fetchCell(url, BUNDLE_TIMEOUT_MS);
+        const tNet = pmNow();
         if (r.status === 404) {
           /* **包外**（不是失败、更不是"这里没有"）：如实记下来，HUD 会写"包外 N" */
           missing.add(cell.key);
+          pmSpan(`feed.net:${spec.dir}`, tNet - t0, null, "404 包外");
           continue;
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const by = netBytesOf(url);
+        pmSpan(`feed.net:${spec.dir}`, tNet - t0, by);
         const j = await r.json();
+        const tJson = pmNow();
+        pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by);
         const feats = spec.parse(j);
+        const tParse = pmNow();
+        pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
+        pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
+        if (have.size === 0) pmMark(`feed.firstCell:${spec.dir}`, { cell: cell.key, bytes: by, n: feats.length });
         have.add(cell.key);
         got += feats.length;
         n += feats.length;
       } catch (e) {
         failed.add(cell.key);
         const why0 = String((e as Error)?.message || e || "取数失败").slice(0, 60);
+        pmSpan(`feed.net:${spec.dir}`, pmNow() - t0, null, "失败:" + why0);
         opts.onError?.(`${spec.dir} ${cell.key} ${why0}`);
       } finally {
         pending -= 1;
@@ -573,7 +609,10 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     } catch {
       /* 淘汰失败不影响显示（下一轮再试） */
     }
+    /* ⏱ `flush` 是这条管道最贵的一段嫌疑（页面在里面挑楼 + 上妆 + setData）⇒ 单独记 */
+    const tF = pmNow();
     opts.flush(`${why}+${batch.length}`);
+    pmSpan(`feed.flush:${spec.dir}`, pmNow() - tF, null, `${batch.length} 格`);
     return { planned: true, batch: batch.length, got: n, capped: p.capped };
   }
 

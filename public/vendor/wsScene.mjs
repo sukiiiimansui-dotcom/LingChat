@@ -1793,7 +1793,178 @@ function bldBundleCellsForView(bounds, center, maxCells = 6, size = BLD_BUNDLE_C
   return bundleCellsForView(bounds, center, maxCells, size);
 }
 
+// src/components/views/worldsim/wsPerfMeter.ts
+var PM_SAMPLE_CAP = 2e3;
+var PM_LONG_TASK_KEEP = 12;
+var PM_LONG_TASK_MS = 50;
+var spans = /* @__PURE__ */ new Map();
+var marks = [];
+var bootT = null;
+var context = {};
+var ltObserving = false;
+var ltSupported = null;
+var ltCount = 0;
+var ltTotal = 0;
+var ltMax = null;
+var ltTop = [];
+function pmAvailable() {
+  return typeof performance !== "undefined" && typeof performance.now === "function";
+}
+function pmNow() {
+  if (pmAvailable()) return performance.now();
+  return typeof Date !== "undefined" && Date.now ? Date.now() : 0;
+}
+function bootOnce() {
+  if (bootT === null) bootT = pmNow();
+  return bootT;
+}
+function pmMark(name, extra = null) {
+  const b = bootOnce();
+  const t = pmNow();
+  marks.push({ name: String(name), t, sinceBoot: Math.round((t - b) * 100) / 100, extra: extra || null });
+  if (marks.length > 400) marks = marks.slice(-400);
+}
+function pmSpan(label, ms, bytes, note) {
+  const k = String(label);
+  const v = Number(ms);
+  if (!Number.isFinite(v)) return;
+  let b = spans.get(k);
+  if (!b) {
+    b = { n: 0, total: 0, max: 0, samples: [], bytes: null, note: null };
+    spans.set(k, b);
+  }
+  b.n += 1;
+  b.total += v;
+  if (v > b.max) b.max = v;
+  b.samples.push(v);
+  if (b.samples.length > PM_SAMPLE_CAP) b.samples.splice(0, b.samples.length - PM_SAMPLE_CAP);
+  if (typeof bytes === "number" && Number.isFinite(bytes)) b.bytes = (b.bytes || 0) + bytes;
+  if (note !== void 0 && note !== null) b.note = String(note).slice(0, 200);
+}
+function pmTime(label, fn, bytesOf) {
+  const t0 = pmNow();
+  try {
+    const r = fn();
+    let by = null;
+    try {
+      const x = bytesOf ? bytesOf(r) : null;
+      if (typeof x === "number" && Number.isFinite(x)) by = x;
+    } catch {
+      by = null;
+    }
+    pmSpan(label, pmNow() - t0, by);
+    return r;
+  } catch (e) {
+    pmSpan(label, pmNow() - t0, null, "抛错(" + String(e?.message || e).slice(0, 60) + ")");
+    throw e;
+  }
+}
+async function pmTimeAsync(label, fn) {
+  const t0 = pmNow();
+  try {
+    const r = await fn();
+    pmSpan(label, pmNow() - t0);
+    return r;
+  } catch (e) {
+    pmSpan(label, pmNow() - t0, null, "抛错(" + String(e?.message || e).slice(0, 60) + ")");
+    throw e;
+  }
+}
+function pmPercentile(sortedAsc, p) {
+  if (!sortedAsc.length) return null;
+  const q = Math.min(1, Math.max(0, p));
+  const idx = Math.max(0, Math.ceil(q * sortedAsc.length) - 1);
+  return sortedAsc[Math.min(sortedAsc.length - 1, idx)];
+}
+function pmSnapshot() {
+  const out = [];
+  for (const [label, b] of spans) {
+    const s = b.samples.slice().sort((a, z) => a - z);
+    out.push({
+      label,
+      n: b.n,
+      total: Math.round(b.total * 100) / 100,
+      max: Math.round(b.max * 100) / 100,
+      kept: s.length,
+      median: s.length ? Math.round(pmPercentile(s, 0.5) * 100) / 100 : null,
+      p90: s.length ? Math.round(pmPercentile(s, 0.9) * 100) / 100 : null,
+      bytes: b.bytes,
+      note: b.note
+    });
+  }
+  out.sort((a, z) => z.total - a.total);
+  return {
+    available: pmAvailable(),
+    now: pmAvailable() ? Math.round(pmNow() * 100) / 100 : null,
+    bootT: bootT === null ? null : Math.round(bootT * 100) / 100,
+    marks: marks.slice(),
+    spans: out,
+    longTasks: {
+      observing: ltObserving,
+      supported: ltSupported,
+      count: ltCount,
+      total: Math.round(ltTotal * 100) / 100,
+      max: ltMax === null ? null : Math.round(ltMax * 100) / 100,
+      top: ltTop.slice()
+    },
+    context: { ...context }
+  };
+}
+function pmReset() {
+  spans.clear();
+  marks = [];
+  bootT = null;
+  for (const k of Object.keys(context)) delete context[k];
+  ltCount = 0;
+  ltTotal = 0;
+  ltMax = null;
+  ltTop = [];
+}
+function pmObserveLongTasks() {
+  if (ltObserving) return true;
+  if (typeof PerformanceObserver === "undefined") {
+    ltSupported = false;
+    return false;
+  }
+  try {
+    const po = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        const dur = Number(e.duration) || 0;
+        const start = Math.round(Number(e.startTime) * 100) / 100;
+        ltCount += 1;
+        ltTotal += dur;
+        if (ltMax === null || dur > ltMax) ltMax = dur;
+        ltTop.push({ start, dur: Math.round(dur * 100) / 100, name: String(e.name || "task") });
+        ltTop.sort((a, z) => z.dur - a.dur);
+        if (ltTop.length > PM_LONG_TASK_KEEP) ltTop = ltTop.slice(0, PM_LONG_TASK_KEEP);
+      }
+    });
+    po.observe({ entryTypes: ["longtask"], buffered: true });
+    ltObserving = true;
+    ltSupported = true;
+    return true;
+  } catch {
+    ltSupported = false;
+    return false;
+  }
+}
+function pmSetContext(k, v) {
+  context[String(k)] = v;
+}
+
 // src/components/views/worldsim/wsOfflineFeed.ts
+function netBytesOf(url) {
+  try {
+    if (typeof performance === "undefined" || typeof performance.getEntriesByName !== "function") return null;
+    const es = performance.getEntriesByName(url);
+    const e = es && es.length ? es[es.length - 1] : null;
+    if (!e) return null;
+    const n = Number(e.decodedBodySize || e.transferSize || 0);
+    return n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
 var BUNDLE_TIMEOUT_MS = 6e3;
 var BLD_BUNDLE_PER_REFRESH = 2;
 var ROADS_BUNDLE_PER_REFRESH = 2;
@@ -1999,7 +2170,7 @@ function createBundleFeed(opts) {
   function ensureIndex() {
     if (indexPromise) return indexPromise;
     indexState = "读取中";
-    indexPromise = loadBundleIndex(opts.fetchCell, opts.kind).then((f) => {
+    indexPromise = pmTimeAsync(`feed.index:${spec.dir}`, () => loadBundleIndex(opts.fetchCell, opts.kind)).then((f) => {
       indexFact = f;
       if (!f.cells) {
         indexState = "失败";
@@ -2091,22 +2262,35 @@ function createBundleFeed(opts) {
     pending += batch.length;
     let n = 0;
     for (const cell of batch) {
+      const url = bundleCellUrl(opts.kind, cell.key);
+      const t0 = pmNow();
       try {
-        const r = await opts.fetchCell(bundleCellUrl(opts.kind, cell.key), BUNDLE_TIMEOUT_MS);
+        const r = await opts.fetchCell(url, BUNDLE_TIMEOUT_MS);
+        const tNet = pmNow();
         if (r.status === 404) {
           missing.add(cell.key);
+          pmSpan(`feed.net:${spec.dir}`, tNet - t0, null, "404 包外");
           continue;
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const by = netBytesOf(url);
+        pmSpan(`feed.net:${spec.dir}`, tNet - t0, by);
         const j = await r.json();
+        const tJson = pmNow();
+        pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by);
         const feats = spec.parse(j);
+        const tParse = pmNow();
+        pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
+        pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
+        if (have.size === 0) pmMark(`feed.firstCell:${spec.dir}`, { cell: cell.key, bytes: by, n: feats.length });
         have.add(cell.key);
         got += feats.length;
         n += feats.length;
       } catch (e) {
         failed.add(cell.key);
         const why0 = String(e?.message || e || "取数失败").slice(0, 60);
+        pmSpan(`feed.net:${spec.dir}`, pmNow() - t0, null, "失败:" + why0);
         opts.onError?.(`${spec.dir} ${cell.key} ${why0}`);
       } finally {
         pending -= 1;
@@ -2119,7 +2303,9 @@ function createBundleFeed(opts) {
       }
     } catch {
     }
+    const tF = pmNow();
     opts.flush(`${why}+${batch.length}`);
+    pmSpan(`feed.flush:${spec.dir}`, pmNow() - tF, null, `${batch.length} 格`);
     return { planned: true, batch: batch.length, got: n, capped: p.capped };
   }
   return {
@@ -3719,6 +3905,9 @@ export {
   PLACES_STORE_CAP,
   PLACE_AREA_TYPES,
   PLACE_LOCAL_TYPES,
+  PM_LONG_TASK_KEEP,
+  PM_LONG_TASK_MS,
+  PM_SAMPLE_CAP,
   PODIUM_H_MAX,
   PODIUM_H_MIN,
   PODIUM_H_RATIO,
@@ -3895,6 +4084,17 @@ export {
   planEnsureRoadOrder,
   planGenNames,
   planStalls,
+  pmAvailable,
+  pmMark,
+  pmNow,
+  pmObserveLongTasks,
+  pmPercentile,
+  pmReset,
+  pmSetContext,
+  pmSnapshot,
+  pmSpan,
+  pmTime,
+  pmTimeAsync,
   pointInRing,
   prerenderSourceOf,
   rampColorOf,

@@ -39,6 +39,10 @@ export interface StoreStats {
   lastMergeMs: number | null;
   /** 硬上限 */
   cap: number;
+  /** 🔴 **被淘汰连累而作废的"来源键"个数**（历史累计）—— 见 `retainNear` 的 `dirtySources` 说明。
+   *  为什么必须可数：作废一个来源键 = 那一格**下次还会被取一遍**（这是"楼没了"的修复代价），
+   *  代价多大要能看见，不能悄悄发生。 */
+  sourcesDropped: number;
 }
 
 export interface MergeResult {
@@ -60,11 +64,12 @@ export function metersBetween(a: LngLat, b: LngLat): number {
 export interface FeatureStore<T> {
   /** 合并一批要素（按 id 去重；同名 id 以**新的**为准） */
   merge(features: readonly T[], sourceKey?: string): MergeResult;
-  /** 淘汰：先丢"离 center 超过 keepRadiusM"的，再（若仍超 cap）丢最远的，直到 ≤ cap */
-  retainNear(center: LngLat, keepRadiusM: number): { droppedFar: number; droppedOverCap: number; n: number };
+  /** 淘汰：先丢"离 center 超过 keepRadiusM"的，再（若仍超 cap）丢最远的，直到 ≤ cap。
+   *  🔴 同时把"被淘汰波及的来源键"作废（`has()` 变 false）—— 见实现里的 `dirtySources`。 */
+  retainNear(center: LngLat, keepRadiusM: number): { droppedFar: number; droppedOverCap: number; n: number; droppedSources: number };
   /** 当前并集（调用方拿它一次性 setData） */
   features(): T[];
-  /** 是否已经取过某个来源键（瓦片键 / 离线格键） */
+  /** 是否**当前仓库里确实还有**某个来源键的要素（瓦片键 / 离线格键） */
   has(sourceKey: string): boolean;
   stats(): StoreStats;
   clear(): void;
@@ -87,6 +92,23 @@ export function createFeatureStore<T>(opts: {
   let noIdList: T[] = [];
   let added = 0, dupes = 0, dropped = 0, merges = 0, lastMergeMs: number | null = null;
   const sources = new Set<string>();
+  let sourcesDropped = 0;
+  /**
+   * 🔴🔴 **要素 → 它的来源键**（2026-09-26 性能/完整性子代理实测出来的真 bug 的修法）。
+   *
+   * 病根（真浏览器实测，`~/chk/_perf_base2.json` 的 ⑤）：`retainNear` 只丢**要素**、**不动作 `sources`**
+   * ⇒ 一格被淘汰后 `has(格键)` 仍为 true ⇒ 离线管道 `todo` 里那一格**永远跳过**
+   * ⇒ **挪走再挪回来，那一片就再也没有数据**（实测：挪回原机位后 `considered 177`（还是远处那一格）、
+   * `inView 0`、`floorShort 10`，且 bldbundle 请求数**一条都没增加**）。
+   * 这就是机主说的「渲染不全」的一个**硬真因**（不是观感）。
+   *
+   * 修法：用 **WeakMap** 记住每个"进来过"的要素属于哪个来源键（不污染要素本身 ⇒ 不会被
+   * `setData`/`JSON.stringify`/structuredClone 带出去，也不会阻止 GC）；淘汰时把**被丢掉的要素**
+   * 对应的来源键作废 ⇒ 管道下一轮就会**重新取那一格**（`merge` 按 id 去重 ⇒ 重取安全，
+   * 缺的那部分正好补回来）。
+   * ⚠️ 只作废"有要素被丢"的来源键：没被波及的格子照旧不重取（那才是"来回挪不该反复取"的设计）。
+   */
+  const srcOf = new WeakMap<object, string>();
 
   function all(): T[] {
     return noIdList.length ? [...byId.values(), ...noIdList] : [...byId.values()];
@@ -98,10 +120,16 @@ export function createFeatureStore<T>(opts: {
       let a = 0, d = 0, nid = 0;
       for (const f of features) {
         const id = opts.idOf(f);
-        if (!id) { noIdList.push(f); nid++; a++; continue; }
+        if (!id) {
+          noIdList.push(f); nid++; a++;
+          if (sourceKey && f && typeof f === "object") srcOf.set(f as unknown as object, sourceKey);
+          continue;
+        }
         if (byId.has(id)) { dupes++; d++; continue; }   // 已有 ⇒ 丢新的（同一要素重复取到，几何等价）
         byId.set(id, f);
         a++;
+        /* 记下"它从哪一格来"（只有真进仓库的才记；被去重丢掉的不需要 —— 它的孪生兄弟已经记过） */
+        if (sourceKey && f && typeof f === "object") srcOf.set(f as unknown as object, sourceKey);
       }
       added += a;
       merges++;
@@ -132,6 +160,19 @@ export function createFeatureStore<T>(opts: {
         keep.push(...sorted.slice(0, cap));
         droppedOverCap = over.length;
       }
+      /* 🔴 **被淘汰波及的来源键一律作废**（太远丢的 + 超上限丢的，两类都算）：
+         作废之后 `has(格键)` 变 false ⇒ 离线管道下一轮会**把那一格重新取回来**（去重保证不会重复画）。
+         为什么要连"只丢了一部分"的格也作废：`merge` 按 id 去重 ⇒ 重取正好**只补回缺的那部分**，
+         而保留"部分格"会让那一格永远缺楼（屏上就是"这一片比旁边稀"）。 */
+      const dirty = new Set<string>();
+      const markDirty = (arr: [number, T][]) => {
+        for (const [, f] of arr) {
+          if (f && typeof f === "object") { const k = srcOf.get(f as unknown as object); if (k) dirty.add(k); }
+        }
+      };
+      markDirty(far);
+      markDirty(over);
+      for (const k of dirty) if (sources.delete(k)) sourcesDropped += 1;
       /* 落盘：重建两个容器（保持"有 id 的进 map、没 id 的进 list"） */
       const keepSet = new Set(keep.map(([, f]) => f));
       const nextById = new Map<string, T>();
@@ -142,7 +183,7 @@ export function createFeatureStore<T>(opts: {
       for (const [id, f] of nextById) byId.set(id, f);
       noIdList = nextNoId;
       dropped += droppedFar + droppedOverCap;
-      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length };
+      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: dirty.size };
     },
 
     features: all,
@@ -154,12 +195,15 @@ export function createFeatureStore<T>(opts: {
         noId: noIdList.length,
         added, dupes, dropped, merges,
         sources: sources.size,
+        sourcesDropped,
         lastMergeMs,
         cap,
       };
     },
 
-    clear() { byId.clear(); noIdList = []; },
+    /* ⚠️ `clear()` 必须**连来源键一起清**：`has()` 的语义现在是"仓库里确实还有这一格的要素"
+       （见 `retainNear` 的 `dirtySources`）—— 只清要素不清来源键，就会又变回"说已经取过、其实没有"。 */
+    clear() { byId.clear(); noIdList = []; sources.clear(); },
   };
 }
 

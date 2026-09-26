@@ -1654,6 +1654,8 @@ function createFeatureStore(opts) {
   let noIdList = [];
   let added = 0, dupes = 0, dropped = 0, merges = 0, lastMergeMs = null;
   const sources = /* @__PURE__ */ new Set();
+  let sourcesDropped = 0;
+  const srcOf = /* @__PURE__ */ new WeakMap();
   function all() {
     return noIdList.length ? [...byId.values(), ...noIdList] : [...byId.values()];
   }
@@ -1667,6 +1669,7 @@ function createFeatureStore(opts) {
           noIdList.push(f);
           nid++;
           a++;
+          if (sourceKey && f && typeof f === "object") srcOf.set(f, sourceKey);
           continue;
         }
         if (byId.has(id)) {
@@ -1676,6 +1679,7 @@ function createFeatureStore(opts) {
         }
         byId.set(id, f);
         a++;
+        if (sourceKey && f && typeof f === "object") srcOf.set(f, sourceKey);
       }
       added += a;
       merges++;
@@ -1705,6 +1709,18 @@ function createFeatureStore(opts) {
         keep.push(...sorted.slice(0, cap));
         droppedOverCap = over.length;
       }
+      const dirty = /* @__PURE__ */ new Set();
+      const markDirty = (arr) => {
+        for (const [, f] of arr) {
+          if (f && typeof f === "object") {
+            const k = srcOf.get(f);
+            if (k) dirty.add(k);
+          }
+        }
+      };
+      markDirty(far);
+      markDirty(over);
+      for (const k of dirty) if (sources.delete(k)) sourcesDropped += 1;
       const keepSet = new Set(keep.map(([, f]) => f));
       const nextById = /* @__PURE__ */ new Map();
       const nextNoId = [];
@@ -1714,7 +1730,7 @@ function createFeatureStore(opts) {
       for (const [id, f] of nextById) byId.set(id, f);
       noIdList = nextNoId;
       dropped += droppedFar + droppedOverCap;
-      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length };
+      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: dirty.size };
     },
     features: all,
     has: (k) => sources.has(k),
@@ -1727,13 +1743,17 @@ function createFeatureStore(opts) {
         dropped,
         merges,
         sources: sources.size,
+        sourcesDropped,
         lastMergeMs,
         cap
       };
     },
+    /* ⚠️ `clear()` 必须**连来源键一起清**：`has()` 的语义现在是"仓库里确实还有这一格的要素"
+       （见 `retainNear` 的 `dirtySources`）—— 只清要素不清来源键，就会又变回"说已经取过、其实没有"。 */
     clear() {
       byId.clear();
       noIdList = [];
+      sources.clear();
     }
   };
 }
@@ -2163,10 +2183,70 @@ function createBundleFeed(opts) {
   let busy = false;
   let queued = false;
   let refused = false;
+  let evictedSources = 0;
   let indexFact = null;
   let indexState = "未读";
   let indexWhy = null;
   let indexPromise = null;
+  const coalesceMs = Math.max(0, Math.floor(Number(opts.flushCoalesceMs || 0)));
+  let flushTimer = null;
+  let pendingFlushWhy = "";
+  let coalescedFlushes = 0;
+  function doFlush(why) {
+    const t = pmNow();
+    try {
+      opts.flush(why);
+    } finally {
+      pmSpan(`feed.flush:${spec.dir}`, pmNow() - t, null, why);
+    }
+  }
+  function requestFlush(why) {
+    if (coalesceMs <= 0) {
+      doFlush(why);
+      return;
+    }
+    pendingFlushWhy = pendingFlushWhy ? pendingFlushWhy + "+" + why : why;
+    if (flushTimer) {
+      coalescedFlushes += 1;
+      return;
+    }
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const w = pendingFlushWhy;
+      pendingFlushWhy = "";
+      try {
+        doFlush(w);
+      } catch {
+      }
+    }, coalesceMs);
+  }
+  const cacheCells = Math.max(0, Math.floor(Number(opts.parsedCacheCells || 0)));
+  const parsedCache = /* @__PURE__ */ new Map();
+  let cacheHits = 0;
+  function cacheTake(k) {
+    const v = parsedCache.get(k);
+    if (!v) return null;
+    parsedCache.delete(k);
+    parsedCache.set(k, v);
+    return v;
+  }
+  function cachePut(k, v) {
+    if (cacheCells <= 0) return;
+    parsedCache.delete(k);
+    parsedCache.set(k, v);
+    while (parsedCache.size > cacheCells) {
+      const first = parsedCache.keys().next();
+      if (first.done) break;
+      parsedCache.delete(first.value);
+    }
+  }
+  function cacheStats() {
+    let feats = 0;
+    for (const v of parsedCache.values()) feats += v.length;
+    return { cells: parsedCache.size, feats, hits: cacheHits, maxCells: cacheCells };
+  }
+  if (cacheCells > 0) pmSetContext(`feed.parsedCache:${spec.dir}`, cacheCells);
+  if (coalesceMs > 0) pmSetContext(`feed.flushCoalesce:${spec.dir}`, coalesceMs);
   function ensureIndex() {
     if (indexPromise) return indexPromise;
     indexState = "读取中";
@@ -2220,6 +2300,9 @@ function createBundleFeed(opts) {
       asked,
       refused,
       cellDeg: spec.cellDeg,
+      evictedSources,
+      cache: cacheStats(),
+      coalesce: { ms: coalesceMs, merged: coalescedFlushes },
       index: {
         state: indexState,
         cellSize: indexFact ? indexFact.cellSize : null,
@@ -2265,6 +2348,16 @@ function createBundleFeed(opts) {
       const url = bundleCellUrl(opts.kind, cell.key);
       const t0 = pmNow();
       try {
+        const hit = cacheTake(cell.key);
+        if (hit) {
+          opts.store.merge(hit, spec.sourceKey(cell.key));
+          cacheHits += 1;
+          have.add(cell.key);
+          got += hit.length;
+          n += hit.length;
+          pmSpan(`feed.cacheHit:${spec.dir}`, pmNow() - t0, null, `${hit.length} 个要素`);
+          continue;
+        }
         const r = await opts.fetchCell(url, BUNDLE_TIMEOUT_MS);
         const tNet = pmNow();
         if (r.status === 404) {
@@ -2283,6 +2376,7 @@ function createBundleFeed(opts) {
         pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
         pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
+        cachePut(cell.key, feats);
         if (have.size === 0) pmMark(`feed.firstCell:${spec.dir}`, { cell: cell.key, bytes: by, n: feats.length });
         have.add(cell.key);
         got += feats.length;
@@ -2299,13 +2393,13 @@ function createBundleFeed(opts) {
     try {
       const c = opts.view().center;
       if (c && Number.isFinite(c.lng) && Number.isFinite(c.lat)) {
-        opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
+        const ev = opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
+        const ds = ev?.droppedSources;
+        if (ds) evictedSources += Number(ds) || 0;
       }
     } catch {
     }
-    const tF = pmNow();
-    opts.flush(`${why}+${batch.length}`);
-    pmSpan(`feed.flush:${spec.dir}`, pmNow() - tF, null, `${batch.length} 格`);
+    requestFlush(`${why}+${batch.length}`);
     return { planned: true, batch: batch.length, got: n, capped: p.capped };
   }
   return {

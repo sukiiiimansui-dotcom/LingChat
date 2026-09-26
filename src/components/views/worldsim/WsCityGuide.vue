@@ -19,8 +19,19 @@
   🔴 引导**不许变成死路**：清单取不到时也给「仍然进入地图」（机主认过这条）。
 
   ## 存储接口
-  取数/落盘全部走 `wsCityStore.cityStore()`（`list/installed/install/remove`）——
-  本组件**一行 fetch 都没有**：换下载源只改 `WS_CITY_PACK_BASE`，真机落盘只换 backend。
+  取数/落盘全部走 `wsCityStore.cityStore()`（`list/installed/install/remove/setBase`）——
+  本组件**一行 fetch 都没有**：换下载源走 `store.setBase()`（或 `?citybase=` / 构建期常量），真机落盘只换 backend。
+
+  ## 交接：i18n 现状（**别当成漏译**）
+  `worldsim` 命名空间：`zh-CN` / `zh-HK` **全量**；`en` / `ja` **只有 `city` 段**（就是这一屏），
+  其余键按 vue-i18n `fallbackLocale` **逐键回落中文**。改文案先改 `zh-CN`（基准）；
+  `zh-HK` 用 `~/chk/gen-zh-hk-worldsim.mjs`（OpenCC cn→hk，与 `scripts/generate-zh-hk.mjs` 同口径）同步。
+
+  ## 交接：屏幕上的话**必须与真实状态一致**（机主截图抓到过）
+  正文（`leadText`）按「已装/未装 × 清单读到/没读到」分三种；「下载源」同行按 `store.baseInfo.from`
+  决定是否提示"未配置/坏值回落"（坏值要把**被拒绝的原值**印出来）。断言在
+  `~/chk/ws_guide_text_check.mjs`：不开浏览器，用 Vue 公开 API `createRenderer` 真挂载组件、
+  真敲字、真点"保存/清除"，再断言屏幕文本、输入框值与 list 调用次数。
 -->
 <template>
   <div class="wscg" role="dialog" aria-modal="true" :aria-label="t('worldsim.city.title')">

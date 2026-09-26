@@ -30,6 +30,8 @@
         <h2 class="wscg__title">{{ t("worldsim.city.title") }}</h2>
         <p class="wscg__lead">{{ t("worldsim.city.lead") }}</p>
         <p class="wscg__src">{{ t("worldsim.city.source") }}：<code>{{ store.base }}</code></p>
+        <!-- 🔴 下载源没配（= 默认示例占位）/ 覆盖值坏掉回落时：**说清原因 + 怎么办**（见 srcHint 注释） -->
+        <p v-if="srcHint" class="wscg__srchint">⚠️ {{ srcHint }}</p>
       </header>
 
       <div class="wscg__body">
@@ -164,6 +166,20 @@
   const droppedLine = computed(() =>
     dropped.value.length ? t("worldsim.city.dropped", { n: dropped.value.length }) : ""
   );
+
+  /**
+   * 🔴 下载源没配（默认示例占位）/ 覆盖值坏掉回落时的**一行提示** —— 必须**同时**说清
+   * ① **原因**（"未配置下载源，当前是示例占位" / "覆盖值不可用，已回落"）
+   * ② **怎么办**（`?citybase=` 或构建期 `VITE_WS_CITY_PACK_BASE`）
+   * ⇒ 不许含糊成"网络错误"：那会把"没人配真源"说成"网络不好"，用户照着修网络永远修不好。
+   * 判断只看 `store.baseInfo.from`（`wsCityStore` 里已按"参数 > 构建期 > 默认占位"解析并如实标注）。
+   */
+  const srcHint = computed(() => {
+    const b = props.store.baseInfo;
+    if (b.from === "default") return t("worldsim.city.srcUnset", { base: props.store.base });
+    if (b.from === "fallback") return t("worldsim.city.srcFallback", { why: b.why || b.requested || "" });
+    return "";
+  });
 
   const stageLabel = computed(() => stageName(progress.value.stage));
 
@@ -324,6 +340,13 @@
   }
   .wscg__src code {
     color: #9fd8ef;
+  }
+  /* "下载源没配/坏掉"的那一行：跟警告色，但不抢列表（小字、可换行） */
+  .wscg__srchint {
+    margin: 6px 0 0;
+    color: #ffd479;
+    font-size: 11px;
+    word-break: break-all;
   }
   .wscg__body {
     flex: 1;

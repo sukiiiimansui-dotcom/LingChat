@@ -2027,15 +2027,26 @@ var GW_BUNDLE_CELL_DEG = 0.05;
 var GW_BUNDLE_PER_REFRESH = 6;
 var GW_BUNDLE_MAX_CELLS = 6;
 var GW_STORE_CAP = 4e3;
-function bundleCellUrl(kind, cellKey) {
+function bundleCellUrl(kind, cellKey, dir) {
   const spec = SPECS[kind];
   if (!spec) throw new Error("未知的离线包类型：" + String(kind));
-  return `/${spec.dir}/${cellKey}.json`;
+  return `/${dir || dirsOf(spec)[0]}/${cellKey}.json`;
 }
-function bundleIndexUrl(kind) {
+function bundleIndexUrl(kind, dir) {
   const spec = SPECS[kind];
   if (!spec) throw new Error("未知的离线包类型：" + String(kind));
-  return `/${spec.dir}/index.json`;
+  return `/${dir || dirsOf(spec)[0]}/index.json`;
+}
+function dirsOf(spec) {
+  const list = (spec.dirs && spec.dirs.length ? spec.dirs : [spec.dir]).slice();
+  try {
+    if (typeof location !== "undefined" && location.search) {
+      const m = /[?&]bdir=([A-Za-z0-9._-]+)/.exec(location.search);
+      if (m && list.indexOf(m[1]) >= 0) return [m[1]].concat(list.filter((d) => d !== m[1]));
+    }
+  } catch {
+  }
+  return list;
 }
 async function fetchWithTimeout(fetchImpl, url, ms = BUNDLE_TIMEOUT_MS) {
   const ctl = typeof AbortController === "function" ? new AbortController() : null;
@@ -2245,8 +2256,11 @@ function roadsPointOfRaw(f) {
 var SPECS = {
   bld: {
     dir: "bldbundle",
+    /* 📦 **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
+       不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
+    dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
-    plan: (b, c, maxCells) => bldBundleCellsForView(b, c, maxCells),
+    plan: (b, c, maxCells, size) => bldBundleCellsForView(b, c, maxCells, size),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
     maxCells: BLD_BUNDLE_MAX_CELLS,
@@ -2256,7 +2270,7 @@ var SPECS = {
   places: {
     dir: "placesbundle",
     cellDeg: PLACES_BUNDLE_CELL_DEG,
-    plan: (b, c, maxCells) => placesBundleCellsForView(b, c, maxCells),
+    plan: (b, c, maxCells, size) => placesBundleCellsForView(b, c, maxCells, size),
     parse: bundlePlacesOf,
     perRefresh: PLACES_BUNDLE_PER_REFRESH,
     maxCells: PLACES_BUNDLE_MAX_CELLS,
@@ -2266,7 +2280,7 @@ var SPECS = {
   roads: {
     dir: "roadsbundle",
     cellDeg: ROADS_BUNDLE_CELL_DEG,
-    plan: (b, c, maxCells) => roadsBundleCellsForView(b, c, maxCells),
+    plan: (b, c, maxCells, size) => roadsBundleCellsForView(b, c, maxCells, size),
     parse: bundleRoadsOf,
     perRefresh: ROADS_BUNDLE_PER_REFRESH,
     maxCells: ROADS_BUNDLE_MAX_CELLS,
@@ -2300,6 +2314,8 @@ function createBundleFeed(opts) {
   let busy = false;
   let queued = false;
   let refused = false;
+  let activeDir = null;
+  let effCellDeg = null;
   let evictedSources = 0;
   let indexFact = null;
   let indexState = "未读";
@@ -2369,32 +2385,46 @@ function createBundleFeed(opts) {
   function ensureIndex() {
     if (indexPromise) return indexPromise;
     indexState = "读取中";
-    indexPromise = pmTimeAsync(`feed.index:${spec.dir}`, () => loadBundleIndex(opts.fetchCell, opts.kind)).then((f) => {
-      indexFact = f;
-      if (!f.cells) {
-        indexState = "失败";
-        indexWhy = "索引没读到（退回试格子）";
-        opts.onError?.(`index ${spec.dir} 没读到，退回试格子`);
-        return f;
-      }
-      const pkg = f.cellSize;
-      if (pkg === null) {
+    const dirs = dirsOf(spec);
+    indexPromise = (async () => {
+      let last = null;
+      let tried = 0;
+      for (const d of dirs) {
+        tried += 1;
+        const f = await pmTimeAsync(`feed.index:${spec.dir}`, () => loadBundleIndex(opts.fetchCell, opts.kind, d));
+        last = f;
+        if (!f.cells) continue;
+        activeDir = d;
+        indexFact = f;
+        const rawSize = f.cellSize;
+        const pkg = typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0 ? rawSize : null;
+        effCellDeg = pkg === null ? spec.cellDeg : pkg;
+        const pin = Number(opts.expectCellDeg);
+        if (pkg === null) {
+          indexState = "已读";
+          indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
+          return f;
+        }
+        if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
+          indexState = "口径不符";
+          refused = true;
+          indexWhy = `包（${d}）按 ${pkg}° 分格、但这一趟**钉住**了 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+          opts.onError?.(`${spec.dir}@${d} 格尺寸口径不符：包 ${pkg}° / 钉住 ${pin}° ⇒ 本轮一个格都不取`);
+          return f;
+        }
         indexState = "已读";
-        indexWhy = "包里没有 cellSize 字段（对拍不了口径）";
+        indexWhy = null;
         return f;
       }
-      if (Math.abs(pkg - spec.cellDeg) > 1e-9) {
-        indexState = "口径不符";
-        refused = true;
-        indexWhy = `包按 ${pkg}° 分格、前端按 ${spec.cellDeg}° 算 ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
-        opts.onError?.(`${spec.dir} 格尺寸口径不符：包 ${pkg}° / 前端 ${spec.cellDeg}° ⇒ 本轮一个格都不取`);
-        return f;
-      }
-      indexState = "已读";
-      indexWhy = null;
-      return f;
-    });
+      indexState = "失败";
+      indexWhy = `索引没读到（试过 ${tried} 个目录：${dirs.join(" / ")}）⇒ 退回试格子`;
+      opts.onError?.(`index ${spec.dir} 没读到（试过 ${tried} 个目录），退回试格子`);
+      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
+    })();
     return indexPromise;
+  }
+  function effectiveDeg() {
+    return effCellDeg === null ? spec.cellDeg : effCellDeg;
   }
   function counters() {
     let n = null;
@@ -2418,7 +2448,10 @@ function createBundleFeed(opts) {
       got,
       asked,
       refused,
-      cellDeg: spec.cellDeg,
+      cellDeg: effectiveDeg(),
+      cellDegPin: Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null,
+      dir: activeDir || dirsOf(spec)[0],
+      dirs: dirsOf(spec),
       evictedSources,
       cache: cacheStats(),
       coalesce: { ms: coalesceMs, merged: coalescedFlushes },
@@ -2435,18 +2468,18 @@ function createBundleFeed(opts) {
   }
   function planned() {
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells);
+    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
     if (!p) return null;
     return { keys: p.cells.map((c) => c.key), wanted: p.wanted, capped: p.capped };
   }
   async function runOnce(why) {
+    const idx = await ensureIndex();
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells);
+    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
     if (!p) return { planned: false, batch: 0, got: 0, capped: false };
     asked = true;
     wanted = p.wanted;
     capped = p.capped;
-    const idx = await ensureIndex();
     if (refused) return { planned: true, batch: 0, got: 0, capped: p.capped, refused: true };
     const todo = [];
     for (const c of p.cells) {
@@ -2464,7 +2497,7 @@ function createBundleFeed(opts) {
     pending += batch.length;
     let n = 0;
     for (const cell of batch) {
-      const url = bundleCellUrl(opts.kind, cell.key);
+      const url = bundleCellUrl(opts.kind, cell.key, activeDir || dirsOf(spec)[0]);
       const t0 = pmNow();
       try {
         const hit = cacheTake(cell.key);

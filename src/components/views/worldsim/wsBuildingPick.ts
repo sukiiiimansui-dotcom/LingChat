@@ -214,37 +214,84 @@ export function pickBuildingsForView<T extends PickFeature>(
  * ⇒ 挑选只依赖**区块本身**（与视野/中心无关）⇒ 同一块永远是那 100 栋，**拖动不乱变**。
  * 区块用**固定经纬格**（默认 0.02° ≈ 2.2km，与离线包同一套 `floor(lng/size)*size` 数学）。
  */
+/* ── 🧍 **视野下限**（机主 2026-09-26 真机原话：「**还要保证视野内最少有十栋房**」，
+ *    同一句里重申「每个区块最多 100 个固定」）—— 两条**同时**要，缺一条都不算做到：
+ *    ① 每块 ≤cap、**同一块永远同一批**（= `base`，只依赖区块的**冻结集**）；
+ *    ② **当前视野内至少 `minInView` 栋**（够不着时按同一套规则**补**）。
+ *
+ * 做法（顺序不能反）：**先算 base（老规则，一字节不改）** → 再数 base 里落在 `bounds` 内的有几栋 →
+ *   · ≥ `minInView` ⇒ **原样返回**（一个字节都不多）；
+ *   · < `minInView` ⇒ 从「**落在此视野内、且尚未入选**」的那批里，按**同一套排序规则**
+ *     （块序 = 格子键升序；块内 = 有名字 → 底面大 → id 定序）补到够；候选取尽就补到取尽，**如实报 `floorShort`**。
+ *
+ * 🔴 **补进来的这批绝不进 base 的冻结集**（冻结只冻结 base）——否则"同一块永远同一批"会被视野污染：
+ *    挪一下地图，那 100 栋就换了一批 = 又回到机主否掉的"乱变"。
+ * 🔴 因此补楼**可能让某块这一刻超过 cap**（补的正是该块"落选"的那批）：`cap` 管的是**冻结集**，
+ *    补充件随视野走 —— 这是两条口径冲突时的取舍（"视野内至少 10 栋"优先），HUD 用 `baseChosen` 与
+ *    `floorAdded` **分开报**，别把两者加起来说成"每块 100"。
+ * 🔴 没给 `bounds` ⇒ `inView` / `floorShort` 报 **null（数不出来）**，绝不写 0（判词三态）。
+ */
 export interface CapCellInput {
   /** 区块边长（度）；默认 0.02 ≈ 2.2km（"小范围一个区块"） */
   cellDeg?: number;
   /** 每块上限；默认 `WS_BLD_CELL_CAP` = 100 */
   cap?: number;
+  /** 当前视野（`{getWest(), getSouth(), getEast(), getNorth()}` 或 null）。
+   *  **不给 ⇒ 不知道视野内有几栋**（`inView` 报 null，不是 0）；给个坏对象（缺方法/NaN）同样按"没给"处理，不抛。 */
+  bounds?: PickBounds | null;
+  /** 视野内**至少**几栋；默认 **0 = 不启用下限**（⇒ 老调用点行为逐字节不变）。
+   *  `<=0` / NaN / 不给 ⇒ 0。⚠️ `cap=0` 时按字面语义仍会补（base 空 ⇒ 从视野内的落选件补够）——
+   *  要"一栋都不画"的开关请同时传 `minInView: 0`（页面现有 `BLDN > 0` 闸门已天然满足）。 */
+  minInView?: number;
 }
 export interface CapCellStats {
   considered: number;
   cells: number;
   cap: number;
   cellDeg: number;
-  /** 每块实际画了几栋（按格子键排序） */
+  /** 每块实际画了几栋（按格子键排序）——**只数 `base` 冻结集**；补的那几栋见 `floorAdded` */
   byCell: Array<{ cell: string; drawn: number; dropped: number }>;
+  /** 实际返回的栋数 = `baseChosen + floorAdded`（老口径"画了几栋"） */
   chosen: number;
+  /** `base`（每块 ≤cap 的**冻结集**）的栋数 = `chosen − floorAdded`；**补的那几栋不算在内** */
+  baseChosen: number;
   dropped: number;
   /** 定位不到的（没几何/坐标坏）——**不画且如实计数** */
   noPoint: number;
+  /** `base` 里**落在视野内**的栋数；没给 `bounds` ⇒ **null（数不出来，不写 0）** */
+  inView: number | null;
+  /** 本次生效的视野下限（= `input.minInView`，默认 0） */
+  minInView: number;
+  /** 为凑够下限**补进来**的栋数（**不进 base 冻结集**，随视野变） */
+  floorAdded: number;
+  /** 补到"视野内候选取尽"仍差几栋；**0 = 够**；没给 `bounds` ⇒ **null（没量过，不敢说"够"）** */
+  floorShort: number | null;
   why: string;
 }
 
 export const WS_BLD_CELL_CAP = 100;
 export const WS_BLD_CELL_DEG = 0.02;
 
-/** 每块最多 `cap` 栋；**只依赖区块 ⇒ 稳定**（拖动不重挑、同一块永远同一批） */
+/** 每块最多 `cap` 栋；**只依赖区块 ⇒ 稳定**（拖动不重挑、同一块永远同一批）。
+ *  可选（`bounds` + `minInView`）再保证「**当前视野内至少 `minInView` 栋**」——
+ *  补的来自"视野内、未入选"的那批，**不进冻结集**（细则见上方注释块）。 */
 export function capBuildingsPerCell<T extends PickFeature>(
   feats: readonly T[],
   input: CapCellInput = {},
 ): { features: T[]; stats: CapCellStats } {
   const size = Number.isFinite(input.cellDeg as number) && (input.cellDeg as number) > 0 ? (input.cellDeg as number) : WS_BLD_CELL_DEG;
   const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
-  const byCell = new Map<string, Array<{ f: T; named: number; area: number; key: string }>>();
+  const rawMin = Number(input.minInView ?? 0);
+  const minInView = Number.isFinite(rawMin) ? Math.max(0, Math.floor(rawMin)) : 0;
+  const b = input.bounds ?? null;
+  /* 坏 bounds（缺方法 / NaN）一律当"没给" ⇒ 如实报"数不出来"，绝不拿半个视野去补楼 */
+  const hasBounds = !!(b
+    && typeof b.getWest === "function" && typeof b.getSouth === "function"
+    && typeof b.getEast === "function" && typeof b.getNorth === "function"
+    && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
+
+  type CellItem = { f: T; named: number; area: number; key: string; pt: [number, number] };
+  const byCell = new Map<string, CellItem[]>();
   let noPoint = 0;
   for (const f of feats) {
     const pt = firstPoint(f);
@@ -252,11 +299,15 @@ export function capBuildingsPerCell<T extends PickFeature>(
     const w = Math.floor(pt[0] / size) * size;
     const s = Math.floor(pt[1] / size) * size;
     const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? "") };
+    const it: CellItem = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? ""), pt };
     const arr = byCell.get(cell);
     if (arr) arr.push(it); else byCell.set(cell, [it]);
   }
-  const chosen: T[] = [];
+  const base: CellItem[] = [];
+  /** 每块**落选**的那批（已按块内同一套顺序排好）—— 补楼**只从这里取**（= "尚未入选"）。
+   *  ⚠️ 只有真要补（给了 bounds 且下限 > 0）才建：**不传新参数的老调用点连一次多余分配都没有**。 */
+  const wantFloor = hasBounds && minInView > 0;
+  const leftovers: CellItem[][] = [];
   const rows: Array<{ cell: string; drawn: number; dropped: number }> = [];
   let dropped = 0;
   for (const cell of [...byCell.keys()].sort()) {
@@ -264,17 +315,58 @@ export function capBuildingsPerCell<T extends PickFeature>(
     /* 块内排序：**有名字优先 → 底面大优先 → id 定序**（同分同序 ⇒ 两次挑选逐字节相同） */
     arr.sort((a, z) => (z.named - a.named) || (z.area - a.area) || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
     const take = arr.slice(0, cap);
-    for (const x of take) chosen.push(x.f);
+    for (const x of take) base.push(x);
+    if (wantFloor) leftovers.push(arr.slice(cap));
     rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
     dropped += arr.length - take.length;
   }
+
+  /* ── 视野下限：先数 base 里在视野内的，再决定要不要补（**不补时原样返回 base**） ── */
+  let inView: number | null = null;
+  let floorAdded = 0;
+  let floorShort: number | null = null;
+  const added: T[] = [];
+  if (hasBounds) {
+    const west = b!.getWest(), south = b!.getSouth(), east = b!.getEast(), north = b!.getNorth();
+    /* 判"在视野内"的口径与 `pickBuildingsForView` **一致**（闭区间，取 `firstPoint` 那个外环首点） */
+    const inside = (pt: [number, number]): boolean =>
+      pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
+    inView = 0;
+    for (const x of base) if (inside(x.pt)) inView += 1;
+    let need = Math.max(0, minInView - inView);
+    if (wantFloor) {
+      for (const arr of leftovers) {                     // 块序与 base 相同（格子键升序）
+        if (need <= 0) break;
+        for (const x of arr) {                           // 块内也是"同一套排序规则"
+          if (!inside(x.pt)) continue;                   // **只补落在此视野内的**
+          added.push(x.f);
+          floorAdded += 1;
+          need -= 1;
+          if (need <= 0) break;
+        }
+      }
+    }
+    floorShort = need;                                   // 取尽仍差几栋（0 = 够）
+  }
+
+  const baseFeats = base.map((x) => x.f);
+  /* 🔴 没补 ⇒ **原样返回 base**（一个字节都不多）；补了 ⇒ base 在前、补的在后（页面按 `baseChosen` 切） */
+  const out = floorAdded > 0 ? baseFeats.concat(added) : baseFeats;
+  /* 判词三态：给了 bounds 才敢报"视野内 N / 补 +X / 仍差 Y"；没给就写"数不出来"（不写 0） */
+  const viewSeg = hasBounds
+    ? ` · 视野内 ${inView}（下限 ${minInView} · 补 +${floorAdded} / 仍差 ${floorShort}）`
+    : (minInView > 0 ? ` · 视野内 **数不出来**（没给 bounds ⇒ 补不了，一栋没补）` : "");
   return {
-    features: chosen,
+    features: out,
     stats: {
       considered: feats.length, cells: byCell.size, cap, cellDeg: size,
-      byCell: rows, chosen: chosen.length, dropped, noPoint,
-      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${chosen.length} 栋（输入 ${feats.length} · 块内超出 ${dropped}`
-        + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`,
+      byCell: rows, chosen: out.length, baseChosen: baseFeats.length, dropped, noPoint,
+      inView, minInView, floorAdded, floorShort,
+      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${out.length} 栋`
+        + (floorAdded > 0 ? `（冻结 ${baseFeats.length} + 视野补 ${floorAdded}）` : "")
+        + `（输入 ${feats.length} · 块内超出 ${dropped}`
+        + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km`
+        + viewSeg,
     },
   };
 }

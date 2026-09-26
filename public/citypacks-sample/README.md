@@ -9,8 +9,8 @@
 | 项 | 值 |
 |---|---|
 | 包 | `sample-chongqing-core-4cells.zip` |
-| 字节数 | **2,179,841 B**（2.08 MiB；解包后 payload 9,783,565 B，压缩到 22.3%） |
-| sha256 | `23e2e256fe214a2384d87badad9efa3cae3df71d6653d1fced772c4201d030dc` |
+| 字节数 | **2,179,825 B**（2.08 MiB；解包后 payload 9,783,565 B，压缩到 22.3%） |
+| sha256 | `e4d0ff5148caa19db7fe11503be11a8917b545664430f94f0acbf67a7587d333` |
 | 格数 | **4**（0.05° 格；各层并集） |
 | 要素 | **55,290**（楼房 46,114 / 路网 8,861 / 片区名 59 / 水系绿地 256） |
 | 层 | 四层全在：`bldbundle` `roadsbundle` `placesbundle` `gwbundle` |

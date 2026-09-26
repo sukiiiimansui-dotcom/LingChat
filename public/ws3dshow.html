@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v84";
+      const BUILD = "ws3dshow-2026-09-26-v85";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1768,6 +1768,46 @@
           + "· 只在 moveend/zoomend/新数据到达时重排（render 循环里不碰 DOM）"; }
       }
 
+      /* ══ 🌊🌳 水/绿地层（共享真源 `wsGwLayer`）══════════════════════════════════════
+         🔴 2026-09-26：这一块**被那次"页面接共享名字层"的大改误删了**（`81c8047` 删了 `gwEnsure/gwHud/refreshGw`
+         三件，却把 `moveend` 里的 `refreshGw("moveend")` 调用留着）⇒ 两个后果：
+           ① 每次移动地图抛 `ReferenceError: refreshGw is not defined`（进 errs，屏幕上没人看见）；
+           ② **代拍页从此没有水/绿地矢量层**（机主截图里那些水绿其实全来自底图栅格）。
+         现在按父提交 `ba6ab50` 的原样恢复（模块侧的规则一行没动，这里只接线）。 */
+      const GW_ON = !/[?&]gw=0/.test(location.search);
+      let gwLayer = null;
+      function gwHud(text) { const el = $("m-gw"); if (el) el.textContent = text; }
+      /** 建那**一个** gw 实例（规则全在模块里；这里只递宿主自己的东西：地图/视野/主题/取数） */
+      function gwEnsure() {
+        if (gwLayer) return gwLayer;
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.createGwLayer !== "function") {
+          /* 自愈口径与别的层一致：缺符号时**说清是"模块旧"还是"真没有"**（`tfState` 是自愈记录） */
+          gwHud("🌊🌳 水/绿地 数不出来：模块缺 createGwLayer（" + tfState + "）");
+          return null;
+        }
+        gwLayer = TFx.createGwLayer({
+          enabled: function () { return GW_ON; },
+          map: function () { return map; },
+          view: bundleView,
+          theme: function () { return THEME; },
+          fetchCell: bundleFetchCell,
+          onHud: function (line) { gwHud(line); },
+          onSnapshot: function (s) { window.__GW__ = s; },
+          onError: function (why) { errs.push(why); },
+        });
+        return gwLayer;
+      }
+      async function refreshGw(why) {
+        const L = gwEnsure();
+        if (!L) return;
+        try { await L.refresh(why); }
+        catch (e) {
+          /* 模块**永不抛**（失败都变成判词里的"数不出来：…"）；这一层是最后一道兜底，绝不静默 */
+          gwHud("🌊🌳 水/绿地 数不出来：" + String(e).slice(0, 60));
+        }
+      }
+
       /** 名字层刷新（**只在事件里调**：moveend / zoomend / 新数据到达 / 开页 kick） */
       async function refreshLabels(why) {
         if (!LABELS_ON) { const el = $("m-labels"); if (el) el.textContent = "🏷 名字层 关（?labels=0）"; return; }
@@ -2469,7 +2509,8 @@
               /* 如实写一行，别让这一块**静默**消失（三态里的"数不出来"） */
               rows.push({ id: "对比度", key: "楼最暗档/地面", now: "数不出来", want: "≥0.85（或靠描边）", hit: "no-layer",
                 why: "数不出来：此刻样式里没有 `tint` 图层（主题档=" + THEME_ID + "；tint 只在档位有 `tier.tint` 时才建）" });
-              el_setContrastWhy("数不出来：此刻样式里没有 tint 图层（主题档=" + THEME_ID + "）");
+              /* 🔴 这里原来调 `el_setContrastWhy(...)` —— 那个函数**从来没定义过**（ReferenceError 被 catch 吞成 errs）。
+                 这一行本来就只是"给日志补一句"，判词已经由上面那行 `rows.push(...)` 如实写在屏幕上了 ⇒ 删掉调用。 */
             }
             if (rep) {
               rows.push({ id: "对比度", key: "楼最暗档/地面", now: rep.bldGroundRatio, want: "≥0.85（或靠描边）", hit: rep.verdict === "ok", why: "楼与地是否分得开" });
@@ -4216,6 +4257,8 @@
         })(0);
         /* 🏘 视野变了就补**片区名**离线格（静态文件、很小；取到后重排一次标签） */
         map.on("moveend", () => { try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); } });
+        /* 🌊🌳 水/绿地：开页 kick 一次（只挂 moveend 的话首屏没有水绿 —— 与"开页 kick"同一条纪律） */
+        try { void refreshGw("open"); } catch (e) { errs.push("gw " + e); }
         /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */

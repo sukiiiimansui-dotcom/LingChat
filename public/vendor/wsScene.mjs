@@ -1275,226 +1275,6 @@ function themeStyleParts(theme, low = false, transitionMs = 0) {
   return { sky: tier.sky || void 0, sources, layers };
 }
 
-// src/components/views/worldsim/wsBuildingPick.ts
-var WS_BLD_VIEW_CAP = 100;
-function bboxArea(f) {
-  const g = f.geometry;
-  if (!g || !g.coordinates) return 0;
-  const rings = g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : [];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
-  for (const ring of rings) {
-    for (const pt of ring || []) {
-      const x = Number(pt?.[0]), y = Number(pt?.[1]);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-      n += 1;
-    }
-  }
-  if (!n) return 0;
-  return Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
-}
-function hasName(f) {
-  const p = f.properties || {};
-  const nm = p.name ?? p["name:zh"] ?? p.n ?? p.ref;
-  return typeof nm === "string" ? nm.trim().length > 0 : nm != null && String(nm).trim().length > 0;
-}
-function firstPoint(f) {
-  const g = f.geometry;
-  if (!g || !g.coordinates) return null;
-  const c = g.type === "Polygon" ? g.coordinates[0]?.[0] : g.type === "MultiPolygon" ? (g.coordinates[0] || [])[0]?.[0] : void 0;
-  const x = Number(c?.[0]), y = Number(c?.[1]);
-  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
-}
-var DERIVED = /* @__PURE__ */ new WeakMap();
-function derivedOf(f, size) {
-  if (!f || typeof f !== "object") return { pt: null, area: 0, named: 0, key: "", ckSize: -1, ck: "" };
-  let d = DERIVED.get(f);
-  if (!d) {
-    d = { pt: firstPoint(f), area: bboxArea(f), named: hasName(f) ? 1 : 0, key: String(f.id ?? ""), ckSize: -1, ck: "" };
-    DERIVED.set(f, d);
-  }
-  if (size > 0 && d.pt && d.ckSize !== size) {
-    const w = Math.floor(d.pt[0] / size) * size;
-    const s = Math.floor(d.pt[1] / size) * size;
-    d.ck = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-    d.ckSize = size;
-  }
-  return d;
-}
-function pickBuildingsForView(feats, input) {
-  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_VIEW_CAP));
-  const nb = Math.max(1, Math.min(32, Math.floor(input.buckets ?? 8)));
-  const considered = feats.length;
-  const b = input.bounds;
-  const hasBounds = !!(b && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
-  const west = hasBounds ? b.getWest() : 0;
-  const south = hasBounds ? b.getSouth() : 0;
-  const east = hasBounds ? b.getEast() : 0;
-  const north = hasBounds ? b.getNorth() : 0;
-  const spanX = east - west;
-  const spanY = north - south;
-  const items = [];
-  let inView = 0;
-  let noPoint = 0;
-  for (const f of feats) {
-    const dv = derivedOf(f, 0);
-    const pt = dv.pt;
-    let bucket = -1;
-    if (hasBounds && !pt) {
-      noPoint += 1;
-      continue;
-    }
-    if (hasBounds && pt) {
-      const inside = pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
-      if (!inside) continue;
-      inView += 1;
-      const bx = spanX > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[0] - west) / spanX * nb))) : 0;
-      const by = spanY > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[1] - south) / spanY * nb))) : 0;
-      bucket = by * nb + bx;
-    } else {
-      bucket = 0;
-    }
-    items.push({
-      f,
-      bucket,
-      named: dv.named,
-      area: dv.area,
-      key: dv.key
-      // ← 记忆过的 id 字符串（不再每次 String()）
-    });
-  }
-  const byBucket = /* @__PURE__ */ new Map();
-  for (const it of items) {
-    const arr = byBucket.get(it.bucket);
-    if (arr) arr.push(it);
-    else byBucket.set(it.bucket, [it]);
-  }
-  for (const arr of byBucket.values()) {
-    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
-  }
-  const buckets = [...byBucket.keys()].sort((a, z) => a - z);
-  const chosen = [];
-  const perBucket = hasBounds ? new Array(nb * nb).fill(0) : [];
-  for (let round = 0; chosen.length < cap; round++) {
-    let tookAny = false;
-    const order = buckets.slice().sort((b1, b2) => {
-      const x = byBucket.get(b1), y = byBucket.get(b2);
-      if (round >= x.length) return round >= y.length ? b1 - b2 : 1;
-      if (round >= y.length) return -1;
-      const a1 = x[round], a2 = y[round];
-      return a2.named - a1.named || a2.area - a1.area || b1 - b2;
-    });
-    for (const bk of order) {
-      const arr = byBucket.get(bk);
-      if (round >= arr.length) continue;
-      if (chosen.length >= cap) break;
-      chosen.push(arr[round].f);
-      if (hasBounds && perBucket[bk] !== void 0) perBucket[bk] += 1;
-      tookAny = true;
-    }
-    if (!tookAny) break;
-  }
-  const stats = {
-    considered,
-    inView: hasBounds ? inView : null,
-    noPoint,
-    chosen: chosen.length,
-    cap,
-    buckets: nb,
-    byBucket: hasBounds ? perBucket : null,
-    why: `显示 ${chosen.length} / ${hasBounds ? "视野内 " + inView : "视野内 **数不出来**（没有 bounds）"} 栋（仓库 ${considered} · 上限 ${cap} · ${nb}×${nb} 分桶轮转：有名字优先、底面大的优先` + (noPoint ? ` · **定位不到点 ${noPoint} 栋未画**` : "") + `）`
-  };
-  return { features: chosen, stats };
-}
-var WS_BLD_CELL_CAP = 100;
-var WS_BLD_CELL_DEG = 0.02;
-function capBuildingsPerCell(feats, input = {}) {
-  const size = Number.isFinite(input.cellDeg) && input.cellDeg > 0 ? input.cellDeg : WS_BLD_CELL_DEG;
-  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
-  const rawMin = Number(input.minInView ?? 0);
-  const minInView = Number.isFinite(rawMin) ? Math.max(0, Math.floor(rawMin)) : 0;
-  const b = input.bounds ?? null;
-  const hasBounds = !!(b && typeof b.getWest === "function" && typeof b.getSouth === "function" && typeof b.getEast === "function" && typeof b.getNorth === "function" && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
-  const byCell = /* @__PURE__ */ new Map();
-  let noPoint = 0;
-  for (const f of feats) {
-    const dv = derivedOf(f, size);
-    const pt = dv.pt;
-    if (!pt) {
-      noPoint++;
-      continue;
-    }
-    const cell = dv.ck;
-    const it = { f, named: dv.named, area: dv.area, key: dv.key, pt };
-    const arr = byCell.get(cell);
-    if (arr) arr.push(it);
-    else byCell.set(cell, [it]);
-  }
-  const base = [];
-  const wantFloor = hasBounds && minInView > 0;
-  const leftovers = [];
-  const rows = [];
-  let dropped = 0;
-  for (const cell of [...byCell.keys()].sort()) {
-    const arr = byCell.get(cell);
-    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
-    const take = arr.slice(0, cap);
-    for (const x of take) base.push(x);
-    if (wantFloor) leftovers.push(arr.slice(cap));
-    rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
-    dropped += arr.length - take.length;
-  }
-  let inView = null;
-  let floorAdded = 0;
-  let floorShort = null;
-  const added = [];
-  if (hasBounds) {
-    const west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
-    const inside = (pt) => pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
-    inView = 0;
-    for (const x of base) if (inside(x.pt)) inView += 1;
-    let need = Math.max(0, minInView - inView);
-    if (wantFloor) {
-      for (const arr of leftovers) {
-        if (need <= 0) break;
-        for (const x of arr) {
-          if (!inside(x.pt)) continue;
-          added.push(x.f);
-          floorAdded += 1;
-          need -= 1;
-          if (need <= 0) break;
-        }
-      }
-    }
-    floorShort = need;
-  }
-  const baseFeats = base.map((x) => x.f);
-  const out = floorAdded > 0 ? baseFeats.concat(added) : baseFeats;
-  const viewSeg = hasBounds ? ` · 视野内 ${inView}（下限 ${minInView} · 补 +${floorAdded} / 仍差 ${floorShort}）` : minInView > 0 ? ` · 视野内 **数不出来**（没给 bounds ⇒ 补不了，一栋没补）` : "";
-  return {
-    features: out,
-    stats: {
-      considered: feats.length,
-      cells: byCell.size,
-      cap,
-      cellDeg: size,
-      byCell: rows,
-      chosen: out.length,
-      baseChosen: baseFeats.length,
-      dropped,
-      noPoint,
-      inView,
-      minInView,
-      floorAdded,
-      floorShort,
-      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${out.length} 栋` + (floorAdded > 0 ? `（冻结 ${baseFeats.length} + 视野补 ${floorAdded}）` : "") + `（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km` + viewSeg
-    }
-  };
-}
-
 // src/components/views/worldsim/wsDistrictScene.ts
 function districtStyleOf(theme, low, fadeMs) {
   const parts = themeStyleParts(theme, low, fadeMs);
@@ -1626,8 +1406,8 @@ function applyBuildingsTo(m, data, specs) {
 }
 function flushBldStore(opts, why = "flush") {
   let drawn = opts.features();
-  if (opts.pickNearView) {
-    const r = pickBuildingsForView(drawn, opts.pickNearView);
+  if (opts.pick) {
+    const r = opts.pick(drawn);
     drawn = r.features;
     try {
       opts.onPicked?.(r.stats);
@@ -3478,7 +3258,252 @@ function envSnapshot(extra = {}) {
   };
 }
 
+// src/components/views/worldsim/wsBuildingPick.ts
+var WS_BLD_VIEW_CAP = 100;
+function bboxArea(f) {
+  const g = f.geometry;
+  if (!g || !g.coordinates) return 0;
+  const rings = g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, n = 0;
+  for (const ring of rings) {
+    for (const pt of ring || []) {
+      const x = Number(pt?.[0]), y = Number(pt?.[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      n += 1;
+    }
+  }
+  if (!n) return 0;
+  return Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
+}
+function hasName(f) {
+  const p = f.properties || {};
+  const nm = p.name ?? p["name:zh"] ?? p.n ?? p.ref;
+  return typeof nm === "string" ? nm.trim().length > 0 : nm != null && String(nm).trim().length > 0;
+}
+function firstPoint(f) {
+  const g = f.geometry;
+  if (!g || !g.coordinates) return null;
+  const c = g.type === "Polygon" ? g.coordinates[0]?.[0] : g.type === "MultiPolygon" ? (g.coordinates[0] || [])[0]?.[0] : void 0;
+  const x = Number(c?.[0]), y = Number(c?.[1]);
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+}
+var DERIVED = /* @__PURE__ */ new WeakMap();
+function derivedOf(f, size) {
+  if (!f || typeof f !== "object") return { pt: null, area: 0, named: 0, key: "", ckSize: -1, ck: "" };
+  let d = DERIVED.get(f);
+  if (!d) {
+    d = { pt: firstPoint(f), area: bboxArea(f), named: hasName(f) ? 1 : 0, key: String(f.id ?? ""), ckSize: -1, ck: "" };
+    DERIVED.set(f, d);
+  }
+  if (size > 0 && d.pt && d.ckSize !== size) {
+    const w = Math.floor(d.pt[0] / size) * size;
+    const s = Math.floor(d.pt[1] / size) * size;
+    d.ck = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+    d.ckSize = size;
+  }
+  return d;
+}
+function pickBuildingsForView(feats, input) {
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_VIEW_CAP));
+  const nb = Math.max(1, Math.min(32, Math.floor(input.buckets ?? 8)));
+  const considered = feats.length;
+  const b = input.bounds;
+  const hasBounds = !!(b && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
+  const west = hasBounds ? b.getWest() : 0;
+  const south = hasBounds ? b.getSouth() : 0;
+  const east = hasBounds ? b.getEast() : 0;
+  const north = hasBounds ? b.getNorth() : 0;
+  const spanX = east - west;
+  const spanY = north - south;
+  const items = [];
+  let inView = 0;
+  let noPoint = 0;
+  for (const f of feats) {
+    const dv = derivedOf(f, 0);
+    const pt = dv.pt;
+    let bucket = -1;
+    if (hasBounds && !pt) {
+      noPoint += 1;
+      continue;
+    }
+    if (hasBounds && pt) {
+      const inside = pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
+      if (!inside) continue;
+      inView += 1;
+      const bx = spanX > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[0] - west) / spanX * nb))) : 0;
+      const by = spanY > 0 ? Math.min(nb - 1, Math.max(0, Math.floor((pt[1] - south) / spanY * nb))) : 0;
+      bucket = by * nb + bx;
+    } else {
+      bucket = 0;
+    }
+    items.push({
+      f,
+      bucket,
+      named: dv.named,
+      area: dv.area,
+      key: dv.key
+      // ← 记忆过的 id 字符串（不再每次 String()）
+    });
+  }
+  const byBucket = /* @__PURE__ */ new Map();
+  for (const it of items) {
+    const arr = byBucket.get(it.bucket);
+    if (arr) arr.push(it);
+    else byBucket.set(it.bucket, [it]);
+  }
+  for (const arr of byBucket.values()) {
+    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+  }
+  const buckets = [...byBucket.keys()].sort((a, z) => a - z);
+  const chosen = [];
+  const perBucket = hasBounds ? new Array(nb * nb).fill(0) : [];
+  for (let round = 0; chosen.length < cap; round++) {
+    let tookAny = false;
+    const order = buckets.slice().sort((b1, b2) => {
+      const x = byBucket.get(b1), y = byBucket.get(b2);
+      if (round >= x.length) return round >= y.length ? b1 - b2 : 1;
+      if (round >= y.length) return -1;
+      const a1 = x[round], a2 = y[round];
+      return a2.named - a1.named || a2.area - a1.area || b1 - b2;
+    });
+    for (const bk of order) {
+      const arr = byBucket.get(bk);
+      if (round >= arr.length) continue;
+      if (chosen.length >= cap) break;
+      chosen.push(arr[round].f);
+      if (hasBounds && perBucket[bk] !== void 0) perBucket[bk] += 1;
+      tookAny = true;
+    }
+    if (!tookAny) break;
+  }
+  const stats = {
+    considered,
+    inView: hasBounds ? inView : null,
+    noPoint,
+    chosen: chosen.length,
+    cap,
+    buckets: nb,
+    byBucket: hasBounds ? perBucket : null,
+    why: `显示 ${chosen.length} / ${hasBounds ? "视野内 " + inView : "视野内 **数不出来**（没有 bounds）"} 栋（仓库 ${considered} · 上限 ${cap} · ${nb}×${nb} 分桶轮转：有名字优先、底面大的优先` + (noPoint ? ` · **定位不到点 ${noPoint} 栋未画**` : "") + `）`
+  };
+  return { features: chosen, stats };
+}
+var WS_BLD_CELL_CAP = 100;
+var WS_BLD_CELL_DEG = 0.02;
+function capBuildingsPerCell(feats, input = {}) {
+  const size = Number.isFinite(input.cellDeg) && input.cellDeg > 0 ? input.cellDeg : WS_BLD_CELL_DEG;
+  const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_CELL_CAP));
+  const rawMin = Number(input.minInView ?? 0);
+  const minInView = Number.isFinite(rawMin) ? Math.max(0, Math.floor(rawMin)) : 0;
+  const b = input.bounds ?? null;
+  const hasBounds = !!(b && typeof b.getWest === "function" && typeof b.getSouth === "function" && typeof b.getEast === "function" && typeof b.getNorth === "function" && [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].every((v) => Number.isFinite(v)));
+  const byCell = /* @__PURE__ */ new Map();
+  let noPoint = 0;
+  for (const f of feats) {
+    const dv = derivedOf(f, size);
+    const pt = dv.pt;
+    if (!pt) {
+      noPoint++;
+      continue;
+    }
+    const cell = dv.ck;
+    const it = { f, named: dv.named, area: dv.area, key: dv.key, pt };
+    const arr = byCell.get(cell);
+    if (arr) arr.push(it);
+    else byCell.set(cell, [it]);
+  }
+  const base = [];
+  const wantFloor = hasBounds && minInView > 0;
+  const leftovers = [];
+  const rows = [];
+  let dropped = 0;
+  for (const cell of [...byCell.keys()].sort()) {
+    const arr = byCell.get(cell);
+    arr.sort((a, z) => z.named - a.named || z.area - a.area || (a.key < z.key ? -1 : a.key > z.key ? 1 : 0));
+    const take = arr.slice(0, cap);
+    for (const x of take) base.push(x);
+    if (wantFloor) leftovers.push(arr.slice(cap));
+    rows.push({ cell, drawn: take.length, dropped: arr.length - take.length });
+    dropped += arr.length - take.length;
+  }
+  let inView = null;
+  let floorAdded = 0;
+  let floorShort = null;
+  const added = [];
+  if (hasBounds) {
+    const west = b.getWest(), south = b.getSouth(), east = b.getEast(), north = b.getNorth();
+    const inside = (pt) => pt[0] >= west && pt[0] <= east && pt[1] >= south && pt[1] <= north;
+    inView = 0;
+    for (const x of base) if (inside(x.pt)) inView += 1;
+    let need = Math.max(0, minInView - inView);
+    if (wantFloor) {
+      for (const arr of leftovers) {
+        if (need <= 0) break;
+        for (const x of arr) {
+          if (!inside(x.pt)) continue;
+          added.push(x.f);
+          floorAdded += 1;
+          need -= 1;
+          if (need <= 0) break;
+        }
+      }
+    }
+    floorShort = need;
+  }
+  const baseFeats = base.map((x) => x.f);
+  const out = floorAdded > 0 ? baseFeats.concat(added) : baseFeats;
+  const viewSeg = hasBounds ? ` · 视野内 ${inView}（下限 ${minInView} · 补 +${floorAdded} / 仍差 ${floorShort}）` : minInView > 0 ? ` · 视野内 **数不出来**（没给 bounds ⇒ 补不了，一栋没补）` : "";
+  return {
+    features: out,
+    stats: {
+      considered: feats.length,
+      cells: byCell.size,
+      cap,
+      cellDeg: size,
+      byCell: rows,
+      chosen: out.length,
+      baseChosen: baseFeats.length,
+      dropped,
+      noPoint,
+      inView,
+      minInView,
+      floorAdded,
+      floorShort,
+      why: `每块 ≤${cap} 栋 · ${byCell.size} 块 / 画 ${out.length} 栋` + (floorAdded > 0 ? `（冻结 ${baseFeats.length} + 视野补 ${floorAdded}）` : "") + `（输入 ${feats.length} · 块内超出 ${dropped}` + (noPoint ? ` · 定位不到 ${noPoint}` : "") + `）· 区块 ${size}° ≈ ${(size * 111).toFixed(1)}km` + viewSeg
+    }
+  };
+}
+
 // src/components/views/worldsim/wsBldPickStore.ts
+var WS_BLD_CELL_CAP_REF_DEG = 0.05;
+var WS_BLD_INVIEW_DEFAULT = 10;
+function parseBldnParam(search) {
+  try {
+    const m = /[?&]bldn=(\d+)/.exec(String(search ?? ""));
+    return m ? Math.max(0, Math.min(5e3, parseInt(m[1], 10))) : null;
+  } catch {
+    return null;
+  }
+}
+function bldCapForCellDeg(cellDeg, pin) {
+  if (pin !== null && pin !== void 0 && Number.isFinite(pin)) return Math.max(0, Math.floor(pin));
+  const deg = Number(cellDeg);
+  return Math.max(1, Math.round(100 * Math.pow(deg / WS_BLD_CELL_CAP_REF_DEG, 2)));
+}
+function parseInViewParam(search, def = WS_BLD_INVIEW_DEFAULT) {
+  try {
+    const m = new RegExp("[?&]inview=(-?[0-9.]+)").exec(String(search ?? ""));
+    if (!m) return def;
+    const v = Number(m[1]);
+    return isFinite(v) && v >= 0 ? v : def;
+  } catch {
+    return def;
+  }
+}
 function pointOfFeature(f) {
   const p = f.geometry && f.geometry.coordinates && f.geometry.coordinates[0] && f.geometry.coordinates[0][0] || null;
   return p;
@@ -4830,10 +4855,12 @@ export {
   WS_ART_PATCHES,
   WS_ART_RAMP_HI,
   WS_BLD_CELL_CAP,
+  WS_BLD_CELL_CAP_REF_DEG,
   WS_BLD_CELL_DEG,
   WS_BLD_FALLBACK_OPACITY,
   WS_BLD_FALLBACK_OUTLINE,
   WS_BLD_FALLBACK_RAMP,
+  WS_BLD_INVIEW_DEFAULT,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
   WS_BLD_OUTLINE_FULL_ZOOM,
@@ -4864,6 +4891,7 @@ export {
   bldBundleCellKey,
   bldBundleCellOf,
   bldBundleCellsForView,
+  bldCapForCellDeg,
   bldIdOf,
   bldLayerSpecsFor,
   bldLiveDecision,
@@ -4974,6 +5002,8 @@ export {
   outlineWidthExpr,
   panDamping,
   parseArtParam,
+  parseBldnParam,
+  parseInViewParam,
   parseLookParam,
   pickBuildingsForView,
   pickHome,

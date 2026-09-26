@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v63";
+      const BUILD = "ws3dshow-2026-09-26-v64";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* 默认落点：**渝中区驻地**（后端 `/api/geo_json?ad=500103` 的 properties.center）。
@@ -2935,18 +2935,32 @@
           const TFp = window.__TF__;
           const z = map.getZoom();
           /* 🧱 **按区块封顶**（机主更正：「小范围一个区块最高 100 栋」，且**不许挪视野就乱变**）：
-             挑选只依赖**区块**（固定经纬格），与视野/中心无关 ⇒ 同一块永远同一批。 */
+             挑选只依赖**区块**（固定经纬格），与视野/中心无关 ⇒ 同一块永远同一批。
+             🔴 2026-09-26 二改（机主：「**还要保证视野内最少有十栋房**」）：模块新增
+             `bounds` + `minInView` —— base（每块 ≤100 的冻结集）算完后，**数 base 里落在视野内的**，
+             不够就从「视野内、未入选」那批按同一套排序规则补到 10（候选不足就取尽并如实报「仍差 N」）。
+             ⚠️ 补的那批**不进冻结集**（`stats.baseChosen` 之前是 base、之后是补充件）——
+             否则"同一块永远同一批"会被视野污染（机主明确否过"挪一下就乱变"）。 */
           const bldMz = bldMinzoom();   /* 每次用时才读真源（页面初始化时 vendor 还没到 ⇒ 那时读是错的） */
           if (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && bldMz !== null && z >= bldMz) {
             /* 🧊 **按格冻结**：同一格的结果缓存住（键 = 格 + 上限）⇒ ① 重复落图不再重排（省算力）；
-               ② "永远不变"变成可断言的：同一格任何时候取到的都是同一批（`window.__BLD_FROZEN__` 可核）。 */
+               ② "永远不变"变成可断言的：同一格任何时候取到的都是同一批（`window.__BLD_FROZEN__` 可核）。
+               ⚠️ **只冻结 base**（`r.features.slice(0, stats.baseChosen)`）：视野补齐的那几栋每帧重算，
+               不进冻结集、也不覆盖冻结集（两条口径都要：块内固定 + 视野内够 10）。 */
             const ckey = BLDCELL + "|" + BLDN;
             if (!window.__BLD_FROZEN__) window.__BLD_FROZEN__ = {};
             const frozen = window.__BLD_FROZEN__;
-            const r = TFp.capBuildingsPerCell(all.features, { cap: BLDN, cellDeg: BLDCELL });
-            /* 逐格冻结：已经冻结过的格，用冻结那批（新格照常加入） */
+            const r = TFp.capBuildingsPerCell(all.features, {
+              cap: BLDN, cellDeg: BLDCELL,
+              bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
+              minInView: 10,                    /* 页面口径：视野内至少 10 栋（数不出来时模块给 null） */
+            });
+            const baseN = (typeof r.stats.baseChosen === "number") ? r.stats.baseChosen : r.features.length;
+            const baseFeats = r.features.slice(0, baseN);
+            const addedNow = r.features.slice(baseN);
+            /* 逐格冻结：已经冻结过的格，用冻结那批（新格照常加入）——**只对 base 做** */
             const byCellNow = new Map();
-            for (const f of r.features) {
+            for (const f of baseFeats) {
               const pt = (f.geometry && f.geometry.coordinates && f.geometry.coordinates[0] && f.geometry.coordinates[0][0]) || null;
               if (!pt) continue;
               const w = Math.floor(pt[0] / BLDCELL) * BLDCELL, s = Math.floor(pt[1] / BLDCELL) * BLDCELL;
@@ -2960,13 +2974,17 @@
               if (frozen[k]) { frozenCells++; for (const f of frozen[k]) stableFeats.push(f); }
               else { frozen[k] = arr; newCells++; for (const f of arr) stableFeats.push(f); }
             }
-            r.features = stableFeats;
+            /* base（冻结后）在前、视野补充件在后 —— 顺序稳定，便于"冻结集"独立核对 */
+            r.features = stableFeats.concat(addedNow);
             r.stats.frozenCells = frozenCells; r.stats.newCells = newCells;
+            r.stats.frozenBase = stableFeats.length;
             window.__BLD_FROZEN_N__ = Object.keys(frozen).length;
             data = { type: "FeatureCollection", features: r.features };
+            /* ⚠️ 这条人话串**只由共享模块产出**（`stats.why` 里已经含"冻结 N + 视野补 M / 视野内 X（下限 10 · 补 +M / 仍差 Y）"）
+               —— 页面**不许**再拼第二份（拼两份就是下一次"两边口径不一致"）。 */
             pickWhy = r.stats.why;
             window.__BLD_PICK__ = r.stats;
-            try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", r.stats.why, r.stats); } catch (e2) { /* 忽略 */ }
+            try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", pickWhy, r.stats); } catch (e2) { /* 忽略 */ }
           } else {
             /* ⚠️ 文案必须与事实一致：瓦片已撤到 z<11 ⇒ 这一档**不再有"瓦片兜底"**。
                2026-09-26 之前这里写的是「远景走瓦片，不挑」—— 那句在瓦片撤掉后就变成假话了。 */

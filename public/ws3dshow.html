@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v71";
+      const BUILD = "ws3dshow-2026-09-26-v72";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -3183,7 +3183,14 @@
       /** 取一格（把 `fetch` 适配成共享模块要的 `BundleFetch`；超时用**共享模块那个常数**） */
       async function bundleFetchCell(url, ms) {
         const r = await fetchWithTimeout(url, ms);
-        return { ok: !!r.ok, status: Number(r.status) || 0, json: function () { return r.json(); } };
+        /* 🕒 多给一个 `text()`：管道就能把「读响应流」与「`JSON.parse`」**分开计时**
+           ——否则浏览器口径里的"解析"混着读流，对外报数会含糊（Node 里 −83%、浏览器里 −26% 就是这原因）。
+           ⚠️ 行为不变：`json()` 仍然在（老适配器/App 宿主那份照旧走它）。 */
+        return {
+          ok: !!r.ok, status: Number(r.status) || 0,
+          json: function () { return r.json(); },
+          text: function () { return r.text(); },
+        };
       }
 
       let roadsFeed = null, bldFeed = null, placesFeed = null;

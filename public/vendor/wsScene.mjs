@@ -2561,9 +2561,20 @@ function createBundleFeed(opts) {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const by = netBytesOf(url);
         pmSpan(`feed.net:${spec.dir}`, tNet - t0, by);
-        const j = await r.json();
-        const tJson = pmNow();
-        pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by);
+        let j;
+        let tJson;
+        if (typeof r.text === "function") {
+          const raw = await r.text();
+          const tText = pmNow();
+          pmSpan(`feed.read:${spec.dir}`, tText - tNet, by, "读响应流");
+          j = JSON.parse(raw);
+          tJson = pmNow();
+          pmSpan(`feed.json:${spec.dir}`, tJson - tText, by, "纯 JSON.parse");
+        } else {
+          j = await r.json();
+          tJson = pmNow();
+          pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "读流+解析（适配器没给 text()）");
+        }
         const feats = spec.parse(j);
         const tParse = pmNow();
         pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);

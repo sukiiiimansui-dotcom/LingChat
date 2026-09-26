@@ -41,3 +41,10 @@
 # ⚠️ 必须写在 `*.png filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
 public/prerender/** binary -filter
 public/prerender/manifest.json text diff eol=lf
+
+# 🏙 城市包**样本**（`public/citypacks-sample/`，随 PR 走的真数据裁剪 · ≤3MB）：**故意不进 LFS**。
+# 理由同 public/prerender：① 它是"能复现的小样本"，不是大素材；② 本机与 CI 的 checkout
+# **没有 git-lfs** ⇒ 走 LFS 会变成 130 字节指针（我们为 62 个素材付过代价的那次事故形状）。
+# 只盖 zip —— `cities.json` / `README.md` 仍按上面的文本规则（reviewer 要能读 diff）。
+# ⚠️ 必须写在 `*.zip filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
+public/citypacks-sample/*.zip binary -filter

@@ -581,6 +581,8 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
 
       /* ── 渲染计划 ── */
       const nodes: NameRenderNode[] = [];
+      /** 区名锚点落在画布外被丢弃的个数（与真名那条路的 `skippedOffscreen` 合并计数，见下） */
+      let zoneDroppedOffscreen = 0;
       const nodeOfLabel = (s: PlacedLabel): NameRenderNode => {
         const a = anchorOf.get(s.id);
         return {
@@ -603,7 +605,20 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           /* 密集：**小名字退场**（POI），**大名字留在屏上**（行政区名 / 区片名），区名进场 */
           const big = picked.shown.filter((s) => s.kind === "admin" || s.kind === "place").slice(0, NAMES_BIG_KEEP);
           for (const s of big) nodes.push(nodeOfLabel(s));
-          for (const z of zoneShown) nodes.push(nodeOfZone(z));
+          /* 🔴🔴 2026-09-26 机主真机：「**楼名与楼对不上位置**」——区名原来**不按视野过滤**：
+             候选来自"取过的格"（含挪走之前留下的旧格）⇒ 真浏览器实测 **7/8 个区名的锚点在画布外**
+             （`@(1892,2074)`、`@(8554,3166)`…），屏上那几个正好是"看着像乱放"的。
+             真名那条路早就有视野过滤（`pickLabels(..., vp, ...)`），区名必须同口径：
+             **只上屏投影点落在视野内（含一屏边距）的区名**，丢了多少如实计数（`zoneDroppedOffscreen`）。 */
+          for (const z of zoneShown) {
+            const n = nodeOfZone(z);
+            if (vp) {
+              const pad = 24;
+              const inView = n.x >= -pad && n.y >= -pad && n.x <= vp.width + pad && n.y <= vp.height + pad;
+              if (!inView) { zoneDroppedOffscreen++; continue; }
+            }
+            nodes.push(n);
+          }
         }
       }
       nodes.forEach((n, i) => { n.slot = i; });
@@ -634,7 +649,8 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         droppedByCap: picked?.droppedByCap ?? 0,
         capped: !!picked?.capped,
         skippedNoName: picked?.skippedNoName ?? 0,
-        skippedOffscreen: picked?.skippedOffscreen ?? 0,
+        /* **视野外丢弃** = 真名候选被 `pickLabels` 丢的 + 区名锚点在画布外被丢的（同一口径，一个数） */
+        skippedOffscreen: (picked?.skippedOffscreen ?? 0) + zoneDroppedOffscreen,
         density,
         mode,
         cells: wanted.length,
@@ -659,13 +675,28 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   }
 
   function nodeOfZone(z: ZoneName): NameRenderNode {
+    /* 🔴🔴 2026-09-26 机主真机：「**楼名与楼对不上位置 / 点开后完全不一致**」——
+       原来这里把 `x/y` 硬写成 0（以为宿主会自己重投影），可宿主只拿 `n.x/n.y` 写 `translate3d`
+       ⇒ **所有区名标签全堆在画布左上角**（实测 8 个区名 @(28,5)(17,5)(11,5)(23,5)…），
+       点哪个都点到压在它上面的另一个 ⇒ 既"对不上位置"又"点开不一致"。
+       规矩：**节点位置是这份真源的职责**（`nodeOfLabel` 也是用挑出来的 `s.x/s.y`），
+       区名就在这里用同一个 `host.map().project()` 投影，宿主只负责画。 */
+    let x = 0;
+    let y = 0;
+    try {
+      const m = host.map?.();
+      if (m && Number.isFinite(z.lng) && Number.isFinite(z.lat)) {
+        const p = m.project([z.lng, z.lat]);
+        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) { x = p.x; y = p.y; }
+      }
+    } catch { /* 投影拿不到就老实留在 0（`why` 里会说明是"数不出来"那条路） */ }
     return {
       slot: 0,
       id: z.id,
       text: z.label,
       style: z.style,
       sketch: z.sketch,
-      x: 0, y: 0, w: 0, h: 0,
+      x, y, w: 0, h: 0,
       lng: z.lng, lat: z.lat,
       why: z.why,
       pick: { kind: "zone", zone: z },

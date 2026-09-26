@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v76";
+      const BUILD = "ws3dshow-2026-09-26-v78";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1824,10 +1824,16 @@
               node.className = "ws-lab";
               node.addEventListener("click", function (ev) {
                 try { ev.stopPropagation(); } catch (e) { /* 忽略 */ }
-                openCardFromNode(n);
+                /* 🔴🔴 2026-09-26 机主真机：「**楼名与点开后完全不一致**」——
+                   节点是**复用池**（数量不够才新建），而回调是**建节点那一刻**绑的、闭包锁死了当时的 `n`。
+                   之后每次重排（moveend/zoomend/新数据）只改文本与位置 ⇒ **点「解放碑」弹出「示意·美食」**。
+                   实测：首次渲染 3/6 一致、挪一次相机后 **2/8**。
+                   ⇒ 回调必须读**点击那一刻**这一格当前的标签（`node.__wsNode`），不许读闭包里的旧值。 */
+                openCardFromNode(node.__wsNode || n);
               });
               box.appendChild(node);
             }
+            node.__wsNode = n;   /* ← 每次重排都刷新（节点复用 ⇒ 这一行是上面那条的配套） */
             node.textContent = n.text;
             node.setAttribute("data-ws-lab", (n.pick && n.pick.kind) || "?");
             node.setAttribute("data-ws-lab-id", n.id);

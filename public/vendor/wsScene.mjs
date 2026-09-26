@@ -4685,9 +4685,9 @@ var STALL = [
 var SUFFIX = ["店", "铺", "馆", "行", "坊", "屋", "站"];
 function hash322(s) {
   let h = 2166136261;
-  const str = String(s ?? "");
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
+  const str2 = String(s ?? "");
+  for (let i = 0; i < str2.length; i++) {
+    h ^= str2.charCodeAt(i);
     h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
   }
   return h >>> 0;
@@ -4761,6 +4761,1255 @@ function genCountsLine(realShown, genShown, stallsShown) {
   const s = Number.isFinite(stallsShown) ? String(stallsShown) : "数不出来";
   return `🏷 真名 ${r} · ${WS_GEN_TAG} 楼名 ${g} · ${WS_GEN_TAG} 小摊 ${s}`;
 }
+
+// src/components/views/worldsim/wsZoneNames.ts
+var WS_ZONE_SUB_DEG = 0.01;
+var WS_ZONE_MIN_COUNT = 5;
+var WS_ZONE_DOMINANCE = 0.5;
+var WS_ZONE_GEN_TAG = "示意";
+var WS_ZONE_DERIVED_SUFFIX = "区";
+var WS_ZONE_COARSE_KINDS = [
+  "food",
+  "retail",
+  "commercial",
+  "lodging",
+  "education",
+  "medical",
+  "transport",
+  "landmark",
+  "park",
+  "culture",
+  "industrial",
+  "other"
+];
+var WS_ZONE_KIND_LABEL = {
+  food: "美食",
+  retail: "零售",
+  commercial: "商业",
+  lodging: "住宿",
+  education: "教育",
+  medical: "医疗",
+  transport: "交通",
+  landmark: "地标",
+  park: "公园",
+  culture: "文化",
+  industrial: "工业",
+  /* 🔴 「没类别」那一档（真包 24 条 = 1.3%）：**不进主导类统计**（它不构成"以什么为主"），
+     但仍然计入 `total`（分母），并如实出现在 `unclassified` 里。 */
+  other: "其他"
+};
+var WS_ZONE_UNCLASSIFIED = "other";
+function coarseKindOf(k) {
+  const s = String(k ?? "").trim().toLowerCase();
+  if (!s) return WS_ZONE_UNCLASSIFIED;
+  return WS_ZONE_COARSE_KINDS.indexOf(s) >= 0 ? s : WS_ZONE_UNCLASSIFIED;
+}
+function zoneKindLabelOf(k) {
+  return WS_ZONE_KIND_LABEL[coarseKindOf(k)];
+}
+function zonePointLngLat(it) {
+  if (!it) return null;
+  const p = it.p;
+  if (p && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1]))) return [Number(p[0]), Number(p[1])];
+  if (Number.isFinite(Number(it.lng)) && Number.isFinite(Number(it.lat))) return [Number(it.lng), Number(it.lat)];
+  return null;
+}
+function zonePointsFrom(list) {
+  const out = { points: [], skippedNoName: 0, skippedNoPoint: 0, unknownKinds: 0, considered: 0 };
+  for (const it of list || []) {
+    out.considered++;
+    const name = String(it && (it.n !== void 0 ? it.n : it.name) || "").trim();
+    if (!name) {
+      out.skippedNoName++;
+      continue;
+    }
+    const ll = zonePointLngLat(it);
+    if (!ll) {
+      out.skippedNoPoint++;
+      continue;
+    }
+    const raw = String(it && (it.k !== void 0 ? it.k : it.kind) || "").trim().toLowerCase();
+    if (raw && WS_ZONE_COARSE_KINDS.indexOf(raw) < 0) out.unknownKinds++;
+    out.points.push(it);
+  }
+  return out;
+}
+var WS_ZONE_REAL_TIER_RANK = { admin: 3, area: 2, local: 1 };
+function zoneRealNamesFromPlaces(list) {
+  const out = [];
+  for (const it of list || []) {
+    const name = String(it && (it.n !== void 0 ? it.n : it.name) || "").trim();
+    if (!name) continue;
+    const raw = String(it && (it.k !== void 0 ? it.k : it.kind) || "").trim().toLowerCase();
+    const t = placeTierOf(raw);
+    if (t === null) continue;
+    const ll = zonePointLngLat(it);
+    if (!ll) continue;
+    out.push({
+      id: "place:" + String(it.i || it.id || raw + ":" + name),
+      name,
+      lng: ll[0],
+      lat: ll[1],
+      tier: t === "area" ? "area" : "local",
+      from: "place",
+      rawKind: raw
+    });
+  }
+  return out;
+}
+function zoneRealNamesFromAdmins(list) {
+  const out = [];
+  for (const it of list || []) {
+    const name = String(it && it.name || "").trim();
+    if (!name || !Number.isFinite(Number(it.lng)) || !Number.isFinite(Number(it.lat))) continue;
+    out.push({
+      id: "admin:" + String(it.id || name),
+      name,
+      lng: Number(it.lng),
+      lat: Number(it.lat),
+      tier: "admin",
+      from: "admin"
+    });
+  }
+  return out;
+}
+function num2(v, d) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+}
+function containerSetOf(v) {
+  if (!v) return null;
+  const s = v instanceof Set ? v : new Set(v);
+  return s.size ? s : null;
+}
+function zoneContainerKeyOf(lng, lat, containerDeg) {
+  const c = bundleCellOf(lng, lat, containerDeg);
+  return bundleCellKey(c.w, c.s, containerDeg);
+}
+function zoneGridCompatible(subDeg, containerDeg) {
+  const a = num2(subDeg, WS_ZONE_SUB_DEG), b = num2(containerDeg, a);
+  if (!(a > 0) || !(b > 0)) return false;
+  const k = b / a;
+  return Math.abs(k - Math.round(k)) < 1e-6 && Math.round(k) >= 1;
+}
+function zoneBucketsOf(points, opts = {}) {
+  const deg = num2(opts.subDeg, WS_ZONE_SUB_DEG);
+  const map = /* @__PURE__ */ new Map();
+  for (const it of points || []) {
+    const ll = zonePointLngLat(it);
+    if (!ll) continue;
+    const name = String(it && (it.n !== void 0 ? it.n : it.name) || "").trim();
+    if (!name) continue;
+    const { w, s } = bundleCellOf(ll[0], ll[1], deg);
+    const key = bundleCellKey(w, s, deg);
+    let e = map.get(key);
+    if (!e) {
+      e = {
+        b: {
+          key,
+          w,
+          s,
+          deg,
+          total: 0,
+          classified: 0,
+          byKind: {},
+          unclassified: 0,
+          lng: 0,
+          lat: 0,
+          bbox: [w, s, +(w + deg).toFixed(5), +(s + deg).toFixed(5)]
+        },
+        pts: []
+      };
+      map.set(key, e);
+    }
+    const b = e.b;
+    const k = coarseKindOf(it && (it.k !== void 0 ? it.k : it.kind));
+    b.total++;
+    if (k === WS_ZONE_UNCLASSIFIED) b.unclassified++;
+    else {
+      b.classified++;
+      b.byKind[k] = (b.byKind[k] || 0) + 1;
+    }
+    e.pts.push(ll);
+  }
+  const out = [];
+  for (const { b, pts } of map.values()) {
+    pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    let sx = 0;
+    let sy = 0;
+    for (const p of pts) {
+      sx += p[0];
+      sy += p[1];
+    }
+    b.lng = b.total > 0 ? sx / b.total : +(b.w + deg / 2).toFixed(6);
+    b.lat = b.total > 0 ? sy / b.total : +(b.s + deg / 2).toFixed(6);
+    const ordered = {};
+    for (const k of WS_ZONE_COARSE_KINDS) if (b.byKind[k]) ordered[k] = b.byKind[k];
+    b.byKind = ordered;
+    out.push(b);
+  }
+  out.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  return out;
+}
+function zoneDominantOf(b) {
+  if (!b || !b.total) return null;
+  let best = null;
+  let bestN = -1;
+  let ties = 0;
+  for (const k of WS_ZONE_COARSE_KINDS) {
+    if (k === WS_ZONE_UNCLASSIFIED) continue;
+    const n = b.byKind[k] || 0;
+    if (n <= 0) continue;
+    if (n > bestN) {
+      bestN = n;
+      best = k;
+      ties = 1;
+    } else if (n === bestN) ties++;
+  }
+  if (best === null) return null;
+  return { kind: best, count: bestN, share: bestN / b.total, ties };
+}
+function realNamesOfCell(realNames, key, deg) {
+  const hit = [];
+  for (const r of realNames || []) {
+    if (!r || !String(r.name || "").trim()) continue;
+    if (!Number.isFinite(r.lng) || !Number.isFinite(r.lat)) continue;
+    const c = bundleCellOf(r.lng, r.lat, deg);
+    if (bundleCellKey(c.w, c.s, deg) !== key) continue;
+    hit.push(r);
+  }
+  hit.sort((a, b) => WS_ZONE_REAL_TIER_RANK[b.tier] - WS_ZONE_REAL_TIER_RANK[a.tier] || (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
+  return hit;
+}
+function derivedZoneNameOf(kind) {
+  return zoneKindLabelOf(kind) + WS_ZONE_DERIVED_SUFFIX;
+}
+function sketchZoneNameOf(kind) {
+  return WS_ZONE_GEN_TAG + "·" + zoneKindLabelOf(kind);
+}
+function zoneNameForCell(cell, opts = {}) {
+  const b = cell && cell.bucket;
+  if (!b || !b.key) return null;
+  const minCount = Math.max(1, Math.trunc(num2(opts.minCount, WS_ZONE_MIN_COUNT)));
+  const dominance = num2(opts.dominance, WS_ZONE_DOMINANCE);
+  const sketch = opts.sketch !== false;
+  const minReal = Math.max(0, Math.trunc(num2(opts.minRealCount, 0)));
+  const reals = (cell.realNames || []).filter((r) => r && String(r.name || "").trim());
+  if (reals.length && b.total >= minReal) {
+    const r = reals[0];
+    const also = reals.length - 1;
+    return {
+      id: "zone:" + b.key,
+      key: b.key,
+      name: r.name,
+      label: r.name,
+      source: "real",
+      derivedFrom: null,
+      realFrom: r.from,
+      realId: r.id,
+      tier: r.tier,
+      count: b.total,
+      total: b.total,
+      share: null,
+      bbox: b.bbox,
+      /* 真名的锚点 = **真名自己的点**（不搬家：它的位置就是事实）；聚合名才用格重心 */
+      lng: Number(r.lng),
+      lat: Number(r.lat),
+      style: "real",
+      sketch: false,
+      why: `🗺 真名「${r.name}」（${r.from === "admin" ? "行政区名" : "片区名"}·${r.tier}）· 格内 ${b.total} 个点` + (also > 0 ? ` · 同格另有真名 ${also} 条` : "")
+    };
+  }
+  const dom = zoneDominantOf(b);
+  const base = {
+    id: "zone:" + b.key,
+    key: b.key,
+    bbox: b.bbox,
+    lng: b.lng,
+    lat: b.lat,
+    realFrom: null,
+    realId: null,
+    tier: null
+  };
+  if (b.total < minCount || !dom) {
+    return null;
+  }
+  const shareTxt = `${dom.count}/${b.total} = ${(dom.share * 100).toFixed(1)}%`;
+  if (dom.share > dominance) {
+    return {
+      ...base,
+      name: derivedZoneNameOf(dom.kind),
+      label: derivedZoneNameOf(dom.kind),
+      source: "derived",
+      derivedFrom: dom.kind,
+      count: dom.count,
+      total: b.total,
+      share: dom.share,
+      style: "derived",
+      sketch: false,
+      why: `🗺 数据驱动：主导「${zoneKindLabelOf(dom.kind)}」 ${shareTxt}（> ${(dominance * 100).toFixed(0)}%）` + (dom.ties > 1 ? ` · ⚠ 并列 ${dom.ties} 类` : "") + ` · 格内 ${b.total} 个点（有类别 ${b.classified}）`
+    };
+  }
+  if (!sketch) return null;
+  return {
+    ...base,
+    name: sketchZoneNameOf(dom.kind),
+    label: sketchZoneNameOf(dom.kind),
+    source: "generated",
+    derivedFrom: dom.kind,
+    count: dom.count,
+    total: b.total,
+    share: dom.share,
+    style: "generated",
+    sketch: true,
+    why: `🗺 **示意**：最多的一类是「${zoneKindLabelOf(dom.kind)}」但只占 ${shareTxt}（没过半 ⇒ 不是数据驱动的区名，只是"这一带这类多一些"）· 格内 ${b.total} 个点`
+  };
+}
+function median(xs) {
+  if (!xs.length) return null;
+  const a = [...xs].sort((x, y) => x - y);
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+function planZoneNames(points, realNames = [], opts = {}) {
+  const deg = num2(opts.subDeg, WS_ZONE_SUB_DEG);
+  const minCount = Math.max(1, Math.trunc(num2(opts.minCount, WS_ZONE_MIN_COUNT)));
+  const containerDeg = num2(opts.containerDeg, deg);
+  const containers = containerSetOf(opts.containers);
+  const all = zoneBucketsOf(points, opts);
+  const buckets = containers ? all.filter((b) => containers.has(zoneContainerKeyOf(b.w + deg / 2, b.s + deg / 2, containerDeg))) : all;
+  const zones = [];
+  const bySource = { real: 0, derived: 0, generated: 0 };
+  const totals = [];
+  const shares = [];
+  let eligible = 0;
+  let overHalf = 0;
+  let skippedSparse = 0;
+  for (const b of buckets) {
+    totals.push(b.total);
+    const z = zoneNameForCell({ bucket: b, realNames: realNamesOfCell(realNames, b.key, deg) }, opts);
+    if (!z) {
+      skippedSparse++;
+      continue;
+    }
+    if (b.total >= minCount) {
+      eligible++;
+      const dom = zoneDominantOf(b);
+      if (dom && dom.share > num2(opts.dominance, WS_ZONE_DOMINANCE)) overHalf++;
+      if (dom && z.source !== "real") shares.push(dom.share);
+    }
+    zones.push(z);
+    bySource[z.source]++;
+  }
+  const rank = { real: 0, derived: 1, generated: 2 };
+  zones.sort((a, b) => rank[a.source] - rank[b.source] || b.total - a.total || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return {
+    zones,
+    cells: buckets.length,
+    eligible,
+    overHalf,
+    bySource,
+    totalStats: {
+      min: totals.length ? Math.min(...totals) : 0,
+      median: median(totals) ?? 0,
+      max: totals.length ? Math.max(...totals) : 0
+    },
+    shareMedian: median(shares),
+    skippedSparse,
+    skippedPartial: all.length - buckets.length
+  };
+}
+function pickZoneNames(zones, cap) {
+  const list = [...zones || []];
+  const n = Math.max(0, Math.trunc(Number(cap) || 0));
+  const bySource = { real: 0, derived: 0, generated: 0 };
+  const droppedBySource = { real: 0, derived: 0, generated: 0 };
+  const shown = list.slice(0, n);
+  const dropped = list.slice(n);
+  for (const z of shown) bySource[z.source]++;
+  for (const z of dropped) droppedBySource[z.source]++;
+  return {
+    shown,
+    candidates: list.length,
+    droppedByCap: dropped.length,
+    bySource,
+    droppedBySource,
+    cap: n,
+    capped: dropped.length > 0
+  };
+}
+var WS_ZONE_ENTER_RATIO = 0.45;
+var WS_ZONE_EXIT_RATIO = 0.2;
+var WS_ZONE_SAMPLES = 2;
+var WS_ZONE_SWITCH_MIN_MS = 400;
+function zoneDensityOf(pick) {
+  if (!pick) return null;
+  const c = Number(pick.candidates);
+  if (!Number.isFinite(c) || c <= 0) return null;
+  const d = Number(pick.droppedByCollision) || 0;
+  return Math.max(0, Math.min(1, d / c));
+}
+function createZoneModeGate(opts = {}) {
+  const enter = num2(opts.enter, WS_ZONE_ENTER_RATIO);
+  const exit = num2(opts.exit, WS_ZONE_EXIT_RATIO);
+  const need = Math.max(2, Math.trunc(num2(opts.samples, WS_ZONE_SAMPLES)));
+  const minMs = Math.max(0, num2(opts.minSwitchMs, WS_ZONE_SWITCH_MIN_MS));
+  let zoneMode = false;
+  let last = null;
+  let streakEnter = 0;
+  let streakExit = 0;
+  let lastSwitchMs = null;
+  return {
+    sample(density, nowMs) {
+      const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+      last = Number.isFinite(Number(density)) ? Math.max(0, Math.min(1, Number(density))) : null;
+      if (last === null) {
+        return { zoneMode, changed: false, reason: "密度数不出来（没候选）⇒ 保持原状" };
+      }
+      streakEnter = last >= enter ? streakEnter + 1 : 0;
+      streakExit = last <= exit ? streakExit + 1 : 0;
+      const wantEnter = !zoneMode && streakEnter >= need;
+      const wantExit = zoneMode && streakExit >= need;
+      if (!wantEnter && !wantExit) {
+        return {
+          zoneMode,
+          changed: false,
+          reason: `D=${last.toFixed(3)} ⇒ 保持（进入连 ${streakEnter}/${need} · 退出连 ${streakExit}/${need}${last > exit && last < enter ? " · 死区" : ""}）`
+        };
+      }
+      if (lastSwitchMs !== null && now - lastSwitchMs < minMs) {
+        return { zoneMode, changed: false, reason: `D=${last.toFixed(3)} 够格但距上次切换只有 ${now - lastSwitchMs}ms < ${minMs}ms（防抖）` };
+      }
+      zoneMode = wantEnter;
+      lastSwitchMs = now;
+      streakEnter = 0;
+      streakExit = 0;
+      return { zoneMode, changed: true, reason: `D=${last.toFixed(3)} 连续 ${need} 次 ⇒ ${zoneMode ? "进区名模式" : "退出区名模式"}` };
+    },
+    state: () => ({ zoneMode, density: last, streakEnter, streakExit, lastSwitchMs }),
+    reset() {
+      zoneMode = false;
+      last = null;
+      streakEnter = 0;
+      streakExit = 0;
+      lastSwitchMs = null;
+    }
+  };
+}
+function zoneAttributionOf(index) {
+  const a = index && typeof index.attribution === "string" && index.attribution ? index.attribution : null;
+  if (a) return a;
+  const s = index && typeof index.source === "string" && index.source ? index.source : null;
+  return s;
+}
+function zoneVerdictLine(f) {
+  if (f.state === "no-index") return `🗺 区名 数不出来：真名包索引没读到（${String(f.why || "index.json 没读到").slice(0, 60)}）`;
+  if (f.state === "size-mismatch") {
+    return `🗺 区名 数不出来：取数粒度 ${String(f.cellSize)}° 不是划区粒度 ${f.subDeg}° 的整数倍 ⇒ 子格会跨容器，本轮不算`;
+  }
+  if (f.state === "no-points") return `🗺 区名 0 个（已量：这一轮 ${f.points} 个真名点，格 ${f.cells}）`;
+  return `🗺 区名 ${f.bySource.real} 真名 · ${f.bySource.derived} 数据驱动 · ${f.bySource.generated} 示意（格 ${f.eligible}/${f.cells} 够格 · 过半 ${f.overHalf} · 点 ${f.points}` + (f.skippedPartial > 0 ? ` · 边缘半格未算 ${f.skippedPartial}` : "") + `）`;
+}
+function zoneFactsOf(plan, ctx) {
+  const subDeg = num2(ctx.subDeg, WS_ZONE_SUB_DEG);
+  const idx = ctx.index;
+  const containerDeg = idx && Number.isFinite(Number(idx.cellSize)) ? Number(idx.cellSize) : null;
+  const base = {
+    state: "counted",
+    points: ctx.points,
+    cells: plan ? plan.cells : 0,
+    eligible: plan ? plan.eligible : 0,
+    overHalf: plan ? plan.overHalf : 0,
+    bySource: plan ? plan.bySource : { real: 0, derived: 0, generated: 0 },
+    subDeg,
+    cellSize: containerDeg,
+    gridOk: containerDeg === null ? true : zoneGridCompatible(subDeg, containerDeg),
+    skippedPartial: plan ? plan.skippedPartial : 0,
+    attribution: zoneAttributionOf(idx),
+    why: null
+  };
+  if (!idx || containerDeg === null) {
+    return { ...base, state: "no-index", why: ctx.indexError || "index.json 没读到" };
+  }
+  if (!base.gridOk) {
+    return { ...base, state: "size-mismatch", why: `取数 ${containerDeg}° / 划区 ${subDeg}°` };
+  }
+  if (ctx.points === 0) return { ...base, state: "no-points" };
+  return base;
+}
+function zoneStyleClassOf(z) {
+  const s = z && z.source;
+  if (s === "real") return "is-real";
+  if (s === "derived") return "is-derived";
+  return "is-generated";
+}
+function zoneClickPayload(z) {
+  return { zoneId: z.id, zoneKey: z.key, lng: z.lng, lat: z.lat };
+}
+
+// src/components/views/worldsim/wsNameLayer.ts
+var NAMES_BUNDLE_DIR = "namesbundle";
+var NAMES_BUNDLE_CELL_DEG = 0.05;
+var NAMES_MAX_CELLS = 6;
+var NAMES_PER_REFRESH = 6;
+var NAMES_STORE_CAP = 64;
+var NAMES_TIMEOUT_MS = 6e3;
+var NAMES_MIN_CONF_FALLBACK = 0.5;
+var NAMES_ZONE_CAP = 8;
+var NAMES_BIG_KEEP = 4;
+var NAMES_ZONE_REAL_MAX = 4;
+var LABEL_MOTION = {
+  /* 三幕（Fade Through）：楼名退 → 40ms 重叠 → 区名进 */
+  nameOutMs: 120,
+  overlapMs: 40,
+  zoneInMs: 200,
+  zoneStaggerMs: 25,
+  zoneStaggerMax: 4,
+  /* 单体（§4.2）：hover 90 / 松开 140 / 被遮挡退让 120（**不动位置**，只 opacity）/ 复现 160 */
+  hoverMs: 90,
+  releaseMs: 140,
+  retreatMs: 120,
+  showMs: 160,
+  /* 相机运动（§4.2）：整层淡化 = **只写 1 个节点** */
+  cameraMs: 80,
+  cameraOpacity: 0.25,
+  restoreMs: 160,
+  /* 同一个切换批的最短间隔（与 `wsZoneNames.WS_ZONE_SWITCH_MIN_MS` 同值；这里给宿主做去抖） */
+  minSwitchMs: 400,
+  /* 避让网格与上限（**与 `wsLabels` 同值**：48px 是实测出来的，不许缩） */
+  gridPx: 48,
+  /* 节点阶梯（§5）：≤12 CSS / 13~26 分批 / 27~60 WAAPI / >60 整层 */
+  ladder: { l0: 12, l1: 26, l2: 60 },
+  /** `>60` 时换手段（整层淡出→重排→淡入），**不是**缩时长 */
+  liteAbove: 60,
+  easeEnter: "cubic-bezier(0.22, 0.61, 0.36, 1)",
+  easeLeave: "cubic-bezier(0.3, 0, 1, 1)"
+};
+var LABEL_ANIM_PROPS = ["transform", "opacity"];
+var LABEL_DOM_CLASS = "ws-lab";
+var LABEL_ROOT_CLASS = "ws-labs";
+var LABEL_CAMERA_CLASS = "is-camera-moving";
+var LABEL_STYLE_CLASS = {
+  real: "is-real",
+  derived: "is-derived",
+  generated: "is-generated"
+};
+function nameVerdictLine(f) {
+  if (f.state === "off") return "🏷🗺 名字层 关（?names=0）";
+  if (f.state === "no-index") return `🏷🗺 名字 数不出来：真名包索引没读到（${String(f.why || "index.json 没读到").slice(0, 50)}）`;
+  if (f.state === "size-mismatch") return `🏷🗺 名字 数不出来：包分格 ${String(f.cellSize)}° 取不到格（本轮不取）`;
+  if (f.state === "uncounted") {
+    return `🏷🗺 名字 数不出来：这一轮 0 格取到（格 ${f.hit}/${f.cells}${f.failed ? " · 失败 " + f.failed : ""}）`;
+  }
+  return `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}（候选 ${f.candidates}${f.capped ? " · 被上限截断" : ""}） · 屏上 ${f.labels}（大名字 ${f.bigLabels} · 真名 ${f.realLabels} · 区名 ${f.zoneLabels}=数据驱动 ${f.zoneDerived}+真名区/示意 ${f.zoneSketch}） · 🚫生成名上屏 ${f.generatedOnScreen} · 点 ${f.points} · 格 ${f.hit}/${f.cells} · 子格 够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf} · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"}`;
+}
+function emptyFacts2(on) {
+  return {
+    state: on ? "uncounted" : "off",
+    labels: 0,
+    pickedShown: 0,
+    realLabels: 0,
+    zoneLabels: 0,
+    bigLabels: 0,
+    zoneDerived: 0,
+    zoneSketch: 0,
+    generatedOnScreen: 0,
+    candidates: 0,
+    droppedByCollision: 0,
+    droppedByCap: 0,
+    capped: false,
+    skippedNoName: 0,
+    skippedOffscreen: 0,
+    density: null,
+    mode: "names",
+    cells: 0,
+    hit: 0,
+    missing: 0,
+    failed: 0,
+    points: 0,
+    droppedByConf: 0,
+    zoneCells: 0,
+    zoneEligible: 0,
+    zoneOverHalf: 0,
+    attribution: null,
+    cellSize: null,
+    why: null
+  };
+}
+function namesCellUrl(cellKey, dir = NAMES_BUNDLE_DIR) {
+  return `/${dir}/${cellKey}.json`;
+}
+function namesIndexUrl(dir = NAMES_BUNDLE_DIR) {
+  return `/${dir}/index.json`;
+}
+function namePointsOfCell(json, minConf) {
+  const list = json?.places;
+  const raw = Array.isArray(list) ? list : [];
+  const pts = [];
+  let dropped = 0;
+  for (const it of raw) {
+    const n = String(it && (it.n !== void 0 ? it.n : it.name) || "").trim();
+    if (!n) continue;
+    const p = it?.p;
+    const lng = Array.isArray(p) ? Number(p[0]) : Number(it?.lng);
+    const lat = Array.isArray(p) ? Number(p[1]) : Number(it?.lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    const cf = Number(it?.cf);
+    if (Number.isFinite(cf) && cf < minConf) {
+      dropped++;
+      continue;
+    }
+    pts.push(it);
+  }
+  return { points: pts, droppedByConf: dropped };
+}
+function createNameLayer(host) {
+  const cells = /* @__PURE__ */ new Map();
+  const now = host.now || (() => Date.now());
+  const gate = createZoneModeGate();
+  let last = emptyFacts2(host.enabled ? host.enabled() : true);
+  let lastPlan = { mode: "names", nodes: [], batch: 0, lite: false, cameraOpacity: LABEL_MOTION.cameraOpacity };
+  let batch = 0;
+  let lastBatchSig = "";
+  let indexDone = false;
+  let indexCells = null;
+  let indexFact = null;
+  function viewOf() {
+    const m = host.map();
+    if (!m) return null;
+    const b = m.getBounds();
+    if (!b) return null;
+    const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
+    if (![w, s, e, n].every((v) => Number.isFinite(v))) return null;
+    return {
+      bounds: b,
+      center: { lng: (w + e) / 2, lat: (s + n) / 2 }
+    };
+  }
+  function viewportOf() {
+    const m = host.map();
+    const c = m?.getCanvas?.();
+    const w = Number(c?.clientWidth ?? c?.width);
+    const h = Number(c?.clientHeight ?? c?.height);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+    return { width: w, height: h };
+  }
+  async function loadIndex() {
+    if (indexDone) return;
+    indexDone = true;
+    try {
+      const r = await host.fetchCell(namesIndexUrl(), NAMES_TIMEOUT_MS);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const keys = j?.cells && typeof j.cells === "object" ? Object.keys(j.cells) : null;
+      indexCells = keys ? new Set(keys) : null;
+      indexFact = {
+        attribution: zoneAttributionOf({ attribution: j?.attribution ?? null, source: null }),
+        cellSize: Number.isFinite(Number(j?.cellSize)) ? Number(j?.cellSize) : null,
+        minConf: Number.isFinite(Number(j?.minConfidenceRecommended)) ? Number(j?.minConfidenceRecommended) : null,
+        cells: keys ? keys.length : null
+      };
+    } catch (e) {
+      indexCells = null;
+      indexFact = null;
+      host.onError?.(`names index ${String(e?.message || e).slice(0, 60)}`);
+    }
+  }
+  async function fetchCellData(key, minConf) {
+    let pts = [];
+    let dropped = 0;
+    let reals = [];
+    let gotAny = false;
+    let miss = 0;
+    let fail = 0;
+    try {
+      const r = await host.fetchCell(namesCellUrl(key), NAMES_TIMEOUT_MS);
+      if (r.ok) {
+        const parsed = namePointsOfCell(await r.json(), minConf);
+        pts = parsed.points;
+        dropped = parsed.droppedByConf;
+        gotAny = true;
+      } else if (r.status === 404) miss++;
+      else fail++;
+    } catch {
+      fail++;
+    }
+    try {
+      const r2 = await host.fetchCell(bundleCellUrl("places", key), NAMES_TIMEOUT_MS);
+      if (r2.ok) {
+        reals = zoneRealNamesFromPlaces(bundlePlacesOf(await r2.json()));
+        gotAny = true;
+      } else if (r2.status === 404) miss++;
+      else fail++;
+    } catch {
+      fail++;
+    }
+    if (gotAny) {
+      cells.set(key, { points: pts, droppedByConf: dropped, reals, ok: true });
+      while (cells.size > NAMES_STORE_CAP) {
+        const k = cells.keys().next().value;
+        if (k === void 0) break;
+        cells.delete(k);
+      }
+      return "hit";
+    }
+    if (fail > 0) return "failed";
+    cells.set(key, { points: [], droppedByConf: 0, reals: [], ok: false });
+    return "missing";
+  }
+  async function refresh(why = "view") {
+    const on = host.enabled ? host.enabled() : true;
+    if (!on) {
+      last = { ...emptyFacts2(false) };
+      return emit();
+    }
+    try {
+      await loadIndex();
+      const cellSize = indexFact?.cellSize ?? null;
+      if (indexFact === null) {
+        last = { ...emptyFacts2(true), state: "no-index", why: "真名包索引没读到" };
+        return emit();
+      }
+      if (cellSize === null) {
+        last = { ...emptyFacts2(true), state: "no-index", why: "索引里没有 cellSize", attribution: indexFact.attribution };
+        return emit();
+      }
+      const view = viewOf();
+      if (!view) {
+        last = { ...emptyFacts2(true), state: "uncounted", why: "视野拿不到（地图还没就绪）", attribution: indexFact.attribution, cellSize };
+        return emit();
+      }
+      const planCells = bundleCellsForView(view.bounds, view.center, NAMES_MAX_CELLS, cellSize);
+      if (!planCells) {
+        last = { ...emptyFacts2(true), state: "uncounted", why: "格数学算不出来（视野离谱）", attribution: indexFact.attribution, cellSize };
+        return emit();
+      }
+      const wanted = indexCells ? planCells.cells.filter((c) => indexCells.has(c.key)) : planCells.cells;
+      const need = wanted.filter((c) => !cells.has(c.key)).slice(0, NAMES_PER_REFRESH);
+      let hit = 0, missing = 0, failed = 0;
+      for (const c of need) {
+        const r = await fetchCellData(c.key, host.minConf?.() ?? indexFact.minConf ?? NAMES_MIN_CONF_FALLBACK);
+        if (r === "hit") hit++;
+        else if (r === "missing") missing++;
+        else failed++;
+      }
+      const used = wanted.map((c) => cells.get(c.key)).filter(Boolean);
+      const hitCells = wanted.filter((c) => cells.get(c.key)?.ok).length;
+      const points = [];
+      const reals = [];
+      let droppedByConf = 0;
+      for (const d of used) {
+        points.push(...d.points);
+        reals.push(...d.reals);
+        droppedByConf += d.droppedByConf;
+      }
+      const minConf = host.minConf?.() ?? indexFact.minConf ?? NAMES_MIN_CONF_FALLBACK;
+      const zonesPlan = planZoneNames(points, reals, {
+        subDeg: WS_ZONE_SUB_DEG,
+        /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
+        containerDeg: cellSize,
+        containers: wanted.filter((c) => cells.get(c.key)?.ok).map((c) => c.key)
+      });
+      const items = [];
+      const anchorOf = /* @__PURE__ */ new Map();
+      const pickOf = /* @__PURE__ */ new Map();
+      for (const p of points) {
+        const n = String(p.n ?? p.name ?? "").trim();
+        const pp = p.p;
+        const lng = Array.isArray(pp) ? Number(pp[0]) : Number(p.lng);
+        const lat = Array.isArray(pp) ? Number(pp[1]) : Number(p.lat);
+        if (!n || !Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+        const id = "poi:" + String(p.i ?? n);
+        items.push({ id, kind: "building", name: n, lng, lat, source: "real" });
+        anchorOf.set(id, [lng, lat]);
+        pickOf.set(id, {
+          kind: "place",
+          place: {
+            n,
+            k: String(p.k ?? ""),
+            c: String(p.c ?? ""),
+            cf: Number.isFinite(Number(p.cf)) ? Number(p.cf) : void 0,
+            p: [lng, lat],
+            i: String(p.i ?? "")
+          }
+        });
+      }
+      const placeItems = placeLabelsFrom(reals.map((r) => ({ n: r.name, k: r.rawKind, p: [r.lng, r.lat], i: r.id })));
+      for (const it of placeItems) {
+        items.push(it);
+        anchorOf.set(it.id, [it.lng, it.lat]);
+        pickOf.set(it.id, { kind: "place", place: { n: it.name, k: it.placeType, p: [it.lng, it.lat], i: it.id } });
+      }
+      const adminItems = adminLabelsFrom(host.admins?.() || []);
+      for (const it of adminItems) {
+        items.push(it);
+        anchorOf.set(it.id, [it.lng, it.lat]);
+        pickOf.set(it.id, { kind: "place", place: { n: it.name, k: "admin", p: [it.lng, it.lat], i: it.id } });
+      }
+      if (host.drawnBuildings) {
+        for (const it of buildingLabelsFrom(host.drawnBuildings())) {
+          items.push(it);
+          anchorOf.set(it.id, [it.lng, it.lat]);
+          pickOf.set(it.id, { kind: "building", buildingId: it.id, name: it.name, lng: it.lng, lat: it.lat });
+        }
+      }
+      const m = host.map();
+      const vp = viewportOf();
+      let picked = null;
+      if (m && vp) {
+        const z = m.getZoom();
+        picked = pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
+      }
+      const density = picked ? picked.candidates > 0 ? picked.droppedByCollision / picked.candidates : null : null;
+      const g = gate.sample(density, now());
+      const mode = g.zoneMode ? "zones" : "names";
+      const zoneReal = zonesPlan.zones.filter((z) => z.source === "real");
+      const zoneCalc = zonesPlan.zones.filter((z) => z.source !== "real");
+      const zonePickReal = pickZoneNames(zoneReal, Math.min(NAMES_ZONE_REAL_MAX, NAMES_ZONE_CAP));
+      const zonePickCalc = pickZoneNames(zoneCalc, Math.max(0, NAMES_ZONE_CAP - zonePickReal.shown.length));
+      const zoneShown = [...zonePickReal.shown, ...zonePickCalc.shown];
+      const nodes = [];
+      const nodeOfLabel = (s) => {
+        const a = anchorOf.get(s.id);
+        return {
+          slot: 0,
+          id: s.id,
+          text: s.name,
+          style: "real",
+          sketch: false,
+          x: s.x,
+          y: s.y,
+          w: s.w,
+          h: s.h,
+          lng: a ? a[0] : 0,
+          lat: a ? a[1] : 0,
+          why: `真名（${s.kind} · 优先级 ${s.priority}）`,
+          pick: pickOf.get(s.id) || { kind: "building", buildingId: s.id, name: s.name, lng: a ? a[0] : 0, lat: a ? a[1] : 0 }
+        };
+      };
+      if (picked && vp) {
+        if (mode === "names") {
+          for (const s of picked.shown) nodes.push(nodeOfLabel(s));
+        } else {
+          const big = picked.shown.filter((s) => s.kind === "admin" || s.kind === "place").slice(0, NAMES_BIG_KEEP);
+          for (const s of big) nodes.push(nodeOfLabel(s));
+          for (const z of zoneShown) nodes.push(nodeOfZone(z));
+        }
+      }
+      nodes.forEach((n, i) => {
+        n.slot = i;
+      });
+      const lite = nodes.length > LABEL_MOTION.liteAbove;
+      const sig = mode + "|" + nodes.map((n) => n.id + ":" + n.text).join(",");
+      if (sig !== lastBatchSig) {
+        batch++;
+        lastBatchSig = sig;
+      }
+      lastPlan = { mode, nodes, batch, lite, cameraOpacity: LABEL_MOTION.cameraOpacity };
+      const realLabels = nodes.filter((n) => n.style === "real").length;
+      const zoneLabels = nodes.filter((n) => n.pick.kind === "zone").length;
+      const bigLabels = nodes.length - zoneLabels;
+      last = {
+        state: "counted",
+        labels: nodes.length,
+        pickedShown: picked?.shown.length ?? 0,
+        realLabels,
+        zoneLabels,
+        bigLabels,
+        zoneDerived: nodes.filter((n) => n.style === "derived").length,
+        /* 区名里**不是数据驱动**的那些（真名区 + 示意区）—— 数据驱动的另有一个数 */
+        zoneSketch: nodes.filter((n) => n.pick.kind === "zone" && n.style !== "derived").length,
+        generatedOnScreen: 0,
+        candidates: picked?.candidates ?? 0,
+        droppedByCollision: picked?.droppedByCollision ?? 0,
+        droppedByCap: picked?.droppedByCap ?? 0,
+        capped: !!picked?.capped,
+        skippedNoName: picked?.skippedNoName ?? 0,
+        skippedOffscreen: picked?.skippedOffscreen ?? 0,
+        density,
+        mode,
+        cells: wanted.length,
+        hit: hitCells,
+        missing,
+        failed,
+        points: points.length,
+        droppedByConf,
+        zoneCells: zonesPlan.cells,
+        zoneEligible: zonesPlan.eligible,
+        zoneOverHalf: zonesPlan.overHalf,
+        attribution: indexFact.attribution,
+        cellSize,
+        why: hitCells === 0 && wanted.length > 0 ? "视野里的格一格都没取到" : null
+      };
+      return emit();
+    } catch (e) {
+      last = { ...emptyFacts2(true), state: "uncounted", why: String(e?.message || e).slice(0, 60) };
+      host.onError?.("names " + last.why);
+      return emit();
+    }
+  }
+  function nodeOfZone(z) {
+    return {
+      slot: 0,
+      id: z.id,
+      text: z.label,
+      style: z.style,
+      sketch: z.sketch,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      lng: z.lng,
+      lat: z.lat,
+      why: z.why,
+      pick: { kind: "zone", zone: z }
+    };
+  }
+  function emit() {
+    try {
+      host.onPlan?.(lastPlan, last);
+    } catch {
+    }
+    return last;
+  }
+  return {
+    refresh,
+    facts: () => last,
+    plan: () => lastPlan,
+    verdict: () => nameVerdictLine(last)
+  };
+}
+
+// src/components/views/worldsim/wsBuildingHint.ts
+function ringsOf(geometry) {
+  const g = geometry || {};
+  if (g.type === "Polygon") {
+    const c = g.coordinates;
+    return c && c[0] ? [c[0]] : [];
+  }
+  if (g.type === "MultiPolygon") {
+    const c = g.coordinates;
+    return Array.isArray(c) ? c.map((p) => p[0]).filter(Boolean) : [];
+  }
+  return [];
+}
+function ringCenter(ring) {
+  if (!ring || ring.length < 3) return null;
+  let a = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i + 1 < ring.length; i++) {
+    const [x0, y0] = ring[i];
+    const [x1, y1] = ring[i + 1];
+    const cross = x0 * y1 - x1 * y0;
+    a += cross;
+    cx += (x0 + x1) * cross;
+    cy += (y0 + y1) * cross;
+  }
+  if (Math.abs(a) < 1e-12) {
+    const n = ring.length - 1 || ring.length;
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < n; i++) {
+      sx += ring[i][0];
+      sy += ring[i][1];
+    }
+    return [sx / n, sy / n];
+  }
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+// src/components/views/worldsim/wsBuildingCard.ts
+var CARD_MOTION = {
+  /* 入场（§4.3 ①） */
+  enterMs: 200,
+  enterScaleFrom: 0.88,
+  /* 内容层（§4.3 ③）：4 层，起于 60ms，每层 140ms，错峰 30ms ⇒ 末层 150→290ms */
+  contentMs: 140,
+  contentStartMs: 60,
+  contentStaggerMs: 30,
+  contentLayers: 4,
+  contentShiftPx: 6,
+  /* 退场（§4.3 ④） */
+  exitMs: 160,
+  exitScaleTo: 0.96,
+  exitShiftPx: 8,
+  /* 遮罩（§4.3 ②）：纯色，**禁 backdrop-filter**；退场晚 40ms 收 */
+  scrimMs: 160,
+  scrimDelayMs: 40,
+  scrimOpacity: 0.32,
+  /* 生长原点夹紧（§4.3：不夹的话从屏幕角落点开会"飞"很长一段，像贴纸不像生长） */
+  originClampPx: 40,
+  /* 区名入口 = 底部升起（§4.4：方向可以不同，**节奏不许不同**） */
+  sheetEnterY: 24,
+  /* 命中区（UI-DESIGN-SPEC §六-5）：标签/楼体的可点区 ≥ 44×44 */
+  minHitPx: 44,
+  /* 降级（§4.3 降级表）：低档去掉位移、内容不分层；reduced-motion 纯淡入（保留终态） */
+  lowEnterMs: 140,
+  lowEnterScaleFrom: 0.96,
+  lowContentMs: 120,
+  lowContentStartMs: 40,
+  reducedMs: 120,
+  /* 曲线（§3.2 全项目只有两条） */
+  easeEnter: "cubic-bezier(0.22, 0.61, 0.36, 1)",
+  easeLeave: "cubic-bezier(0.3, 0, 1, 1)"
+};
+var CARD_ANIM_PROPS = ["transform", "opacity"];
+var CARD_DOM_ID = "ws-card";
+var CARD_DATA_ATTRS = [
+  "data-ws-card",
+  "data-ws-card-kind",
+  "data-ws-card-source",
+  "data-ws-card-id"
+];
+var CARD_STRINGS = {
+  tagReal: "真名",
+  tagSketch: WS_GEN_TAG,
+  typeUnknown: "类型未登记",
+  nameUncountable: "名字数不出来",
+  nameUncountableWhy: "这栋楼连 id 都没有 —— 生成名必须由 id 决定（同 id 永远同名），凭空起一个会让每次刷新都换名字",
+  heightReal: "真数据（OSM 写了 height）",
+  heightLevels: "层数×3（OSM 写了层数，后端已折算）",
+  heightKind: "**按类型估**（不是真数据：中国 OSM 楼高覆盖率只有一两成）",
+  heightNone: "未登记",
+  attrMissing: "署名取不到（包索引里没有 attribution）",
+  chatSketchPlaceholder: "（生成·示意名，不入对话）",
+  zoneReal: "真名区",
+  zoneDerived: "数据驱动区",
+  zoneSketch: "示意区"
+};
+function str(v) {
+  return String(v ?? "").trim();
+}
+function fin(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function cardBuildingId(b) {
+  if (!b) return null;
+  const p = b.properties || {};
+  for (const v of [p.osm_id, p.id, b.id, b.i, p.i]) {
+    const s = str(v);
+    if (s) return s;
+  }
+  return null;
+}
+function cardBuildingPoint(b) {
+  if (!b) return null;
+  const lng = fin(b.lng), lat = fin(b.lat);
+  if (lng !== null && lat !== null) return [lng, lat];
+  let rings = [];
+  if (b.geometry) rings = ringsOf(b.geometry);
+  else if (Array.isArray(b.p)) {
+    const p = b.p;
+    rings = Array.isArray(p[0]) && Array.isArray(p[0][0]) && Array.isArray(p[0][0][0]) ? p.map((q) => q[0]).filter(Boolean) : p;
+  }
+  for (const r of rings) {
+    const c = ringCenter(r);
+    if (c) return c;
+  }
+  return null;
+}
+function cardTypeOf(kind, src) {
+  if (kind === "zone") {
+    const z = src.zone;
+    if (!z) return { type: CARD_STRINGS.typeUnknown, known: false, hint: null };
+    const how = z.source === "real" ? CARD_STRINGS.zoneReal : z.source === "derived" ? CARD_STRINGS.zoneDerived : CARD_STRINGS.zoneSketch;
+    return { type: how, known: true, hint: z.why };
+  }
+  if (kind === "place") {
+    const c = str(src.place?.c);
+    const k = str(src.place?.k);
+    if (!c && !k) return { type: CARD_STRINGS.typeUnknown, known: false, hint: null };
+    return {
+      type: c || k,
+      known: true,
+      hint: c && k ? `Overture 原始类别 ${c} · 粗类 ${k}` : c ? "Overture 原始类别" : "Overture 粗类"
+    };
+  }
+  const p = src.building?.properties || {};
+  const kindV = str(p.kind) || str(p.subtype) || str(p.class);
+  if (!kindV || kindV === "yes") return { type: CARD_STRINGS.typeUnknown, known: false, hint: kindV === "yes" ? "OSM 只写了 building=yes（没说是什么楼）" : null };
+  return { type: kindV, known: true, hint: "来自 OSM `building=*`" };
+}
+function cardAttributionOf(index) {
+  const a = index && typeof index.attribution === "string" && index.attribution ? index.attribution : null;
+  if (a) return a;
+  const s = index && typeof index.source === "string" && index.source ? index.source : null;
+  return s;
+}
+function buildingCardData(input) {
+  const kind = input && input.kind ? input.kind : "building";
+  const index = input ? input.index : null;
+  const attribution = cardAttributionOf(index);
+  const typeInfo = cardTypeOf(kind, { building: input?.building, place: input?.place, zone: input?.zone });
+  const realName = kind === "place" ? str(input?.place?.n ?? input?.place?.name) : kind === "zone" ? str(input?.zone?.name) : str((input?.building?.properties || {}).name);
+  const id = kind === "place" ? str(input?.place?.i || input?.place?.id) || null : kind === "zone" ? str(input?.zone?.id) || null : cardBuildingId(input?.building);
+  let state;
+  let title;
+  let titleTag = null;
+  let sketch = false;
+  let why = "";
+  if (realName) {
+    state = "real";
+    title = realName;
+    if (kind === "zone") {
+      const z = input?.zone;
+      sketch = !!z.sketch;
+      if (z.source === "real") {
+        titleTag = CARD_STRINGS.tagReal;
+        why = z.why;
+      } else if (z.source === "derived") {
+        titleTag = "数据驱动";
+        why = z.why;
+      } else {
+        titleTag = CARD_STRINGS.tagSketch;
+        why = z.why;
+      }
+    } else if (kind === "place") {
+      titleTag = CARD_STRINGS.tagReal;
+      why = `真名来自 Overture places（${str(input?.place?.k) || "粗类未登记"}）`;
+    } else {
+      titleTag = CARD_STRINGS.tagReal;
+      why = "真名来自 OSM `name`";
+    }
+  } else if (kind !== "place" && kind !== "zone" && id && !input?.noSketch) {
+    state = "generated";
+    title = genName(id, input?.genKind || "shop");
+    titleTag = CARD_STRINGS.tagSketch;
+    sketch = true;
+    why = `这栋楼**没有真名**（实测真名覆盖率只有 2.0%）⇒ 这是由 id 决定的**${WS_GEN_TAG}**名（同 id 永远同名），只上屏、不进数据与对话`;
+  } else {
+    state = "uncountable";
+    title = CARD_STRINGS.nameUncountable;
+    titleTag = null;
+    sketch = false;
+    why = input?.noSketch ? "调用方显式禁用生成名（noSketch）" : CARD_STRINGS.nameUncountableWhy;
+  }
+  let height = null;
+  let heightFrom = "none";
+  let levels = null;
+  if (kind === "building") {
+    const p = input?.building?.properties || {};
+    const src = str(p.height_src) || "default";
+    levels = fin(p.levels);
+    if (src === "height" || src === "levels") {
+      const rh = renderHeight(p);
+      height = Number.isFinite(rh.h) ? rh.h : null;
+      heightFrom = src === "height" ? "real" : "levels";
+    } else if (levels !== null && levels > 0) {
+      heightFrom = "levels";
+      height = Math.round(levels * 3 * 10) / 10;
+    } else {
+      const rh = renderHeight(p);
+      height = Number.isFinite(rh.h) ? rh.h : null;
+      heightFrom = height === null ? "none" : "kind";
+    }
+  }
+  const heightText = height === null ? CARD_STRINGS.heightNone : heightFrom === "real" ? `${height} m · ${CARD_STRINGS.heightReal}` : heightFrom === "levels" ? `${height} m · ${CARD_STRINGS.heightLevels}` : `${height} m · ${CARD_STRINGS.heightKind}`;
+  const ll = kind === "place" ? fin(input?.place?.p?.[0]) !== null && fin(input?.place?.p?.[1]) !== null ? [Number(input?.place?.p?.[0]), Number(input?.place?.p?.[1])] : fin(input?.place?.lng) !== null && fin(input?.place?.lat) !== null ? [Number(input?.place?.lng), Number(input?.place?.lat)] : null : kind === "zone" ? input?.zone && Number.isFinite(input.zone.lng) && Number.isFinite(input.zone.lat) ? [input.zone.lng, input.zone.lat] : null : cardBuildingPoint(input?.building);
+  const lng = ll ? +ll[0].toFixed(6) : null;
+  const lat = ll ? +ll[1].toFixed(6) : null;
+  const fields = [];
+  fields.push({ key: "name", label: "名字", value: title, tone: sketch ? "sketch" : state === "real" ? "real" : "muted", hint: why });
+  if (titleTag) fields.push({ key: "nameSource", label: "名字来源", value: titleTag, tone: sketch ? "sketch" : "real", hint: why });
+  fields.push({ key: "type", label: "类型", value: typeInfo.type, tone: typeInfo.known ? "real" : "muted", hint: typeInfo.hint || void 0 });
+  if (kind === "building") fields.push({ key: "height", label: "高度", value: heightText, tone: heightFrom === "kind" ? "warn" : heightFrom === "none" ? "muted" : "real", hint: heightFrom === "kind" ? CARD_STRINGS.heightKind : void 0 });
+  if (kind === "building" && levels !== null) fields.push({ key: "levels", label: "层数", value: String(levels), tone: "real", hint: "OSM `building:levels`" });
+  if (kind === "place" && Number.isFinite(Number(input?.place?.cf))) {
+    fields.push({ key: "cf", label: "置信度", value: Number(input?.place?.cf).toFixed(3), tone: Number(input?.place?.cf) >= 0.5 ? "real" : "warn", hint: "Overture `confidence`；运行期建议阈值 0.5" });
+  }
+  if (kind === "zone" && input?.zone) {
+    const z = input.zone;
+    const shareTxt = z.share === null ? "不适用（真名）" : `${z.count}/${z.total} = ${(z.share * 100).toFixed(1)}%`;
+    fields.push({ key: "zoneDominant", label: "主导类占比", value: shareTxt, tone: z.source === "derived" ? "real" : z.source === "generated" ? "sketch" : "muted", hint: z.why });
+    const spanDeg = +(z.bbox[2] - z.bbox[0]).toFixed(4);
+    fields.push({ key: "zoneBbox", label: "范围", value: `[${z.bbox.join(", ")}]（${spanDeg}° 子格）`, tone: "muted", hint: "区名的作用范围 = 一个 0.01° 子格（≈1.1km）" });
+  }
+  fields.push({ key: "id", label: "id", value: id || "（无 id）", tone: id ? "real" : "warn", hint: id ? "稳定 id（生成名就是由它决定）" : "没有 id ⇒ 生成名也拿不到（第三态）" });
+  fields.push({ key: "coord", label: "坐标", value: lng === null || lat === null ? "数不出来" : `${lng}, ${lat}`, tone: lng === null ? "muted" : "real" });
+  fields.push({ key: "attribution", label: "署名", value: attribution || CARD_STRINGS.attrMissing, tone: attribution ? "muted" : "warn", hint: "数据合规项：原话来自包索引，不在代码里另写" });
+  const origin = cardOriginOf(input?.click, input?.cardRect, kind === "zone");
+  return {
+    kind,
+    id,
+    state,
+    title,
+    titleTag,
+    sketch,
+    type: typeInfo.type,
+    typeKnown: typeInfo.known,
+    typeHint: typeInfo.hint,
+    height,
+    heightText,
+    heightFrom,
+    levels,
+    lng,
+    lat,
+    fields,
+    attribution,
+    why,
+    origin,
+    domId: CARD_DOM_ID,
+    dataAttrs: {
+      "data-ws-card": kind,
+      "data-ws-card-kind": kind,
+      "data-ws-card-source": state,
+      "data-ws-card-id": id || ""
+    }
+  };
+}
+function cardOriginOf(click, cardRect, fromSheet = false) {
+  if (!click || !cardRect) return null;
+  const cx = Number(cardRect.x) + Number(cardRect.w) / 2;
+  const cy = Number(cardRect.y) + Number(cardRect.h) / 2;
+  if (![click.x, click.y, cx, cy].every((v) => Number.isFinite(Number(v)))) return null;
+  const max = CARD_MOTION.originClampPx;
+  const rawX = Number(click.x) - cx;
+  const rawY = Number(click.y) - cy;
+  const dx = Math.max(-max, Math.min(max, rawX));
+  const dy = Math.max(-max, Math.min(max, rawY));
+  return {
+    dx: +dx.toFixed(2),
+    dy: +dy.toFixed(2),
+    clamped: Math.abs(rawX) > max || Math.abs(rawY) > max,
+    fromSheet: !!fromSheet
+  };
+}
+function cardEnterStyle(o) {
+  if (o && o.fromSheet) return { transform: `translate3d(0, ${CARD_MOTION.sheetEnterY}px, 0)` };
+  if (o) return { transform: `translate3d(${o.dx}px, ${o.dy}px, 0) scale(${CARD_MOTION.enterScaleFrom})` };
+  return { opacity: "0" };
+}
+var CARD_BASE_TRANSFORM = "translate(-50%, -50%)";
+function cardComposeTransform(extra) {
+  const e = String(extra || "").trim();
+  return e ? `${CARD_BASE_TRANSFORM} ${e}` : `${CARD_BASE_TRANSFORM} translate3d(0, 0, 0)`;
+}
+function cardRestTransform() {
+  return cardComposeTransform("translate3d(0, 0, 0) scale(1)");
+}
+function cardExitTransform() {
+  return cardComposeTransform(`translate3d(0, ${CARD_MOTION.exitShiftPx}px, 0) scale(${CARD_MOTION.exitScaleTo})`);
+}
+function cardChatText(d, opts = {}) {
+  const head = opts.header || (d.kind === "place" ? "地点" : d.kind === "zone" ? "区域" : "楼房");
+  const name = d.sketch ? CARD_STRINGS.chatSketchPlaceholder : d.title;
+  const lines = [`${head}：${name}（${d.titleTag || "无名"}）`, `类型：${d.type}`];
+  if (d.kind === "building") lines.push(`高度：${d.heightText}`);
+  lines.push(`id：${d.id || "无"}`);
+  if (d.lng !== null && d.lat !== null) lines.push(`坐标：${d.lng}, ${d.lat}`);
+  if (d.attribution) lines.push(`署名：${d.attribution}`);
+  return lines.join("\n");
+}
+function cardIsChatSafe(d) {
+  return !d.sketch;
+}
+function cardVerdictLine(d) {
+  const tag = d.state === "real" ? "真名" : d.state === "generated" ? WS_GEN_TAG : "数不出来";
+  if (d.state === "uncountable") return `🪪 卡片「${d.title}」（${tag}：${d.why.slice(0, 60)}）`;
+  return `🪪 卡片「${d.title}」（${tag}）· 类型 ${d.type} · ${d.kind === "building" ? "高 " + d.heightText + " · " : ""}id ${d.id || "无"}`;
+}
 export {
   ANTENNA_M,
   ANTENNA_MIN_H,
@@ -4775,6 +6024,12 @@ export {
   BUNDLE_REQ_PER_ROUND_MAX,
   BUNDLE_TIMEOUT_MS,
   CAMERA_DEFAULTS,
+  CARD_ANIM_PROPS,
+  CARD_BASE_TRANSFORM,
+  CARD_DATA_ATTRS,
+  CARD_DOM_ID,
+  CARD_MOTION,
+  CARD_STRINGS,
   DEFAULT_FLUSH_COALESCE_MS,
   DEFAULT_PARSED_CACHE_CELLS,
   EQUIP_MIN_AREA_M2,
@@ -4795,6 +6050,12 @@ export {
   HEIGHT_COLOR_RAMP,
   KIND_HEIGHT_M,
   KIND_JITTER,
+  LABEL_ANIM_PROPS,
+  LABEL_CAMERA_CLASS,
+  LABEL_DOM_CLASS,
+  LABEL_MOTION,
+  LABEL_ROOT_CLASS,
+  LABEL_STYLE_CLASS,
   LOD_FAR_ZOOM,
   LOD_LIVE_LAYER_PREFIXES,
   LOD_LIVE_SOURCE_IDS,
@@ -4803,6 +6064,16 @@ export {
   LOD_OPACITY_ZERO_ZOOM,
   LOD_VIEW_TILE_CAP,
   MAX_RENDER_H,
+  NAMES_BIG_KEEP,
+  NAMES_BUNDLE_CELL_DEG,
+  NAMES_BUNDLE_DIR,
+  NAMES_MAX_CELLS,
+  NAMES_MIN_CONF_FALLBACK,
+  NAMES_PER_REFRESH,
+  NAMES_STORE_CAP,
+  NAMES_TIMEOUT_MS,
+  NAMES_ZONE_CAP,
+  NAMES_ZONE_REAL_MAX,
   PAN_MAX_SPEED,
   PARAPET_H,
   PARAPET_MIN_H,
@@ -4890,6 +6161,19 @@ export {
   WS_ROADS_LIVE_VERDICT,
   WS_ROADS_R_MAX,
   WS_SCENE_SOURCE,
+  WS_ZONE_COARSE_KINDS,
+  WS_ZONE_DERIVED_SUFFIX,
+  WS_ZONE_DOMINANCE,
+  WS_ZONE_ENTER_RATIO,
+  WS_ZONE_EXIT_RATIO,
+  WS_ZONE_GEN_TAG,
+  WS_ZONE_KIND_LABEL,
+  WS_ZONE_MIN_COUNT,
+  WS_ZONE_REAL_TIER_RANK,
+  WS_ZONE_SAMPLES,
+  WS_ZONE_SUB_DEG,
+  WS_ZONE_SWITCH_MIN_MS,
+  WS_ZONE_UNCLASSIFIED,
   adminLabelsFrom,
   applyBuildingsTo,
   applyGwLayers,
@@ -4914,6 +6198,7 @@ export {
   buildBldBoxes,
   buildSkyGeometry,
   buildTransport,
+  buildingCardData,
   buildingColor,
   buildingLabelsFrom,
   buildingMasses,
@@ -4931,6 +6216,19 @@ export {
   bundleRoadsOf,
   cameraDefaults,
   capBuildingsPerCell,
+  cardAttributionOf,
+  cardBuildingId,
+  cardBuildingPoint,
+  cardChatText,
+  cardComposeTransform,
+  cardEnterStyle,
+  cardExitTransform,
+  cardIsChatSafe,
+  cardOriginOf,
+  cardRestTransform,
+  cardTypeOf,
+  cardVerdictLine,
+  coarseKindOf,
   contrastRatio,
   contrastReport,
   createBldGlLayer,
@@ -4938,10 +6236,13 @@ export {
   createBundleFeed,
   createFeatureStore,
   createGwLayer,
+  createNameLayer,
   createWsLog,
+  createZoneModeGate,
   dayHash,
   dayKeyOf,
   decorateBuildings,
+  derivedZoneNameOf,
   distM,
   districtStyleOf,
   dressBase,
@@ -5009,6 +6310,10 @@ export {
   mercatorYOf,
   metersBetween,
   metersToMercator,
+  namePointsOfCell,
+  nameVerdictLine,
+  namesCellUrl,
+  namesIndexUrl,
   nearestOnLine,
   outlineWidthAt,
   outlineWidthExpr,
@@ -5020,6 +6325,7 @@ export {
   pickBuildingsForView,
   pickHome,
   pickLabels,
+  pickZoneNames,
   pitchGuardParams,
   pixelRatioForTier,
   placeLabelsFrom,
@@ -5032,6 +6338,7 @@ export {
   planEnsureRoadOrder,
   planGenNames,
   planStalls,
+  planZoneNames,
   pmAvailable,
   pmMark,
   pmNow,
@@ -5046,6 +6353,7 @@ export {
   pointInRing,
   prerenderSourceOf,
   rampColorOf,
+  realNamesOfCell,
   relLuminance,
   renderHeight,
   resetScenePlanConsumed,
@@ -5079,6 +6387,7 @@ export {
   shade,
   shapeCountRows,
   shapeCountsLine,
+  sketchZoneNameOf,
   toLngLat,
   toMeters,
   toggleTask,
@@ -5086,5 +6395,21 @@ export {
   viewHalfMetersOf,
   visibleRoadCount,
   windowPatternSpec,
-  wsFetchRadiusMax
+  wsFetchRadiusMax,
+  zoneAttributionOf,
+  zoneBucketsOf,
+  zoneClickPayload,
+  zoneContainerKeyOf,
+  zoneDensityOf,
+  zoneDominantOf,
+  zoneFactsOf,
+  zoneGridCompatible,
+  zoneKindLabelOf,
+  zoneNameForCell,
+  zonePointLngLat,
+  zonePointsFrom,
+  zoneRealNamesFromAdmins,
+  zoneRealNamesFromPlaces,
+  zoneStyleClassOf,
+  zoneVerdictLine
 };

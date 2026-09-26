@@ -63,7 +63,18 @@ export * from "./wsBldPickStore";
 export * from "./wsArtParams";
 export * from "./wsBldGl";
 export * from "./wsDaily"; // 日常循环（我的家 + 今日三件事）
-export * from "./wsNameGen"; // 🏷 生成名层（**示意·非真实**：确定性楼名 + 沿街小摊） // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
+export * from "./wsNameGen"; // 🏷 生成名层（**示意·非真实**：确定性楼名 + 沿街小摊）
+/* 🏷🗺 **名字层**（2026-09-26 机主：「我要求每个显示的楼房都要有名字喵，如果太密集了就根据类型
+   划定区域（如经济区，美食区），**每个名字和楼房都能点击查看信息**」）。
+   `createNameLayer()` = 取数（真名包 0.05° 格 + 片区包同格键）/ 真名标签（走 `wsLabels.pickLabels`）
+   / 区名聚合（走 `wsZoneNames.planZoneNames`）/ 迟滞闸门 / 动效参数 —— **页面与 App 共用同一份**。
+   🔴 页面侧**一行规则都不许重写**（PR 门禁 C1）：它只画 DOM（`transform: translate3d`）+ 接事件。 */
+export * from "./wsNameLayer";
+/* 🗺 区名三源（真名 / 数据驱动 / 示意）+ 判据常量（0.01° 子格 / 够格 5 / 严格过半） */
+export * from "./wsZoneNames";
+/* 🪪 **信息卡**（点楼体 / 点名字 / 点区名 ⇒ 同一张卡）：卡片字段 + 动效令牌 + 生长原点，
+   纯逻辑，页面与 App 的卡片组件共用同一份（`CARD_MOTION` / `cardComposeTransform` / `cardChatText`）。 */
+export * from "./wsBuildingCard"; // 场景装配（相机默认值 + 图层序 + 自证） // art=3 天空几何（云/山影/雾带，纯函数） // 层序保证（事后断言式自愈） // 路网：分级样式（roadLayerSpecs）+ 计数（visibleRoadCount / roadStatsLine）
 /* 🏢 楼房**形体细化**（2026-09-24）：代拍页 `?bld=2` 用 `decorateBuildings(fc, ramp, {mode:"detail"})`
    生成裙楼/塔楼/退台/女儿墙/设备箱，并拿 `shapeCountsLine()`/`shapeCountRows()` 做回证；
    `windowPatternSpec()` 供 `?win=1` 的窗格层。

@@ -189,22 +189,36 @@
         background: rgba(13, 71, 161, 0.92); border: 1px solid rgba(255, 255, 255, 0.5);
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
       #lc-off.on { display: flex; }
-      /* 🏷 生成名层（**示意·非真实**）：与真名标签**样式不同** —— 虚线框 + 斜体 + 前置 ＊，
-         机主/任何人一眼就能分出"哪些是编的"。这一层永远 pointer-events:none（不挡交互）。 */
-      #ws-gennames { position: absolute; inset: 0; z-index: 24; pointer-events: none; }
-      #ws-gennames .gn { position: absolute; left: 0; top: 0; will-change: transform; white-space: nowrap;
-        font-size: 10.5px; font-style: italic; padding: 1px 5px; border-radius: 4px;
-        border: 1px dashed rgba(255, 214, 102, 0.85); background: rgba(40, 32, 12, 0.55);
-        color: #ffe9a8; }
-      #ws-gennames .gn.is-stall { font-size: 10px; border-color: rgba(120, 230, 180, 0.85);
-        background: rgba(12, 40, 32, 0.55); color: #b7f2d8; }
-      #ws-gennames .gn.is-stall::before { content: "🛒 "; }
-      #ws-gennames svg.gn-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
-      #ws-gennames svg.gn-lines line { stroke: rgba(255, 214, 102, 0.7); stroke-width: 1; stroke-dasharray: 2 2; }
-      #ws-gennames svg.gn-lines line.is-stall { stroke: rgba(120, 230, 180, 0.75); }
-      #ws-gennames .gn-dot { position: absolute; left: 0; top: 0; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; will-change: transform;
-        border-radius: 50%; background: rgba(255, 214, 102, 0.95); }
-      #ws-gennames .gn-dot.is-stall { border-color: rgba(120, 230, 180, 0.95); }
+      /* 🏷🗺 **名字层**（真名标签 + 区名标签）—— 规则全在共享真源 `wsNameLayer`，这里只是皮肤。
+         🔴 三条硬约束（`DESIGN-MG-MOTION.md` §4.0/§4.2）：
+           ① 位置由 JS 写 `transform: translate3d(...)`（**不是** left/top —— 那是布局属性）；
+           ② 相机运动期间**只写容器一个节点**（`.is-camera-moving` 整层 0.25）；
+           ③ **禁 `backdrop-filter`**（浮在地图画布上 ⇒ 每帧读回底下像素；`blur(0px) ≠ 没有模糊`）
+              ⇒ 下面只有"纯色底 + 1px 描边"，没有任何模糊。 */
+      #ws-labels { position: absolute; inset: 0; z-index: 24; pointer-events: none; overflow: hidden; }
+      #ws-labels.is-camera-moving { opacity: 0.25; }
+      #ws-labels.is-switching { opacity: 0; transition: opacity 120ms cubic-bezier(0.3, 0, 1, 1); }
+      #ws-labels.is-lite .ws-lab { transition: none; }
+      .ws-lab { position: absolute; left: 0; top: 0; margin: -14px 0 0 -10px;
+        padding: 12px 10px;                 /* 命中区 ≥44×44（静态 padding，不用动画撑） */
+        background: transparent; border: 0; font: inherit; font-size: 11px; line-height: 14px;
+        color: #eaf2f6; white-space: nowrap; cursor: pointer; pointer-events: auto;
+        transform-origin: 50% 100%;
+        transition: transform 90ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 120ms cubic-bezier(0.3, 0, 1, 1); }
+      .ws-lab::before { content: ""; position: absolute; left: 8px; right: 8px; top: 10px; bottom: 10px;
+        border-radius: 5px; background: rgba(16, 24, 32, 0.72); border: 1px solid rgba(255, 255, 255, 0.16); z-index: -1; }
+      .ws-lab:hover, .ws-lab:focus-visible { transform: scale(1.05); }   /* 强调只动 scale（不改字号/内边距） */
+      /* 🔴 三档样式**必须不同**：真名 / 数据驱动区名 / 示意区名 */
+      .ws-lab.is-real { color: #ffffff; font-weight: 600; }
+      .ws-lab.is-derived { color: #ffe9a8; font-size: 12px; }
+      .ws-lab.is-derived::before { background: rgba(58, 44, 12, 0.78); border-color: rgba(255, 214, 120, 0.45); }
+      .ws-lab.is-generated { color: #cfe0d8; font-style: italic; font-weight: 400; }
+      .ws-lab.is-generated::before { background: rgba(24, 34, 30, 0.66); border-style: dashed; border-color: rgba(180, 214, 200, 0.4); }
+      @media (prefers-reduced-motion: reduce) {
+        .ws-lab { transition: opacity 120ms linear; }
+        .ws-lab:hover, .ws-lab:focus-visible { transform: none; }
+        #ws-labels { transition: opacity 120ms linear; }
+      }
     </style>
   </head>
   <body>
@@ -355,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v74";
+      const BUILD = "ws3dshow-2026-09-26-v75";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -687,6 +701,17 @@
                   }
                 } catch (e) { /* 忽略 */ }
                 return null;
+              })(),
+              /* 🔴 2026-09-26：`tintOpacity` 原来是**静默 null**（读不到就 null，没人知道为什么）。
+                 三态纪律：要么真值、要么"数不出来 + 原因"。这一条与 `tint` 图层同源 ——
+                 `wstheme.json` 里只有 `anime` 档有 tint，`night` 档没有 ⇒ 那一档恒为 null 是**正常**的，
+                 但必须写出来，别让人以为是 bug。 */
+              tintOpacityWhy: (function () {
+                try {
+                  const ls = (THEME && THEME.layers) || [];
+                  for (const l of ls) { if (l && l.id === "tint" && l.paint) return null; }
+                  return "数不出来：当前主题档（" + THEME_ID + "）的 layers 里没有 id==='tint' 的图层（tint 只在档位有 tier.tint 时才建）";
+                } catch (e) { return "数不出来：读主题图层时抛了 " + String(e).slice(0, 60); }
               })(),
               basePaint: (function () {
                 try {
@@ -1145,6 +1170,9 @@
          浏览器缓存里那份旧模块就一直用着（HUD 写「模块缺 createBundleFeed（旧 vendor?）」，
          而兜底逻辑自己却不知道要去找它）。
          规矩：**凡页面真会调的符号，都必须进这张表**（漏一个 = 那次缓存永远修不回来）。 */
+      /* 🏷🗺 名字层要的符号（2026-09-26 接线）：少一个 ⇒ `ensureVendor()` 会**带内容版本重取**一次，
+         并把逐符号在场情况写进徽标 —— 这就是"模块旧"与"真没有"的分界。 */
+      const NAME_NEEDED = ["createNameLayer", "nameVerdictLine", "LABEL_MOTION", "planZoneNames", "buildingCardData", "cardComposeTransform", "CARD_MOTION"];
       const FEED_NEEDED = ["createBundleFeed", "bundleCountsLine", "bundleCellUrl", "loadBundleIndex",
         /* 🎨🏙 2026-09-26 抽真源后**本页新增依赖的符号**（挑选/冻结编排 + 美术取参）：
            它们是**函数**（`tfMissing()` 的判据就是 `typeof === "function"`，常量**不能**进这张表）。
@@ -1183,7 +1211,7 @@
       function tfMissing(mod) {
         /* ⚠️ 常量（如 `LOD_FAR_ZOOM`）**不能进这张表** —— 判据是 `typeof === "function"`，
            常量会被永远判成"缺"，把好模块说成坏的（假报和漏报一样贵）。 */
-        const need = (LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED).concat(FEED_NEEDED);
+        const need = (LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED).concat(NAME_NEEDED, FEED_NEEDED);
         return !mod ? need.slice() : need.filter(function (k) { return typeof mod[k] !== "function"; });
       }
       /**
@@ -1615,339 +1643,409 @@
         if (ops.length) { try { renderRoadHud(); } catch (e) { /* 忽略 */ } }
       }
 
-      /* ══ 🏷 **标签层（DOM）** —— 机主 2026-09-25：「**如何实现楼房及区域名字喵**」══════════
-         🔴 **不用 MapLibre 的文字层**：我们的样式里 `glyphs` 是禁用项（`glyphs: undefined` ⇒
-            样式校验失败 ⇒ `load` 永不触发 ⇒ 整张地图全白且零报错，项目里栽过）；
-            要中文得自托管 glyphs PBF + 生成工具链 ⇒ 不值。⇒ **DOM 标签**（先例：domPins / 头像标签）。
-         🔴 分层/避让/优先级/上限**全在 `wsLabels.ts`**（纯函数，App 复用）；本页只负责
-            "取数据 → 调 pickLabels → 写 DOM"，且**只在 moveend/zoomend/新数据到达时**跑一次
-            （**绝不在 render 循环里做布局** —— 那是 fps 杀手）。
-         🔴 铁律：**缺名字不显示、不编名字**；每个标签带 `source`，喂判断的只有 real。 */
+      /* ══ 🏷🗺 **名字层（DOM）** —— 机主 2026-09-26：「我要求**每个显示的楼房都要有名字喵**，
+         如果太密集了就根据类型划定区域（如经济区，美食区），**每个名字和楼房都能点击查看信息**」 ══
+         🔴 **本页只接线**（PR 门禁 C1）：取数 / 真名标签（48px 避让 + 优先级 + 上限）/ 区名聚合
+         （0.01° 子格 · 真名优先 · 过半才算数据驱动）/ 密集迟滞闸门 / 动效参数 —— **全在共享真源**
+         `wsNameLayer`（它再用 `wsLabels` + `wsZoneNames`），卡片字段与动效令牌在 `wsBuildingCard`，
+         两者都经 `/vendor/wsScene.mjs` 供给（App 宿主接的是**同一份**）。
+         🔴 为什么是 DOM 而不是地图库文字层：`glyphs` 在本项目是**禁用项**
+         （`glyphs: undefined` ⇒ 样式校验失败 ⇒ `load` 永不触发 ⇒ 整图全白且**零报错**，栽过）。
+         🔴 动效三条红线（`DESIGN-MG-MOTION.md` §4.0/§4.2）：
+           ① 位置一律 `transform: translate3d(x px, y px, 0)` —— **不是** left/top（布局属性，
+              每帧改一个就是一次 layout；本页原来真名层正是 left/top，已一并改掉）；
+           ② 相机运动期间**只写容器一个节点**（整层 0.25 + 跟手容器位移，O(1)）；
+           ③ 只在 `moveend`/`zoomend`/新数据到达时重排，**render 循环里绝不碰 DOM**。
+         ⚠️ **生成名层（`＊` 前缀那层）已按机主拍板下屏**：屏上只给「真名 + 区名」，
+            生成名只出现在**点击后的信息卡**里（＊标记 / 单独计数 / 绝不进数据与对话）。
+            旧开关 `?names=real`（关生成名）随之失效；新的关机开关是 `?names=0`（整层关）
+            与 `?labels=0`（连片区包都不取）。 */
       const LABELS_ON = (function () { try { return !/[?&]labels=0\b/.test(location.search); } catch (e) { return true; } })();
-      /* 🏘 `place` = **片区/小区名**（离线包 `/placesbundle` 来的；机主问过「区域名字喵」） */
-      let labelItems = { admin: [], road: [], bld: [], place: [] };
+      const NAMES_ON = (function () { try { return !/[?&]names=0\b/.test(location.search); } catch (e) { return true; } })();
+      /* 自证出口（形状变了，名字沿用 ⇒ 老探针不会读到 undefined 而误判"没实现"） */
       let labelShown = [];
       let labelStat = { shown: 0, dropped: 0, cap: 0, capped: false, ms: null, err: "" };
+      let labelItems = { admin: [], road: [], bld: [], place: [] };
+      let nameLayer = null;
+      let namePlan = { mode: "names", nodes: [], batch: 0, lite: false, cameraOpacity: 0.25 };
+      let nameSwitchTimer = 0;
 
       function labelContainer() {
         let el = document.getElementById("ws-labels");
         if (!el) {
           el = document.createElement("div");
           el.id = "ws-labels";
-          el.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:6;overflow:hidden";
+          /* 容器**不吃事件**（只有标签本身可点）；整层淡化/跟手都写在**这一个**节点上 */
+          el.className = "ws-labs";
+          el.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:24;overflow:hidden;"
+            + "will-change:transform,opacity;transition:opacity 80ms linear";
           const host = map.getContainer();
           host.appendChild(el);
         }
         return el;
       }
 
-      /** 取"有名字的真实名字"（路名来自仓库 / 楼名来自最近一次取楼的 FC / 行政名来自定位） */
+      /** 只为**面板计数**（`labelItems.place` 等）与 HUD 的"片区名几个"。
+          🔴 这些**不是**规则：挑哪些、怎么避让、区名怎么算全在共享真源里。 */
       function collectLabelItems() {
         const TFx = window.__TF__;
         if (!TFx) return;
-        const kindOfRank = (rank) => (rank <= 1 ? "road_trunk" : "road_secondary");
-        const st = roadsStoreOf();
-        if (st && typeof TFx.roadLabelsFrom === "function") {
-          labelItems.road = TFx.roadLabelsFrom(st.features(), kindOfRank);
-        }
-        if (typeof TFx.buildingLabelsFrom === "function") {
-          const fc = window.__LASTFC__;
-          labelItems.bld = fc && fc.features ? TFx.buildingLabelsFrom(fc.features) : [];
-        }
-        /* 🏘 片区/小区名：来自**离线包**（`placeLabelsFrom` 会丢掉没名字/不认得的类型 —— 红线双保险） */
-        if (typeof TFx.placeLabelsFrom === "function") {
-          labelItems.place = TFx.placeLabelsFrom(placeItemsRaw);
-        }
-        if (!labelItems.admin.length && SPOT && Number.isFinite(SPOT.lng) && typeof TFx.adminLabelsFrom === "function") {
-          /* ⚠️ **只用真名字**：`SPOT.name` 是页面里那份定位/默认落点的名字（DataV 口径），不是编的；
-             没拿到就空着 —— HUD 如实写"行政名 0（还没取到）"，绝不造一个。 */
-          labelItems.admin = SPOT.name ? TFx.adminLabelsFrom([{ id: "spot", name: SPOT.name, lng: SPOT.lng, lat: SPOT.lat, level: 3 }]) : [];
-        }
+        try {
+          if (typeof TFx.placeLabelsFrom === "function") labelItems.place = TFx.placeLabelsFrom(placeItemsRaw);
+        } catch (e) { /* 面板计数失败不影响名字层 */ }
       }
 
-      /** 布局 + 写 DOM（**只在事件里调**） */
-      /* ══════════════════════════════════════════════════════════════════════════
-         🏷 **生成名层**（示意·非真实）—— 机主批准「每栋楼注明名字（含小摊）」+「都要」。
-         · 真源 = 共享模块 `wsNameGen`（确定性：同 id 永远同名；红线：不进数据/对话）；
-         · 与真名**样式不同**、**分开计数**（HUD 两格：真名 / 生成名）；
-         · `?names=real` ⇒ 整层关掉（生成名一个都不画）。
-         ⚠️ 只画**视野内**、并按 48px 网格稀疏（首版：一格一个），免得糊成一团。
-         ══════════════════════════════════════════════════════════════════════════ */
-      const GENNAMES_ON = !/[?&]names=real/.test(location.search);
-      const GEN_BLD_MAX = 40, GEN_STALL_MAX = 12;
-      /* 🔴 **沿街小摊层默认关**（机主 2026-09-26 真机：「有的压根没对应楼，有的甚至在水中，公路上」）。
-         离线实测（`~/chk/genname_audit.mjs`，5 格真包）：166 个小摊**全部压在路面上**
-         （到路中心距离 中位 **4.0m** / max 4.0m，而城市道路半宽 3~8m）、且**它本来就没有对应的楼**。
-         ⇒ 那两条反馈说的就是这一层。默认关，`?stalls=1` 才开（开了也会带「摊·」前缀与独立样式）。 */
-      const STALLS_ON = /[?&]stalls=1/.test(location.search);
-      let genLayerEl = null, genShownBld = null, genShownStall = null;
-      /** 当前画出来的生成名节点（带**地理坐标**）—— 拖动时只重投影它们，不重建、不重挑 */
-      let genNodes = [];
-      const GEN_LIFT = 28;   /* 机主真机反馈：16px 太短，读不出"连到哪" */
-      /**
-       * **丝滑**的关键：`move`/`zoom` 每帧只更新位置（transform + SVG 属性），
-       * 不重建 DOM、不重跑挑点 ⇒ 拖动过程中标签与引线**跟着地图连续走**，不会"等松手才跳一下"。
-       * （机主：「现在是滑动刷新一会，能改成丝滑的滑动吗」）
-       */
-      function positionGenNames() {
-        if (!genNodes.length) return;
-        /* ⚠️ 这里写的是**绝对**屏幕坐标 ⇒ 必须先把"拖动时的容器平移"归零，否则坐标被叠加两次 */
-        try { if (genLayerEl && genLayerEl.style.transform) genLayerEl.style.transform = ""; } catch (e) { /* 忽略 */ }
-        const cv = map.getCanvas ? map.getCanvas() : null;
-        const W = (cv && cv.clientWidth) || 400, H = (cv && cv.clientHeight) || 400;
-        for (const n of genNodes) {
-          let p;
-          try { p = map.project([n.lng, n.lat]); } catch (e) { continue; }
-          const off = p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20;
-          const vis = off ? "none" : "block";
-          if (n.el.style.display !== vis) { n.el.style.display = vis; n.dot.style.display = vis; n.line.style.display = vis; }
-          if (off) continue;
-          const x = p.x.toFixed(1), y = p.y.toFixed(1), y2 = (p.y - GEN_LIFT).toFixed(1);
-          n.el.style.transform = "translate3d(" + x + "px," + y2 + "px,0) translate(-50%,-100%)";
-          n.dot.style.transform = "translate3d(" + x + "px," + y + "px,0)";
-          n.line.setAttribute("x1", x); n.line.setAttribute("y1", y);
-          n.line.setAttribute("x2", x); n.line.setAttribute("y2", y2);
-        }
-      }
-      function genLayerOf() {
-        if (genLayerEl) return genLayerEl;
-        genLayerEl = document.createElement("div");
-        genLayerEl.id = "ws-gennames";
-        const host = document.getElementById("map") || document.body;
-        host.appendChild(genLayerEl);
-        return genLayerEl;
-      }
-      /** 视野内稀疏：按 48px 网格，一格只留一个（顺序由 id 哈希决定 ⇒ 稳定） */
-      function genThin(items, cell) {
-        const seen = new Set(), out = [];
-        for (const it of items) {
-          const k = Math.round(it.x / cell) + ":" + Math.round(it.y / cell);
-          if (seen.has(k)) continue;
-          seen.add(k); out.push(it);
-        }
-        return out;
-      }
-      function refreshGenNames(why) {
-        const hud = document.getElementById("m-gennames");
+      /** 懒建共享名字层（缺符号时**说清是"模块旧"还是"真没有"**，与别的层同一自愈口径） */
+      function nameLayerOf() {
+        if (nameLayer) return nameLayer;
         const TFx = window.__TF__;
-        const layer = genLayerOf();
-        if (!GENNAMES_ON) { layer.textContent = ""; if (hud) hud.textContent = "🏷 生成名 关（?names=real）"; return; }
-        if (!TFx || typeof TFx.planGenNames !== "function") {
-          if (hud) hud.textContent = "🏷 生成名 数不出来：vendor 缺 wsNameGen（旧产物？）";
-          return;
-        }
-        const cv = map.getCanvas ? map.getCanvas() : null;
-        const W = (cv && cv.clientWidth) || 400, H = (cv && cv.clientHeight) || 400;
-        const t0 = Date.now();
-        /* ── 楼名：只从**画出来的那批楼**（`drawnBldPts`，由 `setBldData` 记）里挑 ──
-           🔴 机主 2026-09-26：「楼名对不上位置」= 以前从**仓库**里挑名字 ⇒ 名字指到没画的楼上。
-           现在 `drawnBldPts === null`（还没落过图）时**不画楼名**，并在 HUD 说明，绝不退回仓库口径。 */
-        let bldPts = [];
-        try {
-          if (Array.isArray(drawnBldPts)) bldPts = drawnBldPts;
-          window.__GENN_SKIP__ = 0;
-        } catch (e) { bldPts = []; }
-        const byId = new Map(bldPts.map(function (b) { return [b.id, b]; }));
-        const pickedBld = TFx.planGenNames(bldPts.map(function (b) { return b.id; }), GEN_BLD_MAX).map(function (g) {
-          const b = byId.get(g.id); return b ? { name: g.name, kind: "shop", lng: b.lng, lat: b.lat } : null;
-        }).filter(Boolean);
-        /* ── 小摊：沿**路网仓库**的折线生成（真源里做垂直退距） ── */
-        let roads = [];
-        try {
-          const st = roadsStoreOf();
-          const feats = (st && st.features) ? st.features() : [];
-          roads = feats.map(function (f) {
-            const id = f && (f.i || f.id) || null;
-            let cs = (f && f.p) || (f && f.geometry && f.geometry.coordinates) || null;
-            if (cs && cs.length && Array.isArray(cs[0]) && typeof cs[0][0] === "number") cs = [cs];   // 单段折线
-            const line = Array.isArray(cs) && cs.length ? cs[0] : null;
-            return (id && line && line.length >= 2) ? { id: String(id), coords: line } : null;
-          }).filter(Boolean);
-        } catch (e) { roads = []; }
-        const stalls = STALLS_ON ? TFx.planStalls(roads, GEN_STALL_MAX, 2) : [];   /* 默认关（见 STALLS_ON 注释） */
-        /* ── 投影 + 稀疏 + 落 DOM（只改 left/top，不重建元素） ── */
-        const items = [];
-        for (const b of pickedBld) {
-          const p = map.project([b.lng, b.lat]);
-          if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
-          items.push({ x: p.x, y: p.y, lng: b.lng, lat: b.lat, text: "＊" + b.name, stall: false });
-        }
-        genShownBld = items.length;
-        for (const s of stalls) {
-          const p = map.project([s.lng, s.lat]);
-          if (p.x < -40 || p.y < -20 || p.x > W + 40 || p.y > H + 20) continue;
-          items.push({ x: p.x, y: p.y, lng: s.lng, lat: s.lat, text: "摊·" + s.name, stall: true });
-        }
-        genShownStall = items.filter(function (i) { return i.stall; }).length;
-        /* ⚠️ 试过用 `map.queryRenderedFeatures` 只在「屏幕真有楼」处挂名 —— **撤回**：
-           无头 / 无 WebGL 时它恒返回空（实测 8/8 被误拦），自定义 GL 层也查不到 ⇒ 假阴性机器。
-           准确性改由**代表点算对**来保证（见下）。 */
-        const items2 = items;
-        const kept = genThin(items2, 48);
-        layer.textContent = "";
-        /* 🔴 机主：「给名字和楼**连上线**，不然分辨不了具体在哪」⇒ 标签从楼顶点**上抬**，
-           再用一条虚线**指回那栋楼**，并在楼的顶点打一个小点（连的是哪栋，一眼看出）。 */
-        const LIFT = GEN_LIFT;
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("class", "gn-lines");
-        genNodes = [];
-        for (const it of kept) {
-          const d = document.createElement("div");
-          d.className = "gn" + (it.stall ? " is-stall" : "");
-          d.textContent = it.text;
-          const dot = document.createElement("div");
-          dot.className = "gn-dot" + (it.stall ? " is-stall" : "");
-          const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          if (it.stall) ln.setAttribute("class", "is-stall");
-          layer.appendChild(d); layer.appendChild(dot); svg.appendChild(ln);
-          /* 记下**地理坐标**（不是屏幕坐标）：拖动时只需重投影，不用重挑标签 */
-          genNodes.push({ lng: it.lng, lat: it.lat, stall: it.stall, el: d, dot: dot, line: ln });
-        }
-        layer.appendChild(svg);
-        positionGenNames();          // 立刻摆一次（新节点不能停在 0,0）
-        if (hud) {
-          const realN = (labelStat && typeof labelStat.shown === "number") ? labelStat.shown : NaN;
-          /* 🔴 锚点来源必须写在 HUD 上（可核对）：`画出的楼 N 栋` = 只锚**真画出来的那批**（一一对应）；
-             `等落图` = 还没落过图 ⇒ 楼名一个都不画（绝不退回"从仓库挑名字"的旧口径）。 */
-          const anchor = Array.isArray(drawnBldPts) ? ("锚=画出的楼 " + drawnBldPts.length + " 栋") : "锚=等落图（未画楼名）";
-          const base = (typeof TFx.genCountsLine === "function")
-            ? TFx.genCountsLine(realN, kept.filter(function (k) { return !k.stall; }).length, kept.filter(function (k) { return k.stall; }).length)
-            : ("🏷 生成名 " + kept.length + "（" + why + "）");
-          /* 小摊层关着时**明说**（别让人以为"小摊 0 个"= 城里没有摊位） */
-          const stallNote = STALLS_ON ? "" : " · 小摊层默认关（?stalls=1 才开）";
-          hud.textContent = base + " · " + anchor + stallNote;
-        }
-        try { window.__GENN__ = { on: GENNAMES_ON, bld: genShownBld, stall: genShownStall, shown: kept.length, ms: Date.now() - t0, roads: roads.length, lines: kept.length }; } catch (e) { /* 忽略 */ }
-      }
-
-      /* ══════════════════════════════════════════════════════════════════════════
-         🌊🌳 **真水系 / 绿地** —— 规则**全在共享真源** `wsGwLayer`（PR 门禁 C1：宿主不许有第二份实现）。
-         · 数据 = `/gwbundle/<格>.json`（`world_map/gw_bundle.py` 从 OSM/Overpass 取的真多边形，ODbL）；
-         · 为什么必须自己画：Esri 底图在 z17 这一带两个服务都只给占位图（实测同一张 2521B）；
-         · 格键 / 取数 / 归一化 / 配色 / 层序 / 署名 / 判词**都在模块里**（这一页一行规则都不写）；
-         · 这一页只做三件**结构性**的事：把 map/视野/主题/取数递进去 → 判词写进 HUD → 快照挂 `__GW__`。
-         ⚠️ 2026-09-26「抽共享真源」：抽之前这段是**内联原型**（这一页 = 试验台，App 才是 PR 结构）。
-            抽的动作**只搬规则、不动观感**：HUD 文案与数字逐字不变（判词那一行由 `gwVerdictLine()` 给）。
-         ══════════════════════════════════════════════════════════════════════════ */
-      const GW_ON = !/[?&]gw=0/.test(location.search);
-      let gwLayer = null;
-      function gwHud(text) { const el = $("m-gw"); if (el) el.textContent = text; }
-      /** 建那**一个** gw 实例（规则全在模块里；这里只递宿主自己的四样东西：地图/视野/主题/取数） */
-      function gwEnsure() {
-        if (gwLayer) return gwLayer;
-        const TFx = window.__TF__;
-        if (!TFx || typeof TFx.createGwLayer !== "function") {
-          /* 自愈口径与别的层一致：缺符号时**说清是"模块旧"还是"真没有"**（`tfState` 是自愈记录） */
-          gwHud("🌊🌳 水/绿地 数不出来：模块缺 createGwLayer（" + tfState + "）");
+        if (!TFx || typeof TFx.createNameLayer !== "function") {
+          labelStat.err = "模块缺 createNameLayer（" + tfState + "）";
           return null;
         }
-        gwLayer = TFx.createGwLayer({
-          enabled: function () { return GW_ON; },
+        nameLayer = TFx.createNameLayer({
+          enabled: function () { return NAMES_ON; },
           map: function () { return map; },
-          view: bundleView,
-          theme: function () { return THEME; },
           fetchCell: bundleFetchCell,
-          onHud: function (line) { gwHud(line); },
-          onSnapshot: function (s) { window.__GW__ = s; },
-          onError: function (why) { errs.push(why); },
+          /* 行政区名：本页只有"定位/默认落点"那一个真名（DataV 口径），没有就空着 —— 绝不编 */
+          admins: function () {
+            return (labelItems.admin || []).map(function (a) { return { id: a.id, name: a.name, lng: a.lng, lat: a.lat, level: a.adminLevel }; });
+          },
+          /* **画出去的那批楼**（`drawnBldPts`）—— 名字只锚在屏上真有的楼上 */
+          drawnBuildings: function () {
+            return Array.isArray(drawnBldPts)
+              ? drawnBldPts.map(function (b) {
+                  return { type: "Feature", id: b.id, properties: { name: b.name }, geometry: { type: "Point", coordinates: [b.lng, b.lat] } };
+                })
+              : [];
+          },
+          onPlan: function (plan, facts) { applyNamePlan(plan, TFx.nameVerdictLine ? TFx.nameVerdictLine(facts) : ""); },
+          onError: function (why) { errs.push("names " + why); },
         });
-        return gwLayer;
-      }
-      async function refreshGw(why) {
-        const L = gwEnsure();
-        if (!L) return;
-        try { await L.refresh(why); }
-        catch (e) {
-          /* 模块**永不抛**（失败都变成判词里的"数不出来：…"）；这一层是最后一道兜底，绝不静默 */
-          gwHud("🌊🌳 水/绿地 数不出来：" + String(e).slice(0, 60));
-        }
+        return nameLayer;
       }
 
-      function refreshLabels(why) {
-        const el = $("m-labels");
-        if (!LABELS_ON) { if (el) el.textContent = "🏷 标签 关（?labels=0）"; return; }
-        const TFx = window.__TF__;
-        if (!TFx || typeof TFx.pickLabels !== "function" || typeof TFx.labelPlanFor !== "function") {
-          labelStat.err = "模块缺 pickLabels（" + tfState + "）";
-          if (el) el.textContent = "🏷 标签 数不出来：" + labelStat.err;
-          return;
-        }
-        const t0 = Date.now();
-        collectLabelItems();
-        const plan = TFx.labelPlanFor(map.getZoom());
-        const cv = map.getCanvas ? map.getCanvas() : null;
-        const size = { width: (cv && cv.clientWidth) || 400, height: (cv && cv.clientHeight) || 400 };
-        const r = TFx.pickLabels(
-          labelItems.admin.concat(labelItems.road, labelItems.place, labelItems.bld),
-          (lng, lat) => map.project([lng, lat]),
-          size, plan, {},
-        );
-        labelShown = r.shown;
-        labelStat = {
-          shown: r.shown.length, dropped: r.droppedByCollision, cap: r.droppedByCap, capped: r.capped,
-          candidates: r.candidates, noName: r.skippedNoName, sketch: r.skippedSketch, offscreen: r.skippedOffscreen,
-          ms: Date.now() - t0, err: "",
+      /**
+       * 把**渲染计划**落到 DOM，HUD 与节点**同一批**（两者不同步过：实测读到"区名模式 + 屏上全是真名"）。
+       * "先隐后改字"：换批时整层先淡出（`is-switching`，120ms），**看不见的那一帧**才换名字。
+       */
+      function applyNamePlan(plan, hudLine) {
+        const changed = plan.batch !== namePlan.batch;
+        namePlan = plan;
+        if (nameSwitchTimer) { clearTimeout(nameSwitchTimer); nameSwitchTimer = 0; }
+        const commit = function (afterPaint) {
+          renderLabelDom();
+          if (hudLine) nameHud(hudLine);
+          if (afterPaint) setTimeout(function () { box2().classList.remove("is-switching"); }, 16);
+          else box2().classList.remove("is-switching");
         };
-        renderLabelDom();
-        if (el) {
-          const pn = labelItems.place.length;
-          el.textContent = `🏷 标签 ${r.shown.length} 显示 / ${r.droppedByCollision} 丢弃（避让）`
-            + (r.droppedByCap ? ` / ${r.droppedByCap} 超上限` : "")
-            + `（候选 ${r.candidates} · 上限 ${plan.cap} · 无名字跳过 ${r.skippedNoName} · 视野外 ${r.skippedOffscreen} · ${labelStat.ms}ms）`
-            + (function () {
-              const fl = bundleFeedLine(placesFeedOf(), "🏘", "个");
-              return fl ? " · " + fl.replace(/^🏘 /, "") : " · 片区格 数不出来（模块缺 bundleCountsLine）";
-            })()
-            + ` · 片区名 ${pn} 个（区片 ${labelItems.place.filter((x) => x.placeType !== "neighbourhood").length} · 小区 ${labelItems.place.filter((x) => x.placeType === "neighbourhood").length}）`
-            + (function () { const e = placesErrText(); return e ? ` · ⚠ ${e}` : ""; })();
-          el.title = "分层：z≤10 只行政名 + **区片**名 / z11~12 +主干路名 + **小区/街区**名 / z13+ +次干道·楼名（片区名同层竞争；优先级 行政>主干>次干>片区>楼名 —— 阈值在 wsLabels.labelPlanFor）\n"
-            + "**只在 moveend/zoomend 更新**（不在 render 循环里做布局）\n"
-            + "铁律：缺名字不显示、不编名字；标签带 source，喂判断的只有 real";
-        }
-        window.__LABELS__ = labelStat;
+        if (!changed) { commit(false); return; }
+        let reduce = false;
+        try { reduce = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (e) { reduce = false; }
+        if (reduce || window.__PERF_LOW__) { commit(false); return; }
+        box2().classList.add("is-switching");
+        const ms = (window.__TF__ && window.__TF__.LABEL_MOTION) ? window.__TF__.LABEL_MOTION.nameOutMs : 120;
+        nameSwitchTimer = setTimeout(function () { nameSwitchTimer = 0; commit(true); }, ms);
+      }
+      function box2() { return labelContainer(); }
+
+      function nameHud(line) {
+        const el = $("m-labels");
+        if (el) { el.textContent = line; el.title = "共享真源 `wsNameLayer.nameVerdictLine()` 的原话（三态：正数 / 0（已量）/ 数不出来）\n"
+          + "· 显示 = 标签层成功放置数（`pickLabels.shown`）· 丢弃(避让) · 超上限 = 同一批的三个数\n"
+          + "· 🚫 生成名上屏恒为 0：机主拍板「屏上只给真名 + 区名，生成名只进信息卡」\n"
+          + "· 只在 moveend/zoomend/新数据到达时重排（render 循环里不碰 DOM）"; }
       }
 
-      /** 写 DOM（复用节点池；一次更新完，不逐条 insert） */
-      /** 🧈 **真名标签的"只挪位置"**（缩放/旋转途中每帧调它；**不要**调 `renderLabelDom()`：
-          后者会重建每个节点的 `cssText` = 每帧几十次样式重算，正是"卡"的来源之一）。
-          🔴 2026-09-26 之前这一层**只有 moveend/zoomend 才更新** ⇒ 拖动时整层钉在屏幕上
-          （机主：「名字显示是滑动刷新一次，**不能跟随，错位严重**」）。 */
-      function positionLabelNodes() {
+      /** 名字层刷新（**只在事件里调**：moveend / zoomend / 新数据到达 / 开页 kick） */
+      async function refreshLabels(why) {
+        if (!LABELS_ON) { const el = $("m-labels"); if (el) el.textContent = "🏷 名字层 关（?labels=0）"; return; }
+        const L = nameLayerOf();
+        const el = $("m-labels");
+        if (!L) { if (el) el.textContent = "🏷 名字层 数不出来：" + labelStat.err; return; }
+        const t0 = Date.now();
         try {
-          const box = labelContainer();
-          /* 这里写的是**绝对**屏幕坐标 ⇒ 先把拖动时的容器平移归零，否则叠加两次 */
-          if (box.style.transform) box.style.transform = "";
-          for (let i = 0; i < labelShown.length; i++) {
-            const node = box.childNodes[i];
-            const l = labelShown[i];
-            if (!node || !l || !Number.isFinite(l.lng) || !Number.isFinite(l.lat)) continue;
-            let p; try { p = map.project([l.lng, l.lat]); } catch (e) { continue; }
-            node.style.left = p.x.toFixed(1) + "px";
-            node.style.top = p.y.toFixed(1) + "px";
-          }
-        } catch (e) { /* 忽略：标签挪位失败不该影响地图 */ }
+          collectLabelItems();
+          const f = await L.refresh(why || "view");
+          labelStat = {
+            shown: f.pickedShown, dropped: f.droppedByCollision, cap: f.droppedByCap, capped: !!f.capped,
+            candidates: f.candidates, noName: f.skippedNoName, offscreen: f.skippedOffscreen,
+            real: f.realLabels, zone: f.zoneLabels, derived: f.zoneDerived, sketch: f.zoneSketch,
+            generated: f.generatedOnScreen, mode: f.mode, dots: f.points, cells: f.hit + "/" + f.cells,
+            ms: Date.now() - t0, err: "",
+          };
+          /* 老自证出口：`shown` 只放**真名**节点（面板按 kind 分组读它） */
+          labelShown = (L.plan().nodes || []).filter(function (n) { return n.style === "real"; })
+            .map(function (n) { return { kind: n.pick && n.pick.kind === "zone" ? "place" : "place", name: n.text }; });
+          window.__LABELS__ = labelStat;
+          window.__NAMES__ = { mode: f.mode, real: f.realLabels, zone: f.zoneLabels, generatedOnScreen: f.generatedOnScreen, line: nameLineOf(f) };
+        } catch (e) {
+          labelStat.err = String(e).slice(0, 80);
+          if (el) el.textContent = "🏷 名字层 数不出来：" + labelStat.err;
+        }
       }
+      function nameLineOf(f) { try { return window.__TF__.nameVerdictLine(f); } catch (e) { return ""; } }
 
+      /**
+       * 写 DOM（**节点池复用**；一次更新完，不逐条 insert）。
+       * 位置 = `transform: translate3d(...)`（R2）；三档样式由共享层的 `style` 决定（**必须不同**）。
+       */
       function renderLabelDom() {
         try {
           const box = labelContainer();
           /* 绝对坐标写入前先归零容器平移（否则拖动中途重建会叠加两次） */
           if (box.style.transform) box.style.transform = "";
-          while (box.childNodes.length > labelShown.length) box.removeChild(box.lastChild);
-          for (let i = 0; i < labelShown.length; i++) {
-            const l = labelShown[i];
+          const nodes = namePlan.nodes || [];
+          while (box.childNodes.length > nodes.length) box.removeChild(box.lastChild);
+          for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
             let node = box.childNodes[i];
-            if (!node) { node = document.createElement("div"); box.appendChild(node); }
-            node.textContent = l.name;
-            node.style.cssText = "position:absolute;transform:translate(-50%,-50%);white-space:nowrap;"
-              + "font-size:" + (l.kind === "admin" ? "12px" : "11px") + ";"
-              + "color:" + (l.kind === "admin" ? "#0d2a3a" : l.kind === "building" ? "#274156" : "#1d3b52") + ";"
-              + "text-shadow:0 1px 0 rgba(255,255,255,.75);"
-              + "font-weight:" + (l.kind === "admin" ? "700" : "500") + ";"
-              + "left:" + l.x + "px;top:" + l.y + "px";
-            node.title = l.kind + " · " + l.source;
+            if (!node) {
+              node = document.createElement("button");
+              node.type = "button";
+              node.className = "ws-lab";
+              node.addEventListener("click", function (ev) {
+                try { ev.stopPropagation(); } catch (e) { /* 忽略 */ }
+                openCardFromNode(n);
+              });
+              box.appendChild(node);
+            }
+            node.textContent = n.text;
+            node.setAttribute("data-ws-lab", (n.pick && n.pick.kind) || "?");
+            node.setAttribute("data-ws-lab-id", n.id);
+            node.setAttribute("data-ws-lab-style", n.style);
+            node.className = "ws-lab " + (n.style === "real" ? "is-real" : n.style === "derived" ? "is-derived" : "is-generated")
+              + (n.sketch ? " is-sketch" : "");
+            node.style.transform = "translate3d(" + n.x + "px," + n.y + "px,0)";
+            node.title = n.why || "";
           }
+          box.classList.toggle("is-lite", !!namePlan.lite);
         } catch (e) { errs.push("labels " + e); }
+      }
+
+      /** 🧈 **只挪位置**（缩放/旋转途中每帧调它；**不要**重建 DOM —— 那会每帧几十次样式重算）。
+          写的是 `transform`（合成属性），不是 left/top。 */
+      function positionLabelNodes() {
+        try {
+          const box = labelContainer();
+          if (box.style.transform) box.style.transform = "";
+          const nodes = namePlan.nodes || [];
+          for (let i = 0; i < nodes.length; i++) {
+            const node = box.childNodes[i];
+            if (!node) continue;
+            let p; try { p = map.project([nodes[i].lng, nodes[i].lat]); } catch (e) { continue; }
+            node.style.transform = "translate3d(" + p.x.toFixed(1) + "px," + p.y.toFixed(1) + "px,0)";
+          }
+        } catch (e) { /* 忽略：标签挪位失败不该影响地图 */ }
+      }
+
+      /* ══ 🪪 **信息卡**（点楼体 / 点名字 / 点区名 ⇒ **同一张卡**）══════════════════════════
+         规则全在 `wsBuildingCard`：字段、三态（真名 / 生成·示意 / 数不出来）、署名原话、
+         动效令牌（`CARD_MOTION`）、生长原点（`cardOriginOf` + `cardComposeTransform`）。
+         🔴 卡片**不许**用 `backdrop-filter`（浮在地图画布上 ⇒ 每帧读回底下像素）；只动 transform/opacity。 */
+      function cardEl() {
+        let el = document.getElementById("ws-card");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "ws-card";
+          el.className = "ws-bcard";
+          el.setAttribute("role", "dialog");
+          el.setAttribute("aria-modal", "true");
+          el.style.cssText = "position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:30;"
+            + "width:min(88%,420px);max-height:76%;overflow:auto;box-sizing:border-box;padding:14px 16px 12px;"
+            + "background:rgba(18,26,34,0.94);color:#eaf2f6;border:1px solid rgba(255,255,255,0.18);"
+            + "border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.45);will-change:transform,opacity";
+          const host = map.getContainer();
+          host.appendChild(el);
+        }
+        return el;
+      }
+      function scrimEl() {
+        let el = document.getElementById("ws-card-scrim");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "ws-card-scrim";
+          /* 🔴 **收起时必须真的不接事件**（真浏览器实测抓到的严重 bug）：原来收起只把 opacity 写成 0，
+             节点仍 `pointer-events:auto` 且铺满整屏 ⇒ **关掉一张卡之后，地图再也点不动了**
+             （后续每一次点击都被遮罩吃掉 —— 探针表现为"点楼 25 次一个卡片都不弹"，
+             真机用户表现为"看过一次信息之后地图就死了"）。 */
+          el.style.cssText = "position:absolute;inset:0;z-index:29;background:rgba(10,14,20,.32);opacity:0;display:none;"
+            + "pointer-events:none;transition:opacity 160ms cubic-bezier(0.22,0.61,0.36,1);will-change:opacity";
+          el.addEventListener("click", function () { closeCard(); });
+          map.getContainer().appendChild(el);
+        }
+        return el;
+      }
+      let cardData = null;
+      function openCard(input, clickPt) {
+        const TFx = window.__TF__;
+        if (!TFx || typeof TFx.buildingCardData !== "function") { errs.push("card: 模块缺 buildingCardData"); return; }
+        try {
+          const host = map.getContainer();
+          const W = host.clientWidth || 400, H = host.clientHeight || 400;
+          const rect = { x: (W - Math.min(W * 0.88, 420)) / 2, y: (H - Math.min(H * 0.76, 260)) / 2, w: Math.min(W * 0.88, 420), h: Math.min(H * 0.76, 260) };
+          /* 署名（ODbL）：**只念包索引里的原话**（真名包索引里那句；取不到 = null ⇒ 卡片如实写"署名取不到"） */
+          const idx = (function () {
+            try {
+              const f = nameLayer && nameLayer.facts ? nameLayer.facts() : null;
+              return f && f.attribution ? { attribution: f.attribution, real: true } : null;
+            } catch (e) { return null; }
+          })();
+          cardData = TFx.buildingCardData(Object.assign({}, input, { click: clickPt || null, cardRect: rect, index: idx }));
+          renderCard(cardData);
+        } catch (e) { errs.push("card " + e); }
+      }
+      function renderCard(d) {
+        const el = cardEl(), sc = scrimEl();
+        const M = (window.__TF__ && window.__TF__.CARD_MOTION) || { enterMs: 200, exitMs: 160, scrimOpacity: 0.32, scrimMs: 160, contentStartMs: 60, contentStaggerMs: 30, contentMs: 140 };
+        el.innerHTML = "";
+        el.setAttribute("data-ws-card", d.kind);
+        el.setAttribute("data-ws-card-kind", d.kind);
+        el.setAttribute("data-ws-card-source", d.state);
+        el.setAttribute("data-ws-card-id", d.id || "");
+        const head = document.createElement("div");
+        head.className = "ws-bcard__head";
+        head.style.cssText = "display:flex;align-items:baseline;gap:8px";
+        const title = document.createElement("span");
+        title.className = "ws-bcard__title";
+        title.style.cssText = "font-size:16px;font-weight:600;flex:1 1 auto;word-break:break-word";
+        title.textContent = d.title;
+        head.appendChild(title);
+        if (d.titleTag) {
+          const tag = document.createElement("span");
+          tag.className = "ws-bcard__tag " + (d.sketch ? "is-sketch" : "is-real");
+          tag.style.cssText = "flex:none;font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid rgba(255,255,255,.3);"
+            + (d.sketch ? "font-style:italic;border-style:dashed;color:#cfe0d8" : "");
+          tag.textContent = (d.sketch ? "＊" : "") + d.titleTag;
+          head.appendChild(tag);
+        }
+        const x = document.createElement("button");
+        x.className = "ws-bcard__x";
+        x.type = "button";
+        x.setAttribute("aria-label", "关闭");
+        /* 命中区 ≥44×44（静态 padding 撑出来，**不用**动画改尺寸） */
+        x.style.cssText = "flex:none;width:44px;height:44px;margin:-12px -10px -12px 0;background:transparent;border:0;color:#cfe0d8;font-size:14px;cursor:pointer";
+        x.textContent = "✕";
+        x.addEventListener("click", function () { closeCard(); });
+        head.appendChild(x);
+        el.appendChild(head);
+        /* 内容层：4 层错峰（与 App 的 `WsBuildingCard.vue` **同一组令牌**） */
+        const rows = (d.fields || []).filter(function (f) { return f.key !== "name" && f.key !== "attribution"; });
+        /* ⚠️ 两个数组别混（真浏览器实测抓到的 TypeError）：`rows` 是**数据**，
+           `rowEls` 才是**刚建的 DOM 元素**。第一版在 rAF 里对 `rows` 取 `.style` ⇒
+           `Cannot set properties of undefined (setting 'opacity')`（数据对象没有 style）。 */
+        const rowEls = [];
+        rows.forEach(function (f, i) {
+          const row = document.createElement("div");
+          row.className = "ws-bcard__row is-" + (f.tone || "real");
+          row.style.cssText = "display:flex;gap:10px;padding:3px 0;font-size:12.5px;opacity:0;transform:translate3d(0,6px,0);"
+            + "transition:transform " + M.contentMs + "ms cubic-bezier(0.22,0.61,0.36,1),opacity " + M.contentMs + "ms cubic-bezier(0.22,0.61,0.36,1);"
+            + "transition-delay:" + (M.contentStartMs + M.contentStaggerMs * Math.min(i, 3)) + "ms";
+          const dt = document.createElement("span");
+          dt.style.cssText = "flex:none;width:62px;color:#9fb3c0";
+          dt.textContent = f.label;
+          const dd = document.createElement("span");
+          dd.style.cssText = "flex:1 1 auto;word-break:break-word";
+          dd.textContent = f.value;
+          row.appendChild(dt); row.appendChild(dd);
+          el.appendChild(row);
+          rowEls.push(row);
+        });
+        const src = document.createElement("div");
+        src.className = "ws-bcard__src";
+        src.style.cssText = "margin-top:8px;padding-top:6px;font-size:10.5px;line-height:1.4;color:#9fb3c0;border-top:1px solid rgba(255,255,255,.14)";
+        src.textContent = d.attribution || "署名取不到（包索引里没有 attribution）";
+        el.appendChild(src);
+        /* 入场：以点击点为 origin 生长（`cardComposeTransform` 拼**基准居中**，直接覆盖会把居中干掉） */
+        const startTf = (window.__TF__ && window.__TF__.cardEnterStyle) ? window.__TF__.cardEnterStyle(d.origin) : null;
+        el.style.transition = "transform " + M.enterMs + "ms cubic-bezier(0.22,0.61,0.36,1), opacity " + M.enterMs + "ms cubic-bezier(0.22,0.61,0.36,1)";
+        el.style.transform = (window.__TF__ && window.__TF__.cardComposeTransform) ? window.__TF__.cardComposeTransform(startTf && startTf.transform) : "translate(-50%,-50%)";
+        el.style.opacity = "0";
+        el.style.display = "";
+        sc.style.display = "";
+        sc.style.pointerEvents = "auto";
+        requestAnimationFrame(function () {
+          el.style.transform = (window.__TF__ && window.__TF__.cardRestTransform) ? window.__TF__.cardRestTransform() : "translate(-50%,-50%)";
+          el.style.opacity = "1";
+          sc.style.opacity = String(M.scrimOpacity);
+          rowEls.forEach(function (r) { r.style.opacity = "1"; r.style.transform = "translate3d(0,0,0)"; });
+        });
+      }
+      function closeCard() {
+        const el = document.getElementById("ws-card"), sc = document.getElementById("ws-card-scrim");
+        const M = (window.__TF__ && window.__TF__.CARD_MOTION) || { exitMs: 160, scrimMs: 160, scrimDelayMs: 40 };
+        if (el) {
+          el.style.transition = "transform " + M.exitMs + "ms cubic-bezier(0.3,0,1,1), opacity " + M.exitMs + "ms cubic-bezier(0.3,0,1,1)";
+          el.style.transform = (window.__TF__ && window.__TF__.cardExitTransform) ? window.__TF__.cardExitTransform() : "translate(-50%,-50%) scale(.96)";
+          el.style.opacity = "0";
+          setTimeout(function () { if (el.style.opacity === "0") el.style.display = "none"; }, M.exitMs + 20);
+        }
+        if (sc) {
+          sc.style.pointerEvents = "none";        /* **立刻**断事件（动画可以慢慢淡出，事件不能等） */
+          sc.style.transition = "opacity " + M.scrimMs + "ms cubic-bezier(0.3,0,1,1) " + M.scrimDelayMs + "ms";
+          sc.style.opacity = "0";
+          setTimeout(function () { if (sc.style.opacity === "0") sc.style.display = "none"; }, M.scrimMs + M.scrimDelayMs + 30);
+        }
+        cardData = null;
+      }
+      /** 点**标签**（真名 / 区名）—— 与点楼体弹**同一张卡** */
+      function openCardFromNode(n) {
+        const p = n.pick || {};
+        if (p.kind === "zone") { openCard({ kind: "zone", zone: p.zone }); return; }
+        if (p.kind === "place") { openCard({ kind: "place", place: p.place }); return; }
+        openCard({ kind: "building", building: { id: p.buildingId, lng: p.lng, lat: p.lat, properties: { name: p.name, osm_id: p.buildingId } } });
+      }
+      /** 点**楼体** —— 与点标签弹**同一张卡**（`queryRenderedFeatures` 拿不到时按"最近**已画**的楼"降级） */
+      function onMapClickNames(e) {
+        try {
+          const pt = e && e.point;
+          let feats = [];
+          let qerr = "";
+          try { if (pt && map.queryRenderedFeatures) feats = map.queryRenderedFeatures(pt, { layers: ["bld-ext"] }) || []; } catch (e2) { qerr = String(e2).slice(0, 60); feats = []; }
+          /* 🔴 **自证一行**（本页是试验台，`window.__*` 是它的既有契约）：点楼这条路以前**什么都不说**，
+             于是"点不到楼"和"根本没点中"看起来一模一样。诊断三件事都写出来：
+             库查到几条 / 画出去的楼几个点（`drawnBldPts`）/ 当时的 zoom。 */
+          try {
+            /* 顺带算一句"离点击点**最近的一栋画出去的楼**有多远"：这一条直接回答
+               「为什么点不到楼」—— 是"这附近确实没楼"，还是"楼在别的机位"（画出去的批次可能不在视野里）。 */
+            const nearInfo = (function () {
+              try {
+                if (!pt || !Array.isArray(drawnBldPts) || !drawnBldPts.length) return null;
+                let bd = Infinity, bi = null;
+                for (let i = 0; i < drawnBldPts.length; i++) {
+                  const b = drawnBldPts[i];
+                  const p2 = map.project([b.lng, b.lat]);
+                  const d = Math.hypot(p2.x - pt.x, p2.y - pt.y);
+                  if (d < bd) { bd = d; bi = b.id; }
+                }
+                return { d: Math.round(bd), id: bi, offscreen: (bd > 400) };
+              } catch (e7) { return null; }
+            })();
+            window.__NAMES_CLICK__ = {
+              nearest: nearInfo,
+              at: pt ? [Math.round(pt.x), Math.round(pt.y)] : null,
+              feats: feats.length, qerr: qerr,
+              layer: (feats[0] && feats[0].layer && feats[0].layer.id) || null,
+              drawn: Array.isArray(drawnBldPts) ? drawnBldPts.length : null,
+              zoom: (function () { try { return +map.getZoom().toFixed(2); } catch (e5) { return null; } })(),
+              ext: (function () { try { return !!map.getLayer("bld-ext"); } catch (e6) { return null; } })(),
+              n: ((window.__NAMES_CLICK__ && window.__NAMES_CLICK__.n) || 0) + 1,
+            };
+          } catch (e3) { /* 自证失败不影响点击 */ }
+          if (!feats.length && Array.isArray(drawnBldPts) && pt && map.getZoom() >= 13) {
+            let best = null, bestD = 26;
+            for (let i = 0; i < drawnBldPts.length; i++) {
+              const b = drawnBldPts[i];
+              let p; try { p = map.project([b.lng, b.lat]); } catch (e3) { continue; }
+              const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+              if (d < bestD) { bestD = d; best = b; }
+            }
+            if (best) feats = [{ properties: { osm_id: best.id, name: best.name }, id: best.id }];
+          }
+          const f = feats[0];
+          if (!f) return;                    /* 点到空处：什么都不弹（不编一栋楼出来） */
+          openCard({ kind: "building", building: { id: String((f.properties || {}).osm_id || f.id || ""), properties: f.properties || {} }, click: pt || null });
+        } catch (e4) { errs.push("click " + e4); }
       }
 
       /** 🛣 离线包那一行的口径（可数：已取格 / 待取格 / 包里没有的格 / 失败的格） */
@@ -2333,9 +2431,22 @@
           /* 🎨 **可量化的对比度**（把"看不清"变成数字；低于阈值标红 + 页面写一句） */
           try {
             const TFa = window.__TF__;
-            const ground = (map.getPaintProperty("tint", "background-color") || "#FFFFFF");
+            /* 🔴 2026-09-26 修（父代理在诊断图上抓到的真 bug）：`tint` 图层**只在主题档有 `tier.tint`
+               时才被创建**（`wsMapTheme.ts` 的 `if (tier.tint)`），而 `wstheme.json` 里 **只有 `anime` 档有 tint**
+               （`night` 档只有 bg/base/hi/ref）⇒ 在 night 档上 `map.getPaintProperty("tint", …)`
+               直接抛 `TypeError: Cannot read properties of undefined (reading 'getPaintProperty')`，
+               被外层 catch 吞掉、只往 `errs` 推一条 ⇒ **屏幕上那块"对比度"静默消失**（诊断图上印着 `errs=contrast …`）。
+               判词三态：**不许拿 `#FFFFFF` 编一个比值出来** —— 图层不在就写"数不出来 + 原因"。 */
+            const hasTint = (function () { try { return !!map.getLayer("tint"); } catch (e0) { return false; } })();
+            const ground = hasTint ? (map.getPaintProperty("tint", "background-color") || "#FFFFFF") : null;
             const outline = (THEME && THEME.outline && THEME.outline.color) || "#000000";
-            const rep = TFa && TFa.contrastReport ? TFa.contrastReport((THEME && THEME.ramp) || null, ground, outline) : null;
+            const rep = (hasTint && TFa && TFa.contrastReport) ? TFa.contrastReport((THEME && THEME.ramp) || null, ground, outline) : null;
+            if (!hasTint) {
+              /* 如实写一行，别让这一块**静默**消失（三态里的"数不出来"） */
+              rows.push({ id: "对比度", key: "楼最暗档/地面", now: "数不出来", want: "≥0.85（或靠描边）", hit: "no-layer",
+                why: "数不出来：此刻样式里没有 `tint` 图层（主题档=" + THEME_ID + "；tint 只在档位有 `tier.tint` 时才建）" });
+              el_setContrastWhy("数不出来：此刻样式里没有 tint 图层（主题档=" + THEME_ID + "）");
+            }
             if (rep) {
               rows.push({ id: "对比度", key: "楼最暗档/地面", now: rep.bldGroundRatio, want: "≥0.85（或靠描边）", hit: rep.verdict === "ok", why: "楼与地是否分得开" });
               rows.push({ id: "对比度", key: "描边/地面", now: rep.outlineGroundRatio + ":1", want: "≥4.5:1", hit: rep.outlineGroundRatio >= 4.5, why: "平涂主题靠描边撑对比" });
@@ -2540,7 +2651,11 @@
           const l = (THEME.layers || []).filter(function (x) { return x.id === id; })[0];
           return l && l.paint ? l.paint[key] : undefined;
         };
-        row("tint", "background-color", lay("tint", "background-color"), "地面色罩 = 派生主题的地面色（整屏近白就是这一条在治）");
+        row("tint", "background-color",
+          (lay("tint", "background-color") === undefined
+            ? "数不出来：主题档 " + THEME_ID + " 的 layers 里没有 tint 图层（该档没有 tier.tint）"
+            : lay("tint", "background-color")),
+          "地面色罩 = 派生主题的地面色（整屏近白就是这一条在治）");
         row("bg", "background-color", lay("bg", "background-color"), "底色（天空之外那圈）");
         row("base", "raster-brightness-max", lay("base", "raster-brightness-max"), "底图压暗（不压 ⇒ 地面比楼亮，楼会消失）");
         row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "BA 的**平涂**（机主拍板的美术方向）⇒ 渐变保持关；受光/背光改由 cel 分档表达");
@@ -2916,6 +3031,16 @@
             return (id && pt) ? { id: String(id), lng: pt[0], lat: pt[1] } : null;
           }).filter(Boolean);
           window.__GENN_ANCHOR__ = { source: "drawn", n: drawnBldPts.length, of: feats.length, why: String(why || "") };
+          /* 🎯 **画出去那批楼的屏幕坐标**（试验台自证，与 `__GENN_ANCHOR__` 同族）：
+             用途只有一个 —— 回答「**为什么点不到楼**」。实测踩过：54 个网格点
+             `queryRenderedFeatures(["bld-ext"])` 全空、而"最近一栋画出去的楼"只有 97px ⇒
+             到底是"这一点上没有楼"还是"库的命中测试在软件渲染下不可靠"，只有拿**楼自己的锚点**去点才分得清。 */
+          try {
+            window.__BLD_DRAWN_XY__ = drawnBldPts.slice(0, 60).map(function (b) {
+              const p2 = map.project([b.lng, b.lat]);
+              return [Math.round(p2.x), Math.round(p2.y)];
+            });
+          } catch (e8) { window.__BLD_DRAWN_XY__ = null; }
         } catch (e) { drawnBldPts = []; }
         if (map.getSource("bld")) map.getSource("bld").setData(fc);
         else { map.addSource("bld", { type: "geojson", data: fc }); addBldLayers(); }
@@ -3103,7 +3228,7 @@
         } catch (e2) { /* 自检失败不许影响落图 */ }
         renderBldBundleHud();
         try { refreshLabels("bundle-bld"); } catch (e) { /* 标签失败不影响地图 */ }
-        try { refreshGenNames("bundle-bld"); } catch (e2) { /* 忽略 */ }
+        try { void refreshLabels("bundle-bld"); } catch (e2) { /* 忽略 */ }
         if (why) window.__BLD_FLUSH_WHY__ = why;
       }
 
@@ -3369,7 +3494,7 @@
         window.__ROADS_STORE__ = Object.assign({ why: why, evicted: ev, hunks: roadsHunkStat() }, st.stats());
         renderRoadHud();
         try { if (typeof refreshLabels === "function") refreshLabels("roads"); } catch (e) { /* 标签失败不影响地图 */ }
-        try { refreshGenNames("roads"); } catch (e2) { /* 忽略 */ }
+        try { void refreshLabels("roads"); } catch (e2) { /* 忽略 */ }
       }
       function TF2visibleRoadCount(feats) {
         const TF2 = window.__TF__;
@@ -3729,7 +3854,7 @@
         setBldData(data, "live 取数");
         renderBldBadge(); // 🏢 回证（各细节生成了多少 + 档位）随每次取楼刷新
         try { refreshLabels("buildings"); } catch (e) { /* 标签失败不影响地图 */ }   // 🏷 楼名到位后重排一次
-        try { refreshGenNames("buildings"); } catch (e2) { /* 生成名失败不影响地图 */ }
+        try { void refreshLabels("buildings"); } catch (e2) { /* 名字层失败不影响地图 */ }
       }
 
       /**
@@ -3981,12 +4106,24 @@
           if (n >= 20) return;
           setTimeout(function () { kickBldBundle(n + 1); }, 400);
         })(0);
+        /* 🏷🗺 **开页 kick**（有界重试，成功即停）—— 机主真机「**名字也没有**」那条欠账的直接原因：
+           名字层原来只挂 `moveend`/`zoomend`（用户一动才有）⇒ **开页那一屏一个名字都没有**。
+           范本 = 上面那个 `kickBldBundle`（同一形状：最多 20 次 × 400ms ≈ 8s，不吃常驻轮询）。 */
+        (function kickNames(tries) {
+          const n = tries || 0;
+          let ready = false;
+          try { ready = !!(window.__TF__ && typeof window.__TF__.createNameLayer === "function"); } catch (e) { ready = false; }
+          try { window.__NAMES_KICK__ = { tries: n, ok: ready }; } catch (e2) { /* 忽略 */ }
+          if (ready) { try { void refreshLabels("init-kick"); } catch (e3) { errs.push("namesKick " + e3); } return; }
+          if (n >= 20) return;
+          setTimeout(function () { kickNames(n + 1); }, 400);
+        })(0);
         /* 🏘 视野变了就补**片区名**离线格（静态文件、很小；取到后重排一次标签） */
         map.on("moveend", () => { try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); } });
         /* 开局也取一次（否则首屏没有任何片区名 —— 标签层会显得"没实现"） */
         try { void refreshPlacesBundle(); } catch (e) { errs.push("placesBundle " + e); }
         /* 🏷 标签：**只在 moveend/zoomend 重排**（render 循环里绝不碰 DOM —— fps 杀手） */
-        map.on("moveend", () => { try { refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("moveend"); } catch (e2) { errs.push("gennames " + e2); } try { void refreshGw("moveend"); } catch (e3) { errs.push("gw " + e3); } });
+        map.on("moveend", () => { try { void refreshLabels("moveend"); } catch (e) { errs.push("labels " + e); } try { void refreshGw("moveend"); } catch (e3) { errs.push("gw " + e3); } });
         /* 🔴🔴 名字"跟手"（机主 2026-09-26 真机：「名字显示是滑动刷新一次，**不能跟随，错位严重**」）。
            实测代价：`positionGenNames()` 一次 = 每个标签 4~6 次 DOM 写；本机（无头同机）测到
            **3 个标签 3.48ms/帧**（60 次 move 共 208.5ms）⇒ 真机 30+ 个标签必然 >16.7ms 的 60fps 预算
@@ -4028,17 +4165,17 @@
             active() { return !!ref; },
           };
         }
-        const genFollow = attachPanFollow(genLayerOf, positionGenNames);
         const labFollow = attachPanFollow(labelContainer, positionLabelNodes);
-        map.on("movestart", () => { try { genFollow.start(); labFollow.start(); } catch (e) { /* 忽略 */ } });
+        /* 🪪 点楼体 ⇒ 与点标签**同一张卡**（名字层与卡片都在上面那个区块里） */
+        map.on("click", function (e) { try { onMapClickNames(e); } catch (e2) { errs.push("click " + e2); } });
+        map.on("movestart", () => { try { labFollow.start(); box2().classList.add("is-camera-moving"); } catch (e) { /* 忽略 */ } });
         /* 🧈 丝滑：拖动**每帧只写一次容器 transform**（O(1)） */
-        map.on("move", () => { try { genFollow.follow(); labFollow.follow(); } catch (e) { /* 忽略 */ } });
+        map.on("move", () => { try { labFollow.follow(); } catch (e) { /* 忽略 */ } });
         map.on("zoom", () => {
-          try { if (!genFollow.active()) positionGenNames(); } catch (e) { /* 忽略 */ }
           try { if (!labFollow.active()) positionLabelNodes(); } catch (e) { /* 忽略 */ }
         });
-        map.on("rotate", () => { try { positionGenNames(); } catch (e) { /* 忽略 */ } try { positionLabelNodes(); } catch (e) { /* 忽略 */ } });
-        map.on("moveend", () => { try { genFollow.end(); } catch (e) { /* 忽略 */ } try { labFollow.end(); } catch (e) { /* 忽略 */ } });
+        map.on("rotate", () => { try { positionLabelNodes(); } catch (e) { /* 忽略 */ } });
+        map.on("moveend", () => { try { labFollow.end(); } catch (e) { /* 忽略 */ } try { box2().classList.remove("is-camera-moving"); } catch (e2) { /* 忽略 */ } });
 
         /* ══════════════════════════════════════════════════════════════════════════════
          * 💬 **角色接入 LingChat 本身的对话**（机主 2026-09-25：「我最[想]把角色做进去喵
@@ -4581,7 +4718,7 @@
                             name: function () { return lcDisplayName(); }, settingsName: function () { return lcSettingsName; },
                             resolvePos: function (force) { return lcResolveAnchor(force); } };
         } catch (e) { errs.push("char " + e); }
-        map.on("zoomend", () => { try { refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } try { refreshGenNames("zoomend"); } catch (e2) { errs.push("gennames " + e2); } });
+        map.on("zoomend", () => { try { void refreshLabels("zoomend"); } catch (e) { errs.push("labels " + e); } });
         /* 🛰 LOD 那一格也要跟着 zoom 走（它是 zoom 的纯函数；只在 zoomend 刷一次，仍是"事件驱动"） */
         map.on("zoom", () => { try { scheduleLodHud(); } catch (e) { /* 忽略 */ } });
         /* ☁️ art=3：天空叠加重画（moveend 时重画一次即可 —— 几何是确定性的，不会抖） */

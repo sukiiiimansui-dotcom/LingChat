@@ -97,6 +97,16 @@ export const PLACES_STORE_CAP = 3000;
      要真拿到 10 格：`最近 10 格 = 14.0MB`（≈1.4s 解析，一次性，之后走解析缓存）。
    ⇒ **推荐值 30,000**（区间低端：+10.8MB 换 2.6 倍画出的楼，且挑楼比改前还快）；
      50,000 的边际收益只有 +27% 的格数，却要 ~3 倍的挑楼耗时。 */
+/**
+ * 🧮 **一轮取数的字节预算**（默认 1.5MB）：格数不再是主要闸门 —— 细格包上一轮可以取十几格，
+ * 但"这一轮下多少字节"必须封顶（否则用户看到的就是"转圈半天"）。
+ * 1.5MB 对老包（0.05°、单格中位 205KB / 最大 1.9MB）≈ 今天"一轮 2 格"的量级；
+ * 对细格包（0.01°、单格中位 57KB）≈ 一轮十几到二十几格 ⇒ **同一条规则，两种粒度都对**。
+ * 取不到索引里的 `bytes`（老索引没这字段）⇒ 退回按格数（不猜）。
+ */
+export const BUNDLE_BYTES_PER_ROUND = 1.5 * 1048576;
+/** 一轮最多发几条格子请求（串行也有排队成本；细格包上"十几格"是合理的，几十条不是） */
+export const BUNDLE_REQ_PER_ROUND_MAX = 16;
 export const BLD_STORE_CAP = 30000;
 /** **实测推荐值**（机主给的区间低端）。改默认时要**页面与 App 一起改**（自检钉着"两处同值"）。 */
 export const BLD_STORE_CAP_RECOMMENDED = 30000;
@@ -601,6 +611,8 @@ export interface BundleFeedFacts {
   dir: string;
   /** 候选目录（按优先级）—— HUD 要能回答"为什么用的是这个目录" */
   dirs: string[];
+  /** 📐 **跟着格尺寸走的预算**（格越细，计划格数/一轮请求数越大；但**字节**由 `bytesPerRound` 封顶） */
+  budget: { cellDeg: number; scale: number; maxCells: number; perRefresh: number; bytesPerRound: number };
   /** 🗂 包里那张**索引**（`index.json`）的实况 —— HUD 要能回答"包外是读来的还是猜的" */
   index: { state: "未读" | "读取中" | "已读" | "失败" | "口径不符"; cells: number | null; keys: number | null;
            why: string | null; attribution: string | null; real: boolean | null; cellSize: number | null };
@@ -654,6 +666,8 @@ export interface BundleFeedOptions<T> {
    * 用途：`?cell=` 显式比对、自检里对拍两种包、以及将来"页面按哪个尺寸挑选"要对齐时。
    */
   expectCellDeg?: number | null;
+  /** 🧮 一轮取数的**字节预算**（默认 `BUNDLE_BYTES_PER_ROUND` = 1.5MB）；<=0 ⇒ 只看格数 */
+  bytesPerRound?: number;
   /** 失败原文（给 HUD/面板 —— 不静默空着） */
   onError?: (why: string) => void;
   /**
@@ -701,6 +715,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
      先读一次 `<包>/index.json` ⇒ 只对"索引里有的格"发请求；索引里没有的格直接记 `missing`（**包外**，
      零请求、且是**读来的事实**）。索引取不到 ⇒ **如实退回**试格子（`indexState="失败"`，HUD 写出来）。 */
   let refused = false;
+  let bytesThisRound = 0;                  // 这一轮**按索引算出来**要下的字节（不是估算）
   let activeDir: string | null = null;     // 这一场真正在用的包目录（多候选里选中的那个）
   let effCellDeg: number | null = null;    // 包自报的格尺寸（null ⇒ 还没读到索引，用兜底）
   let evictedSources = 0;                     // 被淘汰连累作废、下一轮要重取的格（历史累计）
@@ -823,13 +838,29 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       indexState = "失败";
       indexWhy = `索引没读到（试过 ${tried} 个目录：${dirs.join(" / ")}）⇒ 退回试格子`;
       opts.onError?.(`index ${spec.dir} 没读到（试过 ${tried} 个目录），退回试格子`);
-      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
+      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
     })();
     return indexPromise;
   }
 
   /** 这一场**实际按多少度分格**（包自报优先；索引还没读到 ⇒ 兜底常量） */
   function effectiveDeg(): number { return effCellDeg === null ? spec.cellDeg : effCellDeg; }
+
+  /* ══ 📐 **预算跟着格尺寸走**（2026-09-26 分片改造）══════════════════════════════════════
+     粗格（0.05°）时"一轮 2 格 / 计划 6 格"是合适的；格变细 25 倍之后，同样的**格数**只盖住 1/25 的视野 ——
+     照抄格数会变成"一格一格慢慢啃"。而用户感知的成本是**字节**，不是格数。
+     ⇒ 三个量都按"格面积的倒数"放大（`scale = (0.05/deg)²`），**并以字节为最终闸门**：
+       · 老包 0.05° ⇒ scale = 1 ⇒ **与今天逐字节相同的行为**（双包并存的硬约束）；
+       · 0.01° ⇒ scale = 25 ⇒ 计划格数 6→150、一轮请求 2→16（上限），但**这一轮下多少字节由预算卡死**。 */
+  function scaleOf(): number {
+    const d = effectiveDeg();
+    if (!Number.isFinite(d) || d <= 0) return 1;
+    return Math.max(1, Math.pow(BLD_BUNDLE_CELL_DEG / d, 2));
+  }
+  /** 计划里最多留几格（跟着格面积放大；上界 400 = 防"视野大得离谱"时排长队） */
+  function maxCellsEff(): number { return Math.min(400, Math.max(spec.maxCells, Math.round(spec.maxCells * scaleOf()))); }
+  /** 一轮最多发几条格子请求（跟着格面积放大；上界 `BUNDLE_REQ_PER_ROUND_MAX` —— 串行也不该排 100 条） */
+  function perRefreshEff(): number { return Math.min(BUNDLE_REQ_PER_ROUND_MAX, Math.max(spec.perRefresh, Math.round(spec.perRefresh * scaleOf()))); }
 
   function counters(): BundleFeedFacts {
     let n: number | null = null;
@@ -846,6 +877,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       pending, cap, wanted, capped, got, asked,
       refused: refused, cellDeg: effectiveDeg(), cellDegPin: (Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null),
       dir: activeDir || dirsOf(spec)[0], dirs: dirsOf(spec),
+      /* 📐 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
+      budget: { cellDeg: effectiveDeg(), scale: Math.round(scaleOf() * 100) / 100, maxCells: maxCellsEff(), perRefresh: perRefreshEff(), bytesPerRound: Math.round(bytesThisRound) },
       evictedSources,
       cache: cacheStats(),
       coalesce: { ms: coalesceMs, merged: coalescedFlushes },
@@ -868,7 +901,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
    */
   function planned(): { keys: string[]; wanted: number; capped: boolean } | null {
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
+    const p = spec.plan(v.bounds, v.center, maxCellsEff(), effectiveDeg());
     if (!p) return null;
     return { keys: p.cells.map((c) => c.key), wanted: p.wanted, capped: p.capped };
   }
@@ -879,7 +912,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
        （不然细格包会被按 0.05 算键 ⇒ 键与索引零交集 ⇒ 把有数据说成包外）。 */
     const idx = await ensureIndex();
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
+    const p = spec.plan(v.bounds, v.center, maxCellsEff(), effectiveDeg());
     if (!p) return { planned: false, batch: 0, got: 0, capped: false };
     asked = true;
     wanted = p.wanted;
@@ -898,7 +931,20 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       }
       todo.push(c);                          // 索引没读到：退回老办法（试）
     }
-    const batch = todo.slice(0, spec.perRefresh);
+    /* 🧮 **取哪几格**：先按"格数上限"截，再按**字节预算**截（索引里有每格字节 ⇒ 是算出来的，不是估的）。
+       至少留一格（哪怕它自己就超预算）—— 否则极密的格会一条都不取、屏上永远空。 */
+    const byteBudget = Number.isFinite(Number(opts.bytesPerRound)) && Number(opts.bytesPerRound) >= 0
+      ? Number(opts.bytesPerRound) : BUNDLE_BYTES_PER_ROUND;
+    const cap0 = todo.slice(0, perRefreshEff());
+    const batch: typeof cap0 = [];
+    let bytesPicked = 0;
+    for (const c of cap0) {
+      const by = idx.cellBytes ? (idx.cellBytes.get(c.key) || 0) : 0;
+      if (batch.length > 0 && byteBudget > 0 && bytesPicked + by > byteBudget) break;
+      batch.push(c);
+      bytesPicked += by;
+    }
+    bytesThisRound = bytesPicked;
     if (!batch.length) return { planned: true, batch: 0, got: 0, capped: p.capped };
 
     pending += batch.length;
@@ -1017,6 +1063,15 @@ export interface BundleIndexFact {
   real: boolean | null;
   /** 包自己的格边长（度）—— 与前端常量对拍用；缺字段 = null（老包） */
   cellSize: number | null;
+  /**
+   * 🧮 **每一格的字节数与栋数**（`index.json` 的 `cells[key].bytes / .bld`；老包/缺字段 ⇒ null）。
+   *
+   * 为什么值得单独留：① 报告要回答"这一趟要下多少 MB"（可数，不靠估）；
+   * ② **取数预算改成"字节预算"**就靠它 —— 格数在细格包上会变成几百个，
+   *    而"这一轮下多少字节"才是用户真正感知的成本（0.05° 一格的 1.9MB vs 0.01° 一格的 57KB）。
+   */
+  cellBytes: Map<string, number> | null;
+  cellBld: Map<string, number> | null;
 }
 
 /**
@@ -1031,6 +1086,17 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = (await r.json()) as { source?: unknown; cellCount?: unknown; cells?: unknown; attribution?: unknown; real?: unknown; cellSize?: unknown } | null;
     const rawCells = (j?.cells && typeof j.cells === "object") ? Object.keys(j.cells as Record<string, unknown>) : null;
+    /* 🧮 每格的 `bytes` / `bld`（两种包都有；缺了就 null ⇒ 字节预算退回"按格数"，如实） */
+    let cellBytes: Map<string, number> | null = null;
+    let cellBld: Map<string, number> | null = null;
+    if (rawCells) {
+      for (const k of rawCells) {
+        const meta = (j!.cells as Record<string, { bytes?: unknown; bld?: unknown }>)[k] || {};
+        const by = num(meta.bytes), bd = num(meta.bld);
+        if (by !== null && by > 0) { if (!cellBytes) cellBytes = new Map(); cellBytes.set(k, by); }
+        if (bd !== null && bd > 0) { if (!cellBld) cellBld = new Map(); cellBld.set(k, bd); }
+      }
+    }
     return {
       kind, url,
       source: typeof j?.source === "string" && j.source ? j.source : null,
@@ -1041,9 +1107,10 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
       /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
          而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
       cellSize: (typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0) ? j.cellSize : null,
+      cellBytes, cellBld,
     };
   } catch {
-    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
+    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
   }
 }
 

@@ -2014,6 +2014,8 @@ var ROADS_BUNDLE_MAX_CELLS = 8;
 var PLACES_BUNDLE_PER_REFRESH = 4;
 var PLACES_BUNDLE_MAX_CELLS = 6;
 var PLACES_STORE_CAP = 3e3;
+var BUNDLE_BYTES_PER_ROUND = 1.5 * 1048576;
+var BUNDLE_REQ_PER_ROUND_MAX = 16;
 var BLD_STORE_CAP = 3e4;
 var BLD_STORE_CAP_RECOMMENDED = 3e4;
 var BLD_STORE_CAP_MAX = 5e4;
@@ -2314,6 +2316,7 @@ function createBundleFeed(opts) {
   let busy = false;
   let queued = false;
   let refused = false;
+  let bytesThisRound = 0;
   let activeDir = null;
   let effCellDeg = null;
   let evictedSources = 0;
@@ -2419,12 +2422,23 @@ function createBundleFeed(opts) {
       indexState = "失败";
       indexWhy = `索引没读到（试过 ${tried} 个目录：${dirs.join(" / ")}）⇒ 退回试格子`;
       opts.onError?.(`index ${spec.dir} 没读到（试过 ${tried} 个目录），退回试格子`);
-      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
+      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
     })();
     return indexPromise;
   }
   function effectiveDeg() {
     return effCellDeg === null ? spec.cellDeg : effCellDeg;
+  }
+  function scaleOf() {
+    const d = effectiveDeg();
+    if (!Number.isFinite(d) || d <= 0) return 1;
+    return Math.max(1, Math.pow(BLD_BUNDLE_CELL_DEG / d, 2));
+  }
+  function maxCellsEff() {
+    return Math.min(400, Math.max(spec.maxCells, Math.round(spec.maxCells * scaleOf())));
+  }
+  function perRefreshEff() {
+    return Math.min(BUNDLE_REQ_PER_ROUND_MAX, Math.max(spec.perRefresh, Math.round(spec.perRefresh * scaleOf())));
   }
   function counters() {
     let n = null;
@@ -2452,6 +2466,8 @@ function createBundleFeed(opts) {
       cellDegPin: Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null,
       dir: activeDir || dirsOf(spec)[0],
       dirs: dirsOf(spec),
+      /* 📐 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
+      budget: { cellDeg: effectiveDeg(), scale: Math.round(scaleOf() * 100) / 100, maxCells: maxCellsEff(), perRefresh: perRefreshEff(), bytesPerRound: Math.round(bytesThisRound) },
       evictedSources,
       cache: cacheStats(),
       coalesce: { ms: coalesceMs, merged: coalescedFlushes },
@@ -2468,14 +2484,14 @@ function createBundleFeed(opts) {
   }
   function planned() {
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
+    const p = spec.plan(v.bounds, v.center, maxCellsEff(), effectiveDeg());
     if (!p) return null;
     return { keys: p.cells.map((c) => c.key), wanted: p.wanted, capped: p.capped };
   }
   async function runOnce(why) {
     const idx = await ensureIndex();
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
+    const p = spec.plan(v.bounds, v.center, maxCellsEff(), effectiveDeg());
     if (!p) return { planned: false, batch: 0, got: 0, capped: false };
     asked = true;
     wanted = p.wanted;
@@ -2492,7 +2508,17 @@ function createBundleFeed(opts) {
       }
       todo.push(c);
     }
-    const batch = todo.slice(0, spec.perRefresh);
+    const byteBudget = Number.isFinite(Number(opts.bytesPerRound)) && Number(opts.bytesPerRound) >= 0 ? Number(opts.bytesPerRound) : BUNDLE_BYTES_PER_ROUND;
+    const cap0 = todo.slice(0, perRefreshEff());
+    const batch = [];
+    let bytesPicked = 0;
+    for (const c of cap0) {
+      const by = idx.cellBytes ? idx.cellBytes.get(c.key) || 0 : 0;
+      if (batch.length > 0 && byteBudget > 0 && bytesPicked + by > byteBudget) break;
+      batch.push(c);
+      bytesPicked += by;
+    }
+    bytesThisRound = bytesPicked;
     if (!batch.length) return { planned: true, batch: 0, got: 0, capped: p.capped };
     pending += batch.length;
     let n = 0;
@@ -2584,6 +2610,22 @@ async function loadBundleIndex(fetchCell, kind, dir) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     const rawCells = j?.cells && typeof j.cells === "object" ? Object.keys(j.cells) : null;
+    let cellBytes = null;
+    let cellBld = null;
+    if (rawCells) {
+      for (const k of rawCells) {
+        const meta = j.cells[k] || {};
+        const by = num(meta.bytes), bd = num(meta.bld);
+        if (by !== null && by > 0) {
+          if (!cellBytes) cellBytes = /* @__PURE__ */ new Map();
+          cellBytes.set(k, by);
+        }
+        if (bd !== null && bd > 0) {
+          if (!cellBld) cellBld = /* @__PURE__ */ new Map();
+          cellBld.set(k, bd);
+        }
+      }
+    }
     return {
       kind,
       url,
@@ -2594,10 +2636,12 @@ async function loadBundleIndex(fetchCell, kind, dir) {
       real: typeof j?.real === "boolean" ? j.real : null,
       /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
          而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
-      cellSize: typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0 ? j.cellSize : null
+      cellSize: typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0 ? j.cellSize : null,
+      cellBytes,
+      cellBld
     };
   } catch {
-    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
+    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
   }
 }
 function bundleCountsLine(f, icon, unit) {
@@ -4451,6 +4495,8 @@ export {
   BLD_STORE_CAP_MAX,
   BLD_STORE_CAP_RECOMMENDED,
   BUILDING_LAYER_ID,
+  BUNDLE_BYTES_PER_ROUND,
+  BUNDLE_REQ_PER_ROUND_MAX,
   BUNDLE_TIMEOUT_MS,
   CAMERA_DEFAULTS,
   EQUIP_MIN_AREA_M2,

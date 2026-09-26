@@ -157,8 +157,17 @@ export const PRERENDER_DEMO_MANIFEST_PATH = "/prerender-demo/manifest.json";
 export const PRERENDER_TILE_SIZE = 512;
 /** 瓦片金字塔的 zoom 上限（源级 `maxzoom`：更高的 zoom 由地图库放大复用 z13 那张） */
 export const PRERENDER_TILE_MAXZOOM = 13;
-/** `z ≤ FAR` = 预渲染瓦片独占；`z ≥ NEAR` = 实时矢量独占；中间按 zoom 线性交叉过渡 */
-export const LOD_FAR_ZOOM = 12;
+/**
+ * 🔴 **两条阈值（2026-09-26 收紧，别按旧注释理解）**：
+ *   · `z ≤ LOD_FAR_ZOOM` = 预渲染瓦片**独占**（不透明度 1：那一刻它是唯一的信息源）；
+ *   · `FAR < z < NEAR` = 瓦片按 zoom **线性淡出**（就是 `LOD_OPACITY_STOPS` 的最后一段）；
+ *   · `z ≥ LOD_NEAR_ZOOM` = 实时矢量独占（瓦片层在 `NEAR` 整层隐藏、不透明度正好 0）。
+ * ⚠️ 改前是 `FAR=12 / NEAR=11`（**FAR 反而大于 NEAR**）⇒ `lodTierOf(11|12)` 报「预渲染（z≤12）」，
+ *   而那一刻瓦片层已被 `maxzoom=11` 藏起来、屏上画的是矢量楼 ⇒ **HUD 在撒谎**（红线：事实不许编）。
+ *   现在 `FAR` 收到 **10**：与档位表里最后一个"满不透明"停靠点 `[10,1]` **逐字对齐**
+ *   （自检钉着 `LOD_OPACITY_STOPS[-2][0] === LOD_FAR_ZOOM`，两边不许各自漂）。
+ */
+export const LOD_FAR_ZOOM = 10;
 export const LOD_NEAR_ZOOM = 11;   /* 🔴 2026-09-26 机主：「这些白蓝的方片能去掉吗…楼直接永久显示就行了」⇒ 提前到 11 */
 /** 瓦片源：`real` = 真数据（默认）、`demo` = 示意/占位（只在 `?lod=demo` 下用） */
 export type PrerenderSource = "real" | "demo";
@@ -174,7 +183,9 @@ export const LOD_VIEW_TILE_CAP = 2048;
 
 export type LodTier = "prerender" | "crossfade" | "vector";
 
-/** 当前 zoom 走哪条路（三态：预渲染 / 过渡中 / 实时矢量） */
+/** 当前 zoom 走哪条路（三态：预渲染瓦片 / 淡出窗口 / 实时矢量）。
+ *  ⚠️ 中间那一档**不是"两个图层同时在画"**：矢量楼要到 `NEAR` 才建 ⇒ 那一段是瓦片**退场**、
+ *  还没有接棒者。HUD 读的就是这个函数，措辞必须与事实一致（别读成"双份数据交叉"）。 */
 export function lodTierOf(zoom: number): LodTier {
   const z = Number.isFinite(zoom) ? Number(zoom) : LOD_FAR_ZOOM;
   if (z <= LOD_FAR_ZOOM) return "prerender";
@@ -191,19 +202,15 @@ export function lodTierLabel(tier: LodTier): string {
 /**
  * 🔴 **瓦片的不透明度分档**（机主 2026-09-25：「**路确实有了，但是瓦片太挡视野了喵**」）。
  *
- * 为什么改：原来 z≤12 是**全不透明**（`[12,1, 14,0]`）—— 那是第 1 步"骨架期"定的，
- * 当时实时层只有 600m 一小块，瓦片必须自己顶满；**现在不一样了**：
- *   · 楼：实时层已能取到 2000m；· 路：离线包按视野铺（`/roadsbundle`）⇒ 实时层能覆盖大半屏。
- * ⇒ 瓦片从"主角"退回**本职**：**远处没有实时数据时的替身**。分档（单调不增）：
- *   z≤10 → **1.00**（全国/市区尺度：瓦片仍是唯一的信息源，"城市轮廓"要看得清）
- *   z11  → 0.72（开始让位）
- *   z12  → 0.45（明显让位；此刻实时层+离线路网已盖住视野里的大部分）
- *   z13  → 0.18（几乎交还实时层，只剩一点"远处的底"）
- *   z≥14 → **0**（完全交还；层本身也在 `LOD_NEAR_ZOOM` 关掉）
- *   ⚠️ 2026-09-25 改：原来 13.5 就归零，而矢量楼要到 14 才画 ⇒ **12.8~14 那截两层都不管**
- *   （机主在 13.5 看到「只有路线没有楼」）。现在归零点与矢量楼起点**统一在 14**。
- * ⚠️ **不是删掉瓦片**：z≤12 之外/实时层取不到的地方，仍靠它兜底（见 README/DESIGN 的 LOD 分工）。
- * 自检钉着：档位单调不增、`z ≥ LOD_OPACITY_ZERO_ZOOM` 必须为 0。
+ * 现行口径（**以 `LOD_OPACITY_STOPS` 那张表为准**，别读旧版本的档位表）：
+ *   · z ≤ 10 → **1.00**（全国/市区尺度：瓦片是唯一的信息源，"城市轮廓"靠它）
+ *   · 10 < z < 11 → 线性淡出（**退场**，不是"交给谁"：矢量楼要到 11 才建）
+ *   · z ≥ 11 → **0**（`LOD_OPACITY_ZERO_ZOOM`）+ 瓦片层整层隐藏 ⇒ 近景**不再请求瓦片**
+ * 🔴 归零点必须与**矢量楼起点**同一个数（`LOD_OPACITY_ZERO_ZOOM === LOD_NEAR_ZOOM ===
+ *   WS_BLD_VECTOR_MINZOOM`）—— 否则中间会出现「两层都不管」的空档（机主 2026-09-25 在 13.5 见过一次：
+ *   「只有路线没有楼」）。自检钉的是这条**三向相等**，不只是"某档为 0"。
+ * ⚠️ **不是删掉瓦片**：z<11 的远景仍靠它（没有实时数据时它是唯一的信息源）。
+ * 自检钉着：档位单调不增、`z ≥ LOD_OPACITY_ZERO_ZOOM` 必须为 0、`FAR` = 最后一个满档停靠点。
  */
 export const LOD_OPACITY_ZERO_ZOOM = 11;
 export const LOD_OPACITY_STOPS: ReadonlyArray<readonly [number, number]> = [

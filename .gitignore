@@ -224,6 +224,18 @@ public/roadsbundle/
 #    由已缓存的 Overture 楼房盘导出（**真脚印 = real**，不含 sketch），index.json 里有格数/栋数/时间戳。
 #    ⚠️ 体积大（实测 373 格 / 72 万栋 / ~100MB）⇒ 只该在本地生成，**别提交**（预览包重建会一起拷过去）。
 public/bldbundle/
+# 🧱 **细格楼房包（0.01°）**：同一个导出脚本 `--size 0.01` 的产物，落在**另一个目录**里，
+#    为的是**双包并存**（老包 0.05° 是唯一端到端验过的一版，先不删）。客户端按 `index.cellSize` 认格边长
+#    ⇒ 两个目录都能跑（`wsOfflineFeed` 的候选目录 `["bldbundle-002","bldbundle"]`）。
+#    实测：7676 格 / 72.0 万栋 / 102.8MB（与老包**同体积**，只是格子更细）⇒ 同样别提交。
+public/bldbundle-002/
+# 🏷 **真名包**（`world_map/export_names_bundle.py --out` 的落点；命名线交接过来的那条）：
+#    由 Overture places 的行组索引导出（**离线复用 footer 索引 + 行组缓存，零下载**）。
+#    实测 93 格 + index / ~233KB ⇒ 与 placesbundle 同待遇：生成物、不入 git。
+public/namesbundle/
 # 🏷 片区名离线包（`world_map/fetch_places.py` + `export_places_bundle.py` 生成物；**不入 git**）：
 #    实测 32 格 / 145 个有名点 / 12.5 KB；以后补区县会变大 ⇒ 与另两个包同待遇，只留可复现的小样本。
 public/placesbundle/
+
+# 水系/绿地离线包（生成物，不进 git；管线 world_map/gw_bundle.py）
+public/gwbundle/

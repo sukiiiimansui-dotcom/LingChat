@@ -2422,7 +2422,22 @@ function createBundleFeed(opts) {
       indexState = "失败";
       indexWhy = `索引没读到（试过 ${tried} 个目录：${dirs.join(" / ")}）⇒ 退回试格子`;
       opts.onError?.(`index ${spec.dir} 没读到（试过 ${tried} 个目录），退回试格子`);
-      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
+      return last || {
+        kind: opts.kind,
+        url: "",
+        source: null,
+        cellCount: null,
+        cells: null,
+        attribution: null,
+        real: null,
+        cellSize: null,
+        cellBytes: null,
+        cellBld: null,
+        cellSizeByLayer: null,
+        layerCellSizeSole: null,
+        ok: false,
+        why: `试过 ${tried} 个目录都没读到索引`
+      };
     })();
     return indexPromise;
   }
@@ -2604,8 +2619,9 @@ function createBundleFeed(opts) {
   };
 }
 async function loadBundleIndex(fetchCell, kind, dir) {
-  const url = bundleIndexUrl(kind, dir);
+  let url = "";
   try {
+    url = bundleIndexUrl(kind, dir);
     const r = await fetchCell(url, BUNDLE_TIMEOUT_MS);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
@@ -2626,6 +2642,20 @@ async function loadBundleIndex(fetchCell, kind, dir) {
         }
       }
     }
+    let cellSizeByLayer = null;
+    let layerCellSizeSole = null;
+    const rawLayers = j?.cellSizeByLayer;
+    if (rawLayers && typeof rawLayers === "object") {
+      for (const [k, v] of Object.entries(rawLayers)) {
+        const n = num(v);
+        if (n === null || n <= 0) continue;
+        if (!cellSizeByLayer) cellSizeByLayer = {};
+        cellSizeByLayer[k] = n;
+      }
+      const vals = cellSizeByLayer ? Object.values(cellSizeByLayer) : [];
+      layerCellSizeSole = vals.length === 1 ? vals[0] : null;
+    }
+    const okCells = !!(rawCells && rawCells.length);
     return {
       kind,
       url,
@@ -2638,10 +2668,29 @@ async function loadBundleIndex(fetchCell, kind, dir) {
          而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
       cellSize: typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0 ? j.cellSize : null,
       cellBytes,
-      cellBld
+      cellBld,
+      cellSizeByLayer,
+      layerCellSizeSole,
+      ok: okCells,
+      why: okCells ? null : "索引里没有 cells（取到了文件但内容不像清单）"
     };
-  } catch {
-    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
+  } catch (e) {
+    return {
+      kind,
+      url,
+      source: null,
+      cellCount: null,
+      cells: null,
+      attribution: null,
+      real: null,
+      cellSize: null,
+      cellBytes: null,
+      cellBld: null,
+      cellSizeByLayer: null,
+      layerCellSizeSole: null,
+      ok: false,
+      why: String(e?.message || e || "索引读取失败").slice(0, 120)
+    };
   }
 }
 function bundleCountsLine(f, icon, unit) {

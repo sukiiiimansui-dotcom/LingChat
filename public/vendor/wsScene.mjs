@@ -2015,6 +2015,13 @@ var PLACES_BUNDLE_PER_REFRESH = 4;
 var PLACES_BUNDLE_MAX_CELLS = 6;
 var PLACES_STORE_CAP = 3e3;
 var BLD_STORE_CAP = 12e3;
+var BLD_STORE_CAP_RECOMMENDED = 3e4;
+var BLD_STORE_CAP_MAX = 5e4;
+function resolveBldStoreCap(requested) {
+  const n = Number(requested);
+  if (!Number.isFinite(n) || n <= 0) return BLD_STORE_CAP;
+  return Math.max(2e3, Math.min(BLD_STORE_CAP_MAX, Math.floor(n)));
+}
 var ROADS_STORE_CAP = 6e3;
 var GW_BUNDLE_CELL_DEG = 0.05;
 var GW_BUNDLE_PER_REFRESH = 6;
@@ -2197,7 +2204,19 @@ function bldIdOf(f) {
   const id = p.store_id || p.osm_id || p.id || f && f.id;
   return id ? String(id) : null;
 }
+var PT_CACHE = /* @__PURE__ */ new WeakMap();
+function memoPoint(f, calc) {
+  if (!f || typeof f !== "object") return null;
+  const k = f;
+  if (PT_CACHE.has(k)) return PT_CACHE.get(k) ?? null;
+  const v = calc(f);
+  PT_CACHE.set(k, v);
+  return v;
+}
 function bldPointOf(f) {
+  return memoPoint(f, bldPointOfRaw);
+}
+function bldPointOfRaw(f) {
   const ring = f?.geometry?.coordinates?.[0];
   if (!Array.isArray(ring) || !ring.length) return null;
   let x = 0, y = 0, n = 0;
@@ -2216,6 +2235,9 @@ function roadsIdOf(f) {
   return id ? String(id) : null;
 }
 function roadsPointOf(f) {
+  return memoPoint(f, roadsPointOfRaw);
+}
+function roadsPointOfRaw(f) {
   const c = f?.geometry?.coordinates || [];
   const m = c[Math.floor(c.length / 2)];
   return m && Number.isFinite(m[0]) && Number.isFinite(m[1]) ? [m[0], m[1]] : null;
@@ -4391,6 +4413,8 @@ export {
   BLD_BUNDLE_MAX_CELLS,
   BLD_BUNDLE_PER_REFRESH,
   BLD_STORE_CAP,
+  BLD_STORE_CAP_MAX,
+  BLD_STORE_CAP_RECOMMENDED,
   BUILDING_LAYER_ID,
   BUNDLE_TIMEOUT_MS,
   CAMERA_DEFAULTS,
@@ -4510,6 +4534,7 @@ export {
   bldLayerSpecsFor,
   bldLiveDecision,
   bldPointOf,
+  bldPointOfRaw,
   bldVerdictState,
   bldVerdictText,
   buildBldBoxes,
@@ -4641,6 +4666,7 @@ export {
   relLuminance,
   renderHeight,
   resetScenePlanConsumed,
+  resolveBldStoreCap,
   ringAreaM2,
   ringBand,
   ringCentroid,
@@ -4657,6 +4683,7 @@ export {
   roadsIdOf,
   roadsLiveDecision,
   roadsPointOf,
+  roadsPointOfRaw,
   roadsRadiusFor,
   roadsVerdictState,
   roadsVerdictText,

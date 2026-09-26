@@ -102,6 +102,55 @@ function firstPoint(f: PickFeature): [number, number] | null {
 }
 
 /**
+ * 🔁 **要素的三个派生值（首点 / 包围盒面积 / 有没有名字）—— 按要素对象记忆一次**。
+ *
+ * 为什么（2026-09-26 性能子代理实测）：挑楼**每一轮 flush 都要重扫整仓**
+ * （12,000~50,000 栋；`bld.pick` 实测中位 53ms、p90 300ms），而这三个值**只跟要素自身有关**
+ * （首点要扫第一环、面积要扫全部外环顶点）。同一个要素对象在一次会话里会被扫几十遍。
+ * 用 **WeakMap** 记：不给要素加属性（不会被 `setData`/序列化带出去）、不阻止回收、也不占生命周期。
+ *
+ * 🔴 **前提（改这里的人必须守住）**：**要素对象进了仓库就是只读的** ——
+ * 几何在包解析/接口解析时建好，之后**任何代码都不许原地改它**。
+ * （`dressBldBase` 是 `{...f, properties:{...}}` **造新对象**，不动原对象；这一点是这条缓存成立的基础。）
+ * 语义不变：同输入 ⇒ 同输出（`ws_building_pick_selftest` 逐条钉着）。
+ */
+interface PickDerived {
+  /** 外环首点（定位不到 ⇒ null） */
+  pt: [number, number] | null;
+  /** 外环包围盒面积（度²；**只用来排序**，不是建筑面积） */
+  area: number;
+  /** 有名字 ⇒ 1（排序第一关键字） */
+  named: number;
+  /** 稳定 id 的字符串形式（`String(f.id ?? "")`；排序第三关键字）—— 每次 `String()` 也是钱 */
+  key: string;
+  /** 格键（**跟着 `size` 变**，所以连 size 一起记） */
+  ckSize: number;
+  ck: string;
+}
+const DERIVED = new WeakMap<object, PickDerived>();
+/**
+ * 取（并在需要时算一次）要素的派生值。`size` = 分块边长（度）；`<=0` 表示"这次不需要格键"
+ * （`pickBuildingsForView` 用桶、不用格）。
+ */
+function derivedOf(f: PickFeature, size: number): PickDerived {
+  if (!f || typeof f !== "object") return { pt: null, area: 0, named: 0, key: "", ckSize: -1, ck: "" };
+  let d = DERIVED.get(f as unknown as object);
+  if (!d) {
+    d = { pt: firstPoint(f), area: bboxArea(f), named: hasName(f) ? 1 : 0, key: String((f as PickFeature).id ?? ""), ckSize: -1, ck: "" };
+    DERIVED.set(f as unknown as object, d);
+  }
+  /* 格键 = `w.toFixed(5)_s.toFixed(5)_size`：**每栋每轮都要拼一次**（30,000 栋就是 9 万次字符串操作）
+     —— 实测这就是"记忆了三个派生值之后仍然没快多少"的原因，所以连它一起记忆。 */
+  if (size > 0 && d.pt && d.ckSize !== size) {
+    const w = Math.floor(d.pt[0] / size) * size;
+    const s = Math.floor(d.pt[1] / size) * size;
+    d.ck = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+    d.ckSize = size;
+  }
+  return d;
+}
+
+/**
  * 按视野挑楼。**纯函数**：不改入参、不用随机、同输入同输出。
  */
 export function pickBuildingsForView<T extends PickFeature>(
@@ -126,7 +175,8 @@ export function pickBuildingsForView<T extends PickFeature>(
   let inView = 0;
   let noPoint = 0;
   for (const f of feats) {
-    const pt = firstPoint(f);
+    const dv = derivedOf(f, 0);                 // 0 = 这次不需要格键（桶式挑选不用格）
+    const pt = dv.pt;
     let bucket = -1;
     if (hasBounds && !pt) {
       /* 🔴 定位不到点（没几何/坐标非法）⇒ **不画**。第一版把它当"在视野内 bucket 0"画了出来，
@@ -147,9 +197,9 @@ export function pickBuildingsForView<T extends PickFeature>(
     items.push({
       f,
       bucket,
-      named: hasName(f) ? 1 : 0,
-      area: bboxArea(f),
-      key: String(f.id ?? ""),
+      named: dv.named,
+      area: dv.area,
+      key: dv.key,                                // ← 记忆过的 id 字符串（不再每次 String()）
     });
   }
 
@@ -294,12 +344,12 @@ export function capBuildingsPerCell<T extends PickFeature>(
   const byCell = new Map<string, CellItem[]>();
   let noPoint = 0;
   for (const f of feats) {
-    const pt = firstPoint(f);
+    /* 🔁 三个派生值走记忆（见 `derivedOf`）—— 挑楼每轮 flush 都重扫整仓，这里省的是大头 */
+    const dv = derivedOf(f, size);
+    const pt = dv.pt;
     if (!pt) { noPoint++; continue; }                    // 定位不到 ⇒ 不画（也不许算进任何区块）
-    const w = Math.floor(pt[0] / size) * size;
-    const s = Math.floor(pt[1] / size) * size;
-    const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-    const it: CellItem = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? ""), pt };
+    const cell = dv.ck;                                  // ← 记忆过的格键（不再每栋每次 toFixed+拼接）
+    const it: CellItem = { f, named: dv.named, area: dv.area, key: dv.key, pt };
     const arr = byCell.get(cell);
     if (arr) arr.push(it); else byCell.set(cell, [it]);
   }

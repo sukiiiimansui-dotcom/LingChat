@@ -77,7 +77,40 @@ export const ROADS_BUNDLE_MAX_CELLS = 8;
 export const PLACES_BUNDLE_PER_REFRESH = 4;
 export const PLACES_BUNDLE_MAX_CELLS = 6;
 export const PLACES_STORE_CAP = 3000;
+/* ══ 🏢 **楼房仓库上限**：机主 2026-09-26 拍板「远景容量放宽到 30000~50000 栋」═════════════
+   上限同时是**帧率护栏**的一半（另一半是保留半径）⇒ 不能拍脑袋加。实测（`~/chk/_cap_cost.mjs`，
+   真包 + 每档独立子进程 + gc；z13 样保留半径 14km，本机 aarch64）：
+
+   | 上限   | 仓库占格 | heapUsed(稳态) | 淘汰/轮 | 挑楼(冷/热) | 画出去 | 视野内 |
+   |--------|---------|---------------|--------|------------|--------|--------|
+   | 12,000 |   4     | +23.0MB       | 155ms  | 207 / **27ms** |  307  | 275 |
+   | 30,000 |  10     | +33.8MB       | 257ms  | 318 / **63ms** |  813  | 412 |
+   | 50,000 |  14     | +48.6MB       | 268ms  | 596 / 185ms    | 1030  | 301 |
+   | 100,000|  20     | +73.3MB       | 274ms  | 1303 / 198ms   | 1054  |  —  |
+
+   · **保留半径 2km（默认机位）时上限根本不生效**：任何上限都是 2,544 栋 / 3 格
+     ⇒ 放宽上限**不影响默认机位的观感与内存**，只影响 z≤13.5 那一档。
+   · 挑楼的"热"值是真实场景（每轮 flush 重扫同一批要素对象）：`wsBuildingPick` 的
+     `derivedOf` 记忆化之后 12k 从 ~70ms 降到 ~27ms ⇒ **30,000 的新增成本比"改之前 12,000"还低**。
+   · 但**装得下 ≠ 取得到**：一轮只取 `BLD_BUNDLE_MAX_CELLS`(6) 格、每次刷新取 2 格
+     ⇒ 只把上限调大，z13 的实际格数仍被取数预算卡在 6 格（≈9.6MB / 62,405 栋）。
+     要真拿到 10 格：`最近 10 格 = 14.0MB`（≈1.4s 解析，一次性，之后走解析缓存）。
+   ⇒ **推荐值 30,000**（区间低端：+10.8MB 换 2.6 倍画出的楼，且挑楼比改前还快）；
+     50,000 的边际收益只有 +27% 的格数，却要 ~3 倍的挑楼耗时。 */
 export const BLD_STORE_CAP = 12000;
+/** **实测推荐值**（机主给的区间低端）。改默认时要**页面与 App 一起改**（自检钉着"两处同值"）。 */
+export const BLD_STORE_CAP_RECOMMENDED = 30000;
+/** 机主给的上界（2026-09-26）：超过这个数不接受（再多人也看不完，内存先爆）。 */
+export const BLD_STORE_CAP_MAX = 50000;
+/**
+ * 把"想要的仓库上限"收进合法区间（**可配的唯一入口**：页面/App 都调它，别各自写 clamp）。
+ * 取不到/坏值 ⇒ 回默认值（**不猜**）；过小 ⇒ 2000 兜底；过大 ⇒ `BLD_STORE_CAP_MAX`。
+ */
+export function resolveBldStoreCap(requested?: number | null): number {
+  const n = Number(requested);
+  if (!Number.isFinite(n) || n <= 0) return BLD_STORE_CAP;
+  return Math.max(2000, Math.min(BLD_STORE_CAP_MAX, Math.floor(n)));
+}
 export const ROADS_STORE_CAP = 6000;
 
 /* 🌊🌳 水/绿地的**格边长**：0.05° —— 与 `public/gwbundle/*.json` 里每一格自报的 `cellSize` **实测一致**
@@ -391,8 +424,30 @@ export function bldIdOf(f: BundleBuildingFeature): string | null {
   const id = (p.store_id as string) || (p.osm_id as string) || (p.id as string) || (f && f.id);
   return id ? String(id) : null;
 }
-/** 楼房代表点：外环质心（淘汰按"离视野中心多远"）；取不到 ⇒ null（不参与淘汰，也不丢） */
-export function bldPointOf(f: BundleBuildingFeature): LngLat | null {
+/**
+ * 🔁 **代表点按要素对象记忆一次**（2026-09-26 性能实测）。
+ *
+ * 为什么：`pointOf` 是仓库**淘汰**（`retainNear`）与**挑楼**都要用的回调，每次都得把外环顶点扫一遍求质心；
+ * 而淘汰是**每一轮 flush 都跑一次全仓**（12,000~50,000 栋）⇒ 实测淘汰合计 **1.8~3.7s**（10 轮），
+ * 是仅次于 `JSON.parse` 的一块。与 `wsBuildingPick.derivedOf` 同一套理由与前提：
+ * **要素进仓库之后是只读的**（几何在解析时建好，之后没人原地改）⇒ 这个值只跟要素自身有关。
+ * 用 **WeakMap** 记：不给要素加属性（不会被 `setData`/序列化带出去）、不阻止回收、不占生命周期。
+ * 🔴 与挑楼那份缓存**不共用**：仓库淘汰按"到视野中心的距离"需要代表点，挑楼按"外环首点"分块，
+ * 两者口径不同（本文件早先就写明了"代表点 ≠ 首点"），别混成一个。
+ */
+const PT_CACHE = new WeakMap<object, LngLat | null>();
+function memoPoint<T extends object>(f: T, calc: (x: T) => LngLat | null): LngLat | null {
+  if (!f || typeof f !== "object") return null;
+  const k = f as unknown as object;
+  if (PT_CACHE.has(k)) return PT_CACHE.get(k) ?? null;
+  const v = calc(f);
+  PT_CACHE.set(k, v);
+  return v;
+}
+/** 记忆版楼房代表点（**导出名就是它** ⇒ 页面/App/自检的调用点一行都不用改） */
+export function bldPointOf(f: BundleBuildingFeature): LngLat | null { return memoPoint(f, bldPointOfRaw); }
+/** 未记忆的原始实现（给自检/对照用：证明"记忆版"与它逐值相同） */
+export function bldPointOfRaw(f: BundleBuildingFeature): LngLat | null {
   const ring = f?.geometry?.coordinates?.[0];
   if (!Array.isArray(ring) || !ring.length) return null;
   let x = 0, y = 0, n = 0;
@@ -410,8 +465,10 @@ export function roadsIdOf(f: BundleRoadFeature): string | null {
   const id = (p.osm_id as string) || (p.id as string) || (f && f.id);
   return id ? String(id) : null;
 }
-/** 路代表点：折线中点（与代拍页同一取法：中位顶点，不是几何中点） */
-export function roadsPointOf(f: BundleRoadFeature): LngLat | null {
+/** 路代表点：折线中点（与代拍页同一取法：中位顶点，不是几何中点）——**记忆版（导出名）** */
+export function roadsPointOf(f: BundleRoadFeature): LngLat | null { return memoPoint(f, roadsPointOfRaw); }
+/** 未记忆的原始实现（对照用） */
+export function roadsPointOfRaw(f: BundleRoadFeature): LngLat | null {
   const c = f?.geometry?.coordinates || [];
   const m = c[Math.floor(c.length / 2)];
   return m && Number.isFinite(m[0]) && Number.isFinite(m[1]) ? [m[0], m[1]] : null;

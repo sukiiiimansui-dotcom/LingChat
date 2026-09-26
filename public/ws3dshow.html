@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v75";
+      const BUILD = "ws3dshow-2026-09-26-v76";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1171,8 +1171,16 @@
          而兜底逻辑自己却不知道要去找它）。
          规矩：**凡页面真会调的符号，都必须进这张表**（漏一个 = 那次缓存永远修不回来）。 */
       /* 🏷🗺 名字层要的符号（2026-09-26 接线）：少一个 ⇒ `ensureVendor()` 会**带内容版本重取**一次，
-         并把逐符号在场情况写进徽标 —— 这就是"模块旧"与"真没有"的分界。 */
-      const NAME_NEEDED = ["createNameLayer", "nameVerdictLine", "LABEL_MOTION", "planZoneNames", "buildingCardData", "cardComposeTransform", "CARD_MOTION"];
+         并把逐符号在场情况写进徽标 —— 这就是"模块旧"与"真没有"的分界。
+         🔴🔴 **常量绝不能进这张表**（`tfMissing()` 的判据是 `typeof === "function"`）：
+         2026-09-26 真机事故 —— `LABEL_MOTION` / `CARD_MOTION` 是**对象常量**，塞进 `NAME_NEEDED` 后
+         `tfMissing()` **永远非空** ⇒ ① 每次开页都白打 3 趟 231KB 的 vendor（`.ver` + 版本号 + 一次性 token）
+         ② 所有"缺符号就跳过/判红"的闸（含 `renderBldBadge` 的 `bad`）**永久判红**
+         ③ 名字层在 `window.__TF__` 被自愈替换**之前**就查符号 ⇒ 真机上表现为**楼和名全不见**（App 侧不经这条路，所以好的）。
+         常量改用下面的 `NAME_CONSTS` 单独查**存在性**（`undefined` 才算缺）。 */
+      const NAME_NEEDED = ["createNameLayer", "nameVerdictLine", "planZoneNames", "buildingCardData", "cardComposeTransform"];
+      /** 名字层要的**常量**（对象/数组，不是函数）—— 只查在不在，不查是不是函数 */
+      const NAME_CONSTS = ["LABEL_MOTION", "CARD_MOTION"];
       const FEED_NEEDED = ["createBundleFeed", "bundleCountsLine", "bundleCellUrl", "loadBundleIndex",
         /* 🎨🏙 2026-09-26 抽真源后**本页新增依赖的符号**（挑选/冻结编排 + 美术取参）：
            它们是**函数**（`tfMissing()` 的判据就是 `typeof === "function"`，常量**不能**进这张表）。
@@ -1210,9 +1218,12 @@
       /** 缺失的符号名（全在就是空数组） */
       function tfMissing(mod) {
         /* ⚠️ 常量（如 `LOD_FAR_ZOOM`）**不能进这张表** —— 判据是 `typeof === "function"`，
-           常量会被永远判成"缺"，把好模块说成坏的（假报和漏报一样贵）。 */
+           常量会被永远判成"缺"，把好模块说成坏的（假报和漏报一样贵）。
+           🆕 名字层那两个常量走 `NAME_CONSTS`（只查 `undefined`）。 */
         const need = (LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED).concat(NAME_NEEDED, FEED_NEEDED);
-        return !mod ? need.slice() : need.filter(function (k) { return typeof mod[k] !== "function"; });
+        if (!mod) return need.slice().concat(NAME_CONSTS.slice());
+        return need.filter(function (k) { return typeof mod[k] !== "function"; })
+          .concat(NAME_CONSTS.filter(function (k) { return typeof mod[k] === "undefined"; }));
       }
       /**
        * 拿到"能用的" vendor 模块：够用就用现有的；缺符号就用**带版本号的 URL** 重取一次。
@@ -1760,6 +1771,13 @@
       /** 名字层刷新（**只在事件里调**：moveend / zoomend / 新数据到达 / 开页 kick） */
       async function refreshLabels(why) {
         if (!LABELS_ON) { const el = $("m-labels"); if (el) el.textContent = "🏷 名字层 关（?labels=0）"; return; }
+        /* 🔴 **先让旧 vendor 自愈**（浏览器对 `/vendor/wsScene.mjs` 是 `immutable` 缓存）：
+           `ensureVendor()` 会取内容哈希再带版本号重取一次（URL 变了 ⇒ 绕过缓存）。
+           2026-09-26 真机事故：不 await 这一步，这里就永远报"模块缺 createNameLayer"，名字层一辈子建不出来。 */
+        try {
+          const T0 = window.__TF__;
+          if (!T0 || typeof T0.createNameLayer !== "function") await ensureVendor();
+        } catch (e) { /* 自愈失败也不抛：下面照实报"缺"，绝不假装有 */ }
         const L = nameLayerOf();
         const el = $("m-labels");
         if (!L) { if (el) el.textContent = "🏷 名字层 数不出来：" + labelStat.err; return; }

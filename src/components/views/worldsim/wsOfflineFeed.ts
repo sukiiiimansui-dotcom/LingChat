@@ -188,6 +188,15 @@ export interface BundleResponse {
   status: number;
   ok: boolean;
   json(): Promise<unknown>;
+  /**
+   * 🕒 **可选**：原始文本（给了它，管道就能把"读流"与"`JSON.parse`"**分开计时**）。
+   *
+   * 为什么值得拆（2026-09-26）：浏览器 A/B 里 `r.json()` 那一项只 −26%、纯 Node 是 −83% ——
+   * 因为 `r.json()` **把读响应流和解析算在一起**，两个环境读流的成本差很多 ⇒ 对外报数会含糊。
+   * 拆开之后才敢说"**纯解析**省了多少"。
+   * ⚠️ 不给这个方法的适配器（例如 App 宿主现在那份）**照旧走 `json()`**，行为不变。
+   */
+  text?(): Promise<string>;
 }
 /** 取数实现（`fetchWithTimeout()` 就是给浏览器 `fetch` 用的那一份） */
 export type BundleFetch = (url: string, timeoutMs: number) => Promise<BundleResponse>;
@@ -981,9 +990,21 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const by = netBytesOf(url);
         pmSpan(`feed.net:${spec.dir}`, tNet - t0, by);
-        const j = await r.json();
-        const tJson = pmNow();
-        pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by);
+        /* 🕒 能拿到 `text()` 就**拆成两段**（读流 / 解析）；拿不到就退回 `json()`（合在一起计时，如实标 note） */
+        let j: unknown;
+        let tJson: number;
+        if (typeof r.text === "function") {
+          const raw = await r.text();
+          const tText = pmNow();
+          pmSpan(`feed.read:${spec.dir}`, tText - tNet, by, "读响应流");
+          j = JSON.parse(raw);
+          tJson = pmNow();
+          pmSpan(`feed.json:${spec.dir}`, tJson - tText, by, "纯 JSON.parse");
+        } else {
+          j = await r.json();
+          tJson = pmNow();
+          pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "读流+解析（适配器没给 text()）");
+        }
         const feats = spec.parse(j);
         const tParse = pmNow();
         pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);

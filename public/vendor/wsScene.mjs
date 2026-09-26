@@ -1308,6 +1308,22 @@ function firstPoint(f) {
   const x = Number(c?.[0]), y = Number(c?.[1]);
   return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
 }
+var DERIVED = /* @__PURE__ */ new WeakMap();
+function derivedOf(f, size) {
+  if (!f || typeof f !== "object") return { pt: null, area: 0, named: 0, key: "", ckSize: -1, ck: "" };
+  let d = DERIVED.get(f);
+  if (!d) {
+    d = { pt: firstPoint(f), area: bboxArea(f), named: hasName(f) ? 1 : 0, key: String(f.id ?? ""), ckSize: -1, ck: "" };
+    DERIVED.set(f, d);
+  }
+  if (size > 0 && d.pt && d.ckSize !== size) {
+    const w = Math.floor(d.pt[0] / size) * size;
+    const s = Math.floor(d.pt[1] / size) * size;
+    d.ck = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+    d.ckSize = size;
+  }
+  return d;
+}
 function pickBuildingsForView(feats, input) {
   const cap = Math.max(0, Math.floor(input.cap ?? WS_BLD_VIEW_CAP));
   const nb = Math.max(1, Math.min(32, Math.floor(input.buckets ?? 8)));
@@ -1324,7 +1340,8 @@ function pickBuildingsForView(feats, input) {
   let inView = 0;
   let noPoint = 0;
   for (const f of feats) {
-    const pt = firstPoint(f);
+    const dv = derivedOf(f, 0);
+    const pt = dv.pt;
     let bucket = -1;
     if (hasBounds && !pt) {
       noPoint += 1;
@@ -1343,9 +1360,10 @@ function pickBuildingsForView(feats, input) {
     items.push({
       f,
       bucket,
-      named: hasName(f) ? 1 : 0,
-      area: bboxArea(f),
-      key: String(f.id ?? "")
+      named: dv.named,
+      area: dv.area,
+      key: dv.key
+      // ← 记忆过的 id 字符串（不再每次 String()）
     });
   }
   const byBucket = /* @__PURE__ */ new Map();
@@ -1403,15 +1421,14 @@ function capBuildingsPerCell(feats, input = {}) {
   const byCell = /* @__PURE__ */ new Map();
   let noPoint = 0;
   for (const f of feats) {
-    const pt = firstPoint(f);
+    const dv = derivedOf(f, size);
+    const pt = dv.pt;
     if (!pt) {
       noPoint++;
       continue;
     }
-    const w = Math.floor(pt[0] / size) * size;
-    const s = Math.floor(pt[1] / size) * size;
-    const cell = `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-    const it = { f, named: hasName(f) ? 1 : 0, area: bboxArea(f), key: String(f.id ?? ""), pt };
+    const cell = dv.ck;
+    const it = { f, named: dv.named, area: dv.area, key: dv.key, pt };
     const arr = byCell.get(cell);
     if (arr) arr.push(it);
     else byCell.set(cell, [it]);

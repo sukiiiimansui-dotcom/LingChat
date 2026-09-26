@@ -11,19 +11,23 @@
  *   · `install(id, onProgress)` —— 下载 → 校 sha256 → 解包 → 存；每一步都有真进度与真失败原因
  *   · `remove(id)`              —— 卸载（元数据 + 内容一起清）
  *
- * ## 🔴 下载源：一处可替换 + 两条覆盖途径（本文件是唯一入口）
+ * ## 🔴 下载源：一处可替换 + 三条覆盖途径（本文件是唯一入口）
  * `WS_CITY_PACK_BASE_DEFAULT` 是**唯一的常量行**，默认值 = **示例占位**
  * （RFC 2606 保留域名 `.invalid`，永远不会解析成真服务器）：
  * **真源由维护者或用户自建**（GitHub Release / 自己的静态服务器都行），
  * 见 `world_map/CITY-PACK-FORMAT.md` 的「托管与自建」。优先级从高到低：
  *
  *   ① **运行时** `?citybase=<url>`：不改码、不重编译就能换源（浏览器预览、给 reviewer 试自己的源用）；
- *   ② **构建期** `VITE_WS_CITY_PACK_BASE`：fork / 自建打包的人写进 `.env`，一次配好、永久生效；
- *   ③ `WS_CITY_PACK_BASE_DEFAULT`：示例占位（**谁都没配**时的诚实默认值：取不到清单 ⇒ "数不出来"）。
+ *   ② **应用内持久**（引导页那个「下载源」输入框 → `localStorage`，`setCityPackBase()`）：
+ *      普通用户**唯一需要知道**的一条（不用改码、不用重装，存一次就一直用）；
+ *   ③ **构建期** `VITE_WS_CITY_PACK_BASE`：fork / 自建打包的人写进 `.env`，一次配好、永久生效；
+ *   ④ `WS_CITY_PACK_BASE_DEFAULT`：示例占位（**谁都没配**时的诚实默认值：取不到清单 ⇒ "数不出来"）。
  *
  * 坏值（空 / 不是 URL / 非 http(s) 协议）⇒ **回落到默认占位**，并把原因记进
  * `WS_CITY_PACK_BASE_INFO`（`from: "fallback"` + `why` + `requested`）—— 不静默、不猜、不当成"没配"。
- * 「按顺序取三个来源」这个判断是**纯函数** `resolveCityPackBase()`（自检逐条验它，不依赖真 location）。
+ * 「按顺序取四个来源」这个判断是**纯函数** `resolveCityPackBase()`（自检逐条验它，不依赖真 location）。
+ * 保存/清除走 `setCityPackBase()`：**它会即时重算**（`WS_CITY_PACK_BASE_INFO` / `WS_CITY_PACK_BASE`
+ * 是 `let` 导出 ⇒ ESM 里是活绑定），store 侧 `setBase()` 还会顺手作废清单缓存，保存后 `reload()` 立刻生效。
  *
  * ## 🔴 下一片（真机落盘）要接的接口点
  * 真机是 Tauri 壳，**没有 HTTP 服务**（`/bldbundle/<格>.json` 这类相对路径在真机上取不到，
@@ -59,6 +63,9 @@ import {
   sha256Hex,
   type ZipEntry,
 } from "./wsCityPack";
+/* 只借 `shallowRef` 一个 API：下载源必须是**响应式**的（保存后界面立刻变），
+   这是 `worldsim` 这一层的既有做法（`wsFocus.ts` / `wsPerf.ts` / `wsToast.ts` 等都直接 import vue）。 */
+import { shallowRef } from "vue";
 
 /**
  * 🔴 下载源默认值 = **示例占位**（RFC 2606 保留域名 `.invalid`：永远不会解析成真服务器，
@@ -70,15 +77,18 @@ export const WS_CITY_PACK_BASE_DEFAULT = "https://example.invalid/lingchat-cityp
 /** 运行时覆盖的参数名：`?citybase=<url>`（值里有 `&` 请自己 URL 编码） */
 export const WS_CITY_PACK_BASE_PARAM = "citybase";
 
+/** 应用内持久覆盖（引导页「下载源」输入框保存的那一层）在 `localStorage` 里的键 */
+export const WS_CITY_PACK_BASE_STORE_KEY = "ws.citypacks.base.v1";
+
 /** 构建期覆盖：`VITE_WS_CITY_PACK_BASE`（fork/自建打包写进 `.env`；没配就是 undefined） */
 const ENV_BASE = import.meta.env?.VITE_WS_CITY_PACK_BASE as string | undefined;
 
-/** 下载源是"谁给的"（`fallback` = 覆盖值坏掉、已回落默认，**原因在 `why`**） */
+/** 下载源是"谁给的"（`fallback` = 某层覆盖值坏掉、已回落默认，**原因在 `why`、原值在 `requested`**） */
 export interface CityPackBaseInfo {
   /** 最终生效的下载源（已去掉末尾 `/`；客户端拼 `{base}/citypacks/<rel>`，base = 服务器根） */
   base: string;
-  from: "param" | "env" | "default" | "fallback" | "option";
-  /** 被拒绝的原值（只在 `from === "fallback"` 时有）—— 可定位是谁配错的 */
+  from: "param" | "stored" | "env" | "default" | "fallback" | "option";
+  /** 被拒绝的原值（只在 `from === "fallback"` 时有）—— 界面要**留着它让人能改** */
   requested?: string;
   /** 为什么回落（只在 `from === "fallback"` 时有） */
   why?: string;
@@ -110,10 +120,11 @@ function locationSearch(): string {
   }
 }
 
-function judged(raw: string, from: "param" | "env"): CityPackBaseInfo {
+function judged(raw: string, from: "param" | "stored" | "env"): CityPackBaseInfo {
   const n = normalizeBase(raw);
   if (n.ok) return { base: n.base, from };
-  const who = from === "param" ? "?citybase=" : "VITE_WS_CITY_PACK_BASE";
+  const who =
+    from === "param" ? "?citybase=" : from === "stored" ? "应用内保存的下载源" : "VITE_WS_CITY_PACK_BASE";
   return {
     base: WS_CITY_PACK_BASE_DEFAULT,
     from: "fallback",
@@ -122,13 +133,28 @@ function judged(raw: string, from: "param" | "env"): CityPackBaseInfo {
   };
 }
 
+/** 读应用内保存的那一层（`localStorage`；没有/读不动/空白 ⇒ null = 这一层没设） */
+function readStoredBase(): string | null {
+  try {
+    const raw = ls()?.getItem(WS_CITY_PACK_BASE_STORE_KEY);
+    return typeof raw === "string" && raw.trim() ? raw : null;
+  } catch {
+    return null; // 隐私模式/被禁 ⇒ 只是"记不住"，照走下一层
+  }
+}
+
 /**
- * 解析下载源（**纯函数**：`search` / `env` 都能注入 ⇒ 自检可以逐条验，不必依赖真 `location` 与真构建期变量）。
- * 省略 `search` = 读 `location.search`；省略 `env` = 读构建期常量 `VITE_WS_CITY_PACK_BASE`。
+ * 解析下载源（**纯函数**：`search` / `env` / `stored` 都能注入 ⇒ 自检可以逐条验，
+ * 不必依赖真 `location`、真构建期变量、真 `localStorage`）。
+ * 省略 `search` = 读 `location.search`；省略 `env` = 读构建期常量；省略 `stored` = 读应用内保存值。
+ * 优先级：**`?citybase=` > 应用内保存 > 构建期常量 > 默认占位**。
  */
-export function resolveCityPackBase(input: { search?: string; env?: string } = {}): CityPackBaseInfo {
+export function resolveCityPackBase(
+  input: { search?: string; env?: string; stored?: string | null } = {}
+): CityPackBaseInfo {
   const search = input.search !== undefined ? input.search : locationSearch();
   const env = input.env !== undefined ? input.env : ENV_BASE;
+  const stored = input.stored !== undefined ? input.stored : readStoredBase();
   let asked: string | undefined;
   try {
     const params = new URLSearchParams(search || "");
@@ -137,15 +163,46 @@ export function resolveCityPackBase(input: { search?: string; env?: string } = {
     asked = undefined; // 参数串坏到连 URLSearchParams 都读不动 ⇒ 当作"没给"（不改默认行为）
   }
   if (asked !== undefined) return judged(asked, "param");
+  if (typeof stored === "string" && stored.trim()) return judged(stored, "stored");
   if (typeof env === "string" && env.trim()) return judged(env, "env");
   return { base: WS_CITY_PACK_BASE_DEFAULT, from: "default" };
 }
 
-/** 当前生效的下载源**与它的来路**（坏值回落时这里带着 `why`/`requested`，界面/自检据此如实说明） */
-export const WS_CITY_PACK_BASE_INFO: CityPackBaseInfo = resolveCityPackBase();
+/** 当前生效的下载源**与它的来路**（坏值回落时这里带着 `why`/`requested`，界面/自检据此如实说明）。
+ *  ⚠️ 是 `let` 导出（ESM 活绑定）：`setCityPackBase()` 之后**这个绑定会跟着变**。
+ *  ⚠️ 但它**不是响应式**的 —— 组件里要用响应式的 `baseState`（`setCityPackBase()` 会更新它）。 */
+export let WS_CITY_PACK_BASE_INFO: CityPackBaseInfo = resolveCityPackBase();
 
-/** 🔴 下载源（解析结果）。换默认值改 `WS_CITY_PACK_BASE_DEFAULT`；临时换源走 `?citybase=` / 构建期常量。 */
-export const WS_CITY_PACK_BASE = WS_CITY_PACK_BASE_INFO.base;
+/** 🔴 **响应式**的那一半：`setCityPackBase()` 会更新它 ⇒ 读它的 `computed` 立刻失效重算。
+ *  为什么要它：保存后如果界面读的还是缓存住的旧值，就会"填了不生效"（自检/文本检查抓到过）。 */
+export const wsCityPackBaseState = shallowRef<CityPackBaseInfo>(WS_CITY_PACK_BASE_INFO);
+
+/** 🔴 下载源（解析结果，非响应式）。换默认值改 `WS_CITY_PACK_BASE_DEFAULT`；换源走 `setCityPackBase()` /
+ *  `?citybase=` / 构建期常量。**同样是活绑定**（`setCityPackBase()` 后跟着变）。 */
+export let WS_CITY_PACK_BASE = WS_CITY_PACK_BASE_INFO.base;
+
+/**
+ * 保存/清除**应用内**那一层下载源（引导页输入框调它）。**即时生效**：
+ *   · `""` / 全空白 ⇒ **清除这一层**（`localStorage` 里那条删掉）⇒ 回落下一层；
+ *   · 合法 http(s) 地址 ⇒ 存下来并生效；
+ *   · 坏值 ⇒ **照存**（这样输入框里留着原值让人能改），但**生效的是回落值** + `from: "fallback"`
+ *     （`requested`/`why` 带着原值与原因，界面必须显示，不许只说一句"未配置"）。
+ * 返回重算后的信息（调用方通常紧接着 `reload()` 让列表从新源重取）。
+ */
+export function setCityPackBase(raw: string): CityPackBaseInfo {
+  const v = typeof raw === "string" ? raw : "";
+  try {
+    if (!v.trim()) ls()?.removeItem(WS_CITY_PACK_BASE_STORE_KEY);
+    else ls()?.setItem(WS_CITY_PACK_BASE_STORE_KEY, v);
+  } catch {
+    /* 存不进去（配额/被禁）也不影响本次生效：下面照样按 v 重算 */
+  }
+  const info = resolveCityPackBase({ stored: v.trim() ? v : null });
+  WS_CITY_PACK_BASE_INFO = info;
+  WS_CITY_PACK_BASE = info.base;
+  wsCityPackBaseState.value = info; // 🔴 响应式那一路（界面靠它立刻变）
+  return info;
+}
 
 /** 清单与包的路径口径（`{BASE}/citypacks/...`）——同样只有这一份 */
 export function cityPackUrl(rel: string, base = WS_CITY_PACK_BASE): string {
@@ -291,6 +348,12 @@ export interface CityStore {
   installed(): InstalledCity[];
   install(id: string, onProgress?: (p: InstallProgress) => void): Promise<InstallOutcome>;
   remove(id: string): void;
+  /**
+   * 保存/清除**应用内**那一层下载源（引导页输入框）。`""` = 清除该层；
+   * **即时生效**（重算 `base`/`baseInfo` 并作废清单缓存）⇒ 调用方接着 `list(true)` 就重取了。
+   * 坏值也会被存下（输入框要留着原值让人改），但生效值是回落值 + `from: "fallback"`。
+   */
+  setBase(raw: string): CityPackBaseInfo;
   /** 读已装进内存的格内容（下一片：取数管道从"已装城市"读格时用它） */
   readCell(name: string): string | null;
   /** 只给自检/调试：清掉清单缓存 */
@@ -300,11 +363,14 @@ export interface CityStore {
 /** 造一个门面。App 里请用 `cityStore()`（单例）；自检传自己的 backend/fetch。 */
 export function createCityStore(opts: CityStoreOptions = {}): CityStore {
   /* `opts.base` 是**编程接口**（自检/将来的 Tauri 后端注入）：照旧只去末尾斜杠；
-     而"用户能配的两条路"（`?citybase=` / 构建期常量）走 `resolveCityPackBase()` ⇒ 那里才做严格校验与回落。 */
-  const baseInfo: CityPackBaseInfo = opts.base
+     而"用户能配的三条路"（`?citybase=` / 应用内保存 / 构建期常量）走 `resolveCityPackBase()`。 */
+  let current: CityPackBaseInfo = opts.base
     ? { base: opts.base.replace(/\/+$/, ""), from: "option" }
     : WS_CITY_PACK_BASE_INFO;
-  const base = baseInfo.base;
+  /* 🔴 `base` / `baseInfo` 必须是**响应式**的（组件里的 computed 读它们）——
+     否则 computed 会把保存前的旧值缓存住，界面就成了"填了不生效"（自检/文本检查抓到过这一条）。 */
+  const currentRef = shallowRef<CityPackBaseInfo>(current);
+  void current; // 只用于初始化那一行；之后一律走 currentRef
   const backend = opts.backend || browserBackend();
   const doFetch = opts.fetchImpl || ((...a: Parameters<typeof fetch>) => fetch(...a));
   const ttl = opts.listTtlMs ?? 60_000;
@@ -313,7 +379,7 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
   /** 清单里的城市表（install 要拿 url/sha256/attribution） */
   let cachedCities: CityPackInfo[] = [];
 
-  const url = (rel: string): string => base + "/citypacks/" + rel.replace(/^\/+/, "");
+  const url = (rel: string): string => currentRef.value.base + "/citypacks/" + rel.replace(/^\/+/, "");
   const listUrl = (): string => url("cities.json");
 
   async function readList(): Promise<CityListState> {
@@ -517,12 +583,22 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
   }
 
   return {
-    base,
-    baseInfo,
+    get base() {
+      return currentRef.value.base;
+    },
+    get baseInfo() {
+      return currentRef.value;
+    },
     list,
     installed,
     install,
     remove,
+    setBase(raw: string): CityPackBaseInfo {
+      currentRef.value = setCityPackBase(raw); // 持久 + 重算（含响应式那一半）
+      cached = null; // 清单缓存必须作废，否则「保存了却还在读旧源」（假绿）
+      cachedCities = [];
+      return currentRef.value;
+    },
     readCell: (name: string) => backend.getCell(name),
     forgetList: () => {
       cached = null;

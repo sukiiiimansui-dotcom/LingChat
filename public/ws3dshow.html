@@ -355,7 +355,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v73";
+      const BUILD = "ws3dshow-2026-09-26-v74";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -3185,10 +3185,6 @@
       }
 
       /** 三条管道的**共同装配**（少一处能写歪的地方）：store / 视野 / fetch / flush / 淘汰半径 */
-      /* 🧊♻️ 两个耗时开关的**取值**：默认按批准值（300ms / 3 格），但**可以从 URL 覆盖** ——
-         为什么必须有这个口：这两个开关的效果只能**同机同版本 A/B** 才算数
-         （跨进程跑两次的绝对时间会被后台编译之类的东西污染，我第一轮就撞上过）。
-         口径：`?coal=0` / `?pcache=0` ⇒ **逐字节退回老行为**（也是出问题时的逃生门）；`?coal=600` 之类照给。 */
       function qnum(name, dflt) {
         try {
           const m = new RegExp("[?&]" + name + "=(-?[0-9.]+)").exec(location.search);
@@ -3197,8 +3193,19 @@
           return isFinite(v) && v >= 0 ? v : dflt;
         } catch (e) { return dflt; }
       }
-      const COAL_MS = qnum("coal", 300);
-      const PCACHE_CELLS = qnum("pcache", 3);
+      /* 🧊♻️ 两个耗时开关的**取值**（机主硬指标「**代拍页和 App 页完全一样**」）：
+         **没给 URL 参数就 `undefined` ⇒ 什么都不传** ⇒ 由**共享模块的默认值**决定
+         （`DEFAULT_FLUSH_COALESCE_MS` / `DEFAULT_PARSED_CACHE_CELLS`）——
+         这样**页面里连一个契约数字都没有**，谁也没法照抄出第二处真相。
+         ⚠️ 为什么必须有 `?coal=` / `?pcache=` 这个口：这两个开关的效果只能**同机同版本 A/B** 才算数
+         （跨进程跑两次的绝对时间会被后台编译之类的东西污染，我第一轮就撞上过）；
+         显式给 `0` 仍然是"关"，是出问题时的逃生门。 */
+      const COAL_MS = (function () {
+        try { const m = /[?&]coal=(\d+)/.exec(location.search); return m ? Number(m[1]) : undefined; } catch (e) { return undefined; }
+      })();
+      const PCACHE_CELLS = (function () {
+        try { const m = /[?&]pcache=(\d+)/.exec(location.search); return m ? Number(m[1]) : undefined; } catch (e) { return undefined; }
+      })();
       /* 🔎 **近景密度 A/B 口**（默认 10 = **不改观感**；机主在手机上比完再定默认值）。
          实测默认机位：视野矩形里真有 **629 栋**，而"每块(0.05°≈5.6km) ≤100 栋"+`minInView:10`
          ⇒ 屏上只有 **10 栋**。`?inview=30` / `?inview=100` 就是让他看密度差多少。
@@ -3207,15 +3214,15 @@
 
       function makeFeed(kind, store, flush, margin) {
         const TFx = window.__TF__;
-        /* 🧊♻️ **两个耗时开关**（机主 2026-09-26「加载慢/卡顿」；同日实测后的接线）：
-           · `flushCoalesceMs: 300`（`?coal=`）—— 一次 flush = 把**整仓**再交给 MapLibre 一次
-             （实测路 637ms / 楼 253ms 中位）；一次变焦连着到好几批 ⇒ 300ms 窗口里到齐的**只画一次**。
+        /* 🧊♻️ **两个耗时开关**（机主 2026-09-26「加载慢/卡顿」）—— 默认值**只有共享模块一份**：
+           · `flushCoalesceMs`（`?coal=`）：一次 flush = 把**整仓**再交给 MapLibre 一次
+             （实测路 637ms / 楼 253ms 中位）；一次变焦连着到好几批 ⇒ 窗口内到齐的**只画一次**。
              画出来的最终内容一样，只是少搬几次（k 批的累计搬运量从 k²/2 降到约 k/2）。
              ⚠️ **每一条管道的第一次 flush 不走窗口**（首屏关键路径），模块里钉着这条。
-           · `parsedCacheCells: 3`（`?pcache=`）—— 仓库有上限（楼 12,000 栋 ≈ 2~4 格），一格被淘汰后
-             回头就是一次完整的"下载 1.78MB + `JSON.parse` 350ms"；缓存最近 3 格的**已解析要素**
+           · `parsedCacheCells`（`?pcache=`）：仓库有上限（楼 12,000 栋 ≈ 2~4 格），一格被淘汰后
+             回头就是一次完整的"下载 1.78MB + `JSON.parse` 350ms"；缓存最近几格的**已解析要素**
              ⇒ 直接并回（实测中位 **8.5ms**）。
-             ⚠️ 这是**拿内存换时间**（3 格 ≈ 最多 3 万个要素对象）；不想要就 `?pcache=0`。
+             ⚠️ 这是**拿内存换时间**（几格 ≈ 最多几万个要素对象）；不想要就 `?pcache=0`。
            两个开关的实况都能在 `feed.facts()` / `pmSnapshot().context` 里核（不是嘴上说开了）。 */
         return TFx.createBundleFeed({
           kind: kind, store: store, view: bundleView, fetchCell: bundleFetchCell, flush: flush,

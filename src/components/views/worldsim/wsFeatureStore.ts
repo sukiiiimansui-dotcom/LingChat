@@ -141,6 +141,7 @@ export function createFeatureStore<T>(opts: {
     retainNear(center, keepRadiusM) {
       /* ⚠️ 顺序要紧：**先**按"太远"淘汰（视野外一圈之外），**再**看是否还超上限。
          为什么保留"视野外一圈"：来回挪地图时不该反复重取（机主抱怨的正是"来回一趟就没了"）。 */
+      const droppedSourcesBefore = sourcesDropped;
       let droppedFar = 0, droppedOverCap = 0;
       const keep: [number, T][] = [];
       const far: [number, T][] = [];
@@ -160,19 +161,25 @@ export function createFeatureStore<T>(opts: {
         keep.push(...sorted.slice(0, cap));
         droppedOverCap = over.length;
       }
-      /* 🔴 **被淘汰波及的来源键一律作废**（太远丢的 + 超上限丢的，两类都算）：
-         作废之后 `has(格键)` 变 false ⇒ 离线管道下一轮会**把那一格重新取回来**（去重保证不会重复画）。
-         为什么要连"只丢了一部分"的格也作废：`merge` 按 id 去重 ⇒ 重取正好**只补回缺的那部分**，
-         而保留"部分格"会让那一格永远缺楼（屏上就是"这一片比旁边稀"）。 */
-      const dirty = new Set<string>();
-      const markDirty = (arr: [number, T][]) => {
-        for (const [, f] of arr) {
-          if (f && typeof f === "object") { const k = srcOf.get(f as unknown as object); if (k) dirty.add(k); }
+      /* 🔴 **淘汰之后，来源键只保留"确实还有要素活着"的那些**（没活着的作废）。
+         ⚠️ 判据是"**这一格一个要素都不剩了**"，不是"丢了几个" —— 这条是踩过才改的：
+         第一版写成"只要有要素被丢就作废"，结果**跨保留半径的格子每一轮都被作废**
+         （真浏览器实测：同一格在 3.5s 内被取了 3 次、`feed.net:bldbundle` 1→3 次；因为
+         半径外的部分本来就会被反复丢掉 ⇒ 作废 ⇒ 重取 ⇒ 再丢，绕圈）。
+         现在的语义：被丢掉的格**只要还剩邻居在**，就仍算"取过"（不重取，也就不绕圈）；
+         **整格被丢光**才作废 ⇒ 管道下一轮会重新取它（`merge` 按 id 去重 ⇒ 重取安全，
+         缺的那部分正好补回来）。这一条正是"挪走再挪回，那一片空了"的修法。 */
+      if (droppedFar + droppedOverCap > 0) {
+        const alive = new Set<string>();
+        for (const [, f] of keep) {
+          if (f && typeof f === "object") { const k = srcOf.get(f as unknown as object); if (k) alive.add(k); }
         }
-      };
-      markDirty(far);
-      markDirty(over);
-      for (const k of dirty) if (sources.delete(k)) sourcesDropped += 1;
+        for (const k of [...sources]) {
+          if (alive.has(k)) continue;
+          sources.delete(k);
+          sourcesDropped += 1;
+        }
+      }
       /* 落盘：重建两个容器（保持"有 id 的进 map、没 id 的进 list"） */
       const keepSet = new Set(keep.map(([, f]) => f));
       const nextById = new Map<string, T>();
@@ -183,7 +190,9 @@ export function createFeatureStore<T>(opts: {
       for (const [id, f] of nextById) byId.set(id, f);
       noIdList = nextNoId;
       dropped += droppedFar + droppedOverCap;
-      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: dirty.size };
+      /* `droppedSources` = **这一次**作废掉几个来源键（调用方/探针据此判"要不要重取"） */
+      const droppedSourcesNow = droppedSourcesBefore === sourcesDropped ? 0 : sourcesDropped - droppedSourcesBefore;
+      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: droppedSourcesNow };
     },
 
     features: all,

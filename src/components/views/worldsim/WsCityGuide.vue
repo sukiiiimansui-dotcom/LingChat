@@ -37,6 +37,28 @@
           {{ t("worldsim.city.source") }}：<code>{{ store.base }}</code>
           <span v-if="srcHint" class="wscg__srcwarn">{{ srcHint }}</span>
         </p>
+        <!-- 🔴 下载源**应用内可配**（普通用户唯一需要知道的一条）：存一次就一直用，不用改码/重装。
+             保存后**立刻 reload()** 从新源重取清单 —— 不做"填了不生效"那种假绿。 -->
+        <div class="wscg__baseset">
+          <input
+            v-model="baseDraft"
+            class="wscg__baseinput"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            :placeholder="t('worldsim.city.basePlaceholder')"
+            :aria-label="t('worldsim.city.baseLabel')"
+            @keyup.enter="saveBase"
+          />
+          <button class="wscg__btn is-mini" type="button" :disabled="!!busy" @click="saveBase">
+            {{ t("worldsim.city.baseSave") }}
+          </button>
+          <button v-if="baseDraft.trim()" class="wscg__btn is-mini is-ghost" type="button" :disabled="!!busy" @click="clearBase">
+            {{ t("worldsim.city.baseClear") }}
+          </button>
+        </div>
+        <p v-if="store.baseInfo.from === 'param'" class="wscg__basenote">{{ t("worldsim.city.baseParamNote") }}</p>
+        <p v-if="baseNote" class="wscg__basenote">{{ baseNote }}</p>
       </header>
 
       <div class="wscg__body">
@@ -192,18 +214,48 @@
   /**
    * 🔴 下载源**没配**（默认示例占位）/ 覆盖值坏掉回落时的**同一行**提示 —— 必须**同时**说清
    * ① **原因**（"未配置：占位地址，取不到属预期" / "覆盖值不可用，已回落占位"）
-   * ② **怎么办**（`?citybase=` 或构建期 `VITE_WS_CITY_PACK_BASE`）
+   * ② **怎么办**（在下面输入框里填并保存；或 `?citybase=` / 构建期 `VITE_WS_CITY_PACK_BASE`）
    * ⇒ 不许含糊成"网络错误"：那会把"没人配真源"说成"网络不好"，用户照着修网络永远修不好。
-   * 判断只看 `store.baseInfo.from`（`wsCityStore` 已按"参数 > 构建期 > 默认占位"解析并如实标注）：
-   *   · `default`（谁都没配）⇒ 显示；· `fallback`（配了但值坏、已回落）⇒ **也显示**（那不是"配好了"，
-   *     且理由必须上屏）；· `param` / `env` / `option`（配好了）⇒ 不显示、不打扰。
+   * 坏值那条还必须带上**被拒绝的原值**（`requested`）与**是哪个覆盖源**配的（在 `why` 里）——
+   * 否则用户看到"取不到清单"却不知道是自己填错了。
+   * 判断只看 `store.baseInfo.from`：
+   *   · `default`（谁都没配）⇒ 显示；· `fallback`（配了但值坏、已回落）⇒ **也显示**（那不是"配好了"）；
+   *   · `param` / `stored` / `env` / `option`（配好了）⇒ 不显示、不打扰。
    */
   const srcHint = computed(() => {
     const b = props.store.baseInfo;
     if (b.from === "default") return t("worldsim.city.srcUnset");
-    if (b.from === "fallback") return t("worldsim.city.srcFallback", { why: b.why || b.requested || "" });
+    if (b.from === "fallback") return t("worldsim.city.srcFallback", { why: b.why || "", requested: b.requested || "" });
     return "";
   });
+
+  /* ── 下载源输入框（应用内持久层：保存 ⇒ 立刻生效并重取清单）───────────────────── */
+  const baseDraft = ref("");
+  const baseNote = ref("");
+
+  /** 输入框内容跟随**当前生效值**；坏值回落时**显示被拒绝的原值**（让人能改，而不是显示占位） */
+  function syncBaseDraft(): void {
+    const b = props.store.baseInfo;
+    baseDraft.value = b.from === "fallback" ? b.requested || "" : b.base;
+  }
+
+  async function saveBase(): Promise<void> {
+    const asked = baseDraft.value;
+    const info = props.store.setBase(asked);
+    syncBaseDraft();
+    baseNote.value =
+      info.from === "fallback"
+        ? t("worldsim.city.baseBad", { why: info.why || "" })
+        : t("worldsim.city.baseSaved", { base: info.base });
+    await reload(); // 🔴 保存后**立刻**从新源重取清单（否则就是"填了不生效"）
+  }
+
+  async function clearBase(): Promise<void> {
+    props.store.setBase(""); // 空值 = 删掉这一层 ⇒ 回落下一层（参数/构建期/占位）
+    syncBaseDraft();
+    baseNote.value = t("worldsim.city.baseCleared", { base: props.store.baseInfo.base });
+    await reload();
+  }
 
   const stageLabel = computed(() => stageName(progress.value.stage));
 
@@ -283,7 +335,10 @@
     loading.value = false;
   }
 
-  onMounted(() => void reload());
+  onMounted(() => {
+    syncBaseDraft();
+    void reload();
+  });
 
   async function install(c: CityPackInfo): Promise<void> {
     if (busy.value) return;
@@ -368,6 +423,37 @@
   /* 「下载源」**同一行**的"未配置/覆盖值坏掉"提示：跟警告色，但不抢列表（小字、可换行） */
   .wscg__srcwarn {
     color: #ffd479;
+    word-break: break-all;
+  }
+  /* 下载源输入框那一行（应用内持久层） */
+  .wscg__baseset {
+    display: flex;
+    gap: 6px;
+    margin-top: 7px;
+  }
+  .wscg__baseinput {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 9px;
+    border-radius: 9px;
+    border: 1px solid rgba(121, 217, 255, 0.28);
+    background: rgba(12, 18, 26, 0.92);
+    color: #eaf6ff;
+    font: inherit;
+    font-size: 11.5px;
+  }
+  .wscg__baseinput::placeholder {
+    color: #6c8093;
+  }
+  .wscg__btn.is-mini {
+    padding: 6px 10px;
+    border-radius: 9px;
+    font-size: 11.5px;
+  }
+  .wscg__basenote {
+    margin: 6px 0 0;
+    color: #9fb4c4;
+    font-size: 11px;
     word-break: break-all;
   }
   .wscg__body {

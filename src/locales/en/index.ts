@@ -10,6 +10,7 @@ import ui from "./ui";
 import api from "./api";
 import scriptEditor from "./scriptEditor";
 import misc from "./misc";
+import worldsim from "./worldsim";
 
 export default {
   common,
@@ -24,4 +25,5 @@ export default {
   api,
   scriptEditor,
   misc,
+  worldsim,
 };

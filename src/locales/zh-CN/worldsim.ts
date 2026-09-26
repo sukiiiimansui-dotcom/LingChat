@@ -393,9 +393,18 @@ export default {
     leadInstalledNoList: "已装：{list} —— 已装的数据不受影响，可以直接进入地图（可选城市列表状态见下方）。",
     source: "下载源",
     /** 🔴 下载源**没配**（默认值 = 示例占位）时的同一行提示：说清「原因 + 怎么办」，不许含糊成"网络错误" */
-    srcUnset: "（未配置：占位地址，取不到属预期 —— 用 ?citybase=<你的地址> 或构建期 VITE_WS_CITY_PACK_BASE 指定自建源）",
-    /** 覆盖值坏掉 ⇒ 已回落默认（`{why}` 是 store 给的原因原话，含被拒绝的原值） */
-    srcFallback: "（下载源覆盖值不可用、已回落到占位：{why} —— 请检查 ?citybase= 或 VITE_WS_CITY_PACK_BASE 的值）",
+    srcUnset: "（未配置：占位地址，取不到属预期 —— 在下面填你自己的地址并保存；或用 ?citybase= / 构建期 VITE_WS_CITY_PACK_BASE）",
+    /** 覆盖值坏掉 ⇒ 已回落默认：必须带**被拒绝的原值**（`{requested}`）+ 是哪个源配的（在 `{why}` 里） */
+    srcFallback: "（下载源覆盖值不可用、已回落到占位：{why}；被拒绝的原值 = {requested} —— 改下面输入框里的地址，或检查 ?citybase= / VITE_WS_CITY_PACK_BASE）",
+    /** 下载源输入框（应用内持久层） */
+    baseLabel: "下载源地址",
+    basePlaceholder: "https://你的域名（客户端会拼 /citypacks/…）",
+    baseSave: "保存",
+    baseClear: "清除",
+    baseSaved: "已保存并生效：{base}",
+    baseBad: "这个地址不能用（{why}）—— 现在按占位地址运行，改好再保存一次",
+    baseCleared: "已清除保存的地址，改用：{base}",
+    baseParamNote: "本次由地址栏的 ?citybase= 指定（优先级最高）—— 这里保存的值要等去掉那个参数后才生效",
     /** 顶栏状态标签 / 常驻提示：一个城市都没装时 */
     noCityTag: "未装城市数据",
     noCity: "未装城市数据 · 点这里选",

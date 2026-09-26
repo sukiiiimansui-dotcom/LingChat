@@ -31,6 +31,11 @@
 
 import { rampExpression, themeForTier, themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { sceneLayerPlan } from "./wsScene";
+/* 🎨 **取参只有一份**（`bldArtParamsOf`）—— 本文件只决定"参数怎么变成图层"，不决定参数从哪来 */
+import { bldArtParamsOf } from "./wsArtParams";
+/* 🎨 基准上妆要 `renderHeight`（楼属性 → 渲染高度，纯函数）。⚠️ 本文件**只**用它的纯函数，
+   不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。 */
+import { renderHeight } from "./wsBuildingLook";
 /* 🏙 挑选的**统计类型**来自编排真源（`wsBldPickStore`）；规则类型（`wsBuildingPick`）本文件已不再直接用 ——
    `pickBuildingsForView` 那条"按视野挑、无冻结"的旧路**已从这里移除**（App 会"挪一下就变"，机主否过）。 */
 import type { BldPickStats } from "./wsBldPickStore"
@@ -111,9 +116,140 @@ export const WS_BLD_VECTOR_MINZOOM = 11;   /* ← 2026-09-26 与 `LOD_NEAR_ZOOM`
  *  与 AI 绘制管线里那条经验同源（z12 小楼不许描边）；这里用 zoom 插值让线从 12.8 的 0 平滑长到 15 的正常宽。 */
 export const WS_BLD_OUTLINE_FULL_ZOOM = 15;
 
-export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier): Array<Record<string, unknown>> {
-  /* 🎨 主题参数（暗色 ↔ 二次元）与低端档 —— 都从单一真源取，不在这里写死任何颜色 */
+/* ══ 🎨 **基准上妆**（`dressBase`，2026-09-26 从代拍页 `dressBldBase` 搬过来）════════════════
+ * 机主拍板 **(a′)：App 向代拍页看齐**（「**我的要求是代拍页和App页完全一样喵**」）——
+ * 两页默认档都必须走**同一条**"只补渲染字段、**不拆件**"的上妆，所以它不能再只长在页面里
+ * （App 抄一份就是 PR 门禁 C1 要防的"第二份实现"）。
+ *
+ * ## 为什么必须有这一步（页面注释里的真机事故，原话搬来）
+ * 图层写的是 `"fill-extrusion-height": ["get","h3d"]`（**没有兜底**），而离线通路以前直接把仓库要素
+ * 塞进 `setData`、**从没上妆** ⇒ `h3d` 缺失 = MapLibre 当 0 ⇒ 一地图**平躺的板**
+ * （机主 2026-09-25「**这是近处，连3d都没有**」的真因）。
+ */
+
+/** 小楼阈值（m²）：脚印面积小于它就 `small = 1`（代拍页 `?bst=2` 用它"小楼不描边"）。
+ *  ⚠️ 页面里那份字面量（`BST_SMALL_M2 = 220`）**等它可以动时改成读这里**（v75）——数值以这一份为准。 */
+export const WS_BLD_SMALL_M2 = 220;
+
+/** `dressBase()` 的计数（**楼栋数**，不是要素数 —— 不拆件时两者相等，但口径要写死） */
+export interface DressBaseCounts {
+  n: number;
+  /** 有真高度（`height_src === "height"`）的栋数 */
+  real: number;
+  /** 按层数折算的栋数 */
+  levels: number;
+  /** 按 `kind` 估 + 确定性抖动的栋数（**不是随机**：同 id 永远同高） */
+  kind: number;
+}
+
+/**
+ * 脚印面积（m²，鞋带公式，经纬度按本地米制换算）——**逐字等于页面那份** `fpAreaM2Of`。
+ *
+ * 🔴 为什么不去调 `wsBuildingLook.footprintMetrics()`：两者**数值上会有极小差异**
+ *   （那份用**首点**纬度做 `kx`、并在质心系里做鞋带；这份用**环上纬度均值**、在绝对坐标里做）。
+ *   而 `small = fp < 220` 是**阈值判定** ⇒ 极小的差会让临界楼在两页之间翻面。
+ *   "两页完全一样"优先 ⇒ 这里与页面**同式**；等页面也改调共享（v75）之后，这份就是唯一一份。
+ */
+export function bldFootprintAreaM2(f: { geometry?: { coordinates?: unknown } | null }): number {
+  const g = (f && f.geometry) || {};
+  const ring = ((g.coordinates as number[][][]) || [])[0] || [];
+  if (ring.length < 3) return 0;
+  let lat0 = 0;
+  for (const q of ring) lat0 += q[1];
+  lat0 /= ring.length;
+  const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
+  let a = 0;
+  for (let i = 0, n = ring.length; i < n; i++) {
+    const [x1, y1] = ring[i];
+    const [x2, y2] = ring[(i + 1) % n];
+    a += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
+  }
+  return Math.abs(a) / 2;
+}
+
+/**
+ * 🎨 **基准上妆（不拆件）**：给每栋楼补 `h3d`（渲染高度）/ `h_from`（高度来源）/ `fp`（脚印 m²）/ `small`。
+ *
+ * **只补字段、不动几何、不拆件** —— 默认档两页共用这一条（机主 (a′)）。
+ * 拆件（裙楼/塔楼/女儿墙/设备箱/天线）走 `wsBuildingLook.decorateBuildings(..., {mode:"detail"})`，
+ * 那是 `?bld=2` 那条路（页面本来就有，App 侧本次补上）。
+ *
+ * @returns `features`（新对象，**不改入参**）+ `counts`（HUD 的高度来源分布；口径与 `ShapeCounts` 同名）
+ */
+export function dressBase<T extends { properties?: Record<string, unknown> | null; geometry?: unknown }>(
+  features: readonly T[] | null | undefined
+): { features: Array<Record<string, unknown>>; counts: DressBaseCounts } {
+  const counts: DressBaseCounts = { n: 0, real: 0, levels: 0, kind: 0 };
+  const out: Array<Record<string, unknown>> = [];
+  for (const f of features || []) {
+    const { h, from } = renderHeight(f.properties || {});
+    const fp = bldFootprintAreaM2(f as { geometry?: { coordinates?: unknown } | null });
+    counts.n += 1;
+    if (from === "real") counts.real += 1;
+    else if (from === "levels") counts.levels += 1;
+    else counts.kind += 1;
+    out.push({
+      ...f,
+      properties: { ...(f.properties || {}), h3d: h, h_from: from, fp: Math.round(fp), small: fp < WS_BLD_SMALL_M2 ? 1 : 0 },
+    });
+  }
+  return { features: out, counts };
+}
+
+/** 楼体图层的形体档（**两页共用**）：`base` = 原始脚印一条挤出层（默认）· `parts` = 拆件后的 body/roof/antenna 三层 */
+export type BldLayerMode = "base" | "parts";
+
+export interface BldLayerOpts {
+  /** `?art=` 档位（默认 1 = 恒等 ⇒ 与旧版逐字节相同） */
+  art?: number;
+  /** `?look=` 档位（默认 1） */
+  look?: number;
+  /** 形体档（默认 `base` —— 机主 (a′) 之后**两页默认档都是这一档**） */
+  mode?: BldLayerMode;
+}
+
+export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLayerOpts = {}): Array<Record<string, unknown>> {
+  /* 🎨 取参**只有一份**（`wsArtParams.bldArtParamsOf`）：色阶 / 描边 / 渐变 / 不透明度 / 停靠点全从它来，
+     本文件不写死任何颜色。`art=1` 时 `ramp` 就是主题那个**引用** ⇒ 默认逐字节不变。 */
   const th = theme;
+  const P = bldArtParamsOf(th, { art: opts.art ?? 1, look: opts.look ?? 1 });
+
+  /* ── ① `base` 档（**默认**，机主 (a′) 后两页共用）：原始脚印、一条挤出层 + 一条描边层 ──
+     规格**逐字段等于代拍页默认档**（`bldLayerSpecs()` 的 else 分支）—— 这是"两页完全一样"的判据，
+     由 `ws_pages_consistency.mjs` 的 ④a/④b 盯着。 */
+  if ((opts.mode ?? "base") === "base") {
+    return [
+      {
+        id: "bld-ext", type: "fill-extrusion", source: "bld",
+        minzoom: WS_BLD_VECTOR_MINZOOM,
+        paint: {
+          "fill-extrusion-color": P.rampColor,
+          "fill-extrusion-height": ["get", "h3d"],
+          "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
+          "fill-extrusion-opacity": P.opacity,
+          "fill-extrusion-vertical-gradient": P.vgrad,
+        },
+      },
+      ...(tier.outlineWidth !== null
+        ? [{
+            id: "bld-line", type: "line", source: "bld",
+            minzoom: WS_BLD_VECTOR_MINZOOM,
+            /* ⚠️ 这一笔**故意先保留** App 原来的 zoom 插值（`0 → 主题宽`）。
+               "改成主题给的固定宽"是**可见变化**（z11~15 描边会变粗），主会话要求它**单独一笔**，
+               好让它能被单独审/单独回退 ⇒ 见紧接着的那一笔（本文件同一行的下一刀）。 */
+            paint: {
+              "line-color": P.outline.color,
+              "line-width": ["interpolate", ["linear"], ["zoom"],
+                WS_BLD_VECTOR_MINZOOM, 0,
+                WS_BLD_OUTLINE_FULL_ZOOM, tier.outlineWidth ?? th.outline.width],
+            },
+          }]
+        : []),
+    ];
+  }
+
+  /* ── ② `parts` 档（`?bld=2` 拆件）：body / roof / antenna 三层 + 描边 ──────────────
+     下面的形状与 2026-09-26 之前**逐字相同**（App 侧默认档原来就是它）。 */
   /** 挤出体的公共 paint（三条层只差颜色/过滤，写一份免得漂移） */
   const common = {
     /* 主题/时间切换要**平滑**而不是「啪」一下：本构建的 paint 属性带 `transition: true`（spec 实测），

@@ -42,8 +42,9 @@
 
     <!-- 🚌 交通设施那一行（代拍页 `?tf=1` 的 HUD 位置）。
          **只读诊断**：显示 `wsTransport.transportHudLine()` 的原文（含「示意，非事实」与各计数）。
-         没有设施（或还没算出来）时**不占地方**；层序自愈/路网缺失也如实写出来，绝不静默。 -->
-    <div v-if="layerNote || tfHud" class="ws-sceneview__tf">
+         没有设施（或还没算出来）时**不占地方**；层序自愈/路网缺失也如实写出来，绝不静默。
+         ⚠️ 新入口传 `:tf="false"` ⇒ 这一行连同整条交通设施接线一起不出现（见下面 `tf` 的说明）。 -->
+    <div v-if="tf && (layerNote || tfHud)" class="ws-sceneview__tf">
       <span v-if="tfHud">{{ tfHud }}</span>
       <span v-if="layerNote" class="is-warn">{{ layerNote }}</span>
     </div>
@@ -51,8 +52,14 @@
     <!-- 底部两个动作（与 `WsDistrict` 那一屏**同一组按钮、同一套类名**）：
          机主要"进这个世界"的入口不能因为重做而消失。
          ⚠️ 类名复用，但样式**必须在本文件里重写一份** —— `WsDistrict.vue` 是 `<style scoped>`，
-         那些 `.ws-dist__*` 规则不会作用到本组件（见下面 style 块里的说明）。 -->
-    <div class="ws-dist__foot">
+         那些 `.ws-dist__*` 规则不会作用到本组件（见下面 style 块里的说明）。
+
+         🆕 2026-09-26（App 入口替换）：`chrome` 开关（**默认 true ⇒ 老路径逐字不变**）。
+         为什么需要它：机主拍板「/worldsim **直接进 3D 地图**，去掉多余按钮」，而这条底栏里
+         「← 回到区县」在没有"区县"这一级的新入口里是**死按钮**、「小区」这个级别标签也不再成立
+         ⇒ 新入口（`WsCityEntry.vue`）传 `:chrome="false"` 只隐藏这条底栏，
+         **交通设施接线/地图本体一行都不动**（那些还是这一份，不是第二份）。 -->
+    <div v-if="chrome" class="ws-dist__foot">
       <div class="ws-dist__area">
         <span class="ws-dist__pin" aria-hidden="true">🏘</span>
         <span class="ws-dist__name">{{ area || "未知区域" }}</span>
@@ -100,8 +107,30 @@
       locSource?: string;
       /** 世界时间（如 `23:41`）—— 验证面板要显示 */
       worldTime?: string;
+      /**
+       * 底栏开关（**默认 true**）。
+       *
+       * 🆕 2026-09-26（App 入口替换）：新入口 `WsCityEntry.vue` 直接进 3D 地图、没有"区县"上一级，
+       * 底栏里的「← 回到区县」会是死按钮 ⇒ 它传 `false`。
+       * 默认 `true` 是刻意的：老调用点（`WorldSim.vue` 的引导主线）**一个字都不用改**，
+       * 行为与本改动前逐字相同。
+       */
+      chrome?: boolean;
+      /**
+       * 交通设施开关（**默认 true**）。
+       *
+       * 🔴 2026-09-26（App 入口替换，父代理裁定）：新入口默认**不要**交通设施 ——
+       * 原因是这条接线里有一次真请求 `worldMapApi.roads()`（`/api/roads`，半径 600），
+       * 而真机上这条路"冷查分钟级、必超时"（机主报的"路时有时无"旧病根），
+       * 且代拍页默认（不带 `?tf=1`）也没有这一层 ⇒ 新入口要**默认 0 条 `/api/*`**。
+       *
+       * ⚠️ 用 prop 分流而不是"新入口直接渲染 `WsDistrictMapLibre`"：
+       * 后者会让新老两条路各有一份宿主接线（第二份实现，PR 门禁 C1 要防的正是这个）。
+       * 默认 `true` ⇒ 老调用点（`WorldSim.vue` 的引导主线）**逐字不变**。
+       */
+      tf?: boolean;
     }>(),
-    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "" }
+    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true }
   );
 
   const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
@@ -181,6 +210,10 @@
    * —— 不在这里另写一份类型：两份形状描述迟早漂移（`BldFeature` 只在那个模块里定义）。
    */
   function onSceneReady(p: { map: unknown; buildings: { features?: unknown[] } | null }): void {
+    /* 🚫 `tf=false`（新入口的默认）：**在这里就退**——不挂监听、不取路网、不画设施。
+       放在最前面是有意的：这条接线的第一件事就是 `worldMapApi.roads()`，
+       晚一步退就等于还是发了那条请求。 */
+    if (!props.tf) return;
     buildings = (p?.buildings as TfBuildingsFc) || null;
     const m = p?.map as (TfMapLike & { on?(ev: string, cb: () => void): void }) | null;
     if (!m) return;

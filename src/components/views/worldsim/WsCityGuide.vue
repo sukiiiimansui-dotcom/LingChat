@@ -165,15 +165,18 @@
     dropped.value.length ? t("worldsim.city.dropped", { n: dropped.value.length }) : ""
   );
 
-  const stageLabel = computed(() => {
+  const stageLabel = computed(() => stageName(progress.value.stage));
+
+  /** 阶段名的**唯一**映射（进度条与失败原因都用它，别在两处各写一份中文） */
+  function stageName(s: InstallProgress["stage"]): string {
     const m: Record<InstallProgress["stage"], string> = {
       download: t("worldsim.city.stageDownload"),
       verify: t("worldsim.city.stageVerify"),
       unpack: t("worldsim.city.stageUnpack"),
       store: t("worldsim.city.stageStore"),
     };
-    return m[progress.value.stage];
-  });
+    return m[s];
+  }
 
   const progressLine = computed(() => {
     const p = progress.value;
@@ -252,8 +255,8 @@
     });
     busy.value = "";
     if (!out.ok) {
-      /* 失败原因**原样**上屏（含阶段）：谁也不会以为"装好了" */
-      err.value = "[" + out.stage + "] " + out.why;
+      /* 失败原因**原样**上屏（含阶段，阶段名与进度条同一份文案）：谁也不会以为"装好了" */
+      err.value = "[" + stageName(out.stage) + "] " + out.why;
       return;
     }
     installed.value = props.store.installed();

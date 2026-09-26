@@ -2025,6 +2025,8 @@ function resolveBldStoreCap(requested) {
   return Math.max(2e3, Math.min(BLD_STORE_CAP_MAX, Math.floor(n)));
 }
 var ROADS_STORE_CAP = 6e3;
+var DEFAULT_FLUSH_COALESCE_MS = 300;
+var DEFAULT_PARSED_CACHE_CELLS = 3;
 var GW_BUNDLE_CELL_DEG = 0.05;
 var GW_BUNDLE_PER_REFRESH = 6;
 var GW_BUNDLE_MAX_CELLS = 6;
@@ -2324,7 +2326,9 @@ function createBundleFeed(opts) {
   let indexState = "未读";
   let indexWhy = null;
   let indexPromise = null;
-  const coalesceMs = Math.max(0, Math.floor(Number(opts.flushCoalesceMs || 0)));
+  const coalesceMs = Math.max(0, Math.floor(Number(
+    opts.flushCoalesceMs === void 0 || opts.flushCoalesceMs === null ? DEFAULT_FLUSH_COALESCE_MS : opts.flushCoalesceMs
+  )));
   let flushTimer = null;
   let pendingFlushWhy = "";
   let coalescedFlushes = 0;
@@ -2358,7 +2362,9 @@ function createBundleFeed(opts) {
       }
     }, coalesceMs);
   }
-  const cacheCells = Math.max(0, Math.floor(Number(opts.parsedCacheCells || 0)));
+  const cacheCells = Math.max(0, Math.floor(Number(
+    opts.parsedCacheCells === void 0 || opts.parsedCacheCells === null ? DEFAULT_PARSED_CACHE_CELLS : opts.parsedCacheCells
+  )));
   const parsedCache = /* @__PURE__ */ new Map();
   let cacheHits = 0;
   function cacheTake(k) {
@@ -4559,6 +4565,8 @@ export {
   BUNDLE_REQ_PER_ROUND_MAX,
   BUNDLE_TIMEOUT_MS,
   CAMERA_DEFAULTS,
+  DEFAULT_FLUSH_COALESCE_MS,
+  DEFAULT_PARSED_CACHE_CELLS,
   EQUIP_MIN_AREA_M2,
   EQUIP_SIDE_MIN,
   EQUIP_SIDE_STEPS,

@@ -235,14 +235,14 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
         ? [{
             id: "bld-line", type: "line", source: "bld",
             minzoom: WS_BLD_VECTOR_MINZOOM,
-            /* ⚠️ 这一笔**故意先保留** App 原来的 zoom 插值（`0 → 主题宽`）。
-               "改成主题给的固定宽"是**可见变化**（z11~15 描边会变粗），主会话要求它**单独一笔**，
-               好让它能被单独审/单独回退 ⇒ 见紧接着的那一笔（本文件同一行的下一刀）。 */
+            /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
+               `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。
+               🔴 这是**可见变化**（2026-09-26 机主 (a′) 第 3 笔）：App 原来**一律** zoom 插值
+               （`z11 → 0` 平滑长到 `z15 → 主题宽`），现在 `art=1` 是**固定主题宽**
+               ⇒ **z11~15 的描边比原来粗**（真机观感只有机主能判）。 */
             paint: {
               "line-color": P.outline.color,
-              "line-width": ["interpolate", ["linear"], ["zoom"],
-                WS_BLD_VECTOR_MINZOOM, 0,
-                WS_BLD_OUTLINE_FULL_ZOOM, tier.outlineWidth ?? th.outline.width],
+              "line-width": P.lineWidth,
             },
           }]
         : []),
@@ -277,11 +277,8 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
           minzoom: WS_BLD_VECTOR_MINZOOM,
           paint: {
             "line-color": P.outline.color,
-            /* ⚠️ 同 `base` 档：这一笔**故意先保留** App 原来的 zoom 插值，
-               "改成主题给的固定宽"是**可见变化**、主会话要求它**单独一笔** ⇒ 见紧接着的下一刀。 */
-            "line-width": ["interpolate", ["linear"], ["zoom"],
-              WS_BLD_VECTOR_MINZOOM, 0,
-              WS_BLD_OUTLINE_FULL_ZOOM, tier.outlineWidth ?? th.outline.width],
+            /* 🖊 同 `base` 档：宽度取共享取参（`art=1` ⇒ 主题固定宽）—— 与代拍页逐字段相同 */
+            "line-width": P.lineWidth,
           },
         }]
       : []),

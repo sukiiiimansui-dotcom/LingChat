@@ -1024,8 +1024,8 @@ export interface BundleIndexFact {
  * 为什么走清单而不是在 TS 里写一句：`ROUTE.md` 要求"复用同一句常量，别改写第二版"——
  * 最不容易漂的做法就是**让导出脚本那句原话随包走**，页面照抄显示。
  */
-export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind): Promise<BundleIndexFact> {
-  const url = bundleIndexUrl(kind);
+export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, dir?: string): Promise<BundleIndexFact> {
+  const url = bundleIndexUrl(kind, dir);
   try {
     const r = await fetchCell(url, BUNDLE_TIMEOUT_MS);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1038,7 +1038,9 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind):
       cells: rawCells ? new Set(rawCells) : null,
       attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
       real: typeof j?.real === "boolean" ? j.real : null,
-      cellSize: num(j?.cellSize),
+      /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
+         而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
+      cellSize: (typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0) ? j.cellSize : null,
     };
   } catch {
     return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };

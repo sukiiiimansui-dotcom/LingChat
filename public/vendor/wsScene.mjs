@@ -1688,6 +1688,7 @@ function createFeatureStore(opts) {
       return { added: a, dupes: d, noId: nid, total: byId.size + noIdList.length, ms: lastMergeMs };
     },
     retainNear(center, keepRadiusM) {
+      const droppedSourcesBefore = sourcesDropped;
       let droppedFar = 0, droppedOverCap = 0;
       const keep = [];
       const far = [];
@@ -1709,18 +1710,20 @@ function createFeatureStore(opts) {
         keep.push(...sorted.slice(0, cap));
         droppedOverCap = over.length;
       }
-      const dirty = /* @__PURE__ */ new Set();
-      const markDirty = (arr) => {
-        for (const [, f] of arr) {
+      if (droppedFar + droppedOverCap > 0) {
+        const alive = /* @__PURE__ */ new Set();
+        for (const [, f] of keep) {
           if (f && typeof f === "object") {
             const k = srcOf.get(f);
-            if (k) dirty.add(k);
+            if (k) alive.add(k);
           }
         }
-      };
-      markDirty(far);
-      markDirty(over);
-      for (const k of dirty) if (sources.delete(k)) sourcesDropped += 1;
+        for (const k of [...sources]) {
+          if (alive.has(k)) continue;
+          sources.delete(k);
+          sourcesDropped += 1;
+        }
+      }
       const keepSet = new Set(keep.map(([, f]) => f));
       const nextById = /* @__PURE__ */ new Map();
       const nextNoId = [];
@@ -1730,7 +1733,8 @@ function createFeatureStore(opts) {
       for (const [id, f] of nextById) byId.set(id, f);
       noIdList = nextNoId;
       dropped += droppedFar + droppedOverCap;
-      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: dirty.size };
+      const droppedSourcesNow = droppedSourcesBefore === sourcesDropped ? 0 : sourcesDropped - droppedSourcesBefore;
+      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: droppedSourcesNow };
     },
     features: all,
     has: (k) => sources.has(k),
@@ -1995,6 +1999,10 @@ var PLACES_BUNDLE_MAX_CELLS = 6;
 var PLACES_STORE_CAP = 3e3;
 var BLD_STORE_CAP = 12e3;
 var ROADS_STORE_CAP = 6e3;
+var GW_BUNDLE_CELL_DEG = 0.05;
+var GW_BUNDLE_PER_REFRESH = 6;
+var GW_BUNDLE_MAX_CELLS = 6;
+var GW_STORE_CAP = 4e3;
 function bundleCellUrl(kind, cellKey) {
   const spec = SPECS[kind];
   if (!spec) throw new Error("未知的离线包类型：" + String(kind));
@@ -2089,6 +2097,63 @@ function bundleRoadsOf(json) {
   }
   return out;
 }
+function isRing(v) {
+  return Array.isArray(v) && v.length > 0 && Array.isArray(v[0]) && typeof v[0][0] === "number";
+}
+function closeRing(ring) {
+  const first = ring[0], last = ring[ring.length - 1];
+  return first && last && first[0] === last[0] && first[1] === last[1] ? ring.slice() : ring.concat([first]);
+}
+function bundleGwOf(json) {
+  const j = json;
+  const arr = j?.f;
+  if (!Array.isArray(arr)) throw new Error("gwbundle 里没有 f 数组");
+  const cs = j?.cellSize;
+  if (cs !== void 0 && cs !== null && Math.abs(Number(cs) - GW_BUNDLE_CELL_DEG) > 1e-9) {
+    throw new Error(`gwbundle 格尺寸口径不符：包 ${cs}° / 前端 ${GW_BUNDLE_CELL_DEG}°`);
+  }
+  const cell = typeof j?.key === "string" && j.key ? j.key : "";
+  const out = [];
+  for (let fi = 0; fi < arr.length; fi++) {
+    const raw = arr[fi];
+    if (!raw) continue;
+    const kind = raw.k === "water" ? "water" : "green";
+    const rings = Array.isArray(raw.r) ? raw.r : [];
+    const name = raw.n === void 0 || raw.n === null ? null : String(raw.n);
+    const props = { name, kind, src: "bundle", bsrc: "osm" };
+    const nested = rings.length > 0 && !isRing(rings[0]);
+    const groups = nested ? rings : rings.map((r) => [r]);
+    for (let gi = 0; gi < groups.length; gi++) {
+      const parts = groups[gi].filter((r) => isRing(r) && r.length >= 3);
+      if (!parts.length) continue;
+      out.push({
+        type: "Feature",
+        /* 稳定 id 用**包自己的格键** + 位置 ⇒ 同一格重取时能去重（仓库 `merge` 靠它），
+           且不同格之间不会撞（撞了就会被当成重复要素丢掉 —— 那是**少画**，属于"把有说成没有"）。 */
+        id: cell ? `${cell}#${fi}:${gi}` : `${kind}|${parts[0].length}|${parts[0][0][0]},${parts[0][0][1]}`,
+        properties: props,
+        geometry: { type: "Polygon", coordinates: parts.map(closeRing) }
+      });
+    }
+  }
+  return out;
+}
+function gwIdOf(f) {
+  return f && f.id ? String(f.id) : null;
+}
+function gwPointOf(f) {
+  const ring = f?.geometry?.coordinates?.[0];
+  if (!Array.isArray(ring) || !ring.length) return null;
+  let x = 0, y = 0, n = 0;
+  for (const q of ring) {
+    if (Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1])) {
+      x += q[0];
+      y += q[1];
+      n++;
+    }
+  }
+  return n ? [x / n, y / n] : null;
+}
 function bundlePlacesOf(json) {
   const arr = json?.places;
   if (!Array.isArray(arr)) return [];
@@ -2168,6 +2233,19 @@ var SPECS = {
     maxCells: ROADS_BUNDLE_MAX_CELLS,
     sourceKey: (k) => `bundle:${k}`,
     unit: "条"
+  },
+  /* 🌊🌳 **水/绿地**（第四种包）：目录 `gwbundle`、格边长 `GW_BUNDLE_CELL_DEG`（= 0.05°）、
+     计划走**同一个** `bundleCellsForView` —— 也就是说"取哪些格"与楼/路/片区名是同一套格数学，
+     差别只有"格边长"这一个参数（口径要漂就一起漂，不会各漂一半）。 */
+  gw: {
+    dir: "gwbundle",
+    cellDeg: GW_BUNDLE_CELL_DEG,
+    plan: (b, c, maxCells) => bundleCellsForView(b, c, maxCells, GW_BUNDLE_CELL_DEG),
+    parse: bundleGwOf,
+    perRefresh: GW_BUNDLE_PER_REFRESH,
+    maxCells: GW_BUNDLE_MAX_CELLS,
+    sourceKey: (k) => `gwbundle:${k}`,
+    unit: "面"
   }
 };
 function createBundleFeed(opts) {
@@ -2192,8 +2270,10 @@ function createBundleFeed(opts) {
   let flushTimer = null;
   let pendingFlushWhy = "";
   let coalescedFlushes = 0;
+  let flushDone = 0;
   function doFlush(why) {
     const t = pmNow();
+    flushDone += 1;
     try {
       opts.flush(why);
     } finally {
@@ -2201,7 +2281,7 @@ function createBundleFeed(opts) {
     }
   }
   function requestFlush(why) {
-    if (coalesceMs <= 0) {
+    if (coalesceMs <= 0 || flushDone === 0) {
       doFlush(why);
       return;
     }
@@ -2472,6 +2552,293 @@ function roadsVerdictState(f) {
   if (f.pending > 0 && f.n === 0 && f.have === 0) return "pending";
   if (f.n === 0 && f.have === 0 && f.failed > 0 && f.missing === 0) return "failed";
   return "bundle";
+}
+
+// src/components/views/worldsim/wsGwLayer.ts
+var GW_KINDS = ["water", "green"];
+var GW_LAYER_ID_OF = { water: "gw-water", green: "gw-green" };
+var GW_LAYER_IDS = [GW_LAYER_ID_OF.water, GW_LAYER_ID_OF.green];
+var GW_BUNDLE_DIR = "gwbundle";
+var GW_SOURCE_KEY_PREFIX = GW_BUNDLE_DIR + ":";
+var GW_RETAIN_RADIUS_M = 3e3;
+function gwSourceKeyOf(cellKey) {
+  return GW_SOURCE_KEY_PREFIX + cellKey;
+}
+var GW_COLOR_PATHS = {
+  water: ["themes.anime.ai.water", "ai.water", "look.ai.water", "themes.night.ai.water"],
+  green: ["themes.anime.ai.park", "ai.park", "look.ai.park", "themes.night.ai.park"]
+};
+function pickString(o, path) {
+  let cur = o;
+  for (const seg of path.split(".")) {
+    if (!cur || typeof cur !== "object") return null;
+    cur = cur[seg];
+  }
+  return typeof cur === "string" && cur ? cur : null;
+}
+function gwColorsOf(theme) {
+  const first = (paths) => {
+    for (const p of paths) {
+      const v = pickString(theme, p);
+      if (v) return v;
+    }
+    return null;
+  };
+  return { water: first(GW_COLOR_PATHS.water), green: first(GW_COLOR_PATHS.green) };
+}
+function gwMissingColors(c) {
+  const miss = [];
+  if (!c.water) miss.push("water");
+  if (!c.green) miss.push("green");
+  return miss;
+}
+function gwBeforeIdOf(m) {
+  try {
+    const ls = m.getStyle?.()?.layers || [];
+    for (const l of ls) {
+      const id = String(l?.id ?? "");
+      if (id.indexOf("bld") === 0) return id;
+    }
+    return void 0;
+  } catch {
+    return void 0;
+  }
+}
+function applyGwLayers(opts) {
+  const out = { added: [], updated: [], layers: [], sources: [], errs: [] };
+  const m = opts.m;
+  if (!m) return out;
+  for (const k of GW_KINDS) {
+    const id = GW_LAYER_ID_OF[k];
+    const color = opts.colors[k];
+    if (!color) continue;
+    const fc = { type: "FeatureCollection", features: opts.data[k] };
+    try {
+      const src = m.getSource(id);
+      if (src) {
+        src.setData(fc);
+        out.updated.push(id);
+      } else {
+        m.addSource(id, { type: "geojson", data: fc });
+        m.addLayer(
+          { id, type: "fill", source: id, paint: { "fill-color": color, "fill-outline-color": color } },
+          opts.beforeId
+        );
+        out.added.push(id);
+      }
+      out.layers.push(id);
+      out.sources.push(id);
+    } catch (e) {
+      out.errs.push(`${id} ${String(e?.message || e).slice(0, 60)}`);
+    }
+  }
+  return out;
+}
+function gwAttributionOf(index) {
+  const a = index && typeof index.attribution === "string" && index.attribution ? index.attribution : null;
+  if (a) return a;
+  const s = index && typeof index.source === "string" && index.source ? index.source : null;
+  return s;
+}
+function gwPlanForView(indexCells, bounds, center) {
+  const p = bundleCellsForView(bounds, center, GW_BUNDLE_MAX_CELLS, GW_BUNDLE_CELL_DEG);
+  if (!p) return null;
+  const keys = indexCells ? p.cells.map((c) => c.key).filter((k) => indexCells.has(k)) : p.cells.map((c) => c.key);
+  return { keys, wanted: p.wanted, capped: p.capped };
+}
+function gwVerdictLine(f) {
+  if (!f.on) return "🌊🌳 水/绿地 关（?gw=0）";
+  if (f.state === "no-index") {
+    return "🌊🌳 水/绿地 数不出来：索引取不到（" + String(f.why || "index.json 没读到").slice(0, 60) + "）";
+  }
+  if (f.state === "size-mismatch") {
+    return "🌊🌳 水/绿地 数不出来：格尺寸口径不符（包 " + String(f.cellSize) + "° / 前端 " + GW_BUNDLE_CELL_DEG + "°）⇒ **本轮一个格都不取**（取格会把有数据的格说成「包外」）";
+  }
+  if (f.state === "no-color") return "🌊🌳 水/绿地 数不出来：主题里没有 ai.water / ai.park（不硬编码色号）";
+  if (f.state === "uncounted") {
+    return "🌊🌳 水/绿地 数不出来：这一轮 0 格取到（格 " + f.hit + "/" + f.cells + (f.failed ? " · 失败 " + f.failed : "") + "）";
+  }
+  return "🌊🌳 水 " + f.water + " 面 · 绿 " + f.green + " 面（真数据 · 格 " + f.hit + "/" + f.cells + (f.failed ? " · 失败 " + f.failed : "") + "）";
+}
+function gwSnapshotOf(f) {
+  return {
+    on: f.on,
+    /* 与页面历史口径一致：`cellCount || null`（0 也写 null） */
+    index: f.indexCells || null,
+    attribution: f.attribution,
+    cells: f.cells,
+    hit: f.hit,
+    err: f.failed,
+    water: f.water,
+    green: f.green
+  };
+}
+function emptyFacts(on) {
+  return {
+    on,
+    state: "uncounted",
+    water: null,
+    green: null,
+    cells: 0,
+    hit: 0,
+    failed: 0,
+    indexCells: null,
+    cellSize: null,
+    attribution: null,
+    why: null,
+    layers: [],
+    sources: []
+  };
+}
+function nextFacts(prev, on, patch) {
+  return Object.assign(emptyFacts(on), { layers: prev.layers.slice(), sources: prev.sources.slice() }, patch);
+}
+function createGwLayer(host) {
+  const store = createFeatureStore({
+    cap: GW_STORE_CAP,
+    idOf: gwIdOf,
+    pointOf: gwPointOf
+  });
+  let last = emptyFacts(host.enabled ? host.enabled() : true);
+  let indexFact = null;
+  let indexDone = false;
+  function draw() {
+    const colors = gwColorsOf(host.theme());
+    if (gwMissingColors(colors).length) return;
+    const feats = store.features();
+    const res = applyGwLayers({
+      m: host.map(),
+      colors,
+      data: {
+        water: feats.filter((f) => f.properties?.kind === "water"),
+        green: feats.filter((f) => f.properties?.kind === "green")
+      },
+      beforeId: beforeIdOf()
+    });
+    last.layers = res.layers;
+    last.sources = res.sources;
+    for (const e of res.errs) host.onError?.("gw " + e);
+  }
+  function beforeIdOf() {
+    const m = host.map();
+    if (!m) return void 0;
+    if (host.beforeId) {
+      try {
+        return host.beforeId(m);
+      } catch {
+        return void 0;
+      }
+    }
+    return gwBeforeIdOf(m);
+  }
+  function recount() {
+    const feats = store.features();
+    last.water = feats.reduce((n, f) => n + (f.properties?.kind === "water" ? 1 : 0), 0);
+    last.green = feats.reduce((n, f) => n + (f.properties?.kind === "green" ? 1 : 0), 0);
+  }
+  function emit() {
+    const line = gwVerdictLine(last);
+    try {
+      host.onHud?.(line, last);
+    } catch {
+    }
+    try {
+      host.onSnapshot?.(gwSnapshotOf(last), last);
+    } catch {
+    }
+    return last;
+  }
+  const feed = createBundleFeed({
+    kind: "gw",
+    store,
+    view: host.view,
+    fetchCell: host.fetchCell,
+    flush: () => {
+      draw();
+    },
+    retainRadiusM: host.retainRadiusM || (() => GW_RETAIN_RADIUS_M),
+    onError: (why) => host.onError?.(why)
+  });
+  async function refresh(why = "view") {
+    const on = host.enabled ? host.enabled() : true;
+    if (!on) {
+      last = nextFacts(last, false, { state: "off" });
+      return emit();
+    }
+    try {
+      if (!indexDone) {
+        indexDone = true;
+        const f = await loadBundleIndex(host.fetchCell, "gw");
+        indexFact = f;
+        if (f.cellCount === null && f.cells === null) {
+          last = nextFacts(last, true, { state: "no-index", why: "index.json 没读到", cellSize: f.cellSize });
+          return emit();
+        }
+      }
+      const idx = indexFact;
+      if (idx.cellSize !== null && Math.abs(idx.cellSize - GW_BUNDLE_CELL_DEG) > 1e-9) {
+        last = nextFacts(last, true, {
+          state: "size-mismatch",
+          cellSize: idx.cellSize,
+          indexCells: idx.cellCount,
+          attribution: gwAttributionOf(idx),
+          why: "包 " + idx.cellSize + "° / 前端 " + GW_BUNDLE_CELL_DEG + "°"
+        });
+        return emit();
+      }
+      const colors = gwColorsOf(host.theme());
+      if (gwMissingColors(colors).length) {
+        last = nextFacts(last, true, {
+          state: "no-color",
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: "主题缺 " + gwMissingColors(colors).join("/")
+        });
+        return emit();
+      }
+      await feed.refresh(why);
+      if (!last.layers.length) draw();
+      const view = host.view();
+      const plan = gwPlanForView(idx.cells, view.bounds, view.center);
+      const facts = feed.facts();
+      const keys = plan ? plan.keys : [];
+      const hit = keys.reduce((n, k) => n + (store.has(gwSourceKeyOf(k)) ? 1 : 0), 0);
+      const uncounted = keys.length > 0 && hit === 0;
+      last = nextFacts(last, true, {
+        state: uncounted ? "uncounted" : "counted",
+        cells: keys.length,
+        hit,
+        failed: facts.failed,
+        indexCells: idx.cellCount,
+        cellSize: idx.cellSize,
+        attribution: gwAttributionOf(idx),
+        why: uncounted ? "视野里的格一格都没取到" : null
+      });
+      recount();
+      return emit();
+    } catch (e) {
+      last = nextFacts(last, true, {
+        state: "uncounted",
+        why: String(e?.message || e).slice(0, 60)
+      });
+      host.onError?.("gw " + last.why);
+      return emit();
+    }
+  }
+  return {
+    refresh,
+    facts: () => last,
+    index: () => indexFact,
+    storeCount: () => {
+      try {
+        const s = store.stats();
+        return Number.isFinite(s.n) ? s.n : null;
+      } catch {
+        return null;
+      }
+    }
+  };
 }
 
 // src/components/views/worldsim/wsLabels.ts
@@ -3977,6 +4344,16 @@ export {
   EQUIP_SIDE_STEPS,
   EQUIP_SIDE_STEP_M,
   FALLBACK_HEIGHT_M,
+  GW_BUNDLE_CELL_DEG,
+  GW_BUNDLE_DIR,
+  GW_BUNDLE_MAX_CELLS,
+  GW_BUNDLE_PER_REFRESH,
+  GW_KINDS,
+  GW_LAYER_IDS,
+  GW_LAYER_ID_OF,
+  GW_RETAIN_RADIUS_M,
+  GW_SOURCE_KEY_PREFIX,
+  GW_STORE_CAP,
   HEIGHT_COLOR_RAMP,
   KIND_HEIGHT_M,
   KIND_JITTER,
@@ -4068,6 +4445,7 @@ export {
   WS_SCENE_SOURCE,
   adminLabelsFrom,
   applyBuildingsTo,
+  applyGwLayers,
   applyPitchGuard,
   art3Summary,
   bldBundleCellKey,
@@ -4093,6 +4471,7 @@ export {
   bundleCellUrl,
   bundleCellsForView,
   bundleCountsLine,
+  bundleGwOf,
   bundleIndexUrl,
   bundlePlacesOf,
   bundleRoadsOf,
@@ -4103,6 +4482,7 @@ export {
   createBldGlLayer,
   createBundleFeed,
   createFeatureStore,
+  createGwLayer,
   createWsLog,
   dayHash,
   dayKeyOf,
@@ -4122,6 +4502,16 @@ export {
   footprintMetrics,
   genCountsLine,
   genName,
+  gwAttributionOf,
+  gwBeforeIdOf,
+  gwColorsOf,
+  gwIdOf,
+  gwMissingColors,
+  gwPlanForView,
+  gwPointOf,
+  gwSnapshotOf,
+  gwSourceKeyOf,
+  gwVerdictLine,
   hash322 as hash32,
   heightColorExpression,
   hexRgb,

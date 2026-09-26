@@ -731,7 +731,7 @@ var PRERENDER_DEMO_MANIFEST_PATH = "/prerender-demo/manifest.json";
 var PRERENDER_TILE_SIZE = 512;
 var PRERENDER_TILE_MAXZOOM = 13;
 var LOD_FAR_ZOOM = 12;
-var LOD_NEAR_ZOOM = 14;
+var LOD_NEAR_ZOOM = 11;
 var PRERENDER_ATTRIBUTION = "预渲染瓦片（自产）· 数据署名见清单 manifest.attribution";
 var PRERENDER_DEMO_ATTRIBUTION = "预渲染瓦片（示意/占位，非真实楼·路数据）";
 var LOD_VIEW_TILE_CAP = 2048;
@@ -746,18 +746,15 @@ function lodTierLabel(tier) {
   if (tier === "vector") return `实时矢量（z≥${LOD_NEAR_ZOOM}）`;
   return `过渡中（${LOD_FAR_ZOOM}~${LOD_NEAR_ZOOM}）`;
 }
-var LOD_OPACITY_ZERO_ZOOM = 14;
+var LOD_OPACITY_ZERO_ZOOM = 11;
 var LOD_OPACITY_STOPS = [
-  /* 🔴 2026-09-25 修正（机主：「**拉远就看不到楼了喵**」）：原档位在 z12~14 一路压到 0，
-     而**楼房矢量层要到 14 才画** ⇒ 中间那一截"两层都不管" = 拉远看不到楼。
-     现在瓦片**在 14 之前都保持足够不透明**（只是轻微让位），交接点严格落在 14。 */
+  /* 🔴 2026-09-26 机主决定：**预渲染瓦片层（那些"白蓝方片"）不再作为主力**，
+     楼改由**矢量层一直显示**（`WS_BLD_VECTOR_MINZOOM` 同步降到 11）。
+     ⇒ 瓦片只服务 z<11 的远景，**在 11 严格归零**（与矢量层起点仍然严格对齐，
+     自检那条"归零 zoom === 楼房矢量 minzoom"的不变量**继续成立**，没有"两层都不管"的空档）。 */
   [8, 1],
   [9, 1],
   [10, 1],
-  [11, 0.9],
-  [12, 0.8],
-  [13, 0.7],
-  [13.5, 0.5],
   [LOD_OPACITY_ZERO_ZOOM, 0]
 ];
 function lodOpacityAt(zoom) {

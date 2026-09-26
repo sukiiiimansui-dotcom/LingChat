@@ -159,7 +159,7 @@ export const PRERENDER_TILE_SIZE = 512;
 export const PRERENDER_TILE_MAXZOOM = 13;
 /** `z ≤ FAR` = 预渲染瓦片独占；`z ≥ NEAR` = 实时矢量独占；中间按 zoom 线性交叉过渡 */
 export const LOD_FAR_ZOOM = 12;
-export const LOD_NEAR_ZOOM = 14;
+export const LOD_NEAR_ZOOM = 11;   /* 🔴 2026-09-26 机主：「这些白蓝的方片能去掉吗…楼直接永久显示就行了」⇒ 提前到 11 */
 /** 瓦片源：`real` = 真数据（默认）、`demo` = 示意/占位（只在 `?lod=demo` 下用） */
 export type PrerenderSource = "real" | "demo";
 /**
@@ -205,14 +205,14 @@ export function lodTierLabel(tier: LodTier): string {
  * ⚠️ **不是删掉瓦片**：z≤12 之外/实时层取不到的地方，仍靠它兜底（见 README/DESIGN 的 LOD 分工）。
  * 自检钉着：档位单调不增、`z ≥ LOD_OPACITY_ZERO_ZOOM` 必须为 0。
  */
-export const LOD_OPACITY_ZERO_ZOOM = 14;
+export const LOD_OPACITY_ZERO_ZOOM = 11;
 export const LOD_OPACITY_STOPS: ReadonlyArray<readonly [number, number]> = [
-  /* 🔴 2026-09-25 修正（机主：「**拉远就看不到楼了喵**」）：原档位在 z12~14 一路压到 0，
-     而**楼房矢量层要到 14 才画** ⇒ 中间那一截"两层都不管" = 拉远看不到楼。
-     现在瓦片**在 14 之前都保持足够不透明**（只是轻微让位），交接点严格落在 14。 */
-  [8, 1], [9, 1], [10, 1], [11, 0.9], [12, 0.8], [13, 0.7], [13.5, 0.5], [LOD_OPACITY_ZERO_ZOOM, 0],
+  /* 🔴 2026-09-26 机主决定：**预渲染瓦片层（那些"白蓝方片"）不再作为主力**，
+     楼改由**矢量层一直显示**（`WS_BLD_VECTOR_MINZOOM` 同步降到 11）。
+     ⇒ 瓦片只服务 z<11 的远景，**在 11 严格归零**（与矢量层起点仍然严格对齐，
+     自检那条"归零 zoom === 楼房矢量 minzoom"的不变量**继续成立**，没有"两层都不管"的空档）。 */
+  [8, 1], [9, 1], [10, 1], [LOD_OPACITY_ZERO_ZOOM, 0],
 ];
-
 /** 预渲染层在某个 zoom 下的不透明度（纯函数 ⇒ 自检不必建地图、更不必有 WebGL） */
 export function lodOpacityAt(zoom: number): number {
   const z = Number.isFinite(zoom) ? Number(zoom) : LOD_OPACITY_STOPS[LOD_OPACITY_STOPS.length - 1][0];

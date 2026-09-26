@@ -393,7 +393,10 @@ export function buildingCardData(input: CardInput): CardData {
     const z = input.zone as ZoneName;
     const shareTxt = z.share === null ? "不适用（真名）" : `${z.count}/${z.total} = ${(z.share * 100).toFixed(1)}%`;
     fields.push({ key: "zoneDominant", label: "主导类占比", value: shareTxt, tone: z.source === "derived" ? "real" : z.source === "generated" ? "sketch" : "muted", hint: z.why });
-    fields.push({ key: "zoneBbox", label: "范围", value: `[${z.bbox.join(", ")}]（${z.bbox[2] - z.bbox[0]}° 子格）`, tone: "muted", hint: "区名的作用范围 = 一个 0.01° 子格（≈1.1km）" });
+    /* ⚠️ 子格边长要**格式化**：`106.58 - 106.57 = 0.010000000000005116`（浮点），
+       直接拼进卡片就是一行会被当成 bug 的噪声（真浏览器实测抓到）。 */
+    const spanDeg = +(z.bbox[2] - z.bbox[0]).toFixed(4);
+    fields.push({ key: "zoneBbox", label: "范围", value: `[${z.bbox.join(", ")}]（${spanDeg}° 子格）`, tone: "muted", hint: "区名的作用范围 = 一个 0.01° 子格（≈1.1km）" });
   }
   fields.push({ key: "id", label: "id", value: id || "（无 id）", tone: id ? "real" : "warn", hint: id ? "稳定 id（生成名就是由它决定）" : "没有 id ⇒ 生成名也拿不到（第三态）" });
   fields.push({ key: "coord", label: "坐标", value: lng === null || lat === null ? "数不出来" : `${lng}, ${lat}`, tone: lng === null ? "muted" : "real" });

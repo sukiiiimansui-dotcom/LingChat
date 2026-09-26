@@ -299,8 +299,19 @@ export interface PackContents {
   cellCount: number;
   /** 包声明的中心点（`index.json` 的可选字段 `center`/`focus`；没有 = null，**不猜**） */
   center: [number, number] | null;
-  /** `index.json` 里声明的 cellSize（对不上前端口径就该报出来） */
+  /** `index.json` 里声明的 cellSize（包级；**可能为 null** —— 层间粒度不同时导出器会把它置空） */
   cellSize: number | null;
+  /** 按层声明的粒度（`cellSizeByLayer`，如 `{bld:0.01, gw:0.05}`）；没有 = null */
+  cellSizeByLayer: Record<string, number> | null;
+  /**
+   * **从格文件名/格键里读出来的**粒度集合（去重升序，如 `[0.01, 0.05]`）。
+   *
+   * 🔴 为什么要这一份：粒度正在从 0.05° 改到 0.01°（父代理 2026-09-26 拍板），
+   * 而且**层间可以不同** ⇒ 任何"只认包级 `cellSize`"的假设都会在下一版包上崩掉。
+   * 这一份不依赖任何声明（文件名按 `<...>_<粒度>.json` / 格键 `..._<粒度>` 自带粒度），
+   * 所以它是"包到底多细"的**兜底事实**；读不出来就是空数组（空 = 数不出来，不是 0）。
+   */
+  cellSizeSeen: number[];
   /** 压缩方式**本实现不支持**的条目（`名字（方式 N）`）——
       在"解包"这一步就要拦住：否则会读到一半才炸，失败阶段会指到"写入"，让人找错地方 */
   unsupported: string[];
@@ -313,6 +324,34 @@ const INDEX_NAME = "index.json";
 /** 条目名是不是某个 `index.json`（根或层内的都算） */
 function isIndexName(name: string): boolean {
   return name === INDEX_NAME || name.endsWith("/" + INDEX_NAME);
+}
+
+/** 按层粒度（`index.json.cellSizeByLayer`）；只收有限正数，收不到就是 null（不猜） */
+function cellSizeByLayerFromIndex(index: unknown): Record<string, number> | null {
+  if (!index || typeof index !== "object") return null;
+  const v = (index as Record<string, unknown>).cellSizeByLayer;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out: Record<string, number> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    const n = Number(x);
+    if (Number.isFinite(n) && n > 0) out[k] = n;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 从格文件名/格键里读粒度：`bldbundle/106.20000_29.10000_0.05.json` ⇒ 0.05、
+ * 格键 `106.20000_29.10000_0.01` ⇒ 0.01。读不出来就不进集合（**空集 = 数不出来**，不是 0）。
+ */
+function cellSizesSeen(names: readonly string[]): number[] {
+  const out = new Set<number>();
+  for (const n of names) {
+    const m = n.replace(/\.json$/i, "").match(/_([0-9]+(?:\.[0-9]+)?)$/);
+    if (!m) continue;
+    const v = Number(m[1]);
+    if (Number.isFinite(v) && v > 0) out.add(v);
+  }
+  return [...out].sort((a, b) => a - b);
 }
 
 function cellKeysFromIndex(index: unknown): string[] | null {
@@ -330,8 +369,7 @@ function cellKeysFromIndex(index: unknown): string[] | null {
   return null;
 }
 
-function centerFromIndex(index: unknown): [number, number] | null {
-  if (!index || typeof index !== "object") return null;
+function centerFromIndex(index: unknown): [number, number] | null {  if (!index || typeof index !== "object") return null;
   const o = index as Record<string, unknown>;
   for (const k of ["center", "focus"]) {
     const v = o[k];
@@ -402,6 +440,9 @@ export async function readPackContents(bytes: Uint8Array): Promise<PackContents>
     cellCount: declared && declared.length ? declared.length : cells.length,
     center: centerFromIndex(index),
     cellSize: cs ?? null,
+    cellSizeByLayer: cellSizeByLayerFromIndex(index),
+    /* 粒度兜底事实：格文件名 + 根 index.json 声明的格键，两处都扫（层间粒度不同也读得出来） */
+    cellSizeSeen: cellSizesSeen([...cells, ...(declared || [])]),
     unsupported,
     cellsWhy,
   };

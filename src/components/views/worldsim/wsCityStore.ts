@@ -70,6 +70,14 @@ export interface InstalledCity {
   cells: number;
   /** 包里的文件数 */
   files: number;
+  /**
+   * 实际**驻留**的包内条目数 / 应该驻留的条目数（文本类：`.json` / `.txt` / `.md`）。
+   * 两个都在 ⇒ "装了多少"是可数的；`resident` 那串只在**没装全**时才出现（如实写原因）。
+   */
+  stored?: number;
+  entries?: number;
+  /** 包内格粒度（从格文件名/格键读出来，去重升序）—— 粒度正在从 0.05 改到 0.01，**别假设单值** */
+  cellSizes?: number[];
   /** sha256 对账结果：`ok` 对上 / `mismatch` 对不上 / `none` 清单没给（未校验） / `skip` 没算 */
   sha: "ok" | "mismatch" | "none" | "skip";
   /** 装完的时间戳 */
@@ -336,17 +344,20 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
       return { ok: false, stage: "unpack", why: "包里有本实现不支持的压缩方式：" + head + tail };
     }
 
-    /* ⑤ 存（内存驻留上限到了就只留已驻留的那批 + 原因，不假装全装下）
-       ⚠️ 存的是**包里的文件路径**（真包是 `bldbundle/<格>.json` 这种按层分目录的形状），
-       不是"格键" —— 下一片取数管道要按同一个相对路径找格。 */
+    /* ⑤ 存 —— 存**整包条目**（按 zip 顺序），不只是格文件。
+       🔴 为什么不只存格文件：feed 的**第一跳**就是 `/<层目录>/index.json`（先读格白名单再取格），
+       层索引不是"格"、但**必须能读出来**，否则"从已装城市包读数据"第一步就失败
+       （城市包那条线实测报回来的缺口）。
+       顺序沿用 zip 顺序：导出器把「根 index + NOTICE + 四张层索引 + gw + places + roads + bld」
+       排在前面的收益（装到一半时水绿/片区名/路网仍然完整）**只有在这个顺序下才成立**。 */
     report("store", got, total, "正在写入");
     let resident: string | undefined;
-    const cellFiles = contents.cells;
+    const texty = contents.files.filter((f) => !f.endsWith("/") && /\.(json|txt|md)$/i.test(f));
+    let stored = 0;
     try {
       const keep: Array<[string, string]> = [];
-      if (contents.index !== null) keep.push(["index.json", JSON.stringify(contents.index)]);
       let acc = 0;
-      for (const file of cellFiles) {
+      for (const file of texty) {
         const text = await cellText(bytes, entries, file);
         acc += text.length;
         if (acc > residentMax) {
@@ -354,8 +365,8 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
             "只驻留了 " +
             keep.length +
             "/" +
-            cellFiles.length +
-            " 个格文件（累计 " +
+            texty.length +
+            " 个包内条目（累计 " +
             fmtBytes(acc) +
             " 超过内存上限 " +
             fmtBytes(residentMax) +
@@ -363,6 +374,7 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
           break;
         }
         keep.push([file, text]);
+        stored = keep.length;
       }
       backend.putCells(keep);
     } catch (e) {
@@ -378,6 +390,9 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
          `files` 是包内条目数（含各层 index.json），两个数不混。 */
       cells: contents.cellCount,
       files: contents.files.length,
+      stored,
+      entries: texty.length,
+      cellSizes: contents.cellSizeSeen,
       sha,
       at: Date.now(),
       attribution: info.attribution || "",

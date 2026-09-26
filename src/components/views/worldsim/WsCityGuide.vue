@@ -121,7 +121,7 @@
             {{ t("worldsim.city.retry") }}
           </button>
           <button class="wscg__btn" type="button" :disabled="!!busy" @click="emit('enter')">
-            {{ t("worldsim.city.enterAnyway") }}
+            {{ phase === "ok" ? t("worldsim.city.enterSkip") : t("worldsim.city.enterAnyway") }}
           </button>
         </div>
       </footer>

@@ -838,7 +838,9 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       indexState = "失败";
       indexWhy = `索引没读到（试过 ${tried} 个目录：${dirs.join(" / ")}）⇒ 退回试格子`;
       opts.onError?.(`index ${spec.dir} 没读到（试过 ${tried} 个目录），退回试格子`);
-      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
+      return last || { kind: opts.kind, url: "", source: null, cellCount: null, cells: null, attribution: null, real: null,
+                       cellSize: null, cellBytes: null, cellBld: null, cellSizeByLayer: null, layerCellSizeSole: null,
+                       ok: false, why: `试过 ${tried} 个目录都没读到索引` };
     })();
     return indexPromise;
   }
@@ -1072,6 +1074,30 @@ export interface BundleIndexFact {
    */
   cellBytes: Map<string, number> | null;
   cellBld: Map<string, number> | null;
+  /**
+   * ✅ **这一趟索引到底读到了没有**（`false` ⇒ 后面那些字段**全是 null**，消费方据此走"数不出来"那条路）。
+   *
+   * 为什么要有这个字段（2026-09-26 真 bug）：`loadBundleIndex()` 的返回类型曾经是"一个 fact"，
+   * 但**"没读到"这件事在类型里没表达** ⇒ 直接调用它的消费方（`wsGwLayer`）要在"全 null"里自己猜，
+   * 猜漏了就是 `Cannot read properties of null (reading 'cellSize')`（App 页实测抓到，
+   * 每次开页少画水/绿 + HUD 一行红字）。⇒ 现在**显式给一个布尔 + 原因**，谁都不用猜。
+   * ⚠️ 字段只增不减：老消费者不看它也不会坏（与 `cellSize` 一样，null 一律表示"数不出来"）。
+   */
+  ok: boolean;
+  /** 没读到的**原句**（HTTP 状态 / 解析错 / 未知类型…）；读到了 ⇒ null */
+  why: string | null;
+  /**
+   * 🗂 **按层自报的格边长**（`index.json.cellSizeByLayer`：`{层名: 度}`；没有 ⇒ null）。
+   *
+   * 为什么要有（2026-09-26 主对话批，"只加字段、不改语义"）：**城市包**里不同层可能是不同粒度
+   * （楼一档、路/水绿一档），那种包的**包级 `cellSize` 会是 null**（报不出来），而消费方
+   * （入口/App）需要知道"我这一层按多少度算键"。以前谁需要谁自己再解析一遍索引 —— 那就是第二份实现。
+   * ⇒ 在这里**加一个字段**，让索引事实仍然是唯一来源。
+   * ⚠️ **旧消费者不受影响**：字段只增不减，缺字段一律 `null`（不许拿它当 0 —— 与 `cellSize` 同一条纪律）。
+   */
+  cellSizeByLayer: Record<string, number> | null;
+    /** 包级 `cellSize` 为 null、但只有**一个**层报了尺寸时，把它当整体尺寸用（省得每个消费方各判一次） */
+  layerCellSizeSole: number | null;
 }
 
 /**
@@ -1080,8 +1106,14 @@ export interface BundleIndexFact {
  * 最不容易漂的做法就是**让导出脚本那句原话随包走**，页面照抄显示。
  */
 export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, dir?: string): Promise<BundleIndexFact> {
-  const url = bundleIndexUrl(kind, dir);
+  /* 🔴 **这个函数是 total 的：永不抛、永不返回 null**（2026-09-26 真 bug 的修法）。
+     原来 `bundleIndexUrl()` 在 try **外面** ⇒ 它一抛（未知 kind / 目录表拿不到），
+     调用方拿到的就是"什么都没赋值"（`indexFact` 仍是 null）⇒ 下一次调用（它自己的 `indexDone`
+     已经置 true、跳过了加载）直接撞 `null.cellSize`。现在：连"算 URL"都在 try 里，
+     任何失败都回一个**全 null 的 fact**，调用方只需看 `ok`。 */
+  let url = "";
   try {
+    url = bundleIndexUrl(kind, dir);
     const r = await fetchCell(url, BUNDLE_TIMEOUT_MS);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = (await r.json()) as { source?: unknown; cellCount?: unknown; cells?: unknown; attribution?: unknown; real?: unknown; cellSize?: unknown } | null;
@@ -1097,6 +1129,21 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
         if (bd !== null && bd > 0) { if (!cellBld) cellBld = new Map(); cellBld.set(k, bd); }
       }
     }
+    /* 🗂 按层自报的格尺寸（城市包可能层间不同粒度；包级 `cellSize` 那种情况下是 null） */
+    let cellSizeByLayer: Record<string, number> | null = null;
+    let layerCellSizeSole: number | null = null;
+    const rawLayers = (j as { cellSizeByLayer?: unknown } | null)?.cellSizeByLayer;
+    if (rawLayers && typeof rawLayers === "object") {
+      for (const [k, v] of Object.entries(rawLayers as Record<string, unknown>)) {
+        const n = num(v);
+        if (n === null || n <= 0) continue;              // 坏值一律不进（不许拿 0 去算键）
+        if (!cellSizeByLayer) cellSizeByLayer = {};
+        cellSizeByLayer[k] = n;
+      }
+      const vals = cellSizeByLayer ? Object.values(cellSizeByLayer) : [];
+      layerCellSizeSole = (vals.length === 1) ? vals[0] : null;
+    }
+    const okCells = !!(rawCells && rawCells.length);
     return {
       kind, url,
       source: typeof j?.source === "string" && j.source ? j.source : null,
@@ -1107,10 +1154,15 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
       /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
          而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
       cellSize: (typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0) ? j.cellSize : null,
-      cellBytes, cellBld,
+      cellBytes, cellBld, cellSizeByLayer, layerCellSizeSole,
+      ok: okCells,
+      why: okCells ? null : "索引里没有 cells（取到了文件但内容不像清单）",
     };
-  } catch {
-    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null, cellBytes: null, cellBld: null };
+  } catch (e) {
+    /* 任何失败（404 / 超时 / JSON 坏 / 未知 kind）都**如实回一个 fact**，不抛、不 null */
+    return { kind, url, source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null,
+             cellBytes: null, cellBld: null, cellSizeByLayer: null, layerCellSizeSole: null,
+             ok: false, why: String((e as Error)?.message || e || "索引读取失败").slice(0, 120) };
   }
 }
 

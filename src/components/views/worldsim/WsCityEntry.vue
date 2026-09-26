@@ -127,7 +127,6 @@
        ⚠️ 这里**不读清单**：读清单是 sheet 自己的事（它要显示三态与原因）。
        入口只关心"要不要问"，这样清单服务挂了也不影响进地图。 */
     guideOpen.value = !installed.value.length && !skipped();
-    sceneKey.value += 0;
   });
 </script>
 

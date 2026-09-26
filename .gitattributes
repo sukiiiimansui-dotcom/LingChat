@@ -40,3 +40,4 @@
 # ⇒ 走 LFS 会变成 130 字节指针、页面直接 404（这个坑我们为 62 个素材付过代价）。
 # ⚠️ 必须写在 `*.png filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
 public/prerender/** binary -filter
+public/prerender/manifest.json text diff eol=lf

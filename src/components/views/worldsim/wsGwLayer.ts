@@ -544,7 +544,22 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
       const view = host.view();
       const plan = gwPlanForView(idx.cells, view.bounds, view.center);
       const facts = feed.facts();
-      const keys = plan ? plan.keys : [];
+      /* 🔴 **视野拿不到**（地图还没就绪 / 降级路）⇒ 也是「数不出来」，**不许**报成"格 0/0 的已量 0"：
+         那是把"没法量"说成"量过了，是 0"。 */
+      if (!plan) {
+        last = nextFacts(last, true, {
+          state: "uncounted",
+          cells: 0,
+          hit: 0,
+          failed: facts.failed,
+          indexCells: idx.cellCount,
+          cellSize: idx.cellSize,
+          attribution: gwAttributionOf(idx),
+          why: "视野拿不到（地图还没就绪）",
+        });
+        return emit();
+      }
+      const keys = plan.keys;
       const hit = keys.reduce((n, k) => n + (store.has(gwSourceKeyOf(k)) ? 1 : 0), 0);
       const uncounted = keys.length > 0 && hit === 0;
       /* 🔴 **三态**：一格都没取到 ⇒ `water/green` 保持 `null`（判词写"数不出来"，原因写明），

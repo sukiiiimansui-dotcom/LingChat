@@ -135,20 +135,40 @@ export const GW_STORE_CAP = 4000;
  * 解析出来 0 个点（HUD 上看着像"包是空的"），而 `fetchLog` 里根本没有 `/placesbundle/`。
  * ⇒ 教训：**新加一种包时，凡是有"目录名"的地方都必须走同一张表**（自检里现在钉着这条）。
  */
-export function bundleCellUrl(kind: BundleKind, cellKey: string): string {
+export function bundleCellUrl(kind: BundleKind, cellKey: string, dir?: string): string {
   const spec = SPECS[kind];
   if (!spec) throw new Error("未知的离线包类型：" + String(kind));
-  return `/${spec.dir}/${cellKey}.json`;
+  return `/${dir || dirsOf(spec)[0]}/${cellKey}.json`;
 }
 
 /**
  * 离线包的**清单**（`index.json`）：里面的 `source` 就是**署名原句**（由导出脚本写进去）。
  * 署名要求的是"复用同一句常量，别改写第二版" ⇒ 这里**只用包里的原句**，TS 里不重写一句。
  */
-export function bundleIndexUrl(kind: BundleKind): string {
+export function bundleIndexUrl(kind: BundleKind, dir?: string): string {
   const spec = SPECS[kind];
   if (!spec) throw new Error("未知的离线包类型：" + String(kind));
-  return `/${spec.dir}/index.json`;
+  return `/${dir || dirsOf(spec)[0]}/index.json`;
+}
+
+/**
+ * 📦 **一种包可以有几个候选目录**（按优先级）：先来的先用，索引读不到就退下一个。
+ *
+ * 为什么需要（2026-09-26，机主拍板「按视野取格/分片」）：分片后**格尺寸会变小**（0.05° → 0.01°），
+ * 而"老包是唯一被端到端验过的一版"（App / 城市包 / 代拍页都在吃它）⇒ **两版必须能并存**：
+ * 新版放自己的目录、索引里自报 `cellSize`，客户端**按索引里的数算格键**（不再写死），
+ * 老包还在就继续能跑。真要指定目录：`?bdir=<名字>`（排查/A-B 用）。
+ */
+function dirsOf(spec: { dir: string; dirs?: string[] }): string[] {
+  const list = (spec.dirs && spec.dirs.length ? spec.dirs : [spec.dir]).slice();
+  /* `?bdir=` 覆盖（只认列在候选里的，避免拼错目录名去猜） */
+  try {
+    if (typeof location !== "undefined" && location.search) {
+      const m = /[?&]bdir=([A-Za-z0-9._-]+)/.exec(location.search);
+      if (m && list.indexOf(m[1]) >= 0) return [m[1]].concat(list.filter((d) => d !== m[1]));
+    }
+  } catch { /* 无 location（自检/Node）⇒ 用默认顺序 */ }
+  return list;
 }
 
 /* ══ 取数接口（宿主无关：浏览器给 `fetch`，自检给假实现） ═══════════════════════════ */
@@ -478,12 +498,21 @@ export function roadsPointOfRaw(f: BundleRoadFeature): LngLat | null {
 
 interface BundleKindSpec<T> {
   dir: string;
-  /** 🔴 前端现在按多少度分格（**引同一批常量**，不新写数字）。
-   *  与 `index.json.cellSize` 不一致 ⇒ **拒绝取数并响亮报错**（见 `ensureIndex()`）：
-   *  2026-09-25 的事故就是两边各改一半 —— 包按 0.02 分格、前端按 0.05 算键，
-   *  所有格被静默判成"包外" ⇒ **把有数据说成没数据**。 */
+  /** 📦 候选目录（按优先级）：索引读不到就退下一个 ⇒ **不同格尺寸的包能并存**（老包不删也能跑）。 */
+  dirs?: string[];
+  /**
+   * 🔴 **兜底**格边长（**只在包自己没报 `cellSize` 时用**）。
+   *
+   * 2026-09-26 改（机主拍板分片）：**格尺寸以 `index.json.cellSize` 为准**，不再拿这个常量去算格键。
+   * 历史教训（2026-09-25）：包按 0.02 分格、前端按 0.05 算键 ⇒ 格键与索引零交集 ⇒
+   * 每个格都被判"包外" ⇒ **把有数据说成没数据**。当时靠"两边同值 + 不一致就拒绝"防住；
+   * 现在分片会让格尺寸**故意**变小 ⇒ 防线改成两条：
+   *   ① 有 `cellSize` ⇒ **按它算**（0.05/0.02/0.01 都能跑）；
+   *   ② 调用方**显式钉了**尺寸（`BundleFeedOptions.expectCellDeg`，页面用 `?cell=` 给）而包不符 ⇒
+   *      **仍然拒绝取数**并写 `sizemismatch`（"说成包外"这条路永远不许走）。
+   */
   cellDeg: number;
-  plan: (bounds: BundleBoundsLike | null, center: { lng: number; lat: number } | null, maxCells: number) => {
+  plan: (bounds: BundleBoundsLike | null, center: { lng: number; lat: number } | null, maxCells: number, sizeDeg: number) => {
     cells: Array<{ key: string; w: number; s: number }>;
     wanted: number;
     capped: boolean;
@@ -500,8 +529,11 @@ interface BundleKindSpec<T> {
 const SPECS = {
   bld: {
     dir: "bldbundle",
+    /* 📦 **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
+       不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
+    dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
-    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => bldBundleCellsForView(b, c, maxCells),
+    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number, size: number) => bldBundleCellsForView(b, c, maxCells, size),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
     maxCells: BLD_BUNDLE_MAX_CELLS,
@@ -511,7 +543,7 @@ const SPECS = {
   places: {
     dir: "placesbundle",
     cellDeg: PLACES_BUNDLE_CELL_DEG,
-    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => placesBundleCellsForView(b, c, maxCells),
+    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number, size: number) => placesBundleCellsForView(b, c, maxCells, size),
     parse: bundlePlacesOf,
     perRefresh: PLACES_BUNDLE_PER_REFRESH,
     maxCells: PLACES_BUNDLE_MAX_CELLS,
@@ -521,7 +553,7 @@ const SPECS = {
   roads: {
     dir: "roadsbundle",
     cellDeg: ROADS_BUNDLE_CELL_DEG,
-    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number) => roadsBundleCellsForView(b, c, maxCells),
+    plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number, size: number) => roadsBundleCellsForView(b, c, maxCells, size),
     parse: bundleRoadsOf,
     perRefresh: ROADS_BUNDLE_PER_REFRESH,
     maxCells: ROADS_BUNDLE_MAX_CELLS,
@@ -561,8 +593,14 @@ export interface BundleFeedFacts {
   /** 🔴 **口径不符 ⇒ 本轮拒绝取数**（`index.cellSize` ≠ 前端常量）：既不取格、也不写 `missing`。
    *  为什么不能"退回试格子"：0.05 的键在 0.02 的包里**一个都不存在** ⇒ 全 404 ⇒ 照样把有数据说成包外。 */
   refused: boolean;
-  /** 前端现在按多少度分格（引常量）—— 与 `index.cellSize` 一起进 HUD，事故要能当场看见 */
+  /** **实际生效**的格边长（度）：包自报 `cellSize` 优先；包没报才用兜底常量 */
   cellDeg: number;
+  /** 调用方**显式钉住**的格边长（`expectCellDeg`；没钉 ⇒ null）—— 与 `cellDeg` 不同就意味着已拒绝取数 */
+  cellDegPin: number | null;
+  /** 这一场真正在用的包目录（多候选里选中的那个） */
+  dir: string;
+  /** 候选目录（按优先级）—— HUD 要能回答"为什么用的是这个目录" */
+  dirs: string[];
   /** 🗂 包里那张**索引**（`index.json`）的实况 —— HUD 要能回答"包外是读来的还是猜的" */
   index: { state: "未读" | "读取中" | "已读" | "失败" | "口径不符"; cells: number | null; keys: number | null;
            why: string | null; attribution: string | null; real: boolean | null; cellSize: number | null };
@@ -609,6 +647,13 @@ export interface BundleFeedOptions<T> {
   flush: (why: string) => void;
   /** 淘汰半径（米）：保留"视野外一圈" ⇒ 来回挪地图不该反复重取 */
   retainRadiusM: () => number;
+  /**
+   * 📐 **显式钉住的格尺寸（度）**：给了它，而包自报的 `cellSize` 与它不同 ⇒ **拒绝取数**并写
+   * `sizemismatch`（="把有数据说成包外"那条路永远不许走）。
+   * 不给 ⇒ **按包自报的算**（0.05 / 0.02 / 0.01 的包都能跑）—— 这是 2026-09-26 分片改造后的默认。
+   * 用途：`?cell=` 显式比对、自检里对拍两种包、以及将来"页面按哪个尺寸挑选"要对齐时。
+   */
+  expectCellDeg?: number | null;
   /** 失败原文（给 HUD/面板 —— 不静默空着） */
   onError?: (why: string) => void;
   /**
@@ -656,6 +701,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
      先读一次 `<包>/index.json` ⇒ 只对"索引里有的格"发请求；索引里没有的格直接记 `missing`（**包外**，
      零请求、且是**读来的事实**）。索引取不到 ⇒ **如实退回**试格子（`indexState="失败"`，HUD 写出来）。 */
   let refused = false;
+  let activeDir: string | null = null;     // 这一场真正在用的包目录（多候选里选中的那个）
+  let effCellDeg: number | null = null;    // 包自报的格尺寸（null ⇒ 还没读到索引，用兜底）
   let evictedSources = 0;                     // 被淘汰连累作废、下一轮要重取的格（历史累计）
   let indexFact: BundleIndexFact | null = null;
   let indexState: "未读" | "读取中" | "已读" | "失败" | "口径不符" = "未读";
@@ -728,38 +775,61 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   function ensureIndex(): Promise<BundleIndexFact> {
     if (indexPromise) return indexPromise;
     indexState = "读取中";
-    /* ⏱ `index.json` 是**第一跳**（没有它连"哪些格存在"都不知道）⇒ 单独记时，别混进格子账里 */
-    indexPromise = pmTimeAsync(`feed.index:${spec.dir}`, () => loadBundleIndex(opts.fetchCell, opts.kind)).then((f) => {
-      indexFact = f;
-      if (!f.cells) {
-        indexState = "失败";
-        indexWhy = "索引没读到（退回试格子）";
-        opts.onError?.(`index ${spec.dir} 没读到，退回试格子`);
-        return f;
-      }
-      /* 🔴 **口径对拍**（2026-09-25 事故的硬化）：包按 X° 分格、前端按 Y° 算键 ⇒
-         键集与索引**零交集** ⇒ 若不拦，每个格都会被"读"成包外 —— 那是**把有数据说成没数据**。
-         ⇒ 一律**拒绝取数**（不取格、不写 missing），并把两个数字**响亮**写进 HUD/errs。 */
-      const pkg = f.cellSize;
-      if (pkg === null) {
-        /* 老包没有 `cellSize` 字段：**不猜**，也不因此拒绝（保持既有行为），如实标注 */
+    /* ⏱ `index.json` 是**第一跳**（没有它连"哪些格存在"都不知道）⇒ 单独记时，别混进格子账里。
+       📦 **按候选目录逐个试**（`dirsOf`）：第一个能读出索引的目录就是这一场的"活目录" ⇒
+       新细格包与老包**能并存**，谁在就用谁，页面/App 都不用改。 */
+    const dirs = dirsOf(spec);
+    indexPromise = (async (): Promise<BundleIndexFact> => {
+      let last: BundleIndexFact | null = null;
+      let tried = 0;
+      for (const d of dirs) {
+        tried += 1;
+        const f = await pmTimeAsync(`feed.index:${spec.dir}`, () => loadBundleIndex(opts.fetchCell, opts.kind, d));
+        last = f;
+        if (!f.cells) continue;                       // 这个目录没索引 ⇒ 试下一个
+        activeDir = d;
+        indexFact = f;
+        /* 🔴 **格尺寸以包自报的 `cellSize` 为准**（2026-09-26 分片改造）：
+           包按 0.05 / 0.02 / 0.01 分格都能跑，**不再拿前端常量去算格键** ——
+           2026-09-25 那次"包 0.02 / 前端 0.05 ⇒ 格键零交集 ⇒ 把有数据说成包外"就是写死造成的。
+           防线改成"**显式钉住的尺寸**对不上才拒绝"（见下），兜底常量只在包**没报**时用。 */
+        /* ⚠️ **坏值也算"没报"**：`cellSize: null` 经 `Number(null)` 会变 **0**（自检⑧D 抓到的坑），
+           而 0 会让格键计算除零 ⇒ **一个格都取不到**（比报错更难查）⇒ 只有"有限且 > 0"才算包自报。 */
+        const rawSize = f.cellSize;
+        const pkg = (typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0) ? rawSize : null;
+        effCellDeg = (pkg === null ? spec.cellDeg : pkg);
+        const pin = Number(opts.expectCellDeg);
+        if (pkg === null) {
+          /* 老包没有 `cellSize` 字段：**不猜**，用兜底常量，并如实标注 */
+          indexState = "已读";
+          indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
+          return f;
+        }
+        if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
+          /* 🔴 **口径对拍**（2026-09-25 事故的硬化，保留）：调用方**显式钉了**期望尺寸而包不符 ⇒
+             键集与索引**零交集** ⇒ 若不拦，每个格都会被"读"成包外 —— 那是**把有数据说成没数据**。
+             ⇒ **拒绝取数**（不取格、不写 missing），两个数字与目录名都写进 HUD/errs。 */
+          indexState = "口径不符";
+          refused = true;
+          indexWhy = `包（${d}）按 ${pkg}° 分格、但这一趟**钉住**了 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+          opts.onError?.(`${spec.dir}@${d} 格尺寸口径不符：包 ${pkg}° / 钉住 ${pin}° ⇒ 本轮一个格都不取`);
+          return f;
+        }
         indexState = "已读";
-        indexWhy = "包里没有 cellSize 字段（对拍不了口径）";
+        indexWhy = null;
         return f;
       }
-      if (Math.abs(pkg - spec.cellDeg) > 1e-9) {
-        indexState = "口径不符";
-        refused = true;
-        indexWhy = `包按 ${pkg}° 分格、前端按 ${spec.cellDeg}° 算 ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
-        opts.onError?.(`${spec.dir} 格尺寸口径不符：包 ${pkg}° / 前端 ${spec.cellDeg}° ⇒ 本轮一个格都不取`);
-        return f;
-      }
-      indexState = "已读";
-      indexWhy = null;
-      return f;
-    });
+      /* 所有候选目录都没读到索引 ⇒ 如实退回试格子（老行为，判词不许写成"这里没有"） */
+      indexState = "失败";
+      indexWhy = `索引没读到（试过 ${tried} 个目录：${dirs.join(" / ")}）⇒ 退回试格子`;
+      opts.onError?.(`index ${spec.dir} 没读到（试过 ${tried} 个目录），退回试格子`);
+      return last || { kind: opts.kind, url: bundleIndexUrl(opts.kind, dirs[0]), source: null, cellCount: null, cells: null, attribution: null, real: null, cellSize: null };
+    })();
     return indexPromise;
   }
+
+  /** 这一场**实际按多少度分格**（包自报优先；索引还没读到 ⇒ 兜底常量） */
+  function effectiveDeg(): number { return effCellDeg === null ? spec.cellDeg : effCellDeg; }
 
   function counters(): BundleFeedFacts {
     let n: number | null = null;
@@ -774,7 +844,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     return {
       n, have: have.size, missing: missing.size, failed: failed.size,
       pending, cap, wanted, capped, got, asked,
-      refused: refused, cellDeg: spec.cellDeg,
+      refused: refused, cellDeg: effectiveDeg(), cellDegPin: (Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null),
+      dir: activeDir || dirsOf(spec)[0], dirs: dirsOf(spec),
       evictedSources,
       cache: cacheStats(),
       coalesce: { ms: coalesceMs, merged: coalescedFlushes },
@@ -790,22 +861,29 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     };
   }
 
+  /**
+   * 视野需要哪些格。⚠️ `feed.plan()` 是**同步**的（页面/探针要随手读）⇒ 它用"当前已知的格尺寸"
+   * （索引已读 ⇒ 包自报的；还没读 ⇒ 兜底常量）。**取数那条路（`runOnce`）一定先 `await ensureIndex()`**
+   * ⇒ 真正去取格时用的永远是包自报的尺寸，不受这里影响。
+   */
   function planned(): { keys: string[]; wanted: number; capped: boolean } | null {
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells);
+    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
     if (!p) return null;
     return { keys: p.cells.map((c) => c.key), wanted: p.wanted, capped: p.capped };
   }
 
   async function runOnce(why: string): Promise<BundleRefreshReport> {
+    /* 🗂 **先读索引**（一次；失败就退回试格子）—— 两件事都靠它：
+       ① 索引里没有的格 = **包外**，零请求；② **格尺寸以包自报为准** ⇒ 必须先读它再算格键
+       （不然细格包会被按 0.05 算键 ⇒ 键与索引零交集 ⇒ 把有数据说成包外）。 */
+    const idx = await ensureIndex();
     const v = opts.view();
-    const p = spec.plan(v.bounds, v.center, spec.maxCells);
+    const p = spec.plan(v.bounds, v.center, spec.maxCells, effectiveDeg());
     if (!p) return { planned: false, batch: 0, got: 0, capped: false };
     asked = true;
     wanted = p.wanted;
     capped = p.capped;
-    /* 🗂 **先读索引**（一次；失败就退回试格子）—— 索引里没有的格 = **包外**，零请求 */
-    const idx = await ensureIndex();
     /* 🔴 口径不符 ⇒ **本轮什么都不做**（不取格、不写 missing）：把事情说成"包外"是最坏的那种谎 */
     if (refused) return { planned: true, batch: 0, got: 0, capped: p.capped, refused: true };
     /* 已经取过的格不重取；**包外**的也不重试（404/索引判包外 都是"包里没有"，重试只白费流量） */
@@ -829,7 +907,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       /* ⏱ 每格四段拆开记：**网络 / 读流+JSON.parse / 紧凑字段→要素 / 并仓**。
          为什么要拆：机主说的"加载慢"可能是网络（真慢），也可能是解析（我们自己写的循环慢）——
          不拆开就会把锅甩给网络，那是猜。 */
-      const url = bundleCellUrl(opts.kind, cell.key);
+      const url = bundleCellUrl(opts.kind, cell.key, activeDir || dirsOf(spec)[0]);
       const t0 = pmNow();
       try {
         /* ♻️ **先看缓存**（默认关）：淘汰之后回头再取同一格 ⇒ 不下载、不解析，直接并回去。

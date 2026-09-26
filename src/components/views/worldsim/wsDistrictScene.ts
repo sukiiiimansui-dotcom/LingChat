@@ -31,7 +31,9 @@
 
 import { rampExpression, themeForTier, themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { sceneLayerPlan } from "./wsScene";
-import { pickBuildingsForView, type PickBounds, type PickFeature, type PickViewStats } from "./wsBuildingPick";
+/* 🏙 挑选的**统计类型**来自编排真源（`wsBldPickStore`）；规则类型（`wsBuildingPick`）本文件已不再直接用 ——
+   `pickBuildingsForView` 那条"按视野挑、无冻结"的旧路**已从这里移除**（App 会"挪一下就变"，机主否过）。 */
+import type { BldPickStats } from "./wsBldPickStore"
 
 /** 楼层档位（`themeForTier()` 的返回；层序/描边这些"随主题变"的参数都从这里取） */
 export type ThemeTier = ReturnType<typeof themeForTier>;
@@ -254,13 +256,23 @@ export interface BldFlushOpts<T> {
   /** 落图**之后**（宿主的标签/HUD；画不成时不会调用） */
   afterDraw?: (why: string, data: FeatureCollectionLike) => void;
   /**
-   * 🏙 **近景按视野挑楼**（机主 2026-09-25：「楼房过于密集…**上限 100 栋根据视野来显示**」）：
+   * 🏙 **近景挑选**（机主 2026-09-25「楼房过于密集…**上限 100 栋根据视野来显示**」，
+   * 2026-09-26 更正为「**小范围一个区块最高 100 栋**」+「视野内最少十栋房」）。
+   *
    * 传了就把挑出来的那批交给 `dress()`（**其余仍在仓库里，只是不画** —— 事实不编，只编"画多少"）。
-   * 规则全在 `wsBuildingPick.pickBuildingsForView`（纯函数、可自检）；`null`/不传 = 全画（远景/预览）。
+   * `null`/不传 = 全画（远景/预览）。
+   *
+   * 🔴 **编排不在这个模块里**（2026-09-26）：按格挑 + 按格冻结 + 视野补齐的规则与状态都在
+   * `wsBldPickStore.createBldPickStore()`（页面与 App **各自一份实例**，调的是**同一个**函数）。
+   * 这里只负责"挑出来的那批去 `dress()`、其余不画"这一步。
+   *
+   * ⚠️ 上一版这里叫 `pickNearView`，内部调 `pickBuildingsForView`（**按视野**挑、**没有冻结**）——
+   * App 因此"挪走再挪回，那批楼就变了"（机主真机原话：「**每次滑动建筑都变了**」），
+   * 而代拍页早已是按格那套 ⇒ 两页不是一个东西。**别把按视野那套加回来。**
    */
-  pickNearView?: { bounds: PickBounds | null; center?: { lng: number; lat: number } | null; cap?: number } | null;
+  pick?: ((feats: readonly T[]) => { features: readonly T[]; stats: BldPickStats }) | null;
   /** 挑完回报（**只读**，给 HUD 写"显示 N / 视野内 M"；不许在这里改数据） */
-  onPicked?: (stats: PickViewStats) => void;
+  onPicked?: (stats: BldPickStats) => void;
 }
 
 /**
@@ -269,11 +281,12 @@ export interface BldFlushOpts<T> {
  * 数据来自仓库并集而不是"这一批" ⇒ 换视野/换来源都不会把已画上的楼抹掉。
  */
 export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
-  /* 🏙 近景挑楼：**只影响"画哪些"**，仓库不动（HUD 的"仓库 N 栋"仍是全量） */
+  /* 🏙 近景挑选：**只影响"画哪些"**，仓库不动（HUD 的"仓库 N 栋"仍是全量）。
+     编排（按格挑 + 按格冻结 + 视野补齐）在 `wsBldPickStore` 里 —— 这里只转交。 */
   let drawn = opts.features();
-  if (opts.pickNearView) {
-    const r = pickBuildingsForView(drawn as unknown as PickFeature[], opts.pickNearView);
-    drawn = r.features as unknown as readonly T[];
+  if (opts.pick) {
+    const r = opts.pick(drawn);
+    drawn = r.features;
     try { opts.onPicked?.(r.stats); } catch { /* HUD 失败不影响落图 */ }
   }
   const data = opts.dress(drawn);

@@ -67,6 +67,64 @@ export interface BldPickOutcome<T extends PickFeature> {
   stats: BldPickStats;
 }
 
+/* ══ 🏙 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
+ * 为什么放在这里（2026-09-26，两页一致性）：这两个数原来**只长在代拍页里**（页面自己的
+ * `bldnEff()` / `INVIEW_N`）。App 宿主用的是另一套（`WS_BLD_VIEW_CAP` = 100，**按视野**挑的旧方案）
+ * ⇒ 同一个机位、同一份包，两页画出来的楼不是一个集合。
+ * ⇒ 数的来源收进真源：页面 `?bldn=`/`?inview=`、App 的调试口，都调这两个函数。
+ */
+
+/** 「每块 ≤100 栋」是按哪个格尺寸定的基准（页面历史口径：0.05° ≈ 5.5km） */
+export const WS_BLD_CELL_CAP_REF_DEG = 0.05;
+/** 视野内至少几栋（机主 2026-09-26：「还要保证视野内最少有十栋房」） */
+export const WS_BLD_INVIEW_DEFAULT = 10;
+
+/** `?bldn=` 显式钉住的每块上限（没给 ⇒ null）；`0` = 近景一栋不画（保留语义） */
+export function parseBldnParam(search: string | null | undefined): number | null {
+  try {
+    const m = /[?&]bldn=(\d+)/.exec(String(search ?? ""));
+    return m ? Math.max(0, Math.min(5000, parseInt(m[1], 10))) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 每块最多几栋 —— **跟着"块"的面积等比缩**（机主批的"等密度"算法）。
+ * 依据：区块边长默认 0.05°≈5.5km；分片后数据格变成 0.01°（面积 1/25），若上限照旧 100
+ * ⇒ 屏上密度**暴涨 25 倍**（那是改观感）⇒ 上限按面积缩：`100 × (deg/0.05)²`。
+ * **老包（0.05°）⇒ 仍是 100，逐字节与旧版相同**；0.01° 包 ⇒ 自动变 4。
+ *
+ * @param cellDeg 区块/数据格边长（度）
+ * @param pin     `?bldn=` 显式钉住的值（`parseBldnParam()`；null/不给 = 按面积算）
+ */
+export function bldCapForCellDeg(cellDeg: number, pin?: number | null): number {
+  if (pin !== null && pin !== undefined && Number.isFinite(pin)) return Math.max(0, Math.floor(pin));
+  /* 🔴 **逐字等于页面 `bldnEff()` 的那一行**（不含"校验 deg"的小动作）：
+     页面那边 `deg` 已经过 `bldCellDeg()` 的校验（正数，否则退 0.05）⇒ 这里再加一层
+     `deg > 0 ? deg : 0.05` 反而会让 `deg=0` 时两页不同（页面 `Math.round(100*0)=0 → max(1,0)=1`，
+     加固版会退回 0.05 ⇒ 100）。**判据是"同输入同输出"，不是"更稳"** ——
+     自检 `ws_pages_consistency.mjs` 第②组用 6 个格尺寸 × 6 个 pin 逐值钉着，`deg=0` 就是被抓到的那一例。 */
+  const deg = Number(cellDeg);
+  return Math.max(1, Math.round(100 * Math.pow(deg / WS_BLD_CELL_CAP_REF_DEG, 2)));
+}
+
+/**
+ * `?inview=` 视野内下限（没给 / 非法 / 负数 ⇒ `def`，默认 `WS_BLD_INVIEW_DEFAULT` = 10）。
+ * ⚠️ 正则与"非负才认"与页面那个通用 `qnum("inview", 10)` **逐条相同**（含小数）——
+ *    自检第⑧组拿页面锚点原文里的 `qnum` 对拍，别"顺手改成 `\d+`"（那会让 `?inview=10.5` 两页不同）。
+ */
+export function parseInViewParam(search: string | null | undefined, def: number = WS_BLD_INVIEW_DEFAULT): number {
+  try {
+    const m = new RegExp("[?&]inview=(-?[0-9.]+)").exec(String(search ?? ""));
+    if (!m) return def;
+    const v = Number(m[1]);
+    return isFinite(v) && v >= 0 ? v : def;
+  } catch {
+    return def;
+  }
+}
+
 /** 冻结集快照（回证/HUD 用；**只读**，别拿它去改内部状态） */
 export interface BldPickSnapshot {
   /** 冻结集里一共多少格（页面旧实现写进 `window.__BLD_FROZEN_N__` 的那个数） */

@@ -442,7 +442,7 @@
      （行程卡、车辆标记、事件气泡、事件流面板 —— 代拍页那一屏都没有）。
      数据层（`useWorldTrips` / `useWorldEvents`）**照旧在跑**，只是不再上屏。 */
   import { wsToast, useWsToast } from "./wsToast";
-  import { scatterGrid, type PlacedActor, type WsDistrictPin } from "./wsActors";
+  import { districtPinsOf, type PlacedActor, type WsDistrictPin } from "./wsActors";
   import {
     DEFAULT_CELL_M,
     dropGridAt,
@@ -1042,39 +1042,13 @@
    * 直接用 gx/gy 会让叠在一起的人又重合回去）。为什么不干脆把 placed 整个传下去？
    * 因为渲染器只需要"谁在哪一格"，传整个对象会让两边的字段耦合越来越深。
    */
-  const districtPins = computed<WsDistrictPin[]>(() => {
-    const real = (actors.placed.value || []).map((a) => ({
-      id: a.id,
-      name: a.name,
-      gx: a.px,
-      gy: a.py,
-      isMe: a.isMe,
-      avatarUrl: a.avatarUrl,
-      posSource: a.posSource,
-    }));
-    /* 真实角色已经有了就直接用（真壳里是常态）—— 兜底只在"一个角色都没装配上"时生效，
-       否则同一张图上既有真位置的人、又有散点推的人，看起来像鬼影（这条口径抄自 WsAvatarLayer）。 */
-    if (real.some((p) => !p.isMe)) return real;
-    /* 兜底名单**不再单独发请求**：`useWsActors` 早就把 `/api/schedule` 取回来了，
-       里面的 `characters` 就是名单（`useWsRoster` 也是从同一处抽的）。
-       好累～ 这一手是为了少一个数据源：名单只有一份，位置按 `scatterGrid` 铺开（与头像层同口径）。 */
-    const chars = actors.schedule.value?.characters || [];
-    if (!chars.length) return real;
-    const total = chars.length;
-    const extra: WsDistrictPin[] = chars.map((c, i) => {
-      const s = scatterGrid(i, total, WS_GRID);
-      return {
-        id: `roster:${c.folder || c.name}`,
-        name: c.name,
-        gx: s.x,
-        gy: s.y,
-        isMe: false,
-        avatarUrl: "",
-        posSource: "scatter",
-      };
-    });
-    return [...real, ...extra];
-  });
+  const districtPins = computed<WsDistrictPin[]>(() =>
+    /* 🧩 **换算只有一份**：`wsActors.districtPinsOf()`（新入口 `WsCityEntry.vue` 调的是同一个函数）。
+       原来这段就长在这里 —— 2026-09-27 抽出去：`/worldsim` 现在指向新入口，而新入口也要这份钉子，
+       抄一份就是第二份实现（PR 门禁 C1，本项目在 `wsGwLayer`/`wsBldPickStore` 两处栽过同一个坑）。
+       行为逐字不变：先真角色（用**错开后的** px/py），一个都没有时才用名单散点兜底。 */
+    districtPinsOf(actors.placed.value || [], actors.schedule.value?.characters || [], WS_GRID)
+  );
 
   const relation = useWsRelation();
   /** 当前面板看着的角色 → 它的好感（模板直接读） */

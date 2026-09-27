@@ -71,6 +71,53 @@ export interface WsDistrictPin {
   posSource?: string;
 }
 
+/**
+ * 🧩 **「地图上的人」→ 渲染器要的那份钉子**（`WsDistrictMapLibre.markers` 的形状）。
+ *
+ * 为什么是一个**共享纯函数**（不是各入口各写一份）：这段"换算"在两个宿主里都要用 ——
+ * 老入口 `WorldSim.vue`（引导主线）与**新入口** `WsCityEntry.vue`（`/worldsim`）。
+ * 抄第二份就是 PR 门禁 C1 要抓的"第二份实现"（本项目在 `wsGwLayer` / `wsBldPickStore`
+ * 两处都栽过同一个坑），所以这里**只留一份**，两边都调它。
+ *
+ * 两条口径（逐字搬自 `WorldSim.vue` 原来的 computed，**行为不变**）：
+ * · 网格坐标用**错开后的** `px/py`（直接用 `gx/gy` 会让叠在一起的人又重合回去）；
+ * · 兜底名单只在"一个真角色都没装配上"时生效 —— 否则同一张图上既有真位置的人、
+ *   又有散点推的人，看起来像鬼影（口径抄自 `WsAvatarLayer`）。
+ *   兜底**不再单独发请求**：名单来自 `useWsActors` 早已取回的 `/api/schedule`（`characters[]`）。
+ */
+export function districtPinsOf(
+  placed: readonly PlacedActor[] | null | undefined,
+  roster: readonly { name?: string; folder?: string }[] | null | undefined,
+  grid = 28
+): WsDistrictPin[] {
+  const real: WsDistrictPin[] = (placed || []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    gx: a.px,
+    gy: a.py,
+    isMe: a.isMe,
+    avatarUrl: a.avatarUrl,
+    posSource: a.posSource,
+  }));
+  if (real.some((p) => !p.isMe)) return real;
+  const chars = roster || [];
+  if (!chars.length) return real;
+  const total = chars.length;
+  const extra: WsDistrictPin[] = chars.map((c, i) => {
+    const s = scatterGrid(i, total, grid);
+    return {
+      id: "roster:" + (c.folder || c.name || i),
+      name: c.name || c.folder || "",
+      gx: s.x,
+      gy: s.y,
+      isMe: false,
+      avatarUrl: "",
+      posSource: "scatter",
+    };
+  });
+  return [...real, ...extra];
+}
+
 export interface PlacedActor extends MapActor {
   /** 错开后的格子坐标 */
   px: number;

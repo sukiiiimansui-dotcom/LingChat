@@ -867,6 +867,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }
   /** 区界 bbox（setup 作用域也要用：Marker 同步要用它把网格换算成经纬度） */
   const bboxRef = ref<[number, number, number, number] | null>(null);
+  /**
+   * 🧭 **2D 自绘路自己用的那个范围**（`draw2d` 按"真楼 + 示意图元"现算的包围盒）。
+   *
+   * 为什么得要它（2026-09-27 机主报「连人都没有了」时查出来的真 bug）：
+   *   · 降级路的人（`domPins`）要一个 bbox 才能把网格换成画面百分比；
+   *   · 而 `bboxRef` 在 App 页（`adcode=""`）**只有 WebGL 地图能给**（`ensurePinAnchor()` 用 `map.getBounds()`）
+   *     —— 降级路 `map = null` ⇒ `syncPins()` 一进门就 return，那个函数**永远轮不到执行**
+   *     ⇒ `bboxRef` 恒 null ⇒ `domPins` 恒返回 `[]` ⇒ **降级路一个角色都放不下，且 HUD 只显示 `👤 0`（不解释）**。
+   *   · 而 `draw2d` 画楼用的是**它自己现算的 minX/minY/maxX/maxY**（不读 `bboxRef`）——
+   *     所以人必须用**同一份**范围，否则人会被映射到跟楼不一样的地方（画一个区、人按整市铺）。
+   * ⇒ 这里把那份范围**留出来**给 `domPins` 用（只读，不改 `draw2d` 的绘制行为）。
+   */
+  const draw2dBbox = ref<[number, number, number, number] | null>(null);
   /** 真的把地图库跑起来了？（2D 降级时为 false ⇒ 走 DOM 钉子） */
   const mapAvailable = ref(false);
   /** 已经画在地图上的"人"（id → { el, marker }） */
@@ -1230,6 +1243,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          ⇒ 楼栋永远不会再取。写在画布上的承诺必须是我们真做得到的。 */
       ctx.fillText("地图库没起来，走的是自绘路；HUD 里有原因", 12, 42);
       ctx.globalAlpha = 1;
+      /* 这一屏**什么都没画**（连楼都没有）⇒ 也就没有"范围内"可言：把范围清空，
+         让 `domPins` 空着并在 HUD 如实写"数不出来"，而不是把人撒在一块没画的画布上。 */
+      draw2dBbox.value = null;
       return;
     }
     // 包围盒（真楼 + 示意图元一起算，否则示意层会被算到画布外）
@@ -1260,6 +1276,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       }
     }
     if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return;
+    /* 🧭 把这份范围**留给降级路的人**（`domPins` 要用同一份，人才会站在画出来的楼上）。 */
+    draw2dBbox.value = [minX, minY, maxX, maxY];
     const pad = 10;
     const k = Math.min((w - 2 * pad) / (maxX - minX), (h - 2 * pad) / (maxY - minY));
     const ox = (w - k * (maxX - minX)) / 2;
@@ -2472,11 +2490,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* 人变了就同步一次（`placed` 每次 load 会换新数组，浅层 watch 就够） */
   watch(
     /* 👤 **锚点变了也要重画**：新入口的锚点是"视野兜底"，它可能在 markers 之后才设上
-       （第一版只 watch `props.markers` ⇒ 锚点晚到就永远不画，且没有任何提示）。 */
-    () => [props.markers, bboxRef.value] as const,
+       （第一版只 watch `props.markers` ⇒ 锚点晚到就永远不画，且没有任何提示）。
+       🧭 2026-09-27 补 `draw2dBbox`：降级路的楼是**画完才有**那份范围的（`draw2d` 现算），
+       比人晚到 ⇒ 不 watch 它的话，人会等到"下一次名单变化"才出现（甚至永远不出现）。 */
+    () => [props.markers, bboxRef.value, draw2dBbox.value] as const,
     () => {
       syncPins();
       stats.pins = mapAvailable.value ? stats.pins : domPins.value.length;
+      /* 🔴 **不许静默**：名单里有人、屏上却 0 个 ⇒ 必须写出"是哪一种数不出来"。
+         以前这里什么都不说，屏幕上"名单空"与"放不下人"长得一模一样（机主「连人都没有了」）。 */
+      const want = (props.markers || []).length;
+      if (stats.pins > 0) stats.pinsNote = "";
+      else if (want > 0) {
+        stats.pinsNote = mapAvailable.value
+          ? "数不出来：还没有锚点 bbox（adcode 为空且视野也拿不到）⇒ 一个人都放不下"
+          : "数不出来：降级路还没画出可定范围的内容（2D 画布无楼 ⇒ 没有可用的锚点）";
+      }
     }
   );
 
@@ -2532,7 +2561,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      坐标同样来自"网格 → 区界 bbox"的示意映射（和 Marker 那条路同一套语义、同一份数据）。
      好累～ 两个渲染器要维护两套定位代码，这事不优雅 —— 但总比"降级了人就消失"强。 */
   const domPins = computed(() => {
-    const b = bboxRef.value;
+    /* 🧭 降级路的锚点优先用 **`draw2d` 自己算出来的那份范围**（`draw2dBbox`）——
+       因为画楼用的就是它，人必须跟楼同一套映射；没有时才退回 `bboxRef`
+       （WebGL 路留下的行政区/视野范围，在降级路里只是"聊胜于无"的兜底）。
+       🔴 2026-09-27 修：以前只认 `bboxRef`，而它在 App 页（`adcode=""`）+ 降级路下**永远是 null**
+       ⇒ 人一个都放不下（机主：「连人都没有了」）。见 `draw2dBbox` 的注释。 */
+    const b = draw2dBbox.value || bboxRef.value;
     if (!b || mapAvailable.value) return [];
     const g = Math.max(2, Math.round(props.grid || 28));
     const [w, s0, e, n] = b;

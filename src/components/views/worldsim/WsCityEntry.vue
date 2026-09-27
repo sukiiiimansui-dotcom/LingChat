@@ -66,7 +66,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onMounted, ref } from "vue";
+  import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
   import { useRouter } from "vue-router";
   import { useI18n } from "vue-i18n";
   import WsSceneView from "./WsSceneView.vue";
@@ -76,6 +76,9 @@
      钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
   import { useWsActors } from "@/composables/useWsActors";
   import { districtPinsOf, type WsDistrictPin } from "./wsActors";
+  /* 🔌 **把场景推给 Rust**（`scene` 在不在 = `world_sim_enabled()` 的判据）：契约与"退出必须推 null"
+     都在 `wsRuntimePush.ts` 头部注释里（唯一真源），这里只调。 */
+  import { clearRuntime, pushRuntime } from "./wsRuntimePush";
 
   const router = useRouter();
   const { t } = useI18n();
@@ -185,6 +188,28 @@
     })(0);
   });
 
+  /* ── 🔌 把场景推给 Rust（`MapRuntime.scene`）────────────────────────────────────
+     **为什么必须推**（真源 = `wsRuntimePush.ts` 头部注释，这里只复述结论）：
+       · `scene` 在不在 = `world_sim_enabled()`（`src-tauri/src/world_map/state.rs:618`）的**唯一判据**；
+       · 它 false 时：`producer.rs:63` 的位置指令剥离器**不启用**（AI 回话里的 `⟦wm:…⟧` 会漏进正文），
+         且 `role_manager.rs:360` 的 `injection_for()` 返回空 ⇒ **角色不知道自己在哪**；
+       · 老入口 `WorldSim.vue:1132` 一直在推，但 `/worldsim` 现在指向**本组件** ⇒ 这两件事**全关了**。
+     推什么：`area`（本屏就是"在用哪座城市"）+ 地图上的人（键必须是角色的 display_name，见契约 ①）。
+     ⚠️ **退出必须推 `{scene:null}`**（`clearRuntime()`）—— 不清的话 AI 会一直带着上次的地图上下文说话。 */
+  watch(
+    () => [areaLabel.value, districtPins.value.map((p) => p.id + ":" + (p.posSource || "")).join(",")] as const,
+    () => {
+      void pushRuntime({
+        area: areaLabel.value || undefined,
+        actors: actors.placed.value || [],
+      });
+    },
+    { immediate: true }
+  );
+
+  onBeforeUnmount(() => {
+    void clearRuntime();
+  });
 </script>
 
 <style scoped>

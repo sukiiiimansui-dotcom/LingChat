@@ -107,20 +107,6 @@
   const districtPins = computed<WsDistrictPin[]>(() =>
     districtPinsOf(actors.placed.value || [], actors.schedule.value?.characters || [], 28)
   );
-  /** 装配的**可数读数**（探针/面板读它：人数 + 名单长度 + 逐人来源 + 失败原文） */
-  const actorFacts = computed(() => {
-    const pins = districtPins.value;
-    return {
-      n: pins.length,
-      real: pins.filter((p) => !p.isMe).length,
-      /* 名单长度：`/api/schedule` 没取到就是 **null（数不出来）**，不写 0 */
-      roster: actors.schedule.value ? (actors.schedule.value.characters || []).length : null,
-      who: pins.map((p) => ({ id: p.id, name: p.name, pos: p.posSource || "", me: !!p.isMe })),
-      err: actors.loadError.value || "",
-      loading: actors.loading.value,
-    };
-  });
-
   /** 当前在用哪座城市的数据（HUD 之外唯一的一处状态显示） */
   const cityLabel = computed(() => {
     if (!installed.value.length) return t("worldsim.city.noCityTag");
@@ -177,10 +163,9 @@
       const n = tries || 0;
       const done = districtPins.value.filter((p) => !p.isMe).length > 0;
       /* ⚠️ 这里**不放** `window.__WS_ACTORS__` 之类的自证出口 —— 主对话定过规矩：
-         **App 里不许塞调试出口**（否决过 `window.__w3d` / `__GW__`）。探针一律读**产品自己的**
-         DOM 契约（`.maplibregl-marker` 的数量/位置/`title`）与**协议事实**（`/api/schedule` 请求），
-         所以 `actorFacts` 只喂给**面板**（`?wsverify=1`），不挂 window。 */
-      void actorFacts;
+         **App 里不许塞调试出口**（否决过 `window.__w3d` / `__GW__`）。探头一律读**产品自己的**
+         DOM 契约（`.maplibregl-marker` 的数量/位置/`title`）与**协议事实**（`/api/schedule` 请求）。
+         （同理**不留**"只给探针看"的 computed：没人读的读数就是死代码 + 调试残留，主对话复核时删过一份。） */
       if (done) return;
       if (n === 0 || n % 4 === 0) void actors.load();
       if (n >= 20) return;

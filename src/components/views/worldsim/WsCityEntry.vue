@@ -34,7 +34,14 @@
          `tf=false` 关掉交通设施那条接线 —— 它会发一条 `/api/roads`（真机冷查分钟级、必超时），
          而新入口要**默认 0 条 `/api/*`**（与代拍页默认口径一致）。两个开关都只改"显示/接线"，
          地图本体、层序、取数一行不动（那些仍是同一份共享真源）。 -->
-    <WsSceneView :key="sceneKey" :area="areaLabel" adcode="" :chrome="false" :tf="false" />
+    <WsSceneView
+      :key="sceneKey"
+      :area="areaLabel"
+      adcode=""
+      :chrome="false"
+      :tf="false"
+      :markers="districtPins"
+    />
 
     <!-- ── 顶栏（一行三件；引导开着时让位给 sheet）───────────────────────── -->
     <header v-if="!guideOpen" class="wsce__top">
@@ -65,6 +72,10 @@
   import WsSceneView from "./WsSceneView.vue";
   import WsCityGuide from "./WsCityGuide.vue";
   import { type InstalledCity, cityStore } from "./wsCityStore";
+  /* 🧑‍🤝‍🧑 **地图上的人**（M1-1）：装配逻辑全在既有的 `useWsActors` 里（**不新造第二套**）；
+     钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
+  import { useWsActors } from "@/composables/useWsActors";
+  import { districtPinsOf, type WsDistrictPin } from "./wsActors";
 
   const router = useRouter();
   const { t } = useI18n();
@@ -77,6 +88,35 @@
   const sceneKey = ref(0);
 
   const installedCount = computed(() => installed.value.length);
+
+  /* ── 🧑‍🤝‍🧑 角色（M1-1）────────────────────────────────────────────────────────
+     🔴 **列表驱动 + 数量可变**：一个 id、一个名字都不写死。
+       · 名单（App 侧两级）：① `useWsActors.load()` 内部先取 `gameStore.gameRoles` +
+         `loadWorldCharacters()`（`src/composables/useWorldMapBindings.ts:25`；真壳里第一级走
+         LingChat 自己的角色接口 `characterGetAll` ⇒ **创意工坊新加的角色自动在内**）；
+         ② 兜底 = `/api/schedule` 的 `characters[]`（`src/api/services/worldMap.ts:287`）
+         ⇒ Rust `list_characters()`（`src-tauri/src/world_map/schedule.rs:242`）**扫角色目录**
+         （`data_dir()/game_data/characters/<角色目录>/settings.yml`）⇒ 目录里多一个角色就多一个。
+       · 位置：`useWsActors` 的三级站位（runtime → 日程设施点 → `scatterGrid` 散点），
+         `posSource` 如实带在每个钉子上。
+       ⇒ **新增角色不用改这里一行代码**：名单长了，钉子就多了。 */
+  const actors = useWsActors();
+  const districtPins = computed<WsDistrictPin[]>(() =>
+    districtPinsOf(actors.placed.value || [], actors.schedule.value?.characters || [], 28)
+  );
+  /** 装配的**可数读数**（探针/面板读它：人数 + 名单长度 + 逐人来源 + 失败原文） */
+  const actorFacts = computed(() => {
+    const pins = districtPins.value;
+    return {
+      n: pins.length,
+      real: pins.filter((p) => !p.isMe).length,
+      /* 名单长度：`/api/schedule` 没取到就是 **null（数不出来）**，不写 0 */
+      roster: actors.schedule.value ? (actors.schedule.value.characters || []).length : null,
+      who: pins.map((p) => ({ id: p.id, name: p.name, pos: p.posSource || "", me: !!p.isMe })),
+      err: actors.loadError.value || "",
+      loading: actors.loading.value,
+    };
+  });
 
   /** 当前在用哪座城市的数据（HUD 之外唯一的一处状态显示） */
   const cityLabel = computed(() => {
@@ -127,7 +167,24 @@
        ⚠️ 这里**不读清单**：读清单是 sheet 自己的事（它要显示三态与原因）。
        入口只关心"要不要问"，这样清单服务挂了也不影响进地图。 */
     guideOpen.value = !installed.value.length && !skipped();
+    /* 🧑‍🤝‍🧑 装配「地图上的人」：**有界重试**（最多 20 次 × 500ms ≈ 10s，成功即停、不常驻轮询）——
+       与代拍页 `kickBldBundle` / 名字层 `kickNames` 同一个形状。这一屏原来只装配一次，
+       而"名单 / 头像 / 日程"三条通路任一慢半拍就会**静默出 0 个人**（机主看到的就是"地图上没人"）。 */
+    (function kickActors(tries) {
+      const n = tries || 0;
+      const done = districtPins.value.filter((p) => !p.isMe).length > 0;
+      /* ⚠️ 这里**不放** `window.__WS_ACTORS__` 之类的自证出口 —— 主对话定过规矩：
+         **App 里不许塞调试出口**（否决过 `window.__w3d` / `__GW__`）。探针一律读**产品自己的**
+         DOM 契约（`.maplibregl-marker` 的数量/位置/`title`）与**协议事实**（`/api/schedule` 请求），
+         所以 `actorFacts` 只喂给**面板**（`?wsverify=1`），不挂 window。 */
+      void actorFacts;
+      if (done) return;
+      if (n === 0 || n % 4 === 0) void actors.load();
+      if (n >= 20) return;
+      window.setTimeout(() => kickActors(n + 1), 500);
+    })(0);
   });
+
 </script>
 
 <style scoped>

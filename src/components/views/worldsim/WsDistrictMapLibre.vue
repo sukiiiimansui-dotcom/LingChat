@@ -135,8 +135,11 @@
         <em class="ws-dml__est">按类型估 {{ stats.default }}</em>
       </span>
       <span v-if="stats.area" :title="'当前渲染的区（取自 /api/geo_json）'">{{ stats.area }}</span>
-      <span v-if="stats.pins" :title="'画面上的角色数（含你自己；WebGL 用地图库 Marker，降级用 DOM 钉子）'">
-        👤 {{ stats.pins }}
+      <!-- 👤 画面上的角色数（含你自己；WebGL 走地图库 Marker、2D 降级走 DOM 钉子）。
+           🔴 **三态如实**：锚点还没有 / 一个人都没装配上时，**写出原因**（`stats.pinsNote`）——
+           以前这条 `return` 是静默的，"地图上没人"到底是"没锚点"还是"名单为空"根本分不出来。 -->
+      <span v-if="stats.pins || stats.pinsNote" :title="'画面上的角色数（含你自己；WebGL 用地图库 Marker，降级用 DOM 钉子）' + (stats.pinsAnchor ? ' · 锚点：' + stats.pinsAnchor : '') + (stats.pinsNote ? ' · ' + stats.pinsNote : '')">
+        👤 {{ stats.pins }}<template v-if="stats.pinsNote"> <em class="ws-dml__est">数不出来</em></template>
       </span>
       <!-- 🛣 路网：口径与画法一致（按 zoom 过滤档位），并把"主干几条/有名字几条"如实带上 -->
       <span v-if="stats.roads" :title="'本视野看得见的路（' + (stats.roadNote || '') + '）；行人会吸附到这些路上'">
@@ -933,6 +936,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     view: "",
     /** 画在屏幕上的"人"的数量（WebGL 走地图库 Marker、2D 降级走 DOM；两个都算） */
     pins: 0,
+    /** 👤 人的锚点从哪来（`视野兜底（无 adcode）` / `行政区 bbox`）；空 = 还没有锚点 */
+    pinsAnchor: "",
+    /** 👤 放不下人时的**原因原文**（三态里的"数不出来"；空 = 没这个问题） */
+    pinsNote: "",
     /** 🛣 本视野**看得见**的路条数（口径与画法一致：按 zoom 过滤档位，见 `visibleRoadCount`） */
     roads: 0,
     /** 🛣 累积仓库那一行（可数：仓库 N 条 / 已取格 / 包外 / 失败）—— 与 HUD 同源 */
@@ -2386,9 +2393,52 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     return { pos: hit.point, snapped: true, segName: hit.seg.name ?? null };
   }
 
+  /**
+   * 🧭 **没有 adcode 时的锚点**（新入口 `/worldsim` 就是这一种：城市包没有"区县"这一级）。
+   *
+   * 为什么必须有：`markers` → 屏幕位置的换算要一个 bbox（`gridToLngLat`）。没有它，
+   * 角色**一个都画不出来** —— 而原来那条 `return` 是**静默**的（见下面 `syncPins`）。
+   * 口径（**我们选的**，不是"行业标准"）：
+   *   · 只在**还没有锚点**时用**当前视野**兜一次（`map.getBounds()`），**设一次就固定** ——
+   *     否则每拖一次地图人就跟着重排一次（那正是"鬼影"的观感来源）；
+   *   · 网格坐标本来就是**示意**位置（`posSource:"scatter"`/`"schedule"`），
+   *     "人在当前城市视野里"与既有语义一致；
+   *   · 有 adcode 时**一行都不走这里**（官方那条管线逐字不变）。
+   * ⚠️ 第一版把它写在 `map.on("load")` 之前 ⇒ 那时 `map` **还是 null**（`map = m` 在这一段之后），
+   *    于是这段代码**永远不会执行**、而 HUD 只显示"没有锚点"（探针一眼看出 0 个角色）。
+   *    放在这里（`syncPins` 的入口）是**唯一**能保证"map 一定在"的位置。
+   */
+  function ensurePinAnchor(): boolean {
+    if (bboxRef.value) return true;
+    if (props.adcode) return false;                 // 有 adcode ⇒ 走官方那条（geoJson → bbox）
+    const m = map as unknown as { getBounds?: () => { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } } | null;
+    try {
+      const bb = m?.getBounds?.();
+      const w = bb?.getWest(), s0 = bb?.getSouth(), e = bb?.getEast(), n = bb?.getNorth();
+      if ([w, s0, e, n].every((v) => Number.isFinite(Number(v))) && Number(e) > Number(w) && Number(n) > Number(s0)) {
+        bboxRef.value = [Number(w), Number(s0), Number(e), Number(n)];
+        stats.pinsAnchor = "视野兜底（无 adcode）";
+        /* 锚点是**视线兜底**出来的 ⇒ 位置上屏必须如实标出来（不许冒充真实经纬度） */
+        return true;
+      }
+    } catch {
+      /* 拿不到就保持 null —— 下面会如实写"数不出来：没有锚点" */
+    }
+    return false;
+  }
+
   function syncPins(): void {
     const m = map;
-    if (!m || !mlMod?.Marker || !bboxRef.value) return;
+    if (!m || !mlMod?.Marker) return;
+    ensurePinAnchor();
+    if (!bboxRef.value) {
+      /* 🔴 **不静默**：这条 `return` 以前什么都不说，于是"没有锚点 ⇒ 一个钉子都画不出"
+         在屏幕上与"名单是空的"长得一模一样（机主看到"地图上没人"，无从判断是哪一种）。
+         三态如实写：锚点没有 ⇒ 数不出来 + 原因。 */
+      stats.pinsNote = "数不出来：还没有锚点 bbox（adcode 为空且视野也拿不到）⇒ 一个人都放不下";
+      stats.pins = 0;
+      return;
+    }
     const list = props.markers || [];
     const alive = new Set<string>();
     for (const a of list) {
@@ -2421,7 +2471,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
 
   /* 人变了就同步一次（`placed` 每次 load 会换新数组，浅层 watch 就够） */
   watch(
-    () => props.markers,
+    /* 👤 **锚点变了也要重画**：新入口的锚点是"视野兜底"，它可能在 markers 之后才设上
+       （第一版只 watch `props.markers` ⇒ 锚点晚到就永远不画，且没有任何提示）。 */
+    () => [props.markers, bboxRef.value] as const,
     () => {
       syncPins();
       stats.pins = mapAvailable.value ? stats.pins : domPins.value.length;
@@ -3751,6 +3803,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           districtFeat = gj?.features?.[0] ?? null;
           districtBbox = bboxOfGeometry(districtFeat?.geometry);
           bboxRef.value = districtBbox;
+          stats.pinsAnchor = "行政区 bbox";
           /* 如实记下"这是哪个区"（如"涪陵区"）：HUD 直接显示，验证时一眼能看出对不对得上 */
           stats.area = String((districtFeat?.properties || {}).name || props.area || "");
           const pc = (districtFeat?.properties || {}).center as unknown;

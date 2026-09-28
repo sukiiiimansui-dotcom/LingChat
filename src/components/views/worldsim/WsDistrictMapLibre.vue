@@ -3087,7 +3087,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   const fetchCell = (url: string, timeoutMs: number) =>
     fetchWithTimeout((u: string, init?: { signal?: AbortSignal }) => fetch(u, init), url, timeoutMs);
 
-  /** 宿主视野（`map` 还没建时给 null ⇒ 管道本轮什么都不做，如实写成"未取"） */
+  /**
+   * 宿主视野（喂给 `createBundleFeed({ view })`）。
+   *
+   * ⚠️ **口径更正（2026-09-28）**：这段注释以前写的是「`map` 还没建时给 null ⇒ 管道本轮什么都不做，
+   * **如实写成"未取"**」—— 后半句**是假的**，实测 `wsOfflineFeed.ts:945-946`：`bounds=null` ⇒
+   * `plan()` 返回 null ⇒ `runOnce` 直接 `return { planned: false }`，**没有任何 HUD / onError 出口**
+   * ⇒ 屏幕上**永远不会**出现"未取"。也就是说"没有地图 ⇒ 静默不取"这件事在当时**没有被写出来**，
+   * 而这正是"降级路看起来一个人都没有、也没有解释"那一环的源头之一。
+   * 现在这句话只陈述**事实**：没有地图 ⇒ 返回 null ⇒ 管道**静默**跳过本轮。
+   * （要不要给它补一个 HUD 出口属于"降级路"那条线，2026-09-28 机主口径是**先不推进降级**，故此处只改注释。）
+   */
   function bundleView(): BundleView {
     const m = map;
     try {
@@ -4254,11 +4264,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       /* 🧱🏢🛣 **离线包首刷**（切片 A）：地图一就绪就按视野补格（后台、串行、每格独立超时）。
          放在 `phase=done` 之后 ⇒ **不阻塞首屏**（这正是治"加载慢"的那一刀：以前要等
          `/api/buildings` 十几秒到 91.7s，现在首屏一出来楼就一批批补进来）。
-         ⚠️ 楼/路走同一条管道（`refreshBundles`），live 只在 `?live=1` 时另外打。 */
-      void refreshBundles("init");
+         ⚠️ 楼/路走同一条管道（`refreshBundles`），live 只在 `?live=1` 时另外打。
+         🔴 2026-09-28 **删掉了一次重复调用**：这里原来先 `void refreshBundles("init")`，
+         下一行又 `void refreshBundles("init").then(名字层)` —— 两次调用会让首屏的
+         楼/路/水绿**每条管道多跑一整轮**（第二次撞上 feed 的 `busy` 守卫 ⇒ `queued=true`
+         ⇒ 本轮结束后**再跑一轮 `runOnce`**；楼每轮还要吃 `BLD_BUNDLE_PER_REFRESH` 格预算）。
+         名字层只需要**挂在第一份 promise 上**（下面那一行就是），不需要第二个 kick。
+         ⇒ 现在只留下面那一行：**一轮取数 + 取完挂名字**。 */
       /* 🏷🗺 **名字层首刷**（与楼同一个道理：只挂 `moveend` 会"开页没有名字"——本项目栽过三次的
          「挂钩只在用户事件上 ⇒ 首屏空白」）⇒ 这里 kick 一次，成功即停、不常驻轮询。
-         放在 `refreshBundles` 之后：先有楼（锚点只认**画出去的那批**），再挂名字。 */
+         放在取包之后：先有楼（锚点只认**画出去的那批**），再挂名字。 */
       void refreshBundles("init").then(() => (alive ? refreshNames("init") : undefined));
       /* 🔴 署名（ODbL）**随数据一起显示**：句子取自包里的 `index.json`（导出脚本那句原话） */
       void loadBundleAttribution();

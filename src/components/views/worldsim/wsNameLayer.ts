@@ -380,13 +380,38 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     };
   }
 
+  /**
+   * 视口尺寸（CSS px）。
+   *
+   * 🔴 2026-09-28 性能账单实测：**这个函数在拖动手势期花了 1.1~1.2 秒**
+   *    （`viewportOf` → `getCanvas()` → `clientWidth` 会**强制同步布局**，每调一次算一次）。
+   * 现在：
+   *   · **优先读绘制缓冲尺寸**（`canvas.width/height`）—— 纯属性读，**不触发布局**；
+   *     maplibre 的 `canvas.width` 本来就是 `CSS 尺寸 × dpr`，除掉 dpr 就是 CSS px；
+   *   · 结果按 `缓冲尺寸@dpr` **缓存**（同尺寸直接命中，不再读任何东西）；
+   *   · 缓冲拿不到（0）时才退回 `clientWidth/clientHeight`（会强制布局，但这是罕见分支）。
+   * ⚠️ 语义不变：拿不到合法尺寸仍返回 null（调用方按"数不出来"处理）。
+   */
+  let vpKey = "";
+  let vpVal: { width: number; height: number } | null = null;
   function viewportOf(): { width: number; height: number } | null {
     const m = host.map();
     const c = m?.getCanvas?.();
-    const w = Number(c?.clientWidth ?? c?.width);
-    const h = Number(c?.clientHeight ?? c?.height);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
-    return { width: w, height: h };
+    if (!c) return null;
+    const bw = Number(c.width);
+    const bh = Number(c.height);
+    const dpr = typeof devicePixelRatio === "number" && devicePixelRatio > 0 ? devicePixelRatio : 1;
+    const key = `${bw}x${bh}@${dpr}`;
+    if (key === vpKey) return vpVal;
+    let w = bw > 0 ? bw / dpr : 0;
+    let h = bh > 0 ? bh / dpr : 0;
+    if (!(w > 0) || !(h > 0)) {
+      w = Number(c.clientWidth);
+      h = Number(c.clientHeight);
+    }
+    vpVal = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { width: w, height: h } : null;
+    vpKey = key;
+    return vpVal;
   }
 
   async function loadIndex(): Promise<void> {
@@ -413,8 +438,33 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     }
   }
 
+  /**
+   * 🔴 2026-09-28 **同一格同时只许有一个在飞的请求**（性能账单实测的浪费）。
+   *
+   * 实测读数（代拍页，一次加载）：`/namesbundle/106.55000_29.55000_0.05.json`（47,973 B）
+   * 被取 **3~5 次**、`/placesbundle/` 同一个格 **4~6 次** ⇒ 页面 fetch 总量 373~376 KB 里
+   * **96~192 KB 是重复的（26%~51%）**，另外还白等了一轮往返。
+   *
+   * 成因：`refresh()` 会被**并发**调用（首刷 `init` / `moveend` / `zoom` 各 kick 一次），
+   * 而每一次都在"这一格的 `cells` 还没写进去"之前就把 `need` 算好了 ⇒ 两边都去取同一格。
+   *
+   * 这里做的是**请求合并**（不是节流、不是丢弃、不改任何判定）：后来的调用拿到**同一个 promise**，
+   * 语义与"等它取回来再看缓存"完全一致；失败也照旧走三态（`failed` 计数不变）。
+   */
+  const inflight = new Map<string, Promise<"hit" | "missing" | "failed">>();
+  function fetchCellData(key: string, minConf: number): Promise<"hit" | "missing" | "failed"> {
+    const k = `${key}@${minConf}`;
+    const running = inflight.get(k);
+    if (running) return running;
+    const p = fetchCellDataOnce(key, minConf).finally(() => {
+      inflight.delete(k);
+    });
+    inflight.set(k, p);
+    return p;
+  }
+
   /** 取一格（真名点 + 片区真名；两包**同一个 0.05° 格键**）。**成功/包外/失败三态分明** */
-  async function fetchCellData(key: string, minConf: number): Promise<"hit" | "missing" | "failed"> {
+  async function fetchCellDataOnce(key: string, minConf: number): Promise<"hit" | "missing" | "failed"> {
     let pts: ZoneNamePoint[] = [];
     let dropped = 0;
     let reals: ZoneRealName[] = [];

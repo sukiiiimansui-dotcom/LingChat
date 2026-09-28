@@ -4453,7 +4453,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           `nowrap` 会把它们顶出屏幕（窄屏 360px 必现）。 */
     flex-wrap: wrap;
     align-items: baseline;
-    max-width: calc(100% - 16px);
+    /* 🆕 2026-09-28：右边留 **60px**（原来 16px）——验证面板的 🔬 按钮在**右下角**
+       （44×44 + 8px 边距 ⇒ 需要 60px）。不预留的话，HUD 会把它整块压住
+       （兼容矩阵 78 格实测 `HUD ∩ 🔬 = 1440px²`，36/36 格全中）；
+       现在 🔬 有 `z-index` 在对上层、可点，但**HUD 右下角那截文字会被按钮盖住** ⇒ 干脆留位。 */
+    max-width: calc(100% - 60px);
     box-sizing: border-box;
     overflow: hidden;
     gap: 2px 8px;
@@ -4506,6 +4510,32 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       line-height: 1.3;
       gap: 1px 6px;
       padding: 2px 6px;
+    }
+    .ws-dml__hud .ws-dml__theme {
+      font-size: 10px;
+      line-height: 1.3;
+      padding: 0 6px;
+    }
+  }
+  /* 🆕 2026-09-28 **矮屏（横屏手机）**：兼容矩阵 78 格实测 —— 915×412 横屏下这条 HUD
+     长到 **899×143 = 占屏高 35%**（判据上限 25%），而且它整块压在验证面板的 🔬 上
+     （`HUD ∩ 🔬 = 1440px²`，36/36 格全中）。
+     两条一起上（**一格信息都不删**）：
+       ① 每行更矮（字号/行高/间距压缩，与窄屏那条同一手法）；
+       ② 高度封顶 **26vh** 且**可滚动** —— 封顶保证画面不被吃掉，滚动保证后面的格子仍然够得着。
+      ⚠️ 滚动需要 `pointer-events: auto`（容器默认 `none`，为的是不挡地图拖动）⇒ **只在矮屏开**
+         （矮屏本来就是"信息被挤爆"的场景；竖屏行为一字不变）。这条的体感要**真机判**：
+         如果你觉得"横屏时在 HUD 那一条上拖不动地图"，告诉我，我把它改成"点一下才展开"。 */
+  @media (max-height: 560px) {
+    .ws-dml__hud {
+      font-size: 10px;
+      line-height: 1.3;
+      gap: 1px 6px;
+      padding: 2px 6px;
+      max-height: 26vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      pointer-events: auto; /* 只为让"超出的一截"能滚（见上面的 ⚠️） */
     }
     .ws-dml__hud .ws-dml__theme {
       font-size: 10px;

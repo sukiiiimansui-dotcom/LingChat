@@ -233,6 +233,14 @@
     color: #eaf6ff;
     font: inherit;
     cursor: pointer;
+    /* 🆕 2026-09-28 兼容矩阵实测：这颗「←」只有 **30×33**（WCAG 触控目标 44×44 不达标）；
+       顶栏这两个按钮是这一屏**最常点的东西**（返回 / 城市数据）⇒ 撑到 44 高、至少 44 宽。
+       用 inline-flex 居中：只加内边距，不放大底板，视觉上不至于变成"大黑板"。 */
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .wsce__brand {
     display: flex;

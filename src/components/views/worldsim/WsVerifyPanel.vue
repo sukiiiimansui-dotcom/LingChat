@@ -430,11 +430,18 @@
   }
   .wsv__fab {
     position: absolute;
-    left: 8px;
+    /* 🔴 2026-09-28 兼容矩阵实测（78 格）：这把 🔬 原来在 `left:8px; bottom:8px` ——
+       **与 HUD 同一个角**，而 HUD 横屏能长到 143px 高 ⇒ `HUD ∩ 🔬 = 1440px² = 按钮全部面积`，
+       **36/36 格全中**（HUD 是 `pointer-events:none` ⇒ 点得到但**看不见**）。
+       三条一起改：① 挪到**右下角**（HUD 在左下）· ② `z-index` 抬到 HUD 之上
+       （窄屏上 HUD 换行铺满时按钮仍画在最上层、看得见）· ③ 尺寸补到 **44×44**
+       （WCAG 触控目标；实测原为 40×36，矩阵里算"偏小"）。 */
+    right: 8px;
     bottom: 8px;
+    z-index: 6;
     pointer-events: auto;
-    width: 40px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
     border: none;
     border-radius: 12px;
     background: rgba(7, 11, 17, 0.66);

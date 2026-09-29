@@ -436,8 +436,13 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
 
   let last: GwFacts = emptyFacts(host.enabled ? host.enabled() : true);
   let indexFact: BundleIndexFact | null = null;
-  /** 索引读过了没有（**失败也要记**：不然每帧重试一次取数，白费流量） */
-  let indexDone = false;
+  /**
+   * 🔴 **在飞的索引加载**（2026-09-29 加的，治并发）：
+   * 只有这一个 promise 会真的发请求，谁后到就 await 同一份 ⇒ 既不会重复取，也不会
+   * 出现"进度标志已置真、数据还没写"的窗口（那个窗口会让 `idx.cellSize` 撞 null）。
+   * 旧的 `indexDone` 布尔已被它取代（"读过没有"现在等价于 `indexFact !== null`）。
+   */
+  let indexInflight: Promise<BundleIndexFact> | null = null;
 
   /** 落图一次（首次建源建层，之后只 `setData`）；返回这次回证到的图层/数据源 */
   function draw(): void {
@@ -509,17 +514,37 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
     }
     try {
       /* ① 索引（一次；失败也要记住，别每帧重试）—— 署名与"哪些格存在"都从这里来 */
-      if (!indexDone) {
-        indexDone = true;
-        const f = await loadBundleIndex(host.fetchCell, "gw");
-        indexFact = f;
+      /* 🔴🔴 **2026-09-29 修的真 bug：并发 refresh 撞 `null.cellSize`** ——
+         原写法是 `if (!indexDone) { indexDone = true; const f = await loadBundleIndex(...); indexFact = f; ... }`
+         ⇒ `indexDone` **在 await 之前**就置了 true：并发的第二次 refresh（开页时 `init` 与 `moveend`
+         各 kick 一次，几乎必中）会跳过加载，直接走到下面 `const idx = indexFact` ——
+         而那次赋值**还没发生**（`indexFact` 仍是初始的 null）⇒ `idx.cellSize` 抛
+         `Cannot read properties of null (reading 'cellSize')` ⇒ **整轮水/绿层不画**，
+         HUD 上只留一行红字（真机表现：**数据都对、画面上就是没有江**）。
+         ⚠️ 这个坑在本文件的历史注释里出现过一次（`wsOfflineFeed.ts:1148-1153` 的"indexFact 仍是 null"
+         那段），当时只修了"加载函数永不抛"，**没修调用方的并发**。
+         ⇒ 现在改成**共享同一个在飞 promise**：谁先到谁发起，后来的 await 同一份；
+         并且**兜一道 null 检查**（拿不到就如实写"数不出来"，绝不 deref）。 */
+      if (!indexFact) {
+        if (!indexInflight) {
+          indexInflight = loadBundleIndex(host.fetchCell, "gw").then((f) => {
+            indexFact = f;
+            return f;
+          });
+        }
+        const f = await indexInflight;
         /* `loadBundleIndex` 失败时**全 null**（它自己吞了异常，只如实标 null）⇒ 这里据此判"数不出来" */
         if (f.cellCount === null && f.cells === null) {
           last = nextFacts(last, true, { state: "no-index", why: "index.json 没读到", cellSize: f.cellSize });
           return emit();
         }
       }
-      const idx = indexFact as BundleIndexFact;
+      const idx = indexFact;
+      if (!idx) {
+        /* 并发兜底：上面那条 promise 还没回来就又有一轮 refresh（或它被 reset）⇒ 如实说，不 deref */
+        last = nextFacts(last, true, { state: "uncounted", why: "索引还没读回来（并发 refresh）" });
+        return emit();
+      }
       /* ② 口径对拍（🔴 0.02/0.05 那次事故的硬化）：不符就**一个格都不取** —— 说"包外"是最坏的那种谎 */
       if (idx.cellSize !== null && Math.abs(idx.cellSize - GW_BUNDLE_CELL_DEG) > 1e-9) {
         last = nextFacts(last, true, {

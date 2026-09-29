@@ -195,6 +195,21 @@ export function applyGwLayers(opts: {
   const out: GwApplyResult = { added: [], updated: [], layers: [], sources: [], errs: [] };
   const m = opts.m;
   if (!m) return out;
+  /* 🔴 2026-09-29：**锚点不存在时不许让整层消失**。
+     实测（App 页无头，面板原文）：地图库报了 12 条
+     `Cannot add layer "road-casing-N" before non-existing layer "ref"` —— 说明"算 beforeId 那一刻还在、
+     真正 addLayer 时已经被换掉"（迟到 setStyle / 主题重挂，本仓栽过多次的那一类）**是常态风险**。
+     gw 的锚点同样来自 `bld*` 的现查 ⇒ 一旦那时没有 bld 层，`addLayer(spec, "bld-ext")` 会**直接抛**，
+     整层不建、屏幕上就是"没有水"（而且只在 HUD 留一行字）。
+     ⇒ 这里两道保险：① 加之前**再查一次**锚点在不在；② 仍失败就**退到追加**（`undefined`），
+     宁可顺序不完美，也不许"整层不画"。 */
+  let before = opts.beforeId;
+  try {
+    const get = (m as { getLayer?: (id: string) => unknown }).getLayer;
+    if (before && typeof get === "function" && !get.call(m, before)) before = undefined;
+  } catch {
+    before = undefined;
+  }
   for (const k of GW_KINDS) {
     const id = GW_LAYER_ID_OF[k];
     const color = opts.colors[k];
@@ -207,10 +222,20 @@ export function applyGwLayers(opts: {
         out.updated.push(id);
       } else {
         m.addSource(id, { type: "geojson", data: fc });
-        m.addLayer(
-          { id, type: "fill", source: id, paint: { "fill-color": color, "fill-outline-color": color } },
-          opts.beforeId
-        );
+        const spec = {
+          id,
+          type: "fill",
+          source: id,
+          paint: { "fill-color": color, "fill-outline-color": color },
+        };
+        try {
+          m.addLayer(spec, before);
+        } catch (e0) {
+          /* 退到追加：顺序不完美，但"水在地图上"这件事不能因为一个锚点没了一笔勾销 */
+          if (before === undefined) throw e0;
+          m.addLayer(spec);
+          out.errs.push(`${id} 锚点 "${before}" 不存在 ⇒ 已退到追加（顺序可能与其它层不同）`);
+        }
         out.added.push(id);
       }
       out.layers.push(id);

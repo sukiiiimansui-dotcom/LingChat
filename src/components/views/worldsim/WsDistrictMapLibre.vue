@@ -3092,7 +3092,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
 
   /** 浏览器取数（每格**独立超时**；AbortController 在 `wsOfflineFeed.fetchWithTimeout` 里） */
   const fetchCell = (url: string, timeoutMs: number) =>
-    fetchWithTimeout((u: string, init?: { signal?: AbortSignal }) => fetch(u, init), url, timeoutMs);
+    /* 🔴 2026-09-30：数据包一律 **`cache: "no-store"`** —— 服务端虽然已把数据 JSON 改成可校验，
+       但**已经进过浏览器缓存的旧响应**（此前发的是 `immutable`）不会自己消失；
+       显式 no-store 才能保证"页面拿到的是盘上那份"。数据是离线包，改动才重下，代价可接受。 */
+    fetchWithTimeout(
+      (u: string, init?: { signal?: AbortSignal }) => fetch(u, { ...(init || {}), cache: "no-store" }),
+      url,
+      timeoutMs
+    );
 
   /**
    * 宿主视野（喂给 `createBundleFeed({ view })`）。

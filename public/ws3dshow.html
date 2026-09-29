@@ -3691,7 +3691,8 @@
         const ctl = typeof AbortController === "function" ? new AbortController() : null;
         const timer = ctl ? setTimeout(function () { ctl.abort(); }, ms) : null;
         try {
-          return await fetch(url, ctl ? { signal: ctl.signal } : undefined);
+          /* 🔴 2026-09-30：数据包不吃浏览器缓存（详见服务端 end_headers 的注释） */
+          return await fetch(url, { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) });
         } catch (e) {
           const why = (e && e.name === "AbortError") ? ("超时 " + Math.round(ms / 1000) + "s") : String(e);
           throw new Error(why);

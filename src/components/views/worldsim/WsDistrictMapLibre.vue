@@ -155,6 +155,13 @@
       <span v-if="stats.names" :title="stats.names">{{ stats.names }}</span>
       <!-- 🧱🛣 离线路网包：同式（默认**不发 `/api/roads`**；仓库是**累积**的，换视野不减） -->
       <span v-if="stats.roadsBundle" :title="stats.roadsVerdict">{{ stats.roadsBundle }}</span>
+      <!-- 🌊🌳 **水/绿地那一格**（2026-09-29 补）——
+           事实早就算出来了（`wsGwLayer` 通过 `onHud` 回填 `stats.gwVerdict`），
+           但**模板里一直没有渲染它** ⇒ 机主看不到"水到底画出来没有"，只能靠肉眼猜颜色；
+           而 2026-09-29 那个并发 bug（`null.cellSize` ⇒ 每轮水绿层不画）**正是因为这一格缺位**
+           才没能在屏幕上暴露出来。判词由真源给（三态：正数 / 0（已量）/ 数不出来 + 原因），
+           这里只负责摆出来 —— 与代拍页的 `#m-gw` 同一份口径。 -->
+      <span v-if="stats.gwVerdict" :title="stats.gwVerdict">{{ stats.gwVerdict }}</span>
       <!-- 🏪 设施：**必须写"示意布局"**——这些点的经纬度是按 /api/facilities 的
            28×30m 方格摊出来的，不是实测位置（实测位置要走另一条卡）。 -->
       <span v-if="stats.facilities" :title="'设施（' + (stats.facNote || '') + '）—— 点位是**示意布局**，不是实测经纬度'">

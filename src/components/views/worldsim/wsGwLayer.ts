@@ -276,17 +276,36 @@ export function applyGwLayers(opts: {
       out.errs.push(`${id} ${String((e as Error)?.message || e).slice(0, 60)}`);
     }
   }
-  /* 🔴 2026-09-30：**每轮 flush 都把水/绿重新定位一次**（幂等、便宜）。
-     为什么不能只在"建层那一次"插对位置：底图栅格（`bg/base/tint`）是**主题后落地时追加**的，
-     它会盖在我们头上（机主真机实测：底图水色占 64.7% 像素、我们的水只占 0.23%）。
-     宿主没暴露 `moveLayer` ⇒ 静默跳过（不影响其它行为）。 */
-  for (const id of out.layers) {
-    try {
-      const mv = (m as { moveLayer?: (a: string, b?: string) => void }).moveLayer;
-      if (typeof mv === "function") mv.call(m, id, before);
-    } catch (e) {
-      out.errs.push(`${id} moveLayer 失败（${String((e as Error)?.message || e).slice(0, 40)}）`);
+  /* 🔴 2026-09-30：**只在"确实被底图栅格压住"时**才把水/绿挪一次（幂等、便宜、无噪音）。
+     为什么不能每轮无条件 `moveLayer`：第一次上线的版本就是这么写的，结果 HUD 里冒出
+     `gw-water moveLayer 失败（Cannot read properties of null …）`——样式在"算锚点"与"挪层"
+     之间被换掉时，MapLibre 内部会读到已失效的层对象。既然目的是"别被压住"，
+     那就**先看层序、被压住才动手**，并且**best-effort 不报错**（真正要暴露的是"有没有画出来"，
+     那件事由 HUD 的 `🌊🌳 …` 判词负责）。 */
+  try {
+    const ls = (m as { getStyle?: () => { layers?: Array<{ id?: unknown }> } | undefined }).getStyle?.()?.layers || [];
+    let lastBase = -1;
+    let minGw = Number.POSITIVE_INFINITY;
+    ls.forEach((l, i) => {
+      const id = String(l?.id ?? "");
+      if (id === "bg" || id === "base" || id === "tint") lastBase = i;
+      if (out.layers.indexOf(id) >= 0) minGw = Math.min(minGw, i);
+    });
+    /* 有底图栅格、且水/绿排在它下面 ⇒ 才挪 */
+    if (lastBase >= 0 && Number.isFinite(minGw) && minGw < lastBase) {
+      const next = ls[lastBase + 1];
+      const anchor = next ? String(next.id ?? "") : "";
+      for (const id of out.layers) {
+        try {
+          const mv = (m as { moveLayer?: (a: string, b?: string) => void }).moveLayer;
+          if (typeof mv === "function") mv.call(m, id, anchor || undefined);
+        } catch {
+          /* best-effort：挪不动就维持现状（顺序不完美好过"整层不画"） */
+        }
+      }
     }
+  } catch {
+    /* getStyle 不可用（宿主没暴露）⇒ 跳过 */
   }
   return out;
 }

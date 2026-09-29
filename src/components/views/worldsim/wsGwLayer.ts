@@ -145,8 +145,10 @@ export interface GwMapLike {
   getSource(id: string): { setData(d: unknown): void } | undefined;
   addSource(id: string, spec: Record<string, unknown>): void;
   addLayer(spec: Record<string, unknown>, beforeId?: string): void;
+  /** 🆕 2026-09-30：把已有图层挪位置（治"被底图栅格压住"）。宿主没暴露 ⇒ 跳过，不抛。 */
+  moveLayer?(id: string, beforeId?: string): void;
   /** 现有图层的读取口（MapLibre 的 `getStyle()`）；取不到 ⇒ 追加在最上层，不抛 */
-  getStyle?(): { layers?: Array<{ id?: unknown }> } | undefined;
+  getStyle?(): { layers?: Array<{ id?: unknown; type?: unknown }> } | undefined;
 }
 
 /**
@@ -154,9 +156,38 @@ export interface GwMapLike {
  * 为什么是"楼"：水/绿是**地面**上的东西，压在楼上会像浮在半空。
  * 取不到（这一带没有楼体层 / 拿不到样式）⇒ `undefined` = 追加到最上层（与页面原来的兜底一致，不抛错）。
  */
+/**
+ * 🌊🌳 **水/绿该插到谁之前**（层序锚点）。
+ *
+ * 🔴 2026-09-30 机主真机实测（「那个江还是显示不了」）后的重写：
+ *   逐像素比对两张 2392×1080 截图 —— 画面里 **64.7% 的像素是底图瓦片的水色 `#C0D8E0`**，
+ *   而我们水层的青调（`ai.water` 合成色）**只占 0.23%**；同时 HUD 明明写着
+ *   `🌊🌳 水 30 面 · 绿 255 面（真数据 · 格 3/3）` ⇒ **数据在、层也建了，但被底图栅格盖住了**。
+ *   （旧口径是"插到第一个 `bld*` 之前"，可底图那几层 `bg/base/tint` 是**后加的**：
+ *    主题在图层建好之后才落地 ⇒ 栅格被追加到最上面，把水/绿整片压住。）
+ *
+ * 新口径（按优先级）：
+ *   ① **紧贴底图栅格之上** —— 找 `bg/base/tint` 里最靠上的那一层，取它**后面那一层**当锚点
+ *      （锚点不存在/它就是最后一层 ⇒ 返回 undefined = 追加到最上，也就是"在栅格之上"）；
+ *   ② 没有底图栅格（样式还没落地等）⇒ 退回老口径"第一个 `bld*` 之前"；
+ *   ③ 都没有 ⇒ undefined（追加到最上）。
+ * ⚠️ 刻意**不**拿 `ref`（注记栅格）与 `prerender*` 当参照：LOD 的设计就是"远景让预渲染瓦片盖住矢量层"，
+ *    水/绿跟着它们跑到最上面会把那套设计弄反。
+ */
 export function gwBeforeIdOf(m: GwMapLike): string | undefined {
   try {
     const ls = m.getStyle?.()?.layers || [];
+    let lastBase = -1;
+    ls.forEach((l, i) => {
+      const id = String(l?.id ?? "");
+      if (id === "bg" || id === "base" || id === "tint") lastBase = i;
+    });
+    if (lastBase >= 0) {
+      const next = ls[lastBase + 1];
+      const nextId = next ? String(next.id ?? "") : "";
+      /* 下一层可能是 `ref`（注记）或 prerender：那就插到它之前 ⇒ 仍在底图之上、注记之下 */
+      return nextId || undefined;
+    }
     for (const l of ls) {
       const id = String(l?.id ?? "");
       if (id.indexOf("bld") === 0) return id;
@@ -243,6 +274,18 @@ export function applyGwLayers(opts: {
     } catch (e) {
       /* 失败**可见**（不静默）：页面原来写 `errs.push("gw " + e)`，这里把原文交给调用方 */
       out.errs.push(`${id} ${String((e as Error)?.message || e).slice(0, 60)}`);
+    }
+  }
+  /* 🔴 2026-09-30：**每轮 flush 都把水/绿重新定位一次**（幂等、便宜）。
+     为什么不能只在"建层那一次"插对位置：底图栅格（`bg/base/tint`）是**主题后落地时追加**的，
+     它会盖在我们头上（机主真机实测：底图水色占 64.7% 像素、我们的水只占 0.23%）。
+     宿主没暴露 `moveLayer` ⇒ 静默跳过（不影响其它行为）。 */
+  for (const id of out.layers) {
+    try {
+      const mv = (m as { moveLayer?: (a: string, b?: string) => void }).moveLayer;
+      if (typeof mv === "function") mv.call(m, id, before);
+    } catch (e) {
+      out.errs.push(`${id} moveLayer 失败（${String((e as Error)?.message || e).slice(0, 40)}）`);
     }
   }
   return out;

@@ -241,3 +241,6 @@ dist-webdev/
 public/citypacks/
 # 🧪 示意/占位瓦片（只服务试验台 `?lod=demo`；`PR-SLICES.md` 明确"不进 PR"）
 public/prerender-demo/
+
+# 私有预览输出目录（切片① 代理建的，366MB，不进 git）
+dist-namesverify/

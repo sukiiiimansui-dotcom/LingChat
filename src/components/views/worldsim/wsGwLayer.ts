@@ -481,7 +481,7 @@ export interface GwLayerHost {
   onError?: (why: string) => void;
   /** 覆盖保留半径（米）；不传 = `GW_RETAIN_RADIUS_M` */
   retainRadiusM?: () => number;
-  /** 覆盖插入锚点；不传 = `gwBeforeIdOf(map)`（压在楼体之前） */
+  /** 覆盖插入锚点；不传 = `gwBeforeIdOf(map)`（**底图栅格之上、道路与楼体之下**） */
   beforeId?: (m: GwMapLike) => string | undefined;
 }
 

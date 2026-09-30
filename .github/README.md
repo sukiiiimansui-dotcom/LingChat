@@ -39,7 +39,8 @@
 
 | 我想…… | 去哪 |
 |---|---|
-| 看这个分支的代码 | [本仓库 · `feat/worldsim` 分支](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim) |
+| 看整个仓库（我们 fork 的首页） | [本仓库](https://github.com/sukiiiimansui-dotcom/LingChat) |
+| 看正在改的那条分支 | [`feat/worldsim` 分支](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim) |
 | 看它要做什么、做到哪了 | **[issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)**（进度追踪） |
 | 看最早的方案（已关闭） | [issue #804](https://github.com/SlimeBoyOwO/LingChat/issues/804) |
 | **玩官方版本 / 反馈官方问题** | [官方仓库](https://github.com/SlimeBoyOwO/LingChat) · [官方下载](https://github.com/SlimeBoyOwO/LingChat/releases) · [官方 issues](https://github.com/SlimeBoyOwO/LingChat/issues) |
@@ -48,11 +49,11 @@
 
 ## 📄 来源与许可
 
-- LingChat 由 [SlimeBoyOwO](https://github.com/SlimeBoyOwO) 与贡献者们开发，许可 **AGPL-3.0**（见 [LICENSE](https://github.com/sukiiiimansui-dotcom/LingChat/blob/feat/worldsim/LICENSE)）。
+- LingChat 由 [SlimeBoyOwO](https://github.com/SlimeBoyOwO) 与贡献者们开发，许可 **AGPL-3.0**（LICENSE 就在仓库根目录，见 [本仓库首页](https://github.com/sukiiiimansui-dotcom/LingChat)）。
 - 本分支只是在此基础上做**实验性改动**：改动量远大于官方要求的「一个 PR 1k 行以内」，所以先在自己的 fork 里迭代，稳定后再考虑按官方要求切片提交。
 - 官方那套完整说明（功能介绍、安装、下载、致谢、开发者群等）**原文仍在官方仓库**：[SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)。本页只讲「这个分支和官方有什么不同」，所以把它换成了上面这些。
 - 免责声明与素材版权说明（气泡 / 音效 / 立绘等，**请勿商用**）同样以官方说明为准。
 
 ---
 
-_本页是 `feat/worldsim` 分支的首页（`.github/README.md`），随分支更新；其他分支仍是官方原文。_
+_本页是 `feat/worldsim` 分支的首页（`.github/README.md`），随分支更新；`main` 分支上也是这套说明，官方原文仍在官方仓库。_

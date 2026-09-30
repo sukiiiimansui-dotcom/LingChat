@@ -54,6 +54,19 @@
 - 官方那套完整说明（功能介绍、安装、下载、致谢、开发者群等）**原文仍在官方仓库**：[SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)。本页只讲「这个分支和官方有什么不同」，所以把它换成了上面这些。
 - 免责声明与素材版权说明（气泡 / 音效 / 立绘等，**请勿商用**）同样以官方说明为准。
 
+## 📌 分支说明
+
+本仓库**只保留三条分支**：
+
+| 分支 | 是什么 |
+|---|---|
+| [`main`](https://github.com/sukiiiimansui-dotcom/LingChat) | 仓库首页说明（就是那一页） |
+| [`feat/worldsim`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim) | **你正在看的这条** —— 世界模拟开发中 |
+| [`dev`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/dev) | 跟随官方，方便对齐 |
+
+以前的分支（`wip/worldsim-20260930`、`feat/world-map`、`docs/issue-804-preview`、`tmp`、`old-python`、`fix/*`）
+已在 **2026-09-30** 清理；万一要看旧内容，去**标签页**找 `attic/*` —— 每个 tag 的说明里都写了它原来是哪条分支、怎么恢复。
+
 ---
 
 _本页是 `feat/worldsim` 分支的首页（`.github/README.md`），随分支更新；`main` 分支上也是这套说明，官方原文仍在官方仓库。_

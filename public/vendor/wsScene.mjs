@@ -2714,9 +2714,6 @@ var SPECS = {
        不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
     dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
-    /* 🧷 逐目录钉真值（2026-09-30 实测 `index.json.cellSize`）：分片包 0.01° / 老包 0.05°。
-       钉住之后：两种包都照常跑，而任何目录被换错尺寸都**当场拒绝取数**（见 `cellDegByDir` 的长注释）。 */
-    cellDegByDir: { "bldbundle-002": 0.01, bldbundle: BLD_BUNDLE_CELL_DEG },
     plan: (b, c, maxCells, size) => bldBundleCellsForView(b, c, maxCells, size),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
@@ -2863,10 +2860,8 @@ function createBundleFeed(opts) {
         const pkg = typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0 ? rawSize : null;
         effCellDeg = pkg === null ? spec.cellDeg : pkg;
         const callerPin = Number(opts.expectCellDeg);
-        const dirPin = Number(spec.cellDegByDir ? spec.cellDegByDir[d] : NaN);
-        const pin = Number.isFinite(callerPin) && callerPin > 0 ? callerPin : Number.isFinite(dirPin) && dirPin > 0 ? dirPin : NaN;
+        const pin = Number.isFinite(callerPin) && callerPin > 0 ? callerPin : NaN;
         pinDeg = Number.isFinite(pin) ? pin : null;
-        const pinSrc = Number.isFinite(callerPin) && callerPin > 0 ? "调用方显式钉" : "这个目录的已知真值";
         if (pkg === null) {
           indexState = "已读";
           indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
@@ -2875,7 +2870,7 @@ function createBundleFeed(opts) {
         if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
           indexState = "口径不符";
           refused = true;
-          indexWhy = `包（${d}）按 ${pkg}° 分格、但${pinSrc}是 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+          indexWhy = `包（${d}）按 ${pkg}° 分格、但调用方**显式钉住**的是 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
           opts.onError?.(`${spec.dir}@${d} 格尺寸口径不符：包 ${pkg}° / 钉住 ${pin}° ⇒ 本轮一个格都不取`);
           return f;
         }
@@ -2943,7 +2938,7 @@ function createBundleFeed(opts) {
       refused,
       cellDeg: effectiveDeg(),
       cellDegPin: Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null,
-      /* 🧷 这一场**实际拿去对拍**的期望值（调用方显式钉 > 目录真值；都没有 = null）——
+      /* 🧷 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,
       dir: activeDir || dirsOf(spec)[0],

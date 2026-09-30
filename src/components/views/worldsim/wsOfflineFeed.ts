@@ -545,20 +545,13 @@ interface BundleKindSpec<T> {
    *      **仍然拒绝取数**并写 `sizemismatch`（"说成包外"这条路永远不许走）。
    */
   cellDeg: number;
-  /**
-   * 🧷 **逐目录钉住的真值**（`{ 目录名: 度 }`，2026-09-30 加）：包**自报**的 `cellSize` 与它不符 ⇒
-   * **拒绝取数**（`sizemismatch`），即使调用方没显式钉。
-   *
-   * 为什么非要有它：09-25 那次事故（包 0.02° / 前端 0.05° ⇒ 格键零交集 ⇒ 把有数据说成「包外」）
-   * 当时的修法是"一律钉前端常量"；09-26 分片包（`bldbundle-002` = 0.01°）上线后，
-   * 一律钉会把**合法的分片包误杀** ⇒ 被迫放宽成"只在调用方显式钉时才比" ⇒
-   * **实际上没人钉 = 那道防线等于没有**（自检 ⑦h 从那天起一直红）。
-   * ⇒ 改成**逐目录钉各自的真值**：老包 0.05 / 分片包 0.01 都照常跑，
-   *   而**任何一个目录被换成错尺寸的包都会当场拒绝取数**（不取格、不写「包外」）。
-   * ⚠️ 这些数字是**实测值**（`public/<包目录>/index.json` 的 `cellSize`）；换包必须同步改这里 —— 改了不同步就会红，
-   *   这正是我们要的（宁可响亮报错，也不静默把有数据说成没有）。
-   */
-  cellDegByDir?: Record<string, number>;
+  /* 🔴 **格尺寸政策（2026-09-26 定案，别再改回去）**：**一律以包自报的 `index.json.cellSize` 为准** ——
+     0.05 / 0.02 / 0.01 的包都能跑（分片包 `bldbundle-002` 就是 0.01°）。
+     唯一的防线是**调用方显式钉**（`BundleFeedOptions.expectCellDeg`；页面用 `?cell=` 给）：
+     钉住的值与包不符 ⇒ **拒绝取数**（`sizemismatch`），绝不把"有数据"说成「包外」。
+     ⚠️ **已知缺口（如实记着）**：换了 index 却没换格子文件（或反过来）时，自报口径会自洽地算错键 ⇒
+     表现是「包外」而不是报错；要防它只能**显式钉**（或将来给索引加"逐格尺寸自证"）。
+     ⚠️ 2026-09-30 我一度加过"逐目录隐式钉真值"——那等于把这条政策改回去，且会误杀合法分片包 ⇒ **已撤回**。 */
   plan: (bounds: BundleBoundsLike | null, center: { lng: number; lat: number } | null, maxCells: number, sizeDeg: number) => {
     cells: Array<{ key: string; w: number; s: number }>;
     wanted: number;
@@ -580,9 +573,6 @@ const SPECS = {
        不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
     dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
-    /* 🧷 逐目录钉真值（2026-09-30 实测 `index.json.cellSize`）：分片包 0.01° / 老包 0.05°。
-       钉住之后：两种包都照常跑，而任何目录被换错尺寸都**当场拒绝取数**（见 `cellDegByDir` 的长注释）。 */
-    cellDegByDir: { "bldbundle-002": 0.01, bldbundle: BLD_BUNDLE_CELL_DEG },
     plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number, size: number) => bldBundleCellsForView(b, c, maxCells, size),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
@@ -647,7 +637,7 @@ export interface BundleFeedFacts {
   cellDeg: number;
   /** 调用方**显式钉住**的格边长（`expectCellDeg`；没钉 ⇒ null）—— 与 `cellDeg` 不同就意味着已拒绝取数 */
   cellDegPin: number | null;
-  /** 🧷 **实际拿去对拍**的期望格边长（调用方显式钉 > 目录真值；都没钉 = null）—— 判词里的「前端 X°」念它 */
+  /** 🧷 **实际拿去对拍**的期望格边长（= 调用方**显式钉**的值；没钉 = null）—— 判词里的「前端 X°」念它 */
   cellDegExpect: number | null;
   /** 这一场真正在用的包目录（多候选里选中的那个） */
   dir: string;
@@ -863,15 +853,11 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         const rawSize = f.cellSize;
         const pkg = (typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0) ? rawSize : null;
         effCellDeg = (pkg === null ? spec.cellDeg : pkg);
-        /* 🧷 **钉住的期望值**（2026-09-30 补回这道防线）：调用方显式钉（`?cell=` / 自检）优先，
-           否则用**这个目录自己的真值**（`spec.cellDegByDir[d]`：分片包 0.01° / 老包 0.05° …）。
-           ⚠️ `Number(null)` 是 **0**（有限值）⇒ 必须用 `> 0` 挡掉，否则"没钉"会被当成"钉了 0°"。 */
+        /* 🔴 钉住的期望值 = **只有调用方显式钉**（`?cell=` / 自检）；政策见 `cellDeg` 那段注释（不设隐式钉）。
+           ⚠️ `Number(null)` 是 **0**（有限值）⇒ 必须用 `> 0` 挡掉，否则"没钉"会被当成"钉了 0°"（老坑）。 */
         const callerPin = Number(opts.expectCellDeg);
-        const dirPin = Number(spec.cellDegByDir ? spec.cellDegByDir[d] : NaN);
-        const pin = (Number.isFinite(callerPin) && callerPin > 0) ? callerPin
-          : (Number.isFinite(dirPin) && dirPin > 0) ? dirPin : NaN;
+        const pin = (Number.isFinite(callerPin) && callerPin > 0) ? callerPin : NaN;
         pinDeg = Number.isFinite(pin) ? pin : null;
-        const pinSrc = (Number.isFinite(callerPin) && callerPin > 0) ? "调用方显式钉" : "这个目录的已知真值";
         if (pkg === null) {
           /* 老包没有 `cellSize` 字段：**不猜**，用兜底常量，并如实标注 */
           indexState = "已读";
@@ -884,7 +870,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
              ⇒ **拒绝取数**（不取格、不写 missing），两个数字与目录名都写进 HUD/errs。 */
           indexState = "口径不符";
           refused = true;
-          indexWhy = `包（${d}）按 ${pkg}° 分格、但${pinSrc}是 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+          indexWhy = `包（${d}）按 ${pkg}° 分格、但调用方**显式钉住**的是 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
           opts.onError?.(`${spec.dir}@${d} 格尺寸口径不符：包 ${pkg}° / 钉住 ${pin}° ⇒ 本轮一个格都不取`);
           return f;
         }
@@ -936,7 +922,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       n, have: have.size, missing: missing.size, failed: failed.size,
       pending, cap, wanted, capped, got, asked,
       refused: refused, cellDeg: effectiveDeg(), cellDegPin: (Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null),
-      /* 🧷 这一场**实际拿去对拍**的期望值（调用方显式钉 > 目录真值；都没有 = null）——
+      /* 🧷 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,
       dir: activeDir || dirsOf(spec)[0], dirs: dirsOf(spec),
@@ -1255,7 +1241,7 @@ export function bundleCountsLine(f: BundleFeedFacts, icon: string, unit: string)
     const pkgC = f.index && f.index.cellSize !== null && f.index.cellSize !== undefined ? f.index.cellSize + "°" : "?";
     /* 🔴 2026-09-30：这里的「前端 X°」原来念的是 `f.cellDeg`（= **包自报**的尺寸）⇒
        拒绝取数时两个数字会**都等于包自己那个值**（"包 0.02° / 前端 0.02°"），事故现场就看不出来了。
-       期望值应当念 `cellDegExpect`（调用方钉的 / 目录真值），没钉才退回 effectiveDeg。 */
+       期望值应当念 `cellDegExpect`（= 调用方显式钉的那个值），没钉才退回 effectiveDeg。 */
     const expC = f.cellDegExpect !== null && f.cellDegExpect !== undefined ? f.cellDegExpect + "°" : `${f.cellDeg}°`;
     return `${icon} ❌ **格尺寸口径不符**（包 ${pkgC} / 前端 ${expC}）⇒ **本轮一个格都不取**`
       + `（取格会把有数据的格说成「包外」；修包或改前端常量后重试）`;

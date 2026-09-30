@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v89";
+      const BUILD = "ws3dshow-2026-09-26-v90";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -3426,12 +3426,21 @@
            两个开关的实况都能在 `feed.facts()` / `pmSnapshot().context` 里核（不是嘴上说开了）。 */
         return TFx.createBundleFeed({
           kind: kind, store: store, view: bundleView, fetchCell: bundleFetchCell, flush: flush,
+          /* 🧷 `?cell=`：**显式钉住楼房包的格边长**（度）。钉住的值与包自报的 `index.cellSize` 不符 ⇒
+             管道**拒绝取数**（不取格、不写「包外」、HUD/errs 响亮报）—— 这是 09-25「包 0.02 / 前端 0.05 ⇒
+             格键零交集 ⇒ 把有数据说成包外」那次事故留下的防线。**不写这个参数 = 不钉**（以包自报为准）。 */
+          expectCellDeg: (kind === "bld" && CELL_PIN !== null) ? CELL_PIN : undefined,
           retainRadiusM: function () { return Math.max(2000, Math.round((viewHalfMeters() || 0) * margin)); },
           onError: function (why) { errs.push(why); },
           flushCoalesceMs: COAL_MS,
           parsedCacheCells: PCACHE_CELLS,
         });
       }
+
+      /** 🧷 `?cell=` 显式钉住的格边长（度）；没写 = null = **不钉**（一律以包自报为准） */
+      const CELL_PIN = (function () {
+        try { const m = /[?&]cell=([0-9.]+)/.exec(location.search); return m ? Number(m[1]) : null; } catch (e) { return null; }
+      })();
 
       function roadsFeedOf() {
         const st = roadsStoreOf();

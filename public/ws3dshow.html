@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v88";
+      const BUILD = "ws3dshow-2026-09-26-v89";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1799,6 +1799,16 @@
         return gwLayer;
       }
       async function refreshGw(why) {
+        /* 🔴 2026-09-30 修的真 bug（与名字层 2026-09-26 那次**同款**）：vendor 还没落地时 kick 这一轮，
+           `gwEnsure()` 会当场判「模块缺 createGwLayer（未取）」并返回 null ⇒ **这一辈子都不建层**
+           （开页 kick 是唯一触发点，之后没人再叫它；屏幕上水/绿地永远缺席，而 HUD 那句话还被当成"真没有"）。
+           ⇒ 缺符号时先 `await ensureVendor()` 自愈一次（口径与 `refreshLabels` 完全一致）。
+           证据：`ws_bld_page_selftest` 的「确定性」那条 —— 同一 URL 两次跑，一次 20 层、一次 22 层
+           （差的就是 `gw-water`/`gw-green`），A 那次 `m-gw` 正写着「模块缺 createGwLayer（未取）」。 */
+        try {
+          const T0 = window.__TF__;
+          if (!T0 || typeof T0.createGwLayer !== "function") await ensureVendor();
+        } catch (e) { /* 自愈失败也不抛：下面照实报「缺」，绝不假装有 */ }
         const L = gwEnsure();
         if (!L) return;
         try { await L.refresh(why); }

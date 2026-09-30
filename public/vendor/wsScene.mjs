@@ -2714,6 +2714,9 @@ var SPECS = {
        不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
     dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
+    /* 🧷 逐目录钉真值（2026-09-30 实测 `index.json.cellSize`）：分片包 0.01° / 老包 0.05°。
+       钉住之后：两种包都照常跑，而任何目录被换错尺寸都**当场拒绝取数**（见 `cellDegByDir` 的长注释）。 */
+    cellDegByDir: { "bldbundle-002": 0.01, bldbundle: BLD_BUNDLE_CELL_DEG },
     plan: (b, c, maxCells, size) => bldBundleCellsForView(b, c, maxCells, size),
     parse: bundleBuildingsOf,
     perRefresh: BLD_BUNDLE_PER_REFRESH,
@@ -2776,6 +2779,7 @@ function createBundleFeed(opts) {
   let indexState = "未读";
   let indexWhy = null;
   let indexPromise = null;
+  let pinDeg = null;
   const coalesceMs = Math.max(0, Math.floor(Number(
     opts.flushCoalesceMs === void 0 || opts.flushCoalesceMs === null ? DEFAULT_FLUSH_COALESCE_MS : opts.flushCoalesceMs
   )));
@@ -2858,7 +2862,11 @@ function createBundleFeed(opts) {
         const rawSize = f.cellSize;
         const pkg = typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0 ? rawSize : null;
         effCellDeg = pkg === null ? spec.cellDeg : pkg;
-        const pin = Number(opts.expectCellDeg);
+        const callerPin = Number(opts.expectCellDeg);
+        const dirPin = Number(spec.cellDegByDir ? spec.cellDegByDir[d] : NaN);
+        const pin = Number.isFinite(callerPin) && callerPin > 0 ? callerPin : Number.isFinite(dirPin) && dirPin > 0 ? dirPin : NaN;
+        pinDeg = Number.isFinite(pin) ? pin : null;
+        const pinSrc = Number.isFinite(callerPin) && callerPin > 0 ? "调用方显式钉" : "这个目录的已知真值";
         if (pkg === null) {
           indexState = "已读";
           indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
@@ -2867,7 +2875,7 @@ function createBundleFeed(opts) {
         if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
           indexState = "口径不符";
           refused = true;
-          indexWhy = `包（${d}）按 ${pkg}° 分格、但这一趟**钉住**了 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
+          indexWhy = `包（${d}）按 ${pkg}° 分格、但${pinSrc}是 ${pin}° ⇒ 格键与索引零交集，拒绝取数（否则会把有数据的格说成「包外」）`;
           opts.onError?.(`${spec.dir}@${d} 格尺寸口径不符：包 ${pkg}° / 钉住 ${pin}° ⇒ 本轮一个格都不取`);
           return f;
         }
@@ -2935,6 +2943,9 @@ function createBundleFeed(opts) {
       refused,
       cellDeg: effectiveDeg(),
       cellDegPin: Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null,
+      /* 🧷 这一场**实际拿去对拍**的期望值（调用方显式钉 > 目录真值；都没有 = null）——
+         判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
+      cellDegExpect: pinDeg,
       dir: activeDir || dirsOf(spec)[0],
       dirs: dirsOf(spec),
       /* 📐 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
@@ -3166,7 +3177,8 @@ function bundleCountsLine(f, icon, unit) {
   }
   if (f.refused) {
     const pkgC = f.index && f.index.cellSize !== null && f.index.cellSize !== void 0 ? f.index.cellSize + "°" : "?";
-    return `${icon} ❌ **格尺寸口径不符**（包 ${pkgC} / 前端 ${f.cellDeg}°）⇒ **本轮一个格都不取**（取格会把有数据的格说成「包外」；修包或改前端常量后重试）`;
+    const expC = f.cellDegExpect !== null && f.cellDegExpect !== void 0 ? f.cellDegExpect + "°" : `${f.cellDeg}°`;
+    return `${icon} ❌ **格尺寸口径不符**（包 ${pkgC} / 前端 ${expC}）⇒ **本轮一个格都不取**（取格会把有数据的格说成「包外」；修包或改前端常量后重试）`;
   }
   const idx = f.index ? f.index.state === "已读" ? `（索引 ${f.index.cells === null ? "?" : f.index.cells} 格）` : f.index.state === "失败" ? "（索引失败：退回试格子）" : `（索引${f.index.state}）` : "";
   const head = `${icon} 离线格 已取 ${f.have} / 包外 ${f.missing} / 失败 ${f.failed}${idx}`;
@@ -3241,6 +3253,16 @@ function gwMissingColors(c) {
 function gwBeforeIdOf(m) {
   try {
     const ls = m.getStyle?.()?.layers || [];
+    let lastBase = -1;
+    ls.forEach((l, i) => {
+      const id = String(l?.id ?? "");
+      if (id === "bg" || id === "base" || id === "tint") lastBase = i;
+    });
+    if (lastBase >= 0) {
+      const next = ls[lastBase + 1];
+      const nextId = next ? String(next.id ?? "") : "";
+      return nextId || void 0;
+    }
     for (const l of ls) {
       const id = String(l?.id ?? "");
       if (id.indexOf("bld") === 0) return id;
@@ -3254,6 +3276,13 @@ function applyGwLayers(opts) {
   const out = { added: [], updated: [], layers: [], sources: [], errs: [] };
   const m = opts.m;
   if (!m) return out;
+  let before = opts.beforeId;
+  try {
+    const get = m.getLayer;
+    if (before && typeof get === "function" && !get.call(m, before)) before = void 0;
+  } catch {
+    before = void 0;
+  }
   for (const k of GW_KINDS) {
     const id = GW_LAYER_ID_OF[k];
     const color = opts.colors[k];
@@ -3266,10 +3295,19 @@ function applyGwLayers(opts) {
         out.updated.push(id);
       } else {
         m.addSource(id, { type: "geojson", data: fc });
-        m.addLayer(
-          { id, type: "fill", source: id, paint: { "fill-color": color, "fill-outline-color": color } },
-          opts.beforeId
-        );
+        const spec = {
+          id,
+          type: "fill",
+          source: id,
+          paint: { "fill-color": color, "fill-outline-color": color }
+        };
+        try {
+          m.addLayer(spec, before);
+        } catch (e0) {
+          if (before === void 0) throw e0;
+          m.addLayer(spec);
+          out.errs.push(`${id} 锚点 "${before}" 不存在 ⇒ 已退到追加（顺序可能与其它层不同）`);
+        }
         out.added.push(id);
       }
       out.layers.push(id);
@@ -3277,6 +3315,28 @@ function applyGwLayers(opts) {
     } catch (e) {
       out.errs.push(`${id} ${String(e?.message || e).slice(0, 60)}`);
     }
+  }
+  try {
+    const ls = m.getStyle?.()?.layers || [];
+    let lastBase = -1;
+    let minGw = Number.POSITIVE_INFINITY;
+    ls.forEach((l, i) => {
+      const id = String(l?.id ?? "");
+      if (id === "bg" || id === "base" || id === "tint") lastBase = i;
+      if (out.layers.indexOf(id) >= 0) minGw = Math.min(minGw, i);
+    });
+    if (lastBase >= 0 && Number.isFinite(minGw) && minGw < lastBase) {
+      const next = ls[lastBase + 1];
+      const anchor = next ? String(next.id ?? "") : "";
+      for (const id of out.layers) {
+        try {
+          const mv = m.moveLayer;
+          if (typeof mv === "function") mv.call(m, id, anchor || void 0);
+        } catch {
+        }
+      }
+    }
+  } catch {
   }
   return out;
 }
@@ -3347,7 +3407,7 @@ function createGwLayer(host) {
   });
   let last = emptyFacts(host.enabled ? host.enabled() : true);
   let indexFact = null;
-  let indexDone = false;
+  let indexInflight = null;
   function draw() {
     const colors = gwColorsOf(host.theme());
     if (gwMissingColors(colors).length) return;
@@ -3412,16 +3472,24 @@ function createGwLayer(host) {
       return emit();
     }
     try {
-      if (!indexDone) {
-        indexDone = true;
-        const f = await loadBundleIndex(host.fetchCell, "gw");
-        indexFact = f;
+      if (!indexFact) {
+        if (!indexInflight) {
+          indexInflight = loadBundleIndex(host.fetchCell, "gw").then((f2) => {
+            indexFact = f2;
+            return f2;
+          });
+        }
+        const f = await indexInflight;
         if (f.cellCount === null && f.cells === null) {
           last = nextFacts(last, true, { state: "no-index", why: "index.json 没读到", cellSize: f.cellSize });
           return emit();
         }
       }
       const idx = indexFact;
+      if (!idx) {
+        last = nextFacts(last, true, { state: "uncounted", why: "索引还没读回来（并发 refresh）" });
+        return emit();
+      }
       if (idx.cellSize !== null && Math.abs(idx.cellSize - GW_BUNDLE_CELL_DEG) > 1e-9) {
         last = nextFacts(last, true, {
           state: "size-mismatch",
@@ -5386,13 +5454,26 @@ function createNameLayer(host) {
       center: { lng: (w + e) / 2, lat: (s + n) / 2 }
     };
   }
+  let vpKey = "";
+  let vpVal = null;
   function viewportOf() {
     const m = host.map();
     const c = m?.getCanvas?.();
-    const w = Number(c?.clientWidth ?? c?.width);
-    const h = Number(c?.clientHeight ?? c?.height);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
-    return { width: w, height: h };
+    if (!c) return null;
+    const bw = Number(c.width);
+    const bh = Number(c.height);
+    const dpr = typeof devicePixelRatio === "number" && devicePixelRatio > 0 ? devicePixelRatio : 1;
+    const key = `${bw}x${bh}@${dpr}`;
+    if (key === vpKey) return vpVal;
+    let w = bw > 0 ? bw / dpr : 0;
+    let h = bh > 0 ? bh / dpr : 0;
+    if (!(w > 0) || !(h > 0)) {
+      w = Number(c.clientWidth);
+      h = Number(c.clientHeight);
+    }
+    vpVal = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { width: w, height: h } : null;
+    vpKey = key;
+    return vpVal;
   }
   async function loadIndex() {
     if (indexDone) return;
@@ -5415,7 +5496,18 @@ function createNameLayer(host) {
       host.onError?.(`names index ${String(e?.message || e).slice(0, 60)}`);
     }
   }
-  async function fetchCellData(key, minConf) {
+  const inflight = /* @__PURE__ */ new Map();
+  function fetchCellData(key, minConf) {
+    const k = `${key}@${minConf}`;
+    const running = inflight.get(k);
+    if (running) return running;
+    const p = fetchCellDataOnce(key, minConf).finally(() => {
+      inflight.delete(k);
+    });
+    inflight.set(k, p);
+    return p;
+  }
+  async function fetchCellDataOnce(key, minConf) {
     let pts = [];
     let dropped = 0;
     let reals = [];

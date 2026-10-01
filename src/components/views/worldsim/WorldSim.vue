@@ -442,6 +442,8 @@
      （行程卡、车辆标记、事件气泡、事件流面板 —— 代拍页那一屏都没有）。
      数据层（`useWorldTrips` / `useWorldEvents`）**照旧在跑**，只是不再上屏。 */
   import { wsToast, useWsToast } from "./wsToast";
+  /* 📱 没接进来的应用点了说什么 —— **唯一真源**（新宿主 `WsSceneView.vue` 用同一份，切片①）。 */
+  import { phoneNotWiredText } from "@/components/views/worldmap/wsPhoneApps";
   import { districtPinsOf, type PlacedActor, type WsDistrictPin } from "./wsActors";
   import {
     DEFAULT_CELL_M,
@@ -743,13 +745,11 @@
   }
 
   /* 悬浮手机：没接进来的应用点了要**如实提示**（绝不静默 —— 点了没反应最伤体验）。
-     清单同 `WsPhone.vue` 的 APPS；已接的（READY）由 WsPhone 内部直接打开，不走这里。 */
-  const PHONE_APP_LABEL: Record<string, string> = {
-    music: "音乐（T5-8）",
-    me: "我的",
-  };
+     清单同 `WsPhone.vue` 的 APPS；已接的（READY）由 WsPhone 内部直接打开，不走这里。
+     ⚠️ 这句话的**唯一真源**在 `worldmap/wsPhoneApps.ts`（新宿主 `WsSceneView.vue` 用同一份）——
+     两个宿主各写一份文案，说法迟早漂移。 */
   function onPhoneApp(key: string) {
-    wsToast(`${PHONE_APP_LABEL[key] || key} 还没接进来`, "info");
+    wsToast(phoneNotWiredText(key), "info");
   }
 
   /* 🗄 2026-09-24 删除：五级下钻开关 `SHOW_LEVEL_NAV` 与 `?levels=1` 恢复口。

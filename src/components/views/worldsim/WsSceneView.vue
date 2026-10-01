@@ -77,6 +77,12 @@
          手机本体、八个应用、`READY` 清单全在 `WsPhone.vue` 里 —— 这里**一行渲染逻辑都没有**。
          z-index 用令牌（手机 `--z-ws-phone:60`，手机自己在样式里定义），不会盖住验证面板。 -->
     <WsPhone v-if="phone" @open-app="onPhoneApp" />
+
+    <!-- 🔔 toast：`wsToast()` 只是往**模块级队列**里推，得有人渲染才看得见。
+         🔴 切片① 实测（`~/chk/_phone_probe.mjs`）：新入口原来没挂这个渲染处 ⇒ 点「音乐」「我的」
+         面板行为是对的（不换页），但**页面上一个字都不出现** = 机主最烦的"点了没反应"。
+         跟着 `phone` 开关挂：老宿主 `WorldSim.vue` 自己挂了一份，**同一队列两边都渲染会弹两条**。 -->
+    <WsToasts v-if="phone" />
   </div>
 </template>
 
@@ -100,6 +106,8 @@
   import WsPhone from "@/components/views/worldmap/WsPhone.vue";
   import { phoneNotWiredText } from "@/components/views/worldmap/wsPhoneApps";
   import { wsToast } from "./wsToast";
+  /* 🔔 toast 队列的渲染处（切片① 收成组件：**新入口也要弹同一条提示**，见模板里那段注释）。 */
+  import WsToasts from "./WsToasts.vue";
 
   const props = withDefaults(
     defineProps<{

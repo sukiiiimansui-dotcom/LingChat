@@ -92,7 +92,7 @@
         :key="n.slot + ':' + n.id"
         type="button"
         class="ws-lab"
-        :class="[labClassOf(n.style), { 'is-sketch': n.sketch }]"
+        :class="[labClassOf(n.style), { 'is-sketch': n.sketch, 'is-enter': nameEnter.includes(n.id) }]"
         :data-ws-lab="n.pick.kind"
         :data-ws-lab-id="n.id"
         :data-ws-lab-style="n.style"
@@ -102,6 +102,19 @@
       >
         {{ n.text }}
       </button>
+      <!-- 🆕 这一批**要走的**那几张：各自淡出后由宿主移除（**不是**整层一起换字）。
+           用 `span` 而不是按钮 ⇒ 退场中的标签不可点（它马上就要消失，点它只会弹错卡）；
+           位置由**真源**按当前相机投好（`exited[].x/y`），宿主不自己投影。 -->
+      <span
+        v-for="g in nameGhosts"
+        :key="'ghost:' + g.slot + ':' + g.id"
+        class="ws-lab is-ghost"
+        :class="[labClassOf(g.style), { 'is-sketch': g.sketch, 'is-ghost-out': ghostFading }]"
+        :style="{ transform: `translate3d(${g.x}px, ${g.y}px, 0)` }"
+        aria-hidden="true"
+      >
+        {{ g.text }}
+      </span>
     </div>
 
     <!-- 2D 降级路的"人"（WebGL 路用地图库 Marker，不在这里画） -->
@@ -3393,6 +3406,18 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 换批中（"先隐后改字"：整层 opacity≈0 的那一帧才改 textContent） */
   const switching = ref(false);
   const labRootEl = ref<HTMLElement | null>(null);
+  /* 🆕 2026-10-01（机主：「换字动画我想要的是**像高德地图那样可以不用重算**的」）──────────────
+     两条：① 集合**没变** ⇒ 只更新坐标，**不加任何整层类**；
+          ② 集合**真变了** ⇒ 只让**新来的/要走的**那几张各自淡入/淡出（不是整层一起换）。
+     数据全来自**共享真源**的 `plan.changed / plan.entered / plan.exited`（宿主不自己算 diff）。 */
+  /** 这一批**新进来**的节点 id（给这几张挂 `is-enter`，两帧后摘掉 ⇒ 120ms 淡入） */
+  const nameEnter = ref<string[]>([]);
+  /** 这一批**要走的**节点（单独一层 DOM：先原样显示，再加 `is-ghost-out` 淡出，随后移除） */
+  const nameGhosts = ref<NameRenderNode[]>([]);
+  /** 幽灵的淡出态（两帧后才置 true ⇒ 才有一趟真正的过渡，而不是"一挂上就是透明"） */
+  const ghostFading = ref(false);
+  let enterTimer = 0;
+  let ghostTimer = 0;
 
   function labClassOf(style: NameRenderNode["style"]): string {
     return style === "real" ? "is-real" : style === "derived" ? "is-derived" : "is-generated";
@@ -3405,11 +3430,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }));
 
   /**
-   * 把**渲染计划**落到 DOM。🔴 两条纪律：
+   * 把**渲染计划**落到 DOM。🔴 三条纪律：
    * ① **位置只在此时写一次**（`translate3d`），相机运动期间一个字都不许再写节点；
-   * ② **先隐后改字**：如果这一批的"名字集合"变了 ⇒ 先进 `switching`（整层 opacity→0，120ms），
-   *    等它真的看不见了才换 `nameNodes`，然后退出去（区名 200ms 进场）。
-   *    绝不允许"看着旧名字变成新名字"（那是最廉价的一种观感）。
+   * ② 集合**没变** ⇒ **只更新坐标**，不加任何整层类（机主要的"像高德那样跟手滑"，2026-10-01）；
+   * ③ 集合**真变了** ⇒ **只让新来的/要走的这几张各自淡入淡出**（`plan.entered/exited`），
+   *    不再是整层淡化；**绝不允许"看着旧名字变成新名字"**（节点 key 带 id ⇒ 换名字 = 换元素）。
    */
   function applyNamePlan(plan: NameRenderPlan): void { applyNamePlanWithHud(plan, ""); }
   /**
@@ -3447,12 +3472,59 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       commit();
       return;
     }
+    /* 🆕 2026-10-01 机主：「换字动画我想要的是**像高德地图那样可以不用重算**的」——
+       集合真变了时**只让新来的/要走的这几张各自淡入淡出**，屏上其余标签一张都不动。
+       ⚠️ 红线不变：节点 key 是 `slot:id` ⇒ 换了 id 就是**换元素**，不会"看着旧名字变成新名字"；
+          退场的那张走幽灵层（`span`，不可点），进场的那张从 0 淡到 1。 */
+    if (plan.changed !== undefined) {
+      commit();                                    // ← 位置/文案先落地（**不整层淡化**）
+      fadeInNew(plan.entered || []);
+      fadeOutGone(plan.exited || []);
+      return;
+    }
+    /* ⬇️ 兜底：计划没带 `changed`（模块比宿主旧）时，仍走原来的"整层先隐后改字"（逐字保留旧行为） */
     switching.value = true;
     switchTimer = window.setTimeout(() => {
       switchTimer = 0;
       if (!alive) return;
       commit(true);                                 // ← 换字发生在整层看不见的那一帧
     }, LABEL_MOTION.nameOutMs);
+  }
+
+  /**
+   * 🆕 **只给新来的那几张**播淡入（`is-enter`：opacity 0 → 1，用 `.ws-lab` 已有的 120ms 过渡）。
+   * 两帧后摘类：① 让 Vue 先把带 `is-enter` 的节点挂上去 ② 让浏览器结算这一帧
+   * ⇒ 才有"从 0 淡进来"的过渡，而不是"一出现就是全亮"。
+   * 降级/减少动效下**不播**（不是缩短时长）。
+   */
+  function fadeInNew(ids: string[]): void {
+    if (!ids.length || perfLow.value || reducedMotion()) return;
+    nameEnter.value = ids.slice();
+    if (enterTimer) window.clearTimeout(enterTimer);
+    enterTimer = window.setTimeout(() => {
+      enterTimer = 0;
+      if (alive) nameEnter.value = [];
+    }, 32);
+  }
+
+  /**
+   * 🆕 **只给要走的这几张**播淡出：先按原样挂进幽灵层，两帧后加 `is-ghost-out` 淡到 0，
+   * `nameOutMs` 之后移除。**不占** `nameNodes` 的节点池（否则复用池会把它当场改成别人的文案）。
+   */
+  function fadeOutGone(nodes: NameRenderNode[]): void {
+    if (!nodes.length || perfLow.value || reducedMotion()) return;
+    nameGhosts.value = nodes.slice();
+    ghostFading.value = false;
+    if (ghostTimer) window.clearTimeout(ghostTimer);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { if (alive) ghostFading.value = true; });
+    });
+    ghostTimer = window.setTimeout(() => {
+      ghostTimer = 0;
+      if (!alive) return;
+      nameGhosts.value = [];
+      ghostFading.value = false;
+    }, LABEL_MOTION.nameOutMs + 40);
   }
 
   /** 名字层刷新（moveend / load 之后调；**不阻塞首屏**） */
@@ -4435,6 +4507,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       /* 🔴 容器位移**必须**在这里归零：节点自身马上要被写成新位置，容器再留着旧位移就是"错位"
          （机主真机报过的「名字显示是滑动刷新一次，不能跟随，**错位严重**」就是这一层没对齐）。 */
       onMoveEndNames();
+      /* 🆕 2026-10-01 **就地重投影**（治机主说的"松手卡一下/弹回"）：
+         容器刚归零，而节点还钉在**上一台相机**的坐标上 —— 原来要等 600ms 去抖 + 取包之后才重排，
+         那 600ms 里整层是错位的（真因是"重投影排在了重排后面"，不是算得慢）。
+         现在：`reproject()` **只重投影、不重排**（O(N)，N ≤ 26；集合/避让/上限/batch 一律不动）
+         ⇒ 同一 tick 内 Vue 就把 transform 落下去（微任务先于下一帧绘制）⇒ 看不到跳变。
+         ⚠️ 它**不替代** `refreshNames`：600ms 后那一轮仍照跑（该重算时重算、该增删时增删）。 */
+      nameLayer.reproject();
       if (bldTimer) window.clearTimeout(bldTimer);
       bldTimer = window.setTimeout(() => {
         bldTimer = 0;
@@ -4446,6 +4525,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /* 缩放结束也要重排：zoom 变了 ⇒ 避让网格的候选/撞掉**全变**（区名模式的迟滞信号就是它） */
     m.on("zoomend", () => {
       onMoveEndNames();
+      /* 🆕 同 `moveend`：先**就地重投影**（缩放不是刚体平移，容器跟手只是近似），
+         160ms 后那一轮 `refreshNames("zoom")` 照旧（跨档才重算，档内复用 —— 见 `wsNameLayer`）。 */
+      nameLayer.reproject();
       if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
       zoomNameTimer = window.setTimeout(() => { zoomNameTimer = 0; if (alive) void refreshNames("zoom"); }, 160);
     });
@@ -4462,6 +4544,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (bldTimer) window.clearTimeout(bldTimer);
     if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
     if (switchTimer) window.clearTimeout(switchTimer);
+    if (enterTimer) window.clearTimeout(enterTimer);      // 🆕 进场淡入的收尾定时器
+    if (ghostTimer) window.clearTimeout(ghostTimer);      // 🆕 退场幽灵的移除定时器
     if (watchdog) window.clearTimeout(watchdog);
     watchdog = 0;
     if (recoverTimer) window.clearTimeout(recoverTimer);
@@ -4837,6 +4921,21 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   .ws-lab:hover,
   .ws-lab:focus-visible {
     transform: scale(1.05);            /* 强调只动 scale（**不许**改 font-size/padding） */
+  }
+  /* 🆕 2026-10-01 **个别标签各自淡入淡出**（机主：「像高德地图那样可以不用重算」+「只让新来的/要走的淡」）
+     · `is-enter`：这一批**新来的** —— 从 0 淡进来（用 `.ws-lab` 已有的 120ms opacity 过渡，不新增时长）；
+     · `is-ghost`：这一批**要走的** —— 先按原样显示，宿主两帧后加 `is-ghost-out` 才淡到 0，随后整只移除；
+     · 两条都**只动 opacity**（位置仍是 `translate3d`，绝不 left/top），也不吃指针事件。 */
+  .ws-lab.is-enter {
+    opacity: 0;
+  }
+  .ws-lab.is-ghost {
+    pointer-events: none;
+    cursor: default;
+    opacity: 1;
+  }
+  .ws-lab.is-ghost.is-ghost-out {
+    opacity: 0;
   }
   /* 🔴 三档样式**必须不同**（机主拍板）：真名 / 数据驱动区名 / 示意区名 */
   .ws-lab.is-real {

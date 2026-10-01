@@ -46,11 +46,17 @@ import { bundleCellsForView } from "./wsFeatureStore";
 import {
   type LabelItem,
   type LabelPlan,
+  type LabelPlanCache,
+  type LabelPlanKey,
+  type LabelPlanReason,
   type PickResult,
   type PlacedLabel,
   adminLabelsFrom,
   buildingLabelsFrom,
+  createLabelPlanCache,
+  labelItemsSig,
   labelPlanFor,
+  labelTierOf,
   pickLabels,
   placeLabelsFrom,
 } from "./wsLabels";
@@ -208,6 +214,16 @@ export interface NameRenderPlan {
   lite: boolean;
   /** 相机运动期间容器目标 opacity（§4.2：整层 1 → 0.25，只写 1 个节点） */
   cameraOpacity: number;
+  /* ── 🆕 2026-10-01（机主：「换字动画我想要的是**像高德地图那样可以不用重算**的」）──────────
+     增删只该发生在**真的需要**时，而且要**个别标签各自淡入淡出**，不是整层一起换。
+     这三个字段就是"该谁动"的唯一真源（宿主照着做，自己不许再算一份 diff）：
+       · `changed` = **集合变了没**（= `batch` 变没变）——**false ⇒ 禁止整层换字**（只更新坐标）；
+       · `entered` = 这一批**新进来**的节点 id（宿主只给这几张播淡入）；
+       · `exited`  = 这一批**退场**的节点（宿主让它们各自淡出后移除；位置已按**当前**相机投好）。
+     ⚠️ 代拍页不读这三个字段（它按 `batch` 走原来的整层换字）⇒ 旧调用点行为不变（可选字段）。 */
+  changed?: boolean;
+  entered?: string[];
+  exited?: NameRenderNode[];
 }
 
 /* ══ ④ 事实（HUD / 探针 / 判词；三态） ═══════════════════════════════════════════════ */
@@ -262,6 +278,12 @@ export interface NameFacts {
   attribution: string | null;
   /** 包自报的格边长（度） */
   cellSize: number | null;
+  /* ── 🆕 🧠 计划缓存读数（2026-10-01：机主要的"像高德那样不用重算"必须**可数**）───────────
+     判词三态在缓存上同样成立：`planComputes` = **真算过几次**（正数），`planReuses` = 命中几次。
+     `planReason` = 这一轮为什么算/为什么复用（cold/tier/drift/data/viewport/reuse）。 */
+  planComputes: number;
+  planReuses: number;
+  planReason: LabelPlanReason;
   /** 数不出来 / 异常的原因原文 */
   why: string | null;
 }
@@ -269,6 +291,15 @@ export interface NameFacts {
 export interface NameLayer {
   /** 按视野补格 → 算标签/区名 → 出渲染计划（**永不抛**） */
   refresh(why?: string): Promise<NameFacts>;
+  /**
+   * 🆕 **只重投影、不重排**（相机停下来的那一帧调；治"松手弹回"）。
+   *
+   * 机主 2026-10-01 的口径：拖动中/松手后标签要**贴在地图要素上**，但**重投影不该顺带重排**
+   * ⇒ 这里只把现有节点的经纬度锚点按**当前**相机重新投一次（O(N)，N = 屏上标签数 ≤ 26），
+   *   **集合、`batch`、避让、上限、区名聚合一律不动** ⇒ 宿主 `changed=false` ⇒ 不会整层换字。
+   * 返回新计划（同时已通过 `onPlan` 交给宿主渲染）；**还没算过任何一批** ⇒ 返回 null（什么都不做）。
+   */
+  reproject(): NameRenderPlan | null;
   facts(): NameFacts;
   plan(): NameRenderPlan;
   /** 一行的三态判词（宿主 HUD 直接念） */
@@ -295,7 +326,10 @@ export function nameVerdictLine(f: NameFacts): string {
     /* 划区的**中间量**也要看得见：否则"区名 0 个"就只剩一句结论，查不出是"没够格"还是"过半=0"
        （0.05° 上 food 过半就是 0 格 —— 这条实测事实必须能从 HUD 上读出来）。 */
     ` · 子格 够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf}` +
-    ` · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"}`
+    ` · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"}` +
+    /* 🆕 缓存读数：**复用几次 / 真算几次**（机主要的"不用重算"要能在屏上数出来，不靠调试出口）。
+       右侧那个词是**这一轮为什么**算/复用（reuse = 命中缓存 ⇒ 没重排、没换字）。 */
+    ` · ♻ 复用 ${f.planReuses} / 算 ${f.planComputes}（${f.planReason}）`
   );
 }
 
@@ -323,7 +357,9 @@ function emptyFacts(on: boolean): NameFacts {
     cells: 0, hit: 0, missing: 0, failed: 0,
     points: 0, droppedByConf: 0,
     zoneCells: 0, zoneEligible: 0, zoneOverHalf: 0,
-    attribution: null, cellSize: null, why: null,
+    attribution: null, cellSize: null,
+    planComputes: 0, planReuses: 0, planReason: "cold",
+    why: null,
   };
 }
 
@@ -366,6 +402,50 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   let indexDone = false;
   let indexCells: Set<string> | null = null;
   let indexFact: { attribution: string | null; cellSize: number | null; minConf: number | null; cells: number | null } | null = null;
+
+  /* ── 🧠 计划缓存（机主 2026-10-01：「换字动画我想要的是**像高德地图那样可以不用重算**的」）──────
+     判据**只有一份**（在 `wsLabels.createLabelPlanCache`）：缩放跨档 / 中心漂移超视野短边的 25% /
+     候选数据变了 / 视口尺寸变了 —— 其余情况**复用上一次的规划结果**（不重排、不换字、只重投影）。
+     ⚠️ 这里只存"上一次真算过"的那一份**模板**（节点带经纬度锚点）；复用时要按**当前**相机重新投影，
+        并且**必须是新对象/新数组**（Vue 的 ref 同引用不触发渲染 ⇒ 位置就不会更新）。 */
+  const planCache: LabelPlanCache<PickResult> = createLabelPlanCache<PickResult>();
+  interface PlannedPayload {
+    /** 节点模板（含 lng/lat）——复用/重投影都以它为准 */
+    nodes: NameRenderNode[];
+    /** 算这一批时的事实（复用时报同一份，只把缓存读数换成当前的） */
+    facts: NameFacts;
+    /** 算这一批时的挑选结果（缓存里存的就是它；复用时不读，只为类型与排障留个底） */
+    picked: PickResult;
+    mode: NameMode;
+    batch: number;
+    lite: boolean;
+  }
+  let payload: PlannedPayload | null = null;
+
+  /** 一次投影（拿不到就原样返回；**不抛**） */
+  function projectNode(n: NameRenderNode): NameRenderNode {
+    const m = host.map();
+    if (!m || !Number.isFinite(n.lng) || !Number.isFinite(n.lat)) return { ...n };
+    try {
+      const p = m.project([n.lng, n.lat]);
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { ...n, x: p.x, y: p.y };
+    } catch { /* 投影失败就保留旧坐标（宁可差一屏，不许抛） */ }
+    return { ...n };
+  }
+
+  /**
+   * 由**缓存下来的模板**生成一份新计划：只重投影，**集合/batch/避让/上限一律不动**。
+   * `changed=false` 是硬约束：宿主据此**禁止**整层换字（只允许改坐标）。
+   */
+  function planFromPayload(p: PlannedPayload): NameRenderPlan {
+    const nodes = p.nodes.map(projectNode);
+    nodes.forEach((n, i) => { n.slot = i; });
+    return {
+      mode: p.mode, nodes, batch: p.batch, lite: p.lite,
+      cameraOpacity: LABEL_MOTION.cameraOpacity,
+      changed: false, entered: [], exited: [],
+    };
+  }
 
   function viewOf(): BundleView | null {
     const m = host.map();
@@ -555,16 +635,12 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         droppedByConf += d.droppedByConf;
       }
       const minConf = host.minConf?.() ?? indexFact.minConf ?? NAMES_MIN_CONF_FALLBACK;
-      const zonesPlan = planZoneNames(points, reals, {
-        subDeg: WS_ZONE_SUB_DEG,
-        /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
-        containerDeg: cellSize,
-        containers: wanted.filter((c) => cells.get(c.key)?.ok).map((c) => c.key),
-      });
 
       /* ── 真名标签（POI + 片区 + 行政区 + 有名字的楼）──
          `pickLabels` 的产出只有屏幕坐标（`PlacedLabel` 不带经纬度），而**跟手**需要经纬度锚点、
-         **点选**需要原始记录 ⇒ 这里同时建两张按 id 索引的表，节点生成时取。 */
+         **点选**需要原始记录 ⇒ 这里同时建两张按 id 索引的表，节点生成时取。
+         ⚠️ 这一段**每轮都跑**：它就是"候选集"本身，缓存判据 `dataSig` 要用它。
+            被省掉的是它**下游**那一大块（投影 + 避让 + 上限 + 区名聚合 + 节点计划，见下面的 reuse 分支）。 */
       const items: LabelItem[] = [];
       const anchorOf = new Map<string, [number, number]>();
       const pickOf = new Map<string, NameRenderNode["pick"]>();
@@ -609,13 +685,61 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
 
       const m = host.map();
       const vp = viewportOf();
+      const z = m ? m.getZoom() : NaN;
+      /* 🔴 **取到的格也算候选数据**：新格/新名字进来 = 数据变了 ⇒ 必须重算（机主点名的第 ③ 条）。
+         格键**排序后**再进指纹：`bundleCellsForView` 按"离中心远近"排序，中心一动同一批格就换序。 */
+      const okCellKeys = wanted.filter((c) => cells.get(c.key)?.ok).map((c) => c.key).sort();
+      const dataSig = `${labelItemsSig(items)}|w=${wanted.length}|c=${hitCells}|ok=${okCellKeys.join(",")}`;
+
+      /* ── 🧠 缓存判据（**只有这一处**）：该复用还是该重算 ──────────────────────────────
+         命中 ⇒ **不跑**投影/避让/上限/区名聚合/节点计划，只按当前相机重投影（见 `planFromPayload`）。 */
+      let key: LabelPlanKey | null = null;
+      const vb = view.bounds;                      // 类型上可能是 null（`viewOf` 里已校过有限性）
+      const vc = view.center;
+      if (m && vp && vb && vc) {
+        key = {
+          tier: labelTierOf(z),
+          centerLng: vc.lng, centerLat: vc.lat,
+          /* 视野跨度（度）：用来把中心位移折成**屏幕像素**（判据在 `wsLabels.planDriftPx`）。
+             跨度缺失/不为正时 `planDriftPx` 返回 `Infinity` ⇒ 判 `drift` 重算（保守，不静默复用）。 */
+          spanLng: vb.getEast() - vb.getWest(),
+          spanLat: vb.getNorth() - vb.getSouth(),
+          viewW: vp.width, viewH: vp.height,
+          dataSig,
+        };
+      }
+      /* 闸门可能**自己**要换档（密度连续够格 / 防抖到点）⇒ 那时也不许复用（集合会变） */
+      let gateForced: boolean | null = null;
+      if (key && payload && planCache.reasonFor(key) === "reuse") {
+        const g0 = gate.sample(payload.facts.density, now());
+        if (!g0.changed) {
+          /* 记账走**同一个** `run`（命中缓存 ⇒ 里面的 `work` 一次都不调）⇒ 读数由此而来 */
+          planCache.run(key, () => (payload as PlannedPayload).picked);
+          const st = planCache.stats();
+          last = { ...payload.facts, planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason };
+          lastPlan = planFromPayload(payload);          // ← 只重投影；`changed=false` ⇒ 宿主不换字
+          return emit();
+        }
+        gateForced = g0.zoneMode;
+      }
+
+      /* ── 以下都是**重算**路径（复用已在上面 return）────────────────────────────── */
+      const zonesPlan = planZoneNames(points, reals, {
+        subDeg: WS_ZONE_SUB_DEG,
+        /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
+        containerDeg: cellSize,
+        containers: okCellKeys,
+      });
       let picked: PickResult | null = null;
       if (m && vp) {
-        const z = m.getZoom();
-        picked = pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
+        picked = key
+          ? planCache.run(key, () => pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx }))
+          : pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
       }
       const density = picked ? (picked.candidates > 0 ? picked.droppedByCollision / picked.candidates : null) : null;
-      const g = gate.sample(density, now());
+      /* ⚠️ 采样**一轮只做一次**：上面复用分支里若闸门已经采样过（并真的切了档），这里就不再采一次
+         （重复采样会把"连续 N 次"的连击数喂大一倍 = 闸门行为被悄悄改掉）。 */
+      const g = gateForced === null ? gate.sample(density, now()) : { zoneMode: gateForced, changed: true, reason: "复用分支里闸门已切档" };
       const mode: NameMode = g.zoneMode ? "zones" : "names";
       /* 🔴 **名额必须分两半**（2026-09-26 真浏览器实测抓到的产品缺陷）：
          实测那一屏有 8 个**真名区**（placesbundle 的社区/街道名，排序里 real 永远在前），
@@ -674,8 +798,25 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       nodes.forEach((n, i) => { n.slot = i; });
       const lite = nodes.length > LABEL_MOTION.liteAbove;
       const sig = mode + "|" + nodes.map((n) => n.id + ":" + n.text).join(",");
-      if (sig !== lastBatchSig) { batch++; lastBatchSig = sig; }
-      lastPlan = { mode, nodes, batch, lite, cameraOpacity: LABEL_MOTION.cameraOpacity };
+      /* 🔴 `changed` 就是"集合变没变"（= `batch` 变没变）——**宿主只在它为 true 时才允许整层换字** */
+      const sigChanged = sig !== lastBatchSig;
+      if (sigChanged) { batch++; lastBatchSig = sig; }
+      /* 🆕 该谁动：**新来的 / 要走的**那几张（其余的一张都不许动）——
+         退场节点的位置按**当前**相机投好（它们上一次的坐标是上一台相机的，直接用就是错位）。
+         🔴 判据用 `id + 文案`（与 `sig` 同一口径），**不是只用 id**：万一同一个 id 的文案变了
+            （例：同一个区的名字被改、POI 改名），只用 id 判就会**原地改字** —— 那正是项目红线
+            「绝不允许看着旧名字变成新名字」。用 id+文案 ⇒ 旧的那张进 `exited`（淡出）、
+            新的那张进 `entered`（淡入），原地做一次交叉淡化，一个字都不会"变"。 */
+      const keyOf = (n: NameRenderNode): string => n.id + "\u0001" + n.text;
+      const prevNodes = payload ? payload.nodes : [];
+      const nextKeys = new Set(nodes.map(keyOf));
+      const prevKeys = new Set(prevNodes.map(keyOf));
+      const entered = nodes.filter((n) => !prevKeys.has(keyOf(n))).map((n) => n.id);
+      const exited = prevNodes.filter((n) => !nextKeys.has(keyOf(n))).map(projectNode);
+      lastPlan = {
+        mode, nodes, batch, lite, cameraOpacity: LABEL_MOTION.cameraOpacity,
+        changed: sigChanged, entered, exited,
+      };
 
       const realLabels = nodes.filter((n) => n.style === "real").length;
       /* 🔴 「区名」的计数口径：**带 pick.kind==="zone" 的节点**（而不是"样式不是 real"）——
@@ -714,8 +855,17 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         zoneOverHalf: zonesPlan.overHalf,
         attribution: indexFact.attribution,
         cellSize,
+        planComputes: planCache.stats().computes,
+        planReuses: planCache.stats().reuses,
+        planReason: planCache.stats().lastReason,
         why: hitCells === 0 && wanted.length > 0 ? "视野里的格一格都没取到" : null,
       };
+      /* 只把**真算过且真的产出了挑选结果**的那一批存成模板（没地图/没画布时 `picked` 是 null ⇒ 不存） */
+      if (picked) {
+        payload = { nodes, facts: last, picked, mode, batch, lite };
+      } else {
+        payload = null;
+      }
       return emit();
     } catch (e) {
       last = { ...emptyFacts(true), state: "uncounted", why: String((e as Error)?.message || e).slice(0, 60) };
@@ -758,8 +908,26 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     return last;
   }
 
+  /**
+   * 🆕 **只重投影、不重排**（相机停下来的那一帧调；治"松手弹回 ~600ms"）。
+   *
+   * 机主 2026-10-01：「拖动地图时，名字标签应该**只是跟着地图滑**」——
+   * 拖动期间宿主用**容器一次 `translate3d`** 跟手（O(1)），可容器在 `moveend` 归零之后、
+   * 重排（600ms 去抖 + 取包）完成之前，节点还钉在**上一台相机**的坐标上 ⇒ 那 600ms 里整层是错位的。
+   * 这里把这段补上：按**当前**相机把每个保留节点重投一次（O(N)，N ≤ 26），
+   * **集合 / `batch` / 避让 / 上限 / 区名聚合一律不动** ⇒ `changed=false` ⇒ 宿主不会整层换字。
+   */
+  function reproject(): NameRenderPlan | null {
+    if (!payload) return null;                                   // 还没算过任何一批 ⇒ 什么都不做
+    if (host.enabled && !host.enabled()) return null;            // `?names=0` 关着 ⇒ 不画
+    lastPlan = planFromPayload(payload);
+    emit();
+    return lastPlan;
+  }
+
   return {
     refresh,
+    reproject,
     facts: () => last,
     plan: () => lastPlan,
     verdict: () => nameVerdictLine(last),

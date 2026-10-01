@@ -3097,7 +3097,15 @@ function createBundleFeed(opts) {
       }
     },
     facts: counters,
-    plan: planned
+    plan: planned,
+    /* 🔴 **F6（2026-10-01 性能审计 §5.5）**：把**本管道自己那条**索引 promise 露出来。
+       宿主（`wsGwLayer`）原来**自己直连** `loadBundleIndex(fetchCell, "gw")`，而 `refresh()` 里
+       还有一条 —— 两条各自独立 ⇒ 实测 `gwbundle/index.json` **被取了两次**（@7028.1 / @7130.1）。
+       这里**只增加一个入口**：拿到的就是 `ensureIndex()` 内部**同一个** `indexPromise`（谁先到谁发起、
+       后来的 await 同一份），**判词 / 去重口径 / 缓存策略 / 目录候选顺序一律没动** ——
+       不调它的宿主看到的字节与本条改动之前**完全相同**。
+       ⚠️ 不许拿它当"预取"：它等于"把本来就要读的那一次提前到期"，不是多读一次。 */
+    ensureIndex
   };
 }
 async function loadBundleIndex(fetchCell, kind, dir) {
@@ -3478,7 +3486,7 @@ function createGwLayer(host) {
     try {
       if (!indexFact) {
         if (!indexInflight) {
-          indexInflight = loadBundleIndex(host.fetchCell, "gw").then((f2) => {
+          indexInflight = feed.ensureIndex().then((f2) => {
             indexFact = f2;
             return f2;
           });
@@ -3616,6 +3624,11 @@ function labelPlanFor(zoom) {
     cap: z >= 16 ? 26 : z >= 13 ? 20 : z >= 11 ? 12 : 6
   };
 }
+function labelTierOf(zoom) {
+  const z = Number.isFinite(zoom) ? Number(zoom) : 14;
+  return z >= 16 ? 3 : z >= 13 ? 2 : z >= 11 ? 1 : 0;
+}
+var LABEL_PLAN_DRIFT_RATIO = 0.25;
 function labelPriorityOf(it) {
   switch (it.kind) {
     case "admin":
@@ -3736,6 +3749,87 @@ function pickLabels(items, project, viewport, plan, opts = {}) {
     out.shown.push(c);
   }
   return out;
+}
+function planDriftPx(base, next) {
+  const spanLng = Math.abs(Number(next.spanLng));
+  const spanLat = Math.abs(Number(next.spanLat));
+  const w = Number(next.viewW) > 0 ? Number(next.viewW) : 0;
+  const h = Number(next.viewH) > 0 ? Number(next.viewH) : 0;
+  if (!(spanLng > 0) || !(spanLat > 0) || !(w > 0) || !(h > 0)) return Infinity;
+  const dx = Math.abs(Number(next.centerLng) - Number(base.centerLng)) / spanLng * w;
+  const dy = Math.abs(Number(next.centerLat) - Number(base.centerLat)) / spanLat * h;
+  const d = Math.max(dx, dy);
+  return Number.isFinite(d) ? d : Infinity;
+}
+function labelItemsSig(items) {
+  const keys = [];
+  for (const it of items || []) {
+    if (!it) continue;
+    const lng = Number(it.lng), lat = Number(it.lat);
+    keys.push([
+      String(it.id),
+      String(it.kind),
+      String(it.name),
+      (Number.isFinite(lng) ? lng : 0).toFixed(5),
+      (Number.isFinite(lat) ? lat : 0).toFixed(5)
+    ].join(""));
+  }
+  keys.sort();
+  let h = 2166136261;
+  for (const k of keys) {
+    for (let i = 0; i < k.length; i++) {
+      h ^= k.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    h ^= 31;
+    h = Math.imul(h, 16777619);
+  }
+  return `n=${keys.length};h=${(h >>> 0).toString(16)}`;
+}
+function createLabelPlanCache(opts = {}) {
+  const ratio = Number.isFinite(Number(opts.driftRatio)) ? Math.max(0, Number(opts.driftRatio)) : LABEL_PLAN_DRIFT_RATIO;
+  const reasons = { cold: 0, tier: 0, drift: 0, data: 0, viewport: 0, reuse: 0 };
+  let base = null;
+  let result = null;
+  let computes = 0;
+  let reuses = 0;
+  let lastReason = "cold";
+  function reasonFor(key) {
+    if (!base || result === null) return "cold";
+    if (Number(key.tier) !== Number(base.tier)) return "tier";
+    if (Math.abs(Number(key.viewW) - Number(base.viewW)) > 0.5 || Math.abs(Number(key.viewH) - Number(base.viewH)) > 0.5) return "viewport";
+    if (String(key.dataSig) !== String(base.dataSig)) return "data";
+    const limit = ratio * Math.min(Number(key.viewW) > 0 ? Number(key.viewW) : 0, Number(key.viewH) > 0 ? Number(key.viewH) : 0);
+    if (!(planDriftPx(base, key) <= limit)) return "drift";
+    return "reuse";
+  }
+  return {
+    reasonFor,
+    run(key, work) {
+      const r = reasonFor(key);
+      lastReason = r;
+      reasons[r]++;
+      if (r === "reuse") {
+        reuses++;
+        return result;
+      }
+      const out = work();
+      computes++;
+      base = { ...key };
+      result = out;
+      return out;
+    },
+    last: () => result,
+    stats: () => ({ computes, reuses, lastReason, reasons: { ...reasons }, base: base ? { ...base } : null }),
+    reset() {
+      base = null;
+      result = null;
+      computes = 0;
+      reuses = 0;
+      lastReason = "cold";
+      for (const k of Object.keys(reasons)) reasons[k] = 0;
+    }
+  };
 }
 function roadLabelsFrom(features, kindOfRank) {
   const seen = /* @__PURE__ */ new Map();
@@ -5373,7 +5467,7 @@ function nameVerdictLine(f) {
   if (f.state === "uncounted") {
     return `🏷🗺 名字 数不出来：这一轮 0 格取到（格 ${f.hit}/${f.cells}${f.failed ? " · 失败 " + f.failed : ""}）`;
   }
-  return `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}（候选 ${f.candidates}${f.capped ? " · 被上限截断" : ""}） · 屏上 ${f.labels}（大名字 ${f.bigLabels} · 真名 ${f.realLabels} · 区名 ${f.zoneLabels}=数据驱动 ${f.zoneDerived}+真名区/示意 ${f.zoneSketch}） · 🚫生成名上屏 ${f.generatedOnScreen} · 点 ${f.points} · 格 ${f.hit}/${f.cells} · 子格 够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf} · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"}`;
+  return `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}（候选 ${f.candidates}${f.capped ? " · 被上限截断" : ""}） · 屏上 ${f.labels}（大名字 ${f.bigLabels} · 真名 ${f.realLabels} · 区名 ${f.zoneLabels}=数据驱动 ${f.zoneDerived}+真名区/示意 ${f.zoneSketch}） · 🚫生成名上屏 ${f.generatedOnScreen} · 点 ${f.points} · 格 ${f.hit}/${f.cells} · 子格 够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf} · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"} · ♻ 复用 ${f.planReuses} / 算 ${f.planComputes}（${f.planReason}）`;
 }
 function emptyFacts2(on) {
   return {
@@ -5405,6 +5499,9 @@ function emptyFacts2(on) {
     zoneOverHalf: 0,
     attribution: null,
     cellSize: null,
+    planComputes: 0,
+    planReuses: 0,
+    planReason: "cold",
     why: null
   };
 }
@@ -5446,6 +5543,34 @@ function createNameLayer(host) {
   let indexDone = false;
   let indexCells = null;
   let indexFact = null;
+  const planCache = createLabelPlanCache();
+  let payload = null;
+  function projectNode(n) {
+    const m = host.map();
+    if (!m || !Number.isFinite(n.lng) || !Number.isFinite(n.lat)) return { ...n };
+    try {
+      const p = m.project([n.lng, n.lat]);
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { ...n, x: p.x, y: p.y };
+    } catch {
+    }
+    return { ...n };
+  }
+  function planFromPayload(p) {
+    const nodes = p.nodes.map(projectNode);
+    nodes.forEach((n, i) => {
+      n.slot = i;
+    });
+    return {
+      mode: p.mode,
+      nodes,
+      batch: p.batch,
+      lite: p.lite,
+      cameraOpacity: LABEL_MOTION.cameraOpacity,
+      changed: false,
+      entered: [],
+      exited: []
+    };
+  }
   function viewOf() {
     const m = host.map();
     if (!m) return null;
@@ -5600,12 +5725,6 @@ function createNameLayer(host) {
         droppedByConf += d.droppedByConf;
       }
       const minConf = host.minConf?.() ?? indexFact.minConf ?? NAMES_MIN_CONF_FALLBACK;
-      const zonesPlan = planZoneNames(points, reals, {
-        subDeg: WS_ZONE_SUB_DEG,
-        /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
-        containerDeg: cellSize,
-        containers: wanted.filter((c) => cells.get(c.key)?.ok).map((c) => c.key)
-      });
       const items = [];
       const anchorOf = /* @__PURE__ */ new Map();
       const pickOf = /* @__PURE__ */ new Map();
@@ -5651,16 +5770,53 @@ function createNameLayer(host) {
       }
       const m = host.map();
       const vp = viewportOf();
+      const z = m ? m.getZoom() : NaN;
+      const okCellKeys = wanted.filter((c) => cells.get(c.key)?.ok).map((c) => c.key).sort();
+      const dataSig = `${labelItemsSig(items)}|w=${wanted.length}|c=${hitCells}|ok=${okCellKeys.join(",")}`;
+      let key = null;
+      const vb = view.bounds;
+      const vc = view.center;
+      if (m && vp && vb && vc) {
+        key = {
+          tier: labelTierOf(z),
+          centerLng: vc.lng,
+          centerLat: vc.lat,
+          /* 视野跨度（度）：用来把中心位移折成**屏幕像素**（判据在 `wsLabels.planDriftPx`）。
+             跨度缺失/不为正时 `planDriftPx` 返回 `Infinity` ⇒ 判 `drift` 重算（保守，不静默复用）。 */
+          spanLng: vb.getEast() - vb.getWest(),
+          spanLat: vb.getNorth() - vb.getSouth(),
+          viewW: vp.width,
+          viewH: vp.height,
+          dataSig
+        };
+      }
+      let gateForced = null;
+      if (key && payload && planCache.reasonFor(key) === "reuse") {
+        const g0 = gate.sample(payload.facts.density, now());
+        if (!g0.changed) {
+          planCache.run(key, () => payload.picked);
+          const st = planCache.stats();
+          last = { ...payload.facts, planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason };
+          lastPlan = planFromPayload(payload);
+          return emit();
+        }
+        gateForced = g0.zoneMode;
+      }
+      const zonesPlan = planZoneNames(points, reals, {
+        subDeg: WS_ZONE_SUB_DEG,
+        /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
+        containerDeg: cellSize,
+        containers: okCellKeys
+      });
       let picked = null;
       if (m && vp) {
-        const z = m.getZoom();
-        picked = pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
+        picked = key ? planCache.run(key, () => pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx })) : pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
       }
       const density = picked ? picked.candidates > 0 ? picked.droppedByCollision / picked.candidates : null : null;
-      const g = gate.sample(density, now());
+      const g = gateForced === null ? gate.sample(density, now()) : { zoneMode: gateForced, changed: true, reason: "复用分支里闸门已切档" };
       const mode = g.zoneMode ? "zones" : "names";
-      const zoneReal = zonesPlan.zones.filter((z) => z.source === "real");
-      const zoneCalc = zonesPlan.zones.filter((z) => z.source !== "real");
+      const zoneReal = zonesPlan.zones.filter((z2) => z2.source === "real");
+      const zoneCalc = zonesPlan.zones.filter((z2) => z2.source !== "real");
       const zonePickReal = pickZoneNames(zoneReal, Math.min(NAMES_ZONE_REAL_MAX, NAMES_ZONE_CAP));
       const zonePickCalc = pickZoneNames(zoneCalc, Math.max(0, NAMES_ZONE_CAP - zonePickReal.shown.length));
       const zoneShown = [...zonePickReal.shown, ...zonePickCalc.shown];
@@ -5690,8 +5846,8 @@ function createNameLayer(host) {
         } else {
           const big = picked.shown.filter((s) => s.kind === "admin" || s.kind === "place").slice(0, NAMES_BIG_KEEP);
           for (const s of big) nodes.push(nodeOfLabel(s));
-          for (const z of zoneShown) {
-            const n = nodeOfZone(z);
+          for (const z2 of zoneShown) {
+            const n = nodeOfZone(z2);
             if (vp) {
               const pad = 24;
               const inView = n.x >= -pad && n.y >= -pad && n.x <= vp.width + pad && n.y <= vp.height + pad;
@@ -5709,11 +5865,27 @@ function createNameLayer(host) {
       });
       const lite = nodes.length > LABEL_MOTION.liteAbove;
       const sig = mode + "|" + nodes.map((n) => n.id + ":" + n.text).join(",");
-      if (sig !== lastBatchSig) {
+      const sigChanged = sig !== lastBatchSig;
+      if (sigChanged) {
         batch++;
         lastBatchSig = sig;
       }
-      lastPlan = { mode, nodes, batch, lite, cameraOpacity: LABEL_MOTION.cameraOpacity };
+      const keyOf = (n) => n.id + "" + n.text;
+      const prevNodes = payload ? payload.nodes : [];
+      const nextKeys = new Set(nodes.map(keyOf));
+      const prevKeys = new Set(prevNodes.map(keyOf));
+      const entered = nodes.filter((n) => !prevKeys.has(keyOf(n))).map((n) => n.id);
+      const exited = prevNodes.filter((n) => !nextKeys.has(keyOf(n))).map(projectNode);
+      lastPlan = {
+        mode,
+        nodes,
+        batch,
+        lite,
+        cameraOpacity: LABEL_MOTION.cameraOpacity,
+        changed: sigChanged,
+        entered,
+        exited
+      };
       const realLabels = nodes.filter((n) => n.style === "real").length;
       const zoneLabels = nodes.filter((n) => n.pick.kind === "zone").length;
       const bigLabels = nodes.length - zoneLabels;
@@ -5748,8 +5920,16 @@ function createNameLayer(host) {
         zoneOverHalf: zonesPlan.overHalf,
         attribution: indexFact.attribution,
         cellSize,
+        planComputes: planCache.stats().computes,
+        planReuses: planCache.stats().reuses,
+        planReason: planCache.stats().lastReason,
         why: hitCells === 0 && wanted.length > 0 ? "视野里的格一格都没取到" : null
       };
+      if (picked) {
+        payload = { nodes, facts: last, picked, mode, batch, lite };
+      } else {
+        payload = null;
+      }
       return emit();
     } catch (e) {
       last = { ...emptyFacts2(true), state: "uncounted", why: String(e?.message || e).slice(0, 60) };
@@ -5794,8 +5974,16 @@ function createNameLayer(host) {
     }
     return last;
   }
+  function reproject() {
+    if (!payload) return null;
+    if (host.enabled && !host.enabled()) return null;
+    lastPlan = planFromPayload(payload);
+    emit();
+    return lastPlan;
+  }
   return {
     refresh,
+    reproject,
     facts: () => last,
     plan: () => lastPlan,
     verdict: () => nameVerdictLine(last)
@@ -6176,6 +6364,7 @@ export {
   LABEL_CAMERA_CLASS,
   LABEL_DOM_CLASS,
   LABEL_MOTION,
+  LABEL_PLAN_DRIFT_RATIO,
   LABEL_ROOT_CLASS,
   LABEL_STYLE_CLASS,
   LOD_FAR_ZOOM,
@@ -6358,6 +6547,7 @@ export {
   createBundleFeed,
   createFeatureStore,
   createGwLayer,
+  createLabelPlanCache,
   createNameLayer,
   createWsLog,
   createZoneModeGate,
@@ -6402,9 +6592,11 @@ export {
   junctions,
   labelBox,
   labelItemAllowed,
+  labelItemsSig,
   labelKindAllowed,
   labelPlanFor,
   labelPriorityOf,
+  labelTierOf,
   layerOrderHud,
   loadBundleIndex,
   lodEventTileKey,
@@ -6457,6 +6649,7 @@ export {
   placesPointOf,
   planBeforeOf,
   planDaily,
+  planDriftPx,
   planEnsureRoadOrder,
   planGenNames,
   planStalls,

@@ -80,6 +80,27 @@ export function labelPlanFor(zoom: number): LabelPlan {
   };
 }
 
+/**
+ * 缩放**档位**（重算判据之一）—— 阈值与 `labelPlanFor` **同一份**（11/13/16 就是它的三道坎）：
+ *   0 = z<11（行政名 + 区片名）· 1 = 11~12（+主干路 + 小区名）· 2 = 13~15（+次干路 + 楼名）· 3 = z≥16（上限 26）。
+ * ⚠️ **档内**缩放（如 13.0→15.9）不算跨档：`cap` 与各档闸门都没变，位置由调用方重投影负责
+ *   ⇒ 这正是机主要的「像高德地图那样可以不用重算」：连续缩放不掉进整层重排。
+ */
+export function labelTierOf(zoom: number): number {
+  const z = Number.isFinite(zoom) ? Number(zoom) : 14;   // NaN/undefined 与 `labelPlanFor` 同口径（按近景处理）
+  return z >= 16 ? 3 : z >= 13 ? 2 : z >= 11 ? 1 : 0;
+}
+
+/**
+ * 视野中心**漂移**阈值（占视口**短边**的比例）—— 超过它才重算。
+ *
+ * 为什么是 0.25：避让网格 `gridPx = 48`。0.25×短边在 App 舞台（904×341）≈ 85px ≈ **1.8 个格**、
+ * 在自检视口（800×600）= 150px ≈ 3 格 —— 也就是"标签最多偏离它本该在的位置约两格"时就该重排；
+ * 再放宽下去就会出现机主看得见的两种退化：**该进来的名字一直不进来**、**两个标签压在一起也没人管**。
+ * 取**短边**（不是宽）：两个方向共用一份判据，长边方向更保守（宁可早重算，不许错位）。
+ */
+export const LABEL_PLAN_DRIFT_RATIO = 0.25;
+
 /** 优先级：行政 > 主干道 > 次干道 > 片区/小区 > 楼名（同位置冲突时取高的） */
 export function labelPriorityOf(it: Pick<LabelItem, "kind" | "adminLevel" | "placeType">): number {
   switch (it.kind) {
@@ -218,6 +239,149 @@ export function pickLabels(
     out.shown.push(c);
   }
   return out;
+}
+
+/* ══ 🧠 计划缓存（机主 2026-10-01：「换字动画我想要的是**像高德地图那样可以不用重算**的」）═══════════
+   口径（他的原话拆开）：
+     · **拖动时名字标签只是跟着地图滑** —— 位置由调用方重投影负责（本模块不参与）；
+     · **不要每次松手都整层重算 / 重新规划 / 整层换字** —— 规划结果在这里被缓存；
+     · **只有真需要才增删标签**：① 缩放跨档 ② 视野中心漂移超过视野的一个比例 ③ 候选数据变了。
+   本段是**纯函数**：不碰 DOM、不碰地图；调用方（`wsNameLayer`）负责算 key、重投影与渲染。 */
+
+/** 这一轮**为什么**要（或不要）重算；`reuse` = 命中缓存，**一次规划都不许跑** */
+export type LabelPlanReason = "cold" | "tier" | "drift" | "data" | "viewport" | "reuse";
+
+/**
+ * 规划缓存的 key —— **只有这 8 个数**能决定"要不要重算"（多一个都算过度耦合）。
+ * `spanLng/spanLat` = 视野跨度（度），用来把"中心位移"换算成**屏幕像素**；
+ * `dataSig` = 候选集指纹（见 `labelItemsSig`）。
+ */
+export interface LabelPlanKey {
+  /** 缩放档位（`labelTierOf`） */
+  tier: number;
+  centerLng: number;
+  centerLat: number;
+  spanLng: number;
+  spanLat: number;
+  viewW: number;
+  viewH: number;
+  dataSig: string;
+}
+
+/**
+ * 中心漂移（**像素**）：把经纬度位移按"占**当前**视野跨度的比例 × 视口尺寸"折算，取两轴里大的那个。
+ * 用**当前**（`next`）的跨度换算：判据问的是"标签此刻相对它该在的位置偏了多少屏幕像素"。
+ * 🔴 数不出来（跨度/视口缺失、非有限）时返回 `Infinity` = **宁可重算**：
+ *    「量不出来」绝不能变成「永远复用」（那会让标签选择停在很久以前的一屏上）。
+ */
+export function planDriftPx(base: LabelPlanKey, next: LabelPlanKey): number {
+  const spanLng = Math.abs(Number(next.spanLng));
+  const spanLat = Math.abs(Number(next.spanLat));
+  const w = Number(next.viewW) > 0 ? Number(next.viewW) : 0;
+  const h = Number(next.viewH) > 0 ? Number(next.viewH) : 0;
+  if (!(spanLng > 0) || !(spanLat > 0) || !(w > 0) || !(h > 0)) return Infinity;
+  const dx = Math.abs(Number(next.centerLng) - Number(base.centerLng)) / spanLng * w;
+  const dy = Math.abs(Number(next.centerLat) - Number(base.centerLat)) / spanLat * h;
+  const d = Math.max(dx, dy);
+  return Number.isFinite(d) ? d : Infinity;
+}
+
+/**
+ * 候选集指纹（**顺序无关**；数据变了 ⇒ 指纹必变 ⇒ 重算）。
+ * · 每条键 = `id | kind | name | 经度 | 纬度`（坐标取 5 位小数 ≈ 1.1m：同一栋楼重复算出的质心
+ *   不会因为浮点噪声抖动而"看着像变了"）；
+ * · **先排序再哈希**：`bundleCellsForView` 按"离中心远近"排序 ⇒ 中心一动，**同一批格**的顺序就变；
+ *   不排序的话"中心挪一米"会被判成"数据变了"（缓存永远命不中，等于没做）。排序是安全的：
+ *   `pickLabels` 的产出与输入顺序**无关**（内部有全序排序：优先级 → 名字长度 → id）。
+ * · 分隔符用 `\u0001`（不会出现在名字里）⇒ 不会把 `ab|c` 与 `a|bc` 混成同一条。
+ */
+export function labelItemsSig(items: readonly LabelItem[]): string {
+  const keys: string[] = [];
+  for (const it of items || []) {
+    if (!it) continue;
+    const lng = Number(it.lng), lat = Number(it.lat);
+    keys.push([
+      String(it.id), String(it.kind), String(it.name),
+      (Number.isFinite(lng) ? lng : 0).toFixed(5),
+      (Number.isFinite(lat) ? lat : 0).toFixed(5),
+    ].join("\u0001"));
+  }
+  keys.sort();
+  let h = 2166136261;                                        // FNV-1a 32 位（纯整数运算，跨平台逐位一致）
+  for (const k of keys) {
+    for (let i = 0; i < k.length; i++) { h ^= k.charCodeAt(i); h = Math.imul(h, 16777619); }
+    h ^= 31; h = Math.imul(h, 16777619);                     // 每条之间再混一次（防 "ab"+"c" 与 "a"+"bc" 同哈希）
+  }
+  return `n=${keys.length};h=${(h >>> 0).toString(16)}`;
+}
+
+export interface LabelPlanCacheStats {
+  /** **真跑过规划的次数**（"同一输入连续 N 次 ⇒ 只算一次"看这个数） */
+  computes: number;
+  reuses: number;
+  lastReason: LabelPlanReason;
+  reasons: Record<LabelPlanReason, number>;
+  /** 上一次**真算过**的 key（命中缓存时**不更新** —— 漂移必须从"上次重算那一点"起算，否则永远攒不够） */
+  base: LabelPlanKey | null;
+}
+
+export interface LabelPlanCache<T> {
+  /** 只判"这一轮该不该重算"（O(1)；调用方拿它决定要不要连区名/节点计划一起跳过） */
+  reasonFor(key: LabelPlanKey): LabelPlanReason;
+  /** 命中 ⇒ **不调用 `work`**（`work` 里的投影/避让/上限一次都不跑）；未命中 ⇒ 跑并把结果记下来 */
+  run(key: LabelPlanKey, work: () => T): T;
+  /** 上一次规划的结果（未跑过 = null）。⚠️ **只读**：复用方要改就得自己拷贝，不许改这份 */
+  last(): T | null;
+  stats(): LabelPlanCacheStats;
+  reset(): void;
+}
+
+/**
+ * 造一个规划缓存。判据**只有这一处**（宿主不许再写一份）：
+ *   `cold`（第一次）· `tier`（跨档）· `viewport`（视口尺寸变了）· `data`（候选指纹变了）· `drift`（漂移超阈值）
+ * 🔴 命中时**不刷新基准 key**：把基准换成"当前视野"就等于每步都从零开始量漂移 ⇒ 连续小步平移永远不重算
+ *    （自检里那条"连续 10 次各漂 0.1 屏 ⇒ 必须重算 1 次"就是钉这一条的）。
+ */
+export function createLabelPlanCache<T>(opts: { driftRatio?: number } = {}): LabelPlanCache<T> {
+  const ratio = Number.isFinite(Number(opts.driftRatio)) ? Math.max(0, Number(opts.driftRatio)) : LABEL_PLAN_DRIFT_RATIO;
+  const reasons: Record<LabelPlanReason, number> = { cold: 0, tier: 0, drift: 0, data: 0, viewport: 0, reuse: 0 };
+  let base: LabelPlanKey | null = null;
+  let result: T | null = null;
+  let computes = 0;
+  let reuses = 0;
+  let lastReason: LabelPlanReason = "cold";
+
+  function reasonFor(key: LabelPlanKey): LabelPlanReason {
+    if (!base || result === null) return "cold";
+    if (Number(key.tier) !== Number(base.tier)) return "tier";
+    /* 视口尺寸变了（横竖屏/resize）⇒ 避让网格与"视野比例"全部要重算（±0.5px 容差：dpr 抖动不算变） */
+    if (Math.abs(Number(key.viewW) - Number(base.viewW)) > 0.5 || Math.abs(Number(key.viewH) - Number(base.viewH)) > 0.5) return "viewport";
+    if (String(key.dataSig) !== String(base.dataSig)) return "data";
+    const limit = ratio * Math.min(Number(key.viewW) > 0 ? Number(key.viewW) : 0, Number(key.viewH) > 0 ? Number(key.viewH) : 0);
+    if (!(planDriftPx(base, key) <= limit)) return "drift";   // NaN 也走这条（数不出来 ⇒ 重算）
+    return "reuse";
+  }
+
+  return {
+    reasonFor,
+    run(key, work) {
+      const r = reasonFor(key);
+      lastReason = r;
+      reasons[r]++;
+      if (r === "reuse") { reuses++; return result as T; }
+      const out = work();
+      computes++;
+      base = { ...key };                                       // ← 只有**真算过**才刷新基准（见上面的 🔴）
+      result = out;
+      return out;
+    },
+    last: () => result,
+    stats: () => ({ computes, reuses, lastReason, reasons: { ...reasons }, base: base ? { ...base } : null }),
+    reset() {
+      base = null; result = null; computes = 0; reuses = 0; lastReason = "cold";
+      for (const k of Object.keys(reasons) as LabelPlanReason[]) reasons[k] = 0;
+    },
+  };
 }
 
 /** 🏷 从路网要素里取**有名字**的路（离线包 / live 同款形状）—— 同类只留一条（同类名去重） */

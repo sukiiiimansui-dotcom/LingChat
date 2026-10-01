@@ -19,16 +19,33 @@
     class="ws-drawer"
     :class="{ 'is-narrow': narrow }"
     data-no-gesture
-    @pointerdown.stop
-    @pointermove.stop
-    @pointerup.stop
-    @wheel.stop
-    @dblclick.stop
   >
-    <!-- 窄屏：半透明遮罩（点它 = 关闭）；宽屏不要遮罩（抽屉式，背后地图还能看） -->
-    <div v-if="narrow" class="ws-drawer__mask" @click="emit('close')" />
+    <!-- 窄屏：半透明遮罩（点它 = 关闭）；宽屏不要遮罩（抽屉式，背后地图还能看）。
+         🔴 2026-10-01（机主：「点开面板后地图怎么滑动不了喵！」）：**手势的 `.stop` 从根元素挪到真正的面上**。
+         根 `.ws-drawer` 是 `inset:0`（全屏）—— 原来在它身上 `.stop` 掉 pointer/wheel/dblclick，
+         等于**面板一开，整屏的手势都被吃掉**，地图再也拖不动（宽屏明明写着"背后地图还能看"）。
+         现在：根 `pointer-events:none`（见样式），只有**遮罩**与**面板本体**接事件并 stop ——
+         在面板/遮罩上拖动照样不会拖走地图，在空白处（宽屏左侧）则照常能拖地图。 -->
+    <div
+      v-if="narrow"
+      class="ws-drawer__mask"
+      @click="emit('close')"
+      @pointerdown.stop
+      @pointerup.stop
+      @wheel.stop
+    />
 
-    <aside class="ws-drawer__panel" role="dialog" aria-modal="true" :aria-label="panelTitle">
+    <aside
+      class="ws-drawer__panel"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="panelTitle"
+      @pointerdown.stop
+      @pointermove.stop
+      @pointerup.stop
+      @wheel.stop
+      @dblclick.stop
+    >
       <header class="ws-drawer__head">
         <button
           class="ws-btn ws-btn--ghost"
@@ -480,6 +497,14 @@
     position: absolute;
     inset: 0;
     z-index: 30;
+    /* 🔴 2026-10-01：根元素是 `inset:0`（全屏），**它自己不许接事件** ——
+       否则面板一开，整屏（含左侧地图）的手势都被这层吃掉（机主：「点开面板后地图滑动不了」）。
+       只有遮罩与面板本体 `pointer-events:auto`（见各自规则）。 */
+    pointer-events: none;
+  }
+  .ws-drawer__mask,
+  .ws-drawer__panel {
+    pointer-events: auto;
   }
   .ws-drawer__mask {
     position: absolute;

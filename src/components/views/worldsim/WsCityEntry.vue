@@ -44,7 +44,7 @@
   而这一屏底下是每帧重画的 WebGL 画布 ⇒ 所以下面把两个 blur 令牌**显式置 `none`**。
 -->
 <template>
-  <div class="wsce ws-root theme-mint">
+  <div class="wsce ws-root theme-mint" :class="{ 'wsce--panel': panelOpen }">
     <!-- 🗺 地图常驻（新入口 = 直接进 3D 地图）。
          `chrome=false` 只关掉底栏那三个按钮（「← 回到区县」在没有区县这一级时是死按钮）；
          `tf=false` 关掉交通设施那条接线 —— 它会发一条 `/api/roads`（真机冷查分钟级、必超时），
@@ -441,6 +441,16 @@
   .wsce.ws-root {
     --ws-blur: none;
     --ws-blur-low: none;
+  }
+
+  /* 📱 角色面板开着时，把**悬浮手机的按钮**让开（机主：「UI互相挤压」）。
+     手机的 z-index 是 `--z-ws-phone:60`，比抽屉的 30 高 ⇒ 那个 52×52 的 📱 会压在面板内容上
+     （截图里它正好盖在"快捷动作/送礼物"那一行的右下角）。
+     ⚠️ 只藏**按钮**、不卸载 `WsPhone`：送礼的 toast 渲染处跟手机共用 `phone` 开关
+     （`WsSceneView` 里 `<WsToasts v-if="phone" />`），把它卸了，"好感 +6"那条反馈就看不见了。 */
+  .wsce--panel :deep(.wsphone-fab) {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .wsce__top {

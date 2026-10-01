@@ -385,6 +385,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     readDemGrid,
     tileContours,
   } from "@/composables/wsContour";
+  /* 🎨 MapLibre 的**样式表**注入（`link[data-ws-ml-css]`）：本组件直接 import 引擎，
+     所以必须自己补这一下 —— 少了它 `.maplibregl-marker` 不是 absolute，角色钉子会掉进文档流
+     （2026-10-01 机主报的「人物位置错位」就是它；证据 `~/chk/_mlcss_probe.mjs`）。 */
+  import { injectCss as ensureMlCss } from "@/composables/useWsMapLibre";
 
   /* ══ 🏙🎨 **两页一致的取参**（2026-09-26）—— App 侧不再自己发明「画几栋 / 什么美术」 ══════════
      机主拍板口径：**代拍页和 App 页必须完全一样**（两页共用同一份实现 + 同一套参数）。
@@ -4014,6 +4018,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       return;
     }
     mlMod = maplibregl; // Marker 在它身上，setup 作用域的 syncPins 要用
+    /* 🔴 **引擎和样式表必须成对**（2026-10-01 修机主报的「人物位置错位」）：
+       本组件是**绕过 `useWsMapLibre` 自己 import 引擎**的那条路（为了不碰 package.json），
+       而这条路原来只把**引擎**拿进来了、没拿 **样式表** ⇒ 页面上一条 `.maplibregl-*` 规则都没有：
+         · `.maplibregl-marker{position:absolute}` 缺失 ⇒ 角色钉子**掉进文档流**，
+           它们的 `translate(x,y)` 只是叠在流式位置上（实测 4 个钉子被推到 y 589~958，视口只有 557 高）；
+         · `.maplibregl-canvas-container{position:absolute}` 同样缺失（容器成了 static）。
+       实测脚本：`~/chk/_mlcss_probe.mjs`（`position: "static"` / `markerRule: null` / `mlLinks: []`）。
+       ⇒ 与 composable 那条路**用同一个注入函数**（幂等；`wsmaplibre_selftest.mjs` ⑤ 盯着这条配对）。 */
+    ensureMlCss();
     mapAvailable.value = true;
     if (!alive || !maplibregl?.Map) {
       phase.value = "done";

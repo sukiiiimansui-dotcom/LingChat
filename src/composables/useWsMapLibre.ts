@@ -400,7 +400,19 @@ async function importEngine(): Promise<MlModule> {
   return enginePromise;
 }
 
-function injectCss(): void {
+/**
+ * 把 vendored 的 MapLibre **样式表**注入 `<head>`（幂等，一次就够）。
+ *
+ * 🔴 **2026-10-01 导出给"绕过 composable 的宿主"**：机主报「人物位置错位，疑似没有 z 轴，倾斜地图会错位」——
+ * 实测（`~/chk/_mlcss_probe.mjs`）：App 入口那一屏**根本没有这张样式表**
+ * （`link[data-ws-ml-css]` 不存在、`.maplibregl-marker` 规则 `null`、`getComputedStyle(钉).position === "static"`），
+ * 于是角色钉子**掉进文档流**（它们的 `translate(x,y)` 只是叠在流式位置上）⇒ 人整体被推到屏幕外/错位，
+ * 间距还恰好等于各自高度（`~/chk/_pins_probe.mjs` 量到 4 个钉子在 y 589~958，视口只有 557 高）。
+ * 根因：`WsDistrictMapLibre.vue` 为了不碰 package.json **自己 `import()` 了 `/vendor/maplibre/maplibre-gl.mjs`**，
+ * 而这条路上原来只有引擎、没有样式表（引擎由本文件的 `boot()` 载入时才会 `injectCss()`）。
+ * ⇒ 谁直接载引擎，谁就必须调这个函数（`wsmaplibre_selftest.mjs` ⑤ 盯着这条）。
+ */
+export function injectCss(): void {
   if (cssInjected || typeof document === "undefined") return;
   if (document.querySelector("link[data-ws-ml-css]")) {
     cssInjected = true;

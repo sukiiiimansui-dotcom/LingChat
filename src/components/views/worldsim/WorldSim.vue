@@ -351,12 +351,10 @@
          z-index 用令牌：`--z-ws-phone: 60`，高于叠加层（40）、低于 toast（80）。 -->
     <WsPhone @open-app="onPhoneApp" />
 
-    <!-- toast 容器（快捷动作「即将上线」这类提示必须有可见反应，绝不静默） -->
-    <div class="ws-toasts" aria-live="polite">
-      <div v-for="m in toastItems" :key="m.id" class="ws-toast" :class="`ws-toast--${m.kind}`">
-        {{ m.text }}
-      </div>
-    </div>
+    <!-- toast 容器（快捷动作「即将上线」这类提示必须有可见反应，绝不静默）。
+         渲染收进 `WsToasts.vue`（切片① 2026-10-01）：新入口 `WsSceneView.vue` 也要弹同一条提示
+         （没接进来的手机应用点了要如实说），两处各写一份渲染就是第二份实现。 -->
+    <WsToasts />
 
     <!-- ── 底部动作条（按状态给唯一的主按钮）──────────────────────────── -->
     <footer v-if="showFoot" class="ws-foot">
@@ -444,6 +442,8 @@
   import { wsToast, useWsToast } from "./wsToast";
   /* 📱 没接进来的应用点了说什么 —— **唯一真源**（新宿主 `WsSceneView.vue` 用同一份，切片①）。 */
   import { phoneNotWiredText } from "@/components/views/worldmap/wsPhoneApps";
+  /* 🔔 toast 队列的渲染处：切片① 收成一个组件（新入口也要弹同一条提示，不许各写一份渲染）。 */
+  import WsToasts from "./WsToasts.vue";
   import { districtPinsOf, type PlacedActor, type WsDistrictPin } from "./wsActors";
   import {
     DEFAULT_CELL_M,
@@ -917,7 +917,10 @@
     () => Number(gameStore.currentInteractRoleId ?? gameStore.mainRoleId) || 0
   );
 
-  const { items: toastItems, clear: clearToasts } = useWsToast();
+  /* 🔔 只用它的 `clear`：**渲染**那份收进 `WsToasts.vue` 了（切片①）。
+     留着 clear 是因为这个世界模拟页卸载时要把队列里的提示清干净（否则关掉页面后残留的
+     定时器还会往已卸载的宿主上写）。 */
+  const { clear: clearToasts } = useWsToast();
 
   /** 小区图的手势倍率（WsDistrict 用 defineExpose 露出来）—— 头像层据此抵消缩放 */
   const districtRef = ref<{ gsScale?: number } | null>(null);
@@ -2041,37 +2044,6 @@
     display: flex;
     gap: 0.4em;
     z-index: 5;
-  }
-  .ws-toasts {
-    position: absolute;
-    left: 50%;
-    bottom: 5.2em;
-    transform: translateX(-50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.35em;
-    pointer-events: none;
-    z-index: 40;
-  }
-  .ws-toast {
-    max-width: 22em;
-    padding: 0.35em 0.85em;
-    font-size: 0.94em;
-    line-height: 1.6;
-    border-radius: 999px;
-    background: var(--ws-panel);
-    border: 1px solid var(--ws-border);
-    box-shadow: var(--ws-shadow);
-    backdrop-filter: blur(var(--ws-blur));
-    -webkit-backdrop-filter: blur(var(--ws-blur));
-    animation: ws-fade-up 0.24s ease both;
-  }
-  .ws-toast--ok {
-    border-color: var(--ws-ok);
-  }
-  .ws-toast--warn {
-    border-color: var(--ws-warn);
   }
   .ws-toast--err {
     border-color: var(--ws-err);

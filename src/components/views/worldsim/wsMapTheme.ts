@@ -1418,6 +1418,20 @@ export function themeStyleParts(
   /* ⚠️ 上面两条用 `...theme.sources.x` 展开 —— 它会**连 attribution 一起**带过来。
      别改成"只挑 tiles/maxzoom 手抄"：我第一版就是手抄的，结果**把 Esri 的署名弄丢了**
      （见 `WsMapRasterSource.attribution` 的说明）。自检里有一条专门断言署名在。 */
+  /* 🕳 底图瓦片上限**收口**（2026-10-01 续修，首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3 · **App 那条路**）：
+     App 默认机位 **z=16.4**（`wsScene.cameraDefaults()`），而**有 `baseFade` 的主题**（薄荷 `anime`）
+     到 `to`（**14.8**）底图就**全透明**了 ⇒ 再往上取瓦片是纯白等（实测 z16 每张 330~424ms、8~10 张）。
+     `theme.sources.base.maxzoom` 是**主题 JSON 里的值（16）**，它比淡出终点高 ⇒ 这里按**同一条真源**
+     （`baseMaxZoomFor`）收口：**只收口、不放大**（`min(原值, ceil(baseFade.to))`）。
+     · **没有 `baseFade`**（`night` 等）⇒ **原值一字不动** —— 那套 z19 有真细节，砍了就糊；
+     · **只动 `sources.base.maxzoom` 这一个字段**：`ref` / 图层 / paint / attribution 全部原样
+       （自检里有"除这一个字段外逐字节相同"的影子对拍）；
+     · 🔴 **快照 `/wstheme.json` 不许手改**（代拍页 `ws3dshow.html` 直接读它）⇒ 覆盖只发生在
+       **消费侧**（这里）；改完 JSON 里仍写着 16（自检断言它没被动过）。
+     判据：默认机位下不再出现 z16 底图请求（地图库改成过采样 z15；那一层 opacity 已是 0，画面无差别）。 */
+  const baseCap = baseMaxZoomFor(theme);
+  const baseSrc = sources.base as { maxzoom?: number };
+  if (baseCap !== undefined && (typeof baseSrc.maxzoom !== "number" || baseCap < baseSrc.maxzoom)) baseSrc.maxzoom = baseCap;
   const layers: Array<Record<string, unknown>> = [
     {
       id: "bg",

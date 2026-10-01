@@ -32,9 +32,19 @@
   （地图/导航、打车、公交地铁、日程、通讯、天气六个 app **早就实现了**，只缺一个挂载点）
   ⇒ 现在传 `:phone="!guideOpen"`（引导 sheet 开着时不挂，免得挡着那张 sheet）。
   手机本体一行没改（`worldmap/WsPhone.vue`），挂载点与兜底提示在 `WsSceneView.vue`。
+
+  ## 🆕 2026-10-01（当晚第二轮）· 把**世界模拟的皮肤**挂回来（根元素加 `ws-root theme-mint` + import CSS）
+  机主报「点了角色**连个UI都没有，字直接在地图上显示**」⇒ 实测：**这一屏根本没有 `--ws-*` 令牌表**。
+  旧入口 `WorldSim.vue` 干了两件事：`import "@/assets/styles/worldsim.css"` + 根元素
+  `class="ws-root <主题类>"`（令牌定义在 `.ws-root.theme-*` 下）；2026-09-26 换成这一屏时**两件都没做**
+  ⇒ 部署包里 `--ws-panel:` **一处定义都没有、只有引用** ⇒ 抽屉/卡片的底色、边框、圆角、排版全丢。
+  与当天早上那个「MapLibre 样式表没加载」是同一类病：**换入口漏挂全局依赖**。
+  ⚠️ 但**不能只 import 就完事**：皮肤里 `--ws-blur` 是 `0px`（薄荷）/ `10px`（玻璃），而
+  `blur(0px)` **不是"没有模糊"** —— 只要不是 `none`，浏览器就每帧读回底下像素（`worldsim.css:198-201`），
+  而这一屏底下是每帧重画的 WebGL 画布 ⇒ 所以下面把两个 blur 令牌**显式置 `none`**。
 -->
 <template>
-  <div class="wsce">
+  <div class="wsce ws-root theme-mint">
     <!-- 🗺 地图常驻（新入口 = 直接进 3D 地图）。
          `chrome=false` 只关掉底栏那三个按钮（「← 回到区县」在没有区县这一级时是死按钮）；
          `tf=false` 关掉交通设施那条接线 —— 它会发一条 `/api/roads`（真机冷查分钟级、必超时），
@@ -131,6 +141,12 @@
   /* 🔌 **把场景推给 Rust**（`scene` 在不在 = `world_sim_enabled()` 的判据）：契约与"退出必须推 null"
      都在 `wsRuntimePush.ts` 头部注释里（唯一真源），这里只调。 */
   import { clearRuntime, pushRuntime } from "./wsRuntimePush";
+  /* 🎨 **世界模拟的皮肤**（令牌表 + `.ws-*` 组件的公共样式）。
+     ⚠️ 它原来**只有旧入口 `WorldSim.vue` import** ⇒ 换成这一屏之后一直没加载，
+     结果 `--ws-panel` 这类令牌全空、抽屉看起来就是"一堆字铺在地图上"（机主 2026-10-01 报的）。
+     `worldsim.css` 里的令牌定义在 `.ws-root.theme-*` 下 ⇒ 根元素也必须挂 `ws-root`（见模板）。
+     它是**全局皮肤**（不是 scoped）：这一屏内的 `.ws-btn` / `.ws-card` / 抽屉等一律受益。 */
+  import "@/assets/styles/worldsim.css";
 
   const router = useRouter();
   /* `te` = 词条在不在（`actionLabel` 要用：缺词条就退回 action 原样，不编词） */
@@ -411,6 +427,20 @@
     z-index: 50;
     overflow: hidden;
     background: #0a0f16;
+  }
+
+  /* 🔴 **整屏地图上禁毛玻璃**（红线 R1 的同一口径，见 `assets/styles/worldsim.css:198-201`）：
+     `backdrop-filter` 的值只要**不是 `none`**，浏览器就给这个元素建一层 backdrop 层、
+     **每一帧把底下的像素读回来重合成一次**（`blur(0px)` 也算）。这一屏底下是**每帧都在重画的
+     WebGL 地图画布**，所以卡片/遮罩上的每一层毛玻璃都是纯亏。
+     皮肤（刚 import 的那份）里 `--ws-blur` 是 `0px`（薄荷）/ `10px`（玻璃）⇒ 直接挂上会**新开**一批
+     `blur(0px)` 的 backdrop 层；这里把两个令牌都置 `none`：`blur(none)` 在计算值阶段非法 ⇒ 退回 `none`
+     ⇒ 一处关掉这一屏里**所有** `blur(var(--ws-blur*))`。
+     全屏遮罩那份兜底 1px（`WsCharPanel.vue` 的 `.ws-drawer__mask`）另有显式 `none` ——
+     它就是机主 2026-10-01「点了角色直接卡死」的现场（窄屏实测 rAF 最差 1025ms）。 */
+  .wsce.ws-root {
+    --ws-blur: none;
+    --ws-blur-low: none;
   }
 
   .wsce__top {

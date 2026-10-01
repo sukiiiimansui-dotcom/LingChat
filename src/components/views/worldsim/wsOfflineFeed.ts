@@ -679,6 +679,17 @@ export interface BundleFeed<T> {
   facts(): BundleFeedFacts;
   /** 视野需要的格（自检/面板回证用；不取数） */
   plan(): { keys: string[]; wanted: number; capped: boolean } | null;
+  /**
+   * 🗂 **这一场那条 `index.json` 读取**（= `refresh()` 内部用的**同一条在飞 promise**，已读则直接回缓存）。
+   *
+   * 给谁用：需要"先看索引再决定取不取数"的宿主（`wsGwLayer`：格尺寸对拍 / 缺色 / 格键计划都要在取数**之前**
+   * 拿到索引）。**宿主必须用它**，不许自己再 `loadBundleIndex()` 一遍 ——
+   * 2026-10-01 性能审计 F6 实测：`gwbundle/index.json` 被取两次，就是"宿主一条 + 管道一条"造成的。
+   *
+   * ⚠️ **纯读取入口**：不改判词、不改去重、不改目录候选顺序（仍是 `dirsOf(spec)` 逐个试、第一个读出
+   * `cells` 的目录为"活目录"）。不使用它的宿主行为**逐字节不变**。
+   */
+  ensureIndex(): Promise<BundleIndexFact>;
 }
 
 export interface BundleFeedOptions<T> {
@@ -1115,6 +1126,14 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     },
     facts: counters,
     plan: planned,
+    /* 🔴 **F6（2026-10-01 性能审计 §5.5）**：把**本管道自己那条**索引 promise 露出来。
+       宿主（`wsGwLayer`）原来**自己直连** `loadBundleIndex(fetchCell, "gw")`，而 `refresh()` 里
+       还有一条 —— 两条各自独立 ⇒ 实测 `gwbundle/index.json` **被取了两次**（@7028.1 / @7130.1）。
+       这里**只增加一个入口**：拿到的就是 `ensureIndex()` 内部**同一个** `indexPromise`（谁先到谁发起、
+       后来的 await 同一份），**判词 / 去重口径 / 缓存策略 / 目录候选顺序一律没动** ——
+       不调它的宿主看到的字节与本条改动之前**完全相同**。
+       ⚠️ 不许拿它当"预取"：它等于"把本来就要读的那一次提前到期"，不是多读一次。 */
+    ensureIndex,
   };
 }
 

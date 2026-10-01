@@ -41,7 +41,6 @@ import {
   createBundleFeed,
   gwIdOf,
   gwPointOf,
-  loadBundleIndex,
 } from "./wsOfflineFeed";
 import { type FeatureStore, bundleCellsForView, createFeatureStore, metersBetween } from "./wsFeatureStore";
 
@@ -614,7 +613,15 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
          并且**兜一道 null 检查**（拿不到就如实写"数不出来"，绝不 deref）。 */
       if (!indexFact) {
         if (!indexInflight) {
-          indexInflight = loadBundleIndex(host.fetchCell, "gw").then((f) => {
+          /* 🔴 **F6（2026-10-01 性能审计 §5.5）：索引只取一次。**
+             原来这里直连 `loadBundleIndex(host.fetchCell, "gw")`，而下面 `feed.refresh()` 内部
+             还会自己读一条（`ensureIndex`）⇒ 实测 `gwbundle/index.json` **被取了两遍**
+             （@7028.1 与 @7130.1，同一份文件、同一个 URL）。
+             现在改成走 **feed 自己那条在飞 promise**（`feed.ensureIndex()`）：谁先到谁发起，
+             后面的（含 `feed.refresh()`）await 同一份 ⇒ 一个 URL 一次。
+             ⚠️ 语义没动：目录候选顺序、`cellSize` 对拍、三态判词都还是 feed 里那一份；
+             这里只是**不再另起一条读取路径**。 */
+          indexInflight = feed.ensureIndex().then((f) => {
             indexFact = f;
             return f;
           });

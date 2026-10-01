@@ -27,6 +27,17 @@
   "重新引导"被"城市数据"取代）· 未读角标 · 小地图 · 缩放按钮 · 「选别的地方」·
   DataV 的 34 个区划与「进入」按钮。
 
+  ## 🆕 2026-10-01（当晚第三轮 · 切片③）· 「🏠 我的家 + 今日三件事」常驻浮块
+  机主那一轮的「继续开发（好看，稳定，可玩）」要的日常循环（动森式 M1-1/M1-2）**原型页早就跑通了**
+  （`public/ws3dshow.html:4436-4531`），但 App 侧**零消费者**（`grep -rn "wsDaily" src/` 只有
+  `wsPageVendor.ts:65` 的 re-export）⇒ 这一片把它接进来：浮块 `WsDailyHud.vue` +
+  落盘/跨天 `wsDailyStore.ts` + **第三条离线管道 places**（`WsDistrictMapLibre.vue`，家要从真名片区里挑）。
+  · 事件走**新开的 `daily-ready`**（`WsSceneView` 在 `tf` 早退**之前**分流）—— 新入口是 `:tf="false"`，
+    复用 `scene-ready` 那条 handler 会**永远收不到且不报错**（施工图 §5.1 的最大一个坑）。
+  · 家/三件事/跨天**规则一行都不在本文件**：全在共享真源 `wsDaily.ts`（PR 门禁 C1）。
+  · 体感边界（如实）：片区内**没有**离线包覆盖的名点 ⇒ 家会写「数不出来（原因）」，**不编一个家**；
+    冷缓存下这是正常态（places 是新管道，包外机位永远选不到家）。
+
   ## 🆕 2026-10-01（切片①）· `WsPhone` 悬浮手机**挂回来了**
   当初去掉它的理由是"老入口在小区级本来也不显示它"；但它是这一屏**唯一能点开的玩法入口**
   （地图/导航、打车、公交地铁、日程、通讯、天气六个 app **早就实现了**，只缺一个挂载点）
@@ -61,6 +72,23 @@
       :phone="!guideOpen"
       :markers="districtPins"
       @pick-actor="onPickActor"
+      @daily-ready="onDailyReady"
+    />
+
+    <!-- 🏠📋 切片③（2026-10-01）·「我的家 + 今日三件事」常驻浮块（M1-1 那一轮的日常循环搬进 App）。
+         逻辑一行不在模板里：家/三件事/跨天全在共享真源 `wsDaily.ts`，落盘与编排在 `wsDailyStore.ts`；
+         本页只把「地图中心 + 片区名 + 居民 + 设施名」喂进去，再把结果与勾选接回来。
+         ⚠️ 它**不是**第四个常驻块：同屏常驻浮块 = 顶栏（1）+ 未装城市 chip（1，装过就不出现）+ 本块（1）
+            ≤ 3（`UI-DESIGN-SPEC.md:108`）；引导 sheet 开着时不挂（与顶栏同一个开关）。 -->
+    <WsDailyHud
+      v-if="!guideOpen"
+      :verdict="dailyVerdict"
+      :home="dailyHomeName"
+      :why="dailyWhy"
+      :tasks="dailyTasks"
+      :day="dailyDay"
+      :note="dailyNote"
+      @toggle="onDailyToggle"
     />
 
     <!-- ── 顶栏（一行三件；引导开着时让位给 sheet）───────────────────────── -->
@@ -122,6 +150,12 @@
      它内部自己带 `WsGiftSheet`（送礼弹层），所以页面**不** import 那个弹层 —— 页面侧只有
      "开面板 / 接住 @gift" 两件事。 */
   import WsCharPanel from "./WsCharPanel.vue";
+  /* 🏠📋 切片③（2026-10-01）·「我的家 + 今日三件事」：
+     浮块本体 = `WsDailyHud.vue`（只渲染）；落盘/跨天/编排 = `wsDailyStore.ts`（`now`/`storage` 双注入）；
+     **规则**（怎么挑家、怎么排三件事、怎么跨天重置）= 共享真源 `wsDaily.ts`，本页一行都不写（PR 门禁 C1）。 */
+  import WsDailyHud from "./WsDailyHud.vue";
+  import { createDailyStore } from "./wsDailyStore";
+  import type { DailyTask, PlacePoint, Resident, Spot } from "./wsDaily";
   import { type InstalledCity, cityStore } from "./wsCityStore";
   /* 🧑‍🤝‍🧑 **地图上的人**（M1-1）：装配逻辑全在既有的 `useWsActors` 里（**不新造第二套**）；
      钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
@@ -308,6 +342,168 @@
     wsToast(`「去${to}」本片还没接`, "info");
   }
 
+  /* ══ 🏠📋 切片③（2026-10-01）·「我的家 + 今日三件事」─────────────────────────────
+     本页只做**接线**（规则全在共享真源 `wsDaily.ts`、落盘编排在 `wsDailyStore.ts`）：
+       ① 接住 `WsSceneView` 的 `@daily-ready`（地图 + 片区名取值器）—— 那条事件**走的是 tf 早退之前**的分流，
+          否则新入口（`:tf="false"`）永远收不到（见 `WsSceneView.onSceneReady` 的第一行）；
+       ② 把「地图中心 + 片区名 + 居民 + 设施名」喂给 store，build 一次，然后**有界重试**（`kickDaily`）；
+       ③ 把结果同步给 `WsDailyHud`，勾选交回 store。
+     🔴 **App 里没有任何 `window.__*` 出口**（本文件 `:378-381` 那条规矩，原型的 `__WSD__`/`__WS_PLACES_N__`
+        一个都不搬）：断言只读 DOM 契约（`[data-ws-daily*]`）与 `localStorage["wsDaily.v1"]`。 */
+  const daily = createDailyStore();
+
+  /** 地图（只为 `getCenter()` 与 `moveend` 两个用途；图层/相机一概不经手） */
+  type DailyMapLike = {
+    getCenter?: () => { lng: number; lat: number };
+    on?: (ev: string, cb: () => void) => void;
+  };
+  let dailyMap: DailyMapLike | null = null;
+  /** 片区名取值器（地图组件 → 薄壳 → 这里，**原样转上来**的那个）；null = 还没接上 */
+  let dailyPlaces: (() => readonly PlacePoint[]) | null = null;
+
+  const dailyHomeName = ref("");
+  const dailyVerdict = ref(daily.verdict());
+  const dailyWhy = ref("");
+  const dailyTasks = ref<readonly DailyTask[]>([]);
+  const dailyDay = ref(daily.day());
+  const dailyNote = ref("");
+
+  /** store 不是响应式的（普通对象）⇒ 每次 build/toggle 之后把结果**照抄**进 refs（不新造第二份状态） */
+  function syncDaily(): void {
+    dailyHomeName.value = daily.home()?.name || "";
+    dailyVerdict.value = daily.verdict();
+    dailyWhy.value = daily.why();
+    dailyTasks.value = daily.tasks();
+    dailyDay.value = daily.day();
+    dailyNote.value = daily.note();
+  }
+
+  /** 地图中心（拿不到 ⇒ `null`：判词会写「没有地图中心 ⇒ 数不出来」，**不编一个位置**） */
+  function dailyCenter(): { lng: number; lat: number } | null {
+    try {
+      const c = dailyMap?.getCenter?.();
+      if (!c) return null;
+      const lng = Number(c.lng);
+      const lat = Number(c.lat);
+      return Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 居民 = 地图上的人**去掉自己**（`isMe`）。
+   * 一个 id/名字都不写死（角色库多一个角色就自动在内）；「跟自己打个招呼」不是一件事，所以排除玩家。
+   */
+  function dailyResidents(): Resident[] {
+    const out: Resident[] = [];
+    for (const a of actors.placed.value || []) {
+      if (!a || a.isMe || !a.id || !a.name) continue;
+      out.push({ id: a.id, name: a.name });
+    }
+    return out;
+  }
+
+  /**
+   * 设施/地点 = **只用真名**：`actors.placed[*].place`（日程里的设施名，`useWsActors.ts:361/376`）。
+   * 🔴 **不许**搬原型页写死的 `SPOT`（`ws3dshow.html:401` 那个「重庆·渝中区」）—— 那会变成编地点。
+   * 去重后**按名字排序**：`planDaily` 用 `dayHash % spots.length` 选一个 ⇒ 顺序变了当天就会换地方
+   * （`actors.placed` 的顺序会随名单刷新变），排序是"同一天不抖"的一部分。
+   */
+  function dailySpots(): Spot[] {
+    const seen = new Map<string, string>();
+    for (const a of actors.placed.value || []) {
+      const nm = String(a?.place || "").trim();
+      if (!nm || seen.has(nm)) continue;
+      seen.set(nm, `fac:${nm}`);
+    }
+    return [...seen.entries()]
+      .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0))
+      .map(([name, id]) => ({ id, name }));
+  }
+
+  /** 一次编排：读盘 → 挑家 → 排三件事 → 落盘（全在 store 里；这里只喂输入） */
+  function rebuildDaily(): void {
+    daily.build({
+      places: dailyPlaces ? dailyPlaces() : [],
+      center: dailyCenter(),
+      residents: dailyResidents(),
+      spots: dailySpots(),
+    });
+    syncDaily();
+  }
+
+  /**
+   * 有界重试（**照 `kickActors` 同一形状**：最多 20 拍 × 500ms ≈ 10s、成功即停、**不常驻轮询**）。
+   *
+   * 为什么需要：地图中心 / 片区名（离线格要一批批取）/ 角色装配 三条通路谁慢半拍，
+   * "三件事"就会**静默**退回占位（机器上看到的只是"没有名字的三件事"）—— 本文件 `:168-170` 记过这个病。
+   * 每一拍只是**纯函数重算**（不取数、不发请求），所以代价可忽略。
+   * 停的条件：**有家（或确实量到"这一带没有有名片区"）且有人**；到 20 拍也停，并把当时的实话显示出来。
+   */
+  const DAILY_TICKS_MAX = 20;
+  let dailyTimer = 0;
+  let dailyTick = 0;
+  function kickDaily(): void {
+    const stop = (): void => {
+      if (dailyTimer) {
+        window.clearTimeout(dailyTimer);
+        dailyTimer = 0;
+      }
+    };
+    const step = (): void => {
+      dailyTimer = 0;
+      rebuildDaily();
+      let placesN = 0;
+      try {
+        placesN = dailyPlaces ? dailyPlaces().length : 0;
+      } catch {
+        placesN = 0;
+      }
+      /* "量到了"（家挑到了，或片区名确实到了 ⇒ pickHome 的判词已成事实）**且**有人 ⇒ 停 */
+      const settled = !!daily.home() || placesN > 0;
+      if (settled && dailyResidents().length > 0) {
+        stop();
+        return;
+      }
+      if (dailyTick >= DAILY_TICKS_MAX) {
+        stop();
+        return;
+      }
+      dailyTick += 1;
+      dailyTimer = window.setTimeout(step, 500);
+    };
+    stop();
+    dailyTick = 0;
+    step();
+  }
+
+  /**
+   * 地图与片区名到位（`WsSceneView` 转上来的 `daily-ready`）。
+   * `moveend` ⇒ 重挑"家"（原型页的第二个触发点，`ws3dshow.html:4888`）：视野变了，最近的有名片区可能变了；
+   * 已勾选的完成态由 `planDaily` 按 id 对齐继承（跨天/换任务才会重置）⇒ 拖动地图**不会**清空今天。
+   */
+  function onDailyReady(p: { map: unknown; places?: () => readonly PlacePoint[] }): void {
+    dailyPlaces = typeof p?.places === "function" ? p.places : null;
+    const m = (p?.map || null) as DailyMapLike | null;
+    /* 只在新地图实例上挂一次（重挂地图时旧监听随旧实例消失 —— 与 `WsSceneView.onSceneReady` 同款守卫） */
+    if (m && m !== dailyMap) {
+      try {
+        m.on?.("moveend", () => rebuildDaily());
+      } catch {
+        /* 挂不上不影响首屏（`daily-ready` 会随下一次 `scene-ready` 再来） */
+      }
+    }
+    dailyMap = m;
+    kickDaily();
+  }
+
+  /** 勾选一件事：真源 `toggleTask` + 落盘都在 store 里，本页只转发 */
+  function onDailyToggle(id: string, done: boolean): void {
+    daily.toggle(id, done);
+    syncDaily();
+  }
+
   /** 当前在用哪座城市的数据（HUD 之外唯一的一处状态显示） */
   const cityLabel = computed(() => {
     if (!installed.value.length) return t("worldsim.city.noCityTag");
@@ -414,6 +610,11 @@
   );
 
   onBeforeUnmount(() => {
+    /* 🏠 三件事的有界重试也要收掉（否则组件卸载后还会有最多 10s 的空转定时器） */
+    if (dailyTimer) {
+      window.clearTimeout(dailyTimer);
+      dailyTimer = 0;
+    }
     void clearRuntime();
   });
 </script>

@@ -91,6 +91,8 @@
   import { ref } from "vue";
   import WsDistrictMapLibre from "./WsDistrictMapLibre.vue";
   import type { WsDistrictPin } from "./wsActors";
+  /* 🏠 切片③：只借**类型**（「我的家」的取名点形状）—— 规则在共享真源 `wsDaily.ts`，这里不实现 */
+  import type { PlacePoint } from "./wsDaily";
   import {
     drawTransport,
     buildTransportFor,
@@ -172,7 +174,22 @@
    * 不加任何逻辑 —— 开面板/好感/送礼全在宿主 `WsCityEntry.vue`，面板本体在 `WsCharPanel.vue`
    * （PR 门禁 C1：谁都不许在这里再写一份）。
    */
-  const emit = defineEmits<{ (e: "back"): void; (e: "done"): void; (e: "pick-actor", id: string): void }>();
+  const emit = defineEmits<{
+    (e: "back"): void;
+    (e: "done"): void;
+    (e: "pick-actor", id: string): void;
+    /**
+     * 🏠 **切片③（2026-10-01）·「我的家 + 今日三件事」那条路**：新增事件，`back`/`done` 一个字没动。
+     *
+     * 为什么必须**新开一条**而不是复用 `scene-ready`：本组件的 `onSceneReady` 在**最前面**就有
+     * `if (!props.tf) return;`（那条早退是刻意的 —— 交通设施接线第一件事就是一条 `/api/roads`），
+     * 而新入口 `WsCityEntry.vue` 传的正是 `:tf="false"` ⇒ 把三件事挂在那个 handler 的**后半段**
+     * 会**永远收不到、也不报错**（表现只是"HUD 一直空着"）。所以本组件在早退**之前**分流一条：
+     * `emit("daily-ready", …)`（见 `onSceneReady` 的第一行），`tf` 是真是假都照发。
+     * 老宿主 `WorldSim.vue` 不监听这个事件 ⇒ 对它零影响。
+     */
+    (e: "daily-ready", p: { map: unknown; places?: () => readonly PlacePoint[] }): void;
+  }>();
 
   /**
    * 📱 手机上**没接进来**的应用被点了（`WsPhone.vue:164` 那条 `emit("open-app", key)` 路径）⇒ 如实提示。
@@ -258,7 +275,16 @@
    * ⚠️ 入参形状**照抄那个组件的 emit 声明**（`{ map: unknown; buildings: { features?: unknown[] } | null }`）
    * —— 不在这里另写一份类型：两份形状描述迟早漂移（`BldFeature` 只在那个模块里定义）。
    */
-  function onSceneReady(p: { map: unknown; buildings: { features?: unknown[] } | null }): void {
+  function onSceneReady(p: {
+    map: unknown;
+    buildings: { features?: unknown[] } | null;
+    places?: () => readonly PlacePoint[];
+  }): void {
+    /* 🏠 切片③：**先把三件事那条路分出去**，再谈交通设施。
+       🔴 顺序是硬要求：下面的 `if (!props.tf) return;` 是新入口（`:tf="false"`）的必经之路，
+       把这一行放到它后面 = 新入口**永远收不到 `daily-ready`**，而且**不报错**（HUD 一直空着）。
+       本行只是"转发"：地图与取值器**原样**交给宿主，这里不读它们、更不解析（薄壳纪律）。 */
+    emit("daily-ready", { map: p?.map ?? null, places: p?.places });
     /* 🚫 `tf=false`（新入口的默认）：**在这里就退**——不挂监听、不取路网、不画设施。
        放在最前面是有意的：这条接线的第一件事就是 `worldMapApi.roads()`，
        晚一步退就等于还是发了那条请求。 */

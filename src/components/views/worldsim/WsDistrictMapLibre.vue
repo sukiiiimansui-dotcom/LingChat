@@ -113,6 +113,7 @@
         :class="{ 'is-me': p.isMe, 'is-aff': p.affinity }"
         :style="{ left: p.left, top: p.top }"
         :title="p.name + (p.affinity ? '（特地来找你）' : '')"
+        @click.stop="emit('pick-actor', p.id)"
         >{{ (p.name || '我').slice(0, 1) }}</i
       >
     </div>
@@ -389,6 +390,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      所以必须自己补这一下 —— 少了它 `.maplibregl-marker` 不是 absolute，角色钉子会掉进文档流
      （2026-10-01 机主报的「人物位置错位」就是它；证据 `~/chk/_mlcss_probe.mjs`）。 */
   import { injectCss as ensureMlCss } from "@/composables/useWsMapLibre";
+  /* 🧑 切片②（2026-10-01）：面板的开关状态（模块级单例，与宿主 `WsCityEntry.vue` 读的是同一份）。
+     这里只为了**一句早退**：面板开着时点地图空处先关面板（见 `onMapClick`），
+     **不新开第二条 click 监听**、也不在这里开面板/画面板（PR 门禁 C1）。 */
+  import { useWsPanel } from "@/composables/useWsPanel";
 
   /* ══ 🏙🎨 **两页一致的取参**（2026-09-26）—— App 侧不再自己发明「画几栋 / 什么美术」 ══════════
      机主拍板口径：**代拍页和 App 页必须完全一样**（两页共用同一份实现 + 同一套参数）。
@@ -530,6 +535,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   const emit = defineEmits<{
     (e: "scene-ready", payload: { map: unknown; buildings: { features?: unknown[] } | null }): void;
+    /**
+     * 🧑 **点了地图上的某个人**（切片②，2026-10-01）：只把钉子 id 交出去，由宿主开角色面板。
+     *
+     * 为什么在这里只"报点"、不自己开面板：面板与送礼弹层的**唯一实现**在 `WsCharPanel.vue`
+     * （PR 门禁 C1：App 里不许第二份实现）⇒ 地图组件不认面板、不碰路由、不读好感。
+     * `id` 就是 `WsDistrictPin.id`（真角色 `r<roleId>` / 玩家 `me` / 名单兜底 `roster:<folder>`）；
+     * **兜底钉子反查不到真 actor**，宿主必须给一句 toast（不许静默，见 `WsCityEntry.onPickActor`）。
+     */
+    (e: "pick-actor", id: string): void;
   }>();
 
   const host = ref<HTMLElement | null>(null);
@@ -2213,8 +2227,36 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     return [lng, lat];
   }
 
-  /** 造一个"人"的 DOM（用行内样式：scoped CSS 管不到运行时 new 出来的元素） */
+  /**
+   * 造一个"人"的 DOM（用行内样式：scoped CSS 管不到运行时 new 出来的元素）。
+   *
+   * 🎯 切片②（2026-10-01）：**命中区 ≥44×44，视觉尺寸一点不变**——
+   *   外面套一个 44×44 的**透明**盒（`hit`），原来那个 26/30px 的圆照旧居中。
+   *   手法是项目既有的"透明外扩"（HUD 的 `.ws-dml__theme::after{inset:-12px -6px}`）；
+   *   `min-width/height:44px` 那套（`WsCityEntry.vue:423-424`）会把底板也放大，这里不能用。
+   *   ⚠️ 交给 `Marker` 的**必须是外层这个 `hit`**：`anchor:"center"` 与探针读的
+   *   `.maplibregl-marker`（数量 / `title`）都落在它上面。
+   */
   function pinEl(a: WsDistrictPin): HTMLElement {
+    const hit = document.createElement("div");
+    hit.style.cssText = [
+      "width:44px",
+      "height:44px",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "background:transparent",
+      "pointer-events:auto",
+    ].join(";");
+    /* 钉子 id 落在**命中区**上（这是产品自己的 DOM 契约，不是调试出口）：
+       自动化点外层任意一处都算点到这个人。 */
+    hit.dataset.wsPinId = a.id;
+    hit.addEventListener("click", (ev) => {
+      /* 🔴 `stopPropagation()` 不能省：同一个点击会冒泡到地图容器 ⇒ 顺带把楼卡也弹出来
+         （`onMapClick` 把任意落点当"点楼"，还有 `nearestDrawnBuilding` 兜底）。 */
+      ev.stopPropagation();
+      emit("pick-actor", a.id);
+    });
     const el = document.createElement("div");
     const size = a.isMe ? 30 : 26;
     el.style.cssText = [
@@ -2242,13 +2284,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     } else {
       el.textContent = (a.name || "我").slice(0, 1);
     }
+    hit.appendChild(el);
     /* 标题里如实带出"位置是怎么来的"：吸附到路上（`road`）和网格示意位置，
-       精度完全不是一回事 —— 以后排查"怎么站到江里了"就靠这一行。 */
-    el.title =
+       精度完全不是一回事 —— 以后排查"怎么站到江里了"就靠这一行。
+       （挂在 `hit` 上 = 挂钩子的那个元素上，`syncPins` 更新 title 时也是它。） */
+    hit.title =
       `${a.name || "我"}` +
       (a.posSource === "affinity" ? "（特地来找你）" : "") +
       (a.posSource === "road" ? "（在路上）" : a.posSource === "facility" ? "（在设施旁）" : "");
-    return el;
+    return hit;
   }
 
   /**
@@ -3464,8 +3508,20 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     openCard({ kind: "building", building: { id: p.buildingId, lng: p.lng, lat: p.lat, properties: { name: p.name, osm_id: p.buildingId } } });
   }
 
+  /** 🧑 切片②（2026-10-01）：面板开关（模块级单例）—— 本组件**只用它判断"面板开着吗"**
+      （见 `onMapClick` 开头那句早退）。开面板/画面板/好感全在宿主的 `WsCharPanel.vue` 那条路上。 */
+  const panel = useWsPanel();
+
   /** 点**楼体**（地图上的挤出层）—— 与点标签弹**同一张卡** */
   function onMapClick(e: { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number }; features?: unknown[] }): void {
+    /* 🧑 切片②（2026-10-01）：角色面板开着时，点地图**先关面板**再 return ——
+       否则点空处会顺手在面板背后弹一张楼卡（面板没关、楼卡还盖上来）。
+       纪律：**只加这一句早退，不新开第二条 click 监听**（地图级 click 仍然只有 `m.on("click")` 一处）。
+       面板状态读的是模块级单例（`useWsPanel`），与本组件同一次会话里是同一份。 */
+    if (panel.open.value) {
+      panel.closePanel();
+      return;
+    }
     try {
       const m = map as unknown as { queryRenderedFeatures?: (p: unknown, o?: unknown) => Array<{ properties?: Record<string, unknown>; id?: unknown }> } | null;
       const pt = e?.point;
@@ -4454,6 +4510,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     background: #cfe8f5;
     border: 2px solid rgba(255, 255, 255, 0.85);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    /* 🎯 切片②（2026-10-01）：**必须显式 `auto`** —— 容器 `.ws-dml__pins` 是
+       `pointer-events: none`（为了不挡地图拖动，见上面那条），不写这句 ⇒
+       模板里的 `@click` 永远不触发（表现就是"点了没反应"）。 */
+    pointer-events: auto;
+  }
+  /* 🎯 切片②：命中区撑到 ≥44×44（24px 的圆四周各外扩 **12px** 的**透明**层），**视觉尺寸不变**。
+     手法照抄 HUD 的 `.ws-dml__theme::after{inset:-12px -6px}`；`pointer-events` 是继承属性，
+     透明层跟着父级 `auto`，点在它上面照样算点在这颗 `<i>` 上（`is-me` 的 28px 更大，只会更宽）。
+     ⚠️ 为什么是 -12 而不是 -10：`::after` 的 `inset` 是相对**父级 padding box** 的，
+     而这颗 `<i>` 有 `border: 2px`。若全局或局部哪天变成 `box-sizing: border-box`，
+     24px 里含掉 2×2px 边框 ⇒ padding box 只剩 20px，`-10px` 就只有 40px（不达标）；
+     `-12px` 在两种口径下分别是 **44**（border-box）/ **48**（content-box），都够。
+     `position:absolute` 让它脱离 flex 布局 ⇒ 不会把那个圆挤歪。 */
+  .ws-dml__pin::after {
+    content: "";
+    position: absolute;
+    inset: -12px;
   }
   .ws-dml__pin.is-me {
     background: #79d9ff;

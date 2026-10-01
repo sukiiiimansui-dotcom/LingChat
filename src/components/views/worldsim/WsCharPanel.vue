@@ -206,8 +206,10 @@
             <button class="ws-btn" type="button" @click="quick('hi')">
               👋 {{ t("worldsim.action.hi") }}
             </button>
-            <!-- 可玩性切片 A：好感是**世界的状态**，不是装饰 —— 送礼会让它涨，面板立刻可见 -->
-            <div class="ws-aff" :title="`好感 ${affinity} / 100`">
+            <!-- 可玩性切片 A：好感是**世界的状态**，不是装饰 —— 送礼会让它涨，面板立刻可见。
+                 切片②（2026-10-01）：给这一格加 `data-ws-affinity`（**DOM 契约**，供探针/自动化
+                 读数值；App 里不许塞 `window.__*` 调试出口）—— 只有这一个属性，逻辑一行不动。 -->
+            <div class="ws-aff" :title="`好感 ${affinity} / 100`" :data-ws-affinity="affinity ?? 0">
               <span class="ws-aff__k">好感</span>
               <span class="ws-aff__v">{{ affinity ?? 0 }}</span>
               <span class="ws-aff__r">{{ affinityRank || "陌生" }}</span>

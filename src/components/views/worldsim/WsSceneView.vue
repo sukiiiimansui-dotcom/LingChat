@@ -38,6 +38,7 @@
       :loc-source="locSource"
       :world-time="worldTime"
       @scene-ready="onSceneReady"
+      @pick-actor="emit('pick-actor', $event)"
     />
 
     <!-- 🚌 交通设施那一行（代拍页 `?tf=1` 的 HUD 位置）。
@@ -164,7 +165,14 @@
     { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, phone: false }
   );
 
-  const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
+  /**
+   * 🧑 切片②（2026-10-01）· `pick-actor`：地图上点了某个人（钉子 id）。
+   *
+   * 本组件是**薄壳**：只做**原样透传**（`@pick-actor="emit('pick-actor', $event)"`），
+   * 不加任何逻辑 —— 开面板/好感/送礼全在宿主 `WsCityEntry.vue`，面板本体在 `WsCharPanel.vue`
+   * （PR 门禁 C1：谁都不许在这里再写一份）。
+   */
+  const emit = defineEmits<{ (e: "back"): void; (e: "done"): void; (e: "pick-actor", id: string): void }>();
 
   /**
    * 📱 手机上**没接进来**的应用被点了（`WsPhone.vue:164` 那条 `emit("open-app", key)` 路径）⇒ 如实提示。

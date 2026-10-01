@@ -50,6 +50,7 @@
       :tf="false"
       :phone="!guideOpen"
       :markers="districtPins"
+      @pick-actor="onPickActor"
     />
 
     <!-- ── 顶栏（一行三件；引导开着时让位给 sheet）───────────────────────── -->
@@ -71,6 +72,33 @@
 
     <!-- ── 首次引导（一张 sheet；装过就不出现）────────────────────────── -->
     <WsCityGuide v-if="guideOpen" :store="store" @enter="closeGuide" />
+
+    <!-- 🧑 角色面板（切片②，2026-10-01）：点地图上的人 → **同一张** `WsCharPanel`。
+         · **复用**，不重画：页面里没有第二份抽屉/送礼弹层（PR 门禁 C1）。送礼弹层由面板
+           内部就地打开（`WsCharPanel.quick('gift')`），页面**不需要**也**不许**再开一个。
+         · `v-if` 用面板自己的开关 ⇒ 关着时 DOM **不存在**（不是 `display:none`；
+           `.ws-drawer` 计数就是验收口径）。
+         · `:data` 传的是**本文件早就建好的那一份** `useWsActors()`（它没有模块级缓存 ——
+           再建一份，面板里的日程/设施就会跟地图上的人对不上）。
+         · `:actor` 由 `panelTargetId` 从 `actors.placed` 反查（不新造第二份名单）。 -->
+    <WsCharPanel
+      v-if="panelOpen"
+      :actor="currentActor"
+      :data="actors"
+      :area-text="areaLabel"
+      :narrow="panelNarrow"
+      :open="panelOpen"
+      :portrait-open="panelPortrait"
+      :current-role-id="currentRoleId"
+      :affinity="currentAffinity"
+      :affinity-rank="currentAffinityRank"
+      @close="closePanel"
+      @portrait="togglePortrait"
+      @goto-chat="onGotoChat"
+      @quick="onQuick"
+      @gift="onGift"
+      @direct="onDirect"
+    />
   </div>
 </template>
 
@@ -80,17 +108,33 @@
   import { useI18n } from "vue-i18n";
   import WsSceneView from "./WsSceneView.vue";
   import WsCityGuide from "./WsCityGuide.vue";
+  /* 🧑 切片②（2026-10-01）：角色面板 = **同一个** `WsCharPanel.vue`（PR 门禁 C1：不许第二份实现）。
+     它内部自己带 `WsGiftSheet`（送礼弹层），所以页面**不** import 那个弹层 —— 页面侧只有
+     "开面板 / 接住 @gift" 两件事。 */
+  import WsCharPanel from "./WsCharPanel.vue";
   import { type InstalledCity, cityStore } from "./wsCityStore";
   /* 🧑‍🤝‍🧑 **地图上的人**（M1-1）：装配逻辑全在既有的 `useWsActors` 里（**不新造第二套**）；
      钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
   import { useWsActors } from "@/composables/useWsActors";
-  import { districtPinsOf, type WsDistrictPin } from "./wsActors";
+  import { districtPinsOf, type PlacedActor, type WsDistrictPin } from "./wsActors";
+  /* 🧑 面板的开关/选中（模块级单例，与地图组件 `WsDistrictMapLibre.vue` 读的是同一份）。 */
+  import { useWsPanel } from "@/composables/useWsPanel";
+  /* 💗 好感的**唯一真源**：`+6` 是 `wsRelation.ts` 的 `SOURCE_WEIGHT.gift`，
+     页面只说"谁被送了什么"，**不写死任何数字**。 */
+  import { rankOf as relRankOf, useWsRelation } from "./wsRelation";
+  /* 🔔 提示：push 进 `wsToast` 的模块级队列，由 `WsSceneView` 挂的 `WsToasts` 渲染
+     （本页 `:phone="!guideOpen"` ⇒ 同一条开关；不自己再挂一份渲染处）。 */
+  import { wsToast } from "./wsToast";
+  /* 🎮 角色库/当前对话角色（`gameStore`）—— 与孤儿页**同一个 store**（那边的 import 在 `WorldSim.vue:481`；
+     `currentRoleId` 的算法照抄 `WorldSim.vue:916-918`，见下面）。 */
+  import { useGameStore } from "@/stores/modules/game";
   /* 🔌 **把场景推给 Rust**（`scene` 在不在 = `world_sim_enabled()` 的判据）：契约与"退出必须推 null"
      都在 `wsRuntimePush.ts` 头部注释里（唯一真源），这里只调。 */
   import { clearRuntime, pushRuntime } from "./wsRuntimePush";
 
   const router = useRouter();
-  const { t } = useI18n();
+  /* `te` = 词条在不在（`actionLabel` 要用：缺词条就退回 action 原样，不编词） */
+  const { t, te } = useI18n();
   const store = cityStore();
 
   /** 已经装好的城市（`[]` = 确实一个都没装 —— 这是"已量"，不是"读不到"） */
@@ -116,6 +160,138 @@
   const districtPins = computed<WsDistrictPin[]>(() =>
     districtPinsOf(actors.placed.value || [], actors.schedule.value?.characters || [], 28)
   );
+  /* ══ 🧑 切片②（2026-10-01）：点人 → 角色面板 → 送礼 → 好感 ────────────────────
+     本片只做**接线**，三件事各有唯一真源，页面一行都不重写：
+       · 面板本体与送礼弹层 → `WsCharPanel.vue`（含内部的 `WsGiftSheet.vue`）；
+       · 「谁被选中」的 UI 状态 → `useWsPanel()`（模块级单例；地图组件也读它来判断"面板开着吗"）；
+       · 好感的数与档位 → `useWsRelation()`（`+6` 来自 `SOURCE_WEIGHT.gift`，**页面不写死数字**）。 */
+  const wsPanel = useWsPanel();
+  /* 模板里只对**顶层** ref 自动解包 ⇒ 从对象里解出来的这几个必须单独拿（嵌套的不会解）。 */
+  const {
+    open: panelOpen,
+    targetId: panelTargetId,
+    portraitOpen: panelPortrait,
+    narrow: panelNarrow,
+    closePanel,
+    togglePortrait,
+  } = wsPanel;
+
+  const relation = useWsRelation();
+
+  /**
+   * 面板当前对着的那个人 —— 从**本文件早就有的那一份** `actors.placed` 反查。
+   *
+   * 🔴 为什么不再 `useWsActors()` 一次：它**没有模块级缓存**（`useWsActors.ts:159-175`），
+   * 每次调用都是新的一份状态 ⇒ 面板里的日程/设施会与地图上的人对不上（而地图读的是第一份）。
+   * 玩家自己（`targetId === "me"`）也在 `placed` 里（id 固定 `me`）⇒ 这条反查一并覆盖。
+   */
+  const currentActor = computed<PlacedActor | null>(
+    () => actors.placed.value.find((a) => a.id === panelTargetId.value) || null
+  );
+  /** 面板上那一格好感（页面只读真源，不做任何加权/衰减） */
+  /* 🔴 为什么要一个 `affinityTick`：`wsRelation.ts` **一行 vue 都不 import** —— 它的 store 是
+     **普通对象**（不是 `ref`/`reactive`），`gift()` 只是原地换掉 `store.rows` ⇒
+     **computed 收不到通知**。不 bump 这一下，送完礼面板上那一格会停在送礼前的数字
+     （"好感 +6 并立刻显示"就不成立）。这是本片为"非响应式真源"打的**唯一**一个补丁，
+     真源本身一行没改（`wsRelation.ts` 仍是唯一真源，数字仍由 `SOURCE_WEIGHT` 决定）。 */
+  const affinityTick = ref(0);
+  const currentAffinity = computed(() => {
+    void affinityTick.value; // 显式依赖：送礼后自增 ⇒ 强制重算（见上）
+    return currentActor.value ? relation.affinityOf(currentActor.value.name) : 0;
+  });
+  /** 好感档位文案：调真源的 `rankOf()`（面板只负责显示，判据不重复实现） */
+  const currentAffinityRank = computed(() => relRankOf(currentAffinity.value));
+
+  /** 当前正在对话的角色 id（「去找他聊聊」据此决定直连还是先确认）—— 照抄孤儿页 `WorldSim.vue:916-918` */
+  const gameStore = useGameStore();
+  const currentRoleId = computed(() => Number(gameStore.currentInteractRoleId ?? gameStore.mainRoleId) || 0);
+
+  /**
+   * 地图上点了某个人（`WsSceneView` 透传上来的 `pick-actor`）⇒ 开面板。
+   * 开法照抄孤儿页 `WorldSim.vue:1145-1147`（`wsPanel.openPanel(a.isMe ? "me" : a.id)`）。
+   *
+   * ⚠️ `roster:` 开头的兜底钉子（`districtPinsOf` 在"一个真角色都没装配上"时散点推的）
+   *    在 `actors.placed` 里**反查不到真 actor** ⇒ 必须如实说一句，**不许静默**
+   *    （点了没反应是机主最烦的一种）。
+   */
+  function onPickActor(id: string): void {
+    const a = actors.placed.value.find((x) => x.id === id);
+    if (!a) {
+      wsToast("这个人还没装配到地图上（名单兜底钉子），面板开不了", "info");
+      return;
+    }
+    wsPanel.openPanel(a.isMe ? "me" : a.id);
+  }
+
+  /**
+   * 送礼**真的送出去了**（面板内部的 `WsGiftSheet` 已经扣背包 + 记账）。
+   * 这一段照抄孤儿页 `WorldSim.vue:1061-1070`：页面只办**好感**这件事 ——
+   * `relation.gift(role)` 内部按 `SOURCE_WEIGHT.gift`（= 6）加，**页面不写死数字**。
+   */
+  function onGift(p: { name: string; icon: string; role: string }): void {
+    const role = String(p?.role || "").trim();
+    if (!role) {
+      // 拿不到角色名就不假装记上了（宁可少做，不可编数据）
+      wsToast("这个角色还没有绑定的角色库 ID，好感没能记下", "info");
+      return;
+    }
+    const row = relation.gift(role);
+    affinityTick.value += 1; // 真源不是响应式的 ⇒ 手动通知面板重算（见 currentAffinity 的注释）
+    wsToast(
+      `${p.icon || "🎁"} ${p.name || "礼物"} 已送出 · ${role} 好感 ${row.affinity}（${relRankOf(row.affinity)}）`,
+      "info"
+    );
+  }
+
+  /**
+   * 「去找他聊聊」（面板 `@goto-chat` 与快捷动作 `hi` 走同一条）—— 照抄孤儿页 `WorldSim.vue:1162-1175`。
+   *
+   * ⚠️ 这里**故意不调用** `select_character`：Rust 侧它会 `init_game_status()`，把当前对话整份重置 ——
+   * 从地图上点一下就清空聊天记录是绝不能做的破坏性操作 ⇒ 已在聊就直跳，换人先确认。
+   */
+  function onGotoChat(a: PlacedActor): void {
+    if (!a?.roleId) {
+      wsToast(t("worldsim.chat.noRole"), "warn");
+      return;
+    }
+    if (a.roleId === currentRoleId.value) {
+      void router.push("/chat");
+      return;
+    }
+    const ok = window.confirm(t("worldsim.chat.switchWarn", { name: a.name }));
+    if (ok) void router.push("/chat");
+  }
+
+  /** 动作名（给"还没接"的提示用）：词条在就用词条，缺了退回 action 原样（不编词） */
+  function actionLabel(action: string): string {
+    const k = `worldsim.action.${action}`;
+    return te(k) ? t(k) : action;
+  }
+
+  /**
+   * 快捷动作分派（只接**本片真接了**的那两条，其余如实说"还没接"）。
+   *
+   *   · 打招呼   → `onGotoChat`（跳 /chat，零副作用）
+   *   · 送礼物   → 面板内部**已经就地打开** `WsGiftSheet`（`WsCharPanel.quick()`）⇒ 这里什么都不做，
+   *                 真正的记账/好感在 `@gift` 那条路（`onGift`）。
+   *                 ⚠️ 孤儿页这里是个空 `return` + "需求未澄清"的注释（`WorldSim.vue:1187-1200`）——
+   *                 需求已经落地，**别照抄那句空转**，也**不许在页面重画一份弹层**。
+   *   · 约他出门 / 其它 → 那条线（`world_map_trip_start`）不在本片 ⇒ 如实 toast 一句「本片还没接」。
+   */
+  function onQuick(action: string, a: PlacedActor): void {
+    if (action === "hi") {
+      onGotoChat(a);
+      return;
+    }
+    if (action === "gift") return; // 面板自己开了送礼弹层（本函数不是它的入口）
+    wsToast(`「${actionLabel(action)}」本片还没接`, "info");
+  }
+
+  /** 面板的「指挥他去某地」（P4-4）：要 `world_map_trip_start` + 干预开关那条线 —— 本片没接，如实说 */
+  function onDirect(to: string): void {
+    wsToast(`「去${to}」本片还没接`, "info");
+  }
+
   /** 当前在用哪座城市的数据（HUD 之外唯一的一处状态显示） */
   const cityLabel = computed(() => {
     if (!installed.value.length) return t("worldsim.city.noCityTag");

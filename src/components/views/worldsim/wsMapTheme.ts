@@ -543,6 +543,28 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
   return WS_MAP_THEMES[k] || WS_MAP_THEMES[WS_MAP_THEME_DEFAULT];
 }
 
+/**
+ * 底图瓦片源的 **`maxzoom` 上限** —— `wsMapStyle.styleFor(theme, { baseMaxZoom })` 的**唯一真源**。
+ *
+ * 🔴 为什么需要它（2026-10-01 首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3）：
+ * 有 `baseFade` 的主题到 `to`（薄荷/暗色 **14.8**）底图就**完全透明**了，而 App 默认机位
+ * 是 **z=16.4**（`wsScene.ts` 的 `cameraDefaults()`）⇒ 底图 source 写死 `maxzoom: 20`
+ * 会让它在 z16 上**白取 8~10 张 Esri 瓦片**（实测每张 330~424ms，画出来全透明 = 纯等）。
+ * ⇒ 收口到**淡出终点**：`Math.ceil(to)`。
+ *   ⚠️ 圆整方向是"**多要一档**"：宁可多取一张 z15，也不许在还没淡完时就停止取瓦片
+ *      —— 那会在 `to` 附近露出一块没底图的地面（比慢更难看）。
+ *
+ * 🔴 **没有 `baseFade` 的主题返回 `undefined`**（`null` = 全程不淡出，暗色/对照组用它）——
+ * ⇒ 调用方（`styleFor`）保持原有的 **20**，那类主题真的要瓦片看东西，砍了就糊。
+ *
+ * 纯函数（零 IO、零副作用）⇒ Node 自检可直连（`ws_base_maxzoom_selftest.mjs`）。
+ */
+export function baseMaxZoomFor(theme: { baseFade?: { from: number; to: number } | null } | null | undefined): number | undefined {
+  const f = theme && theme.baseFade;
+  if (!f || typeof f.to !== "number" || !Number.isFinite(f.to)) return undefined;
+  return Math.ceil(f.to);
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
  * 🗺 候选底图（页面 `?bm=<id>`）—— **不给参数 = 逐字段与原来一样**
  * ══════════════════════════════════════════════════════════════════════════

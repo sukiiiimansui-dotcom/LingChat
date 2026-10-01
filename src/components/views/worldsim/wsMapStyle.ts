@@ -66,7 +66,7 @@ export const ML_HI_LINE = "ws-ml-hi-line";
  * 🔴 这里**不能出现 `glyphs` / `sprite`**（坑②：`glyphs: undefined` 会让样式校验失败，
  *  `load` 永不触发、页面零报错）。数据 source 与图层在 `load` 之后加（换级要 `setData`）。
  */
-export function styleFor(theme: GeoTheme, opts: { basemap?: boolean } = {}): Record<string, unknown> {
+export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom?: number } = {}): Record<string, unknown> {
   /* `GeoTheme` 里**没有** dark 字段（只有颜色），所以从海色反推 —— 两个常量 Theme 的 sea 不同，
      这是最不容易漂的判据（写死一份"当前主题"会与 setDark 分叉）。 */
   const dark = theme.sea === THEME_DARK.sea;
@@ -86,17 +86,22 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean } = {}): Rec
       type: "raster",
       tiles: basemapTiles(dark),
       tileSize: 256,
-      /* ⚠️ 2026-10-01 首屏审计（`BLUEPRINT-FIRSTPAINT.md` 方案 3）发现的**白等**，**还没修**：
+      /* ⚠️ 2026-10-01 首屏审计（`BLUEPRINT-FIRSTPAINT.md` 方案 3）发现的**白等**，已修：
          有 `baseFade` 的主题到 `to`（薄荷/暗色 14.8）就完全透明，而 App 默认机位 z=16.4
-         ⇒ 这里 `maxzoom: 20` 会让它白取 8~10 张 z16 瓦片（每张 330~424ms，画出来全透明）。
-         想按 `ceil(baseFade.to)` 收口，但 **`GeoTheme`（本函数的入参类型）上没有 `baseFade`**
-         —— 它在 `WsMapTheme`/`WsMapLookSpec`（`wsMapTheme.ts:149/597`），也就是主题 JSON 的
-         `themes[*].baseFade`（实测 `public/wstheme.json` 的 `night` 是 `null`、其他主题才有值）。
-         ⇒ 正确改法是给 `styleFor`/`styleForStage` 加一个**可选** `opts.baseMaxZoom`，由调用方
-         （`useWsMapLibre.ts:890` 那条，它手里有主题 JSON 的 parts）把淡出终点传进来；
-         没有 `baseFade` 的主题（如对照组 `gray`）必须**保持 20** —— 它们真的要瓦片。
-         **别直接写死数字**，也别把这个类型错误用 `as any` 糊过去。 */
-      maxzoom: 20,
+         ⇒ `maxzoom: 20` 会让它白取 8~10 张 z16 瓦片（每张 330~424ms，画出来全透明）。
+         `GeoTheme`（本函数的入参类型）上**没有** `baseFade` —— 它在 `WsMapTheme`/`WsMapLookSpec`
+         （`wsMapTheme.ts:149/597`，也就是主题 JSON 的 `themes[*].baseFade`：`night` 是 `null`、
+         `anime` 才有值）⇒ 所以收口值由**调用方**用可选的 `opts.baseMaxZoom` 递进来
+         （`useWsMapLibre.ts` 建图那条：`stageThemeParts()` → `wsMapTheme.baseMaxZoomFor()`）。
+
+         🔴 纪律（两条都别破坏）：
+         · **默认行为逐字不变** —— 不传 `baseMaxZoom`（`undefined`）时 `maxzoom` 仍是 `20`：
+           `?? 20` 只对 `null`/`undefined` 兜底，任何数字（含 0）都原样生效；
+           `styleForStage` 的回退路与老调用点因此一个字节都不动；
+         · **有淡出才收口** —— 没有 `baseFade` 的主题（对照组 `gray`、主题解析失败的回退路）
+           必须**保持 20**：它们真的要瓦片，砍了就糊。别在这里写死一个数字，
+           也别把 `GeoTheme` 缺字段这件事用 `as any` 糊过去。 */
+      maxzoom: opts.baseMaxZoom ?? 20,
       attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS User Community",
     };
     /* 底图在背景之上、我们自己的数据层之下（数据层不能被底图盖住） */
@@ -246,9 +251,13 @@ export const WS_LOD_STYLE_SOURCE = "wsMapStyle.ts/wsScene.lodPlan";
  */
 export function styleForStage(
   theme: GeoTheme,
-  opts: { basemap?: boolean; themeId?: "anime" | "night"; low?: boolean; nightFadeMs?: number; parts?: { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>> } | null } = {}
+  opts: { basemap?: boolean; themeId?: "anime" | "night"; low?: boolean; nightFadeMs?: number; baseMaxZoom?: number; parts?: { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>> } | null } = {}
 ): Record<string, unknown> {
-  const base = styleFor(theme, opts); // 数据层与兜底都用它（**它本身一字未改**）
+  /* ⚠️ `baseMaxZoom` **原样透传**给 `styleFor`（本函数自己不用它）：
+     底图 source 是 `styleFor` 建的，兜底路（`parts` 为 null 时 `return {...base}`）与正常路
+     都必须拿到同一个上限 —— 只传一半就会出现"换主题后上限不一样"的幽灵差异。
+     不传（`undefined`）⇒ `styleFor` 里 `?? 20` ⇒ 与改动前逐字一致。 */
+  const base = styleFor(theme, { basemap: opts.basemap, baseMaxZoom: opts.baseMaxZoom });
   const parts = opts.parts;
   if (!parts || !parts.layers || !parts.layers.length) {
     return { ...base, __styleSource: "wsMapStyle.ts/fallback(styleFor)" }; // 兜底如实标注

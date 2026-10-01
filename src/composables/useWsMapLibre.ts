@@ -42,7 +42,7 @@
 import { getCurrentInstance, isRef, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import { geoJson } from "@/api/services/worldMap";
 /* 🎨 对齐清单 B：舞台外观改吃主题（与小区级同一份真源） */
-import { themeStyleParts, wsMapTheme } from "@/components/views/worldsim/wsMapTheme";
+import { baseMaxZoomFor, themeStyleParts, wsMapTheme } from "@/components/views/worldsim/wsMapTheme";
 import { parseFeatures, THEME_DARK, THEME_LIGHT, type GeoFeat, type GeoTheme } from "@/components/views/worldsim/wsGeoMap";
 /* 🔴 2026-09-22：`ML_*` 常量组与 `styleFor`/`layersFor`/`paintUpdatesFor` **已搬至 `wsMapStyle.ts`**
    （唯一真源）—— **勿再本地实现**。
@@ -554,15 +554,20 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
     return el;
   }
 
-  /** 取主题的 style 零件（`themeStyleParts`）；**任何失败都返回 null** ⇒ 调用方回退 `styleFor` */
-  function stageThemeParts(): { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>> } | null {
+  /** 取主题的 style 零件（`themeStyleParts`）；**任何失败都返回 null** ⇒ 调用方回退 `styleFor`
+   *
+   *  `baseMaxZoom` = 底图瓦片上限，**只对有 `baseFade` 的主题有值**（`ceil(baseFade.to)`）：
+   *  那些主题到 `to` 底图就全透明了，再往高 zoom 取瓦片是纯白等（首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3）。
+   *  没有 `baseFade`（`null`）⇒ `undefined` ⇒ `styleFor` 保持 20。真源：`wsMapTheme.baseMaxZoomFor`。 */
+  function stageThemeParts(): { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>>; baseMaxZoom?: number } | null {
     try {
       const id = (typeof localStorage !== "undefined" ? (localStorage.getItem("wsm:v1:mapTheme") as "anime" | "night" | null) : null) || "anime";
       const t = wsMapTheme(id === "night" ? "night" : "anime");
       const p = themeStyleParts(t, false, 0);
       /* 如实标注来源（面板那行读它 —— 换源有没有生效，页面上直接看得到） */
       info.value.styleSource = `${WS_MAP_STYLE_SOURCE}/theme(${id})`;
-      return { sky: (p as { sky?: unknown }).sky, sources: (p as { sources: Record<string, unknown> }).sources, layers: (p as { layers: Array<Record<string, unknown>> }).layers };
+      /* 🕳 与 sources/layers **同一次解析**里给出（另起一次调用会把主题再解析一遍） */
+      return { sky: (p as { sky?: unknown }).sky, sources: (p as { sources: Record<string, unknown> }).sources, layers: (p as { layers: Array<Record<string, unknown>> }).layers, baseMaxZoom: baseMaxZoomFor(t) };
     } catch {
       info.value.styleSource = `${WS_MAP_STYLE_SOURCE}/fallback(styleFor)`;
       return null;
@@ -883,6 +888,8 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
          ⇒ 两件事：① **等容器真有尺寸**再建图（有上限，量不到也照建，不卡死）；
                    ② 建图后**主动补 resize**（延迟几次，覆盖"加载态收起 / 方向切换 / 分屏"）。 */
       await waitForBox(el);
+      /* 🕳 主题零件只解析**一次**（`stageThemeParts()` 顺带给出底图上限 —— 两次调用会重复解析主题） */
+      const stageParts = stageThemeParts();
       const m = new mod.Map({
         container: el,
         /* 🎨 对齐清单 B（区县级换源，机主选 A）：外观吃 `wsMapTheme.themeStyleParts`（与小区级同一份真源），
@@ -891,7 +898,11 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
           basemap: baseOk,
           themeId: (typeof localStorage !== "undefined" ? (localStorage.getItem("wsm:v1:mapTheme") as "anime" | "night" | null) : null) || "anime",
           low: false,
-          parts: stageThemeParts(),
+          parts: stageParts,
+          /* 🕳 首屏审计方案 3：**有 `baseFade` 的主题才收口**底图瓦片上限到淡出终点
+             （薄荷/暗色 `to=14.8` ⇒ 15；App 默认机位 z=16.4 时原来会白取 8~10 张 z16 瓦片）。
+             没有 `baseFade`（`night`、对照组 `gray`）或主题解析失败 ⇒ `undefined` ⇒ 保持 20。 */
+          baseMaxZoom: stageParts?.baseMaxZoom,
         }),
         // 初始相机只是占位：真正的 center/zoom 由第一批要素的 bbox 用 fitBounds 决定
         center: [104, 35],

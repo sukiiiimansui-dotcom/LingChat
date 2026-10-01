@@ -485,11 +485,17 @@
     position: absolute;
     inset: 0;
     background: rgba(20, 30, 32, 0.42);
-    /* P5-6：写死的 blur(1px) 低端机档关不掉。改用 `--ws-blur-low`（只在 `.ws-perf-low` 定义）
-       → 默认档与玻璃档都取兜底 1px（逐字节不变），只有低端机档才置 0。
-       ⚠️ 别写成 `var(--ws-blur, 1px)`：那会把默认档改成 0px、玻璃档改成 10px（实测过）。 */
-    backdrop-filter: blur(var(--ws-blur-low, 1px));
-    -webkit-backdrop-filter: blur(var(--ws-blur-low, 1px));
+    /* 🔴 2026-10-01（真机「点了角色直接卡死」的调查结论）：**全屏遮罩上不许有 backdrop-filter**。
+       项目自己在 `assets/styles/worldsim.css:198-201` 写过这条规矩：值只要**不是 `none`**，
+       浏览器就给这个元素建一层 backdrop 层、**每一帧把底下的像素读回来重合成一次**
+       （`blur(0px)` 同样算）。而这一层：① 是全屏（窄屏实测 500×772，真机还要乘 DPR）
+       ② 盖在一张**每帧都在重画的 WebGL 地图画布**上 ⇒ 代价最大。
+       实测（`~/chk/_freeze_probe.mjs --narrow`，同一台机器）：窄屏有遮罩 rAF 最差 **1025ms**、
+       心跳断 **1033ms**、脚本 CPU 0.45s→**1.29s**；宽屏（`narrow=false`、无遮罩）上面这些都没有。
+       原来这里用 `blur(var(--ws-blur-low, 1px))`，而 `--ws-blur-low` 只在 `.ws-perf-low` 里定义、
+       这一屏又没有 `.ws-root` ⇒ **永远吃 1px 兜底** ⇒ 永远每帧读回。改成显式 `none`。 */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     animation: ws-fade-in 0.18s ease both;
   }
   /* 宽屏：右侧抽屉（不遮地图，方便边看边点别人） */

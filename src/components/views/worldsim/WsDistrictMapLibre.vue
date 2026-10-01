@@ -347,9 +347,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      串行取格 + 每格独立超时 + 并进仓库 + 一次 setData。判词/决策/半径仍从 `wsScene` 来。 */
   import {
     BLD_STORE_CAP,
+    /* 🏘 第三条管道（片区名，切片③ 2026-10-01）的预算常量 + 取值器：**与代拍页同一份模块** */
+    PLACES_STORE_CAP,
     ROADS_STORE_CAP,
     type BundleBuildingFeature,
     type BundleFeedFacts,
+    type BundlePlaceFeature,
     type BundleRoadFeature,
     type BundleView,
     bldIdOf,
@@ -359,10 +362,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     createBundleFeed,
     fetchWithTimeout,
     loadBundleIndex,
+    placesIdOf,
+    placesPointOf,
     roadsIdOf,
     roadsPointOf,
     roadsVerdictState,
   } from "./wsOfflineFeed";
+  /* 🏠 「我的家」要的形状（`{name,lng,lat,kind}`）——**只有类型**从共享真源 `wsDaily.ts` 取，
+     规则（怎么挑家/怎么排三件事）一行都不在这边（PR 门禁 C1）。 */
+  import type { PlacePoint } from "./wsDaily";
   /* 🌊🌳 **真水系 / 绿地**（机主选的"自己画"）：格键 / 取数 / 归一化 / 配色 / 层序 / 署名 / 判词
      的**唯一真源**。代拍页那段内联的 `refreshGw()` 与这里**共用同一份** —— App 宿主里
      **一行规则都不写**（PR 门禁 C1 的红线：宿主不许有第二份实现），这里只接线。 */
@@ -547,7 +555,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    *    它自己**不**修改相机/层序以外的东西。
    */
   const emit = defineEmits<{
-    (e: "scene-ready", payload: { map: unknown; buildings: { features?: unknown[] } | null }): void;
+    /**
+     * ⚠️ `places` 是**切片③ 新增的可选字段**（2026-10-01）：一个**只读取值器**，
+     * 返回当前片区名仓库里的有名点（`{name,lng,lat,kind}`，给「我的家」挑选用）。
+     * 旧监听者（连 `buildings` 都不读的那些）**逐字不变** —— 多一个键不影响任何既有行为；
+     * 取值器而不是数组：名字点会随视野一批批到（`placesFlush`），快照比"某一刻的数组"更准。
+     */
+    (
+      e: "scene-ready",
+      payload: { map: unknown; buildings: { features?: unknown[] } | null; places?: () => readonly PlacePoint[] }
+    ): void;
     /**
      * 🧑 **点了地图上的某个人**（切片②，2026-10-01）：只把钉子 id 交出去，由宿主开角色面板。
      *
@@ -3157,6 +3174,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      去重键与代表点取法由 `wsOfflineFeed` 给（一处定义、自检与 App 同一份）。 */
   const bldStore = createFeatureStore<BundleBuildingFeature>({ cap: BLD_STORE_CAP, idOf: bldIdOf, pointOf: bldPointOf });
   const roadsStore = createFeatureStore<BundleRoadFeature>({ cap: ROADS_STORE_CAP, idOf: roadsIdOf, pointOf: roadsPointOf });
+  /* 🏘 **片区名仓库**（切片③，2026-10-01）：只给「我的家」取名点用（**不进地图、不画**）。
+     cap / 去重键 / 代表点全取共享真源（与代拍页 `placesStoreOf()`（`ws3dshow.html:3485-3496`）同一份模块）。 */
+  const placesStore = createFeatureStore<BundlePlaceFeature>({ cap: PLACES_STORE_CAP, idOf: placesIdOf, pointOf: placesPointOf });
 
   /** 浏览器取数（每格**独立超时**；AbortController 在 `wsOfflineFeed.fetchWithTimeout` 里） */
   const fetchCell = (url: string, timeoutMs: number) =>
@@ -3354,6 +3374,46 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     const m = map as BldMapLike | null;
     return m ? viewHalf(m) : null;
   }
+
+  /* ══ 🏘🏠 **第三条离线管道：片区名**（切片③，2026-10-01）══════════════════════════════════
+     给谁用：「我的家」= 离地图中心最近的**有名片区**（`wsDaily.pickHome`）。
+     为什么必须新接一条：App 原来只有 `bld`（`:3341`）与 `roads`（`:3353`）两条管道
+     ⇒ 宿主**拿不到任何片区名**，而原型页的 `wsPlaces()`（`ws3dshow.html:4446-4468`）读的是
+     **页面自己的** `placesStoreOf()`（`:3485-3496`）⇒ 那段内联 JS 在 App 里没有对应物，不能照抄。
+     规则一行不写：目录 / 格尺寸 / 每轮格数 / 上限全是 `wsOfflineFeed` 的 SPECS 里那份（`kind: "places"`）。
+     ⚠️ **不进地图**（`flush` 只重建快照）：名字层自己那条路负责画区名
+        （`wsNameLayer.ts:486` 取的是同一批格）⇒ 同格会被取两次 —— 页面是**同款**双取
+        （`:3485-3496` + `wsNameLayer.ts:486`），属已知口径，不是本片新引入的退化（施工图 §5.6）。 */
+  let placePoints: readonly PlacePoint[] = [];
+  /** 仓库并集 → 「我的家」要的取名点。**只留有名有坐标的**（没名字的一条都不留：绝不编） */
+  function placesFlush(_why: string): void {
+    const out: PlacePoint[] = [];
+    for (const f of placesStore.features()) {
+      const name = String(f?.n || "").trim();
+      /* 形状交给共享取值器（`placesPointOf`）——原型页那条"按 GeoJSON 读 ⇒ 永远空数组"的坑
+         （它自己的注释记着）在 App 这侧同样不许重演 */
+      const pt = placesPointOf(f);
+      if (!name || !pt) continue;
+      out.push({ name, lng: pt[0], lat: pt[1], kind: f?.k || null });
+    }
+    placePoints = out;
+  }
+  /** 交给外层的取值器（`scene-ready` 的新可选字段）：**只读**，外层不许改 */
+  function placesGetter(): readonly PlacePoint[] {
+    return placePoints;
+  }
+  const placesFeed = createBundleFeed<BundlePlaceFeature>({
+    kind: "places",
+    store: placesStore,
+    view: bundleView,
+    fetchCell,
+    flush: placesFlush,
+    /* 与路同式（视野外一圈）：片区名稀且小，留宽一点，来回挪地图别反复重取 */
+    retainRadiusM: () => Math.max(3000, Math.round((bundleViewHalfMeters() || 0) * 2.5)),
+    onError: (why) => {
+      stats.note = stats.note ? `${stats.note} · ${why}` : why;
+    },
+  });
 
   /* 🌊🌳 **水/绿地**：与代拍页**同一个模块、同一组参数**（格尺寸 / 取数 / 归一化 / 配色 / 层序 /
      署名 / 判词全在共享真源 `wsGwLayer` 里）。这里只给宿主自己的四样：**地图 / 视野 / 主题 / 取数**。
@@ -3775,6 +3835,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (z >= ROAD_MIN_ZOOM) await roadsFeed.refresh(why);
     /* 🌊🌳 水/绿地**不设 zoom 闸门**（远景下它才最有用；判词由真源回填 `stats.gwVerdict`） */
     await gwLayer.refresh(why);
+    /* 🏘 片区名**也不设 zoom 闸门**（切片③）：它是「我的家」的取名点，而家是**一进来就要有**的
+       —— 开页若停在远景（z<13.5），有闸门就永远挑不到家（表现是 HUD 一直"数不出来"）。
+       点很稀、包很小 ⇒ 代价可忽略；取到就进 `placesStore`，由 `placesFlush` 变成取值器的快照。 */
+    await placesFeed.refresh(why);
     scheduleBundleHud();
   }
 
@@ -4530,7 +4594,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       void loadBundleAttribution();
       /* 🎬 场景就绪 ⇒ 把地图与**真楼栋**交给外层（交通设施要用楼脚印；见 `emit` 的说明）。
          放在 `phase` 之后：这时 loading 已收起、楼体图层已 addLayer，外层加图层不会插进加载态。 */
-      emit("scene-ready", { map: m, buildings: (fc as { features?: unknown[] } | null) || null });
+      emit("scene-ready", {
+        map: m,
+        buildings: (fc as { features?: unknown[] } | null) || null,
+        /* 🏠 切片③：把「我的家」的取名点取值器**一起**递出去（与楼栋同一次事件 —— 外层不必再取一遍） */
+        places: placesGetter,
+      });
       /* 代拍：`?autoshot=1` 开了开关才跑，没开就是一次 boolean 判断（零开销） */
       if (selfShotArmed()) void runSelfShot(m as unknown as Parameters<typeof runSelfShot>[0]);
       /* 🧪 App 自拍（`?selfshot=1`）：这是 **WebGL 路**的触发点（降级路的在 `fallback2d` 末尾） */

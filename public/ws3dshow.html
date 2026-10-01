@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v90";
+      const BUILD = "ws3dshow-2026-09-26-v91";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -3321,7 +3321,11 @@
           if (TF2 && typeof TF2.bldVerdictText === "function" && facts) {
             const state = (typeof TF2.bldVerdictState === "function") ? TF2.bldVerdictState(facts) : "bundle";
             txt = TF2.bldVerdictText({ state: state, n: facts.n, cells: facts.have, cap: facts.cap,
-                                       pkgCell: facts.index ? facts.index.cellSize : null, feCell: facts.cellDeg });
+                                       pkgCell: facts.index ? facts.index.cellSize : null,
+                                       /* 🔴 复核 2026-10-01：这里原来念 `facts.cellDeg`（= **包自报**的尺寸）⇒ 判词印「包 0.02° /
+                                          前端 0.02°」而同一行的计数行印「… / 前端 0.05°」，同一条 HUD 自相矛盾、事故现场反而看不出来。
+                                          念**期望值**才对。 */
+                                       feCell: (facts.cellDegExpect !== null && facts.cellDegExpect !== undefined) ? facts.cellDegExpect : facts.cellDeg });
           } else {
             txt = "🏢 离线格 数不出来（模块缺 bldVerdictText / createBundleFeed）";
           }
@@ -3439,6 +3443,17 @@
 
       /** 🧷 `?cell=` 显式钉住的格边长（度）；没写 = null = **不钉**（一律以包自报为准） */
       const CELL_PIN = (function () {
+        /* 🔴 复核 2026-10-01：旧正则 `[0-9.]+` 会把 `?cell=1e-1` 截成 **1°**、把 `?cell=abc` 静默忽略。
+           现在：只认「数字[.数字]」且必须落在 (0,1) 度内；**无效值不静默** —— 记一条 errs。 */
+        try {
+          const m = /[?&]cell=([^&]*)/.exec(location.search);
+          if (!m) return null;
+          const raw = decodeURIComponent(m[1]);
+          if (!/^\d+(?:\.\d+)?$/.test(raw)) { errs.push('?cell=' + raw + ' 不是合法格边长（只认 0~1 的小数）⇒ 本次不钉'); return null; }
+          const v = Number(raw);
+          if (!(v > 0 && v < 1)) { errs.push('?cell=' + raw + ' 超出 (0,1) 度 ⇒ 本次不钉'); return null; }
+          return v;
+        } catch (e) { return null; }
         try { const m = /[?&]cell=([0-9.]+)/.exec(location.search); return m ? Number(m[1]) : null; } catch (e) { return null; }
       })();
 

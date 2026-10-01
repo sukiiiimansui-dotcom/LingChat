@@ -2864,7 +2864,13 @@ function createBundleFeed(opts) {
         pinDeg = Number.isFinite(pin) ? pin : null;
         if (pkg === null) {
           indexState = "已读";
-          indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
+          if (Number.isFinite(pin) && pin > 0) {
+            effCellDeg = pin;
+            indexWhy = `包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按调用方**钉住的** ${pin}° 算格键`;
+          } else {
+            effCellDeg = spec.cellDeg;
+            indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
+          }
           return f;
         }
         if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
@@ -2935,9 +2941,12 @@ function createBundleFeed(opts) {
       capped,
       got,
       asked,
+      /* 🧷 钉住的值走**同一套校验**（有限且 > 0）—— 复核代理 2026-10-01 抓到：旧写法用
+         `Number(opts.expectCellDeg)`，`?cell=0` 时 `Number(null)===0` 会被当成合法值 ⇒
+         facts 里印「钉 0°」而 `cellDegExpect=null`，同一条回证自相矛盾。 */
       refused,
       cellDeg: effectiveDeg(),
-      cellDegPin: Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null,
+      cellDegPin: pinDeg,
       /* 🧷 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,

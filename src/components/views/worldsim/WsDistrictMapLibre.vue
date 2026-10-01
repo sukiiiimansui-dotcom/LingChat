@@ -3418,15 +3418,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   const ghostFading = ref(false);
   let enterTimer = 0;
   let ghostTimer = 0;
+  /* 🆕 「传送帧」：相机停下时把容器位移烘进节点坐标（`reproject`）—— 那次坐标重写**必须看不见**，
+     但它落在 `.ws-lab` 的 `transition: transform 90ms` 上 ⇒ 画面会先退回拖动前再滑过来（实测反向行程 84px）。
+     ⇒ 举旗一帧（`.ws-labs.is-snap .ws-lab:not(.is-enter):not(.is-ghost) { transition: none; }`）。 */
+  const snapping = ref(false);
+  let snapRaf1 = 0;
+  let snapRaf2 = 0;
 
   function labClassOf(style: NameRenderNode["style"]): string {
     return style === "real" ? "is-real" : style === "derived" ? "is-derived" : "is-generated";
   }
-  /** 容器 class（相机运动 / 换批 / 整层降级）—— 类名来自真源常量，宿主不写字面量 */
+  /** 容器 class（相机运动 / 换批 / 整层降级 / 传送帧）—— 类名来自真源常量，宿主不写字面量 */
   const labRootClass = computed(() => ({
     [LABEL_CAMERA_CLASS]: cameraMoving.value,
     "is-switching": switching.value,
     "is-lite": namePlan.value.lite,
+    /* 🆕 只在这一帧里掐掉"传送"的过渡（见 `reprojectNow`），**不掐**淡入淡出 */
+    "is-snap": snapping.value,
   }));
 
   /**
@@ -3525,6 +3533,37 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       nameGhosts.value = [];
       ghostFading.value = false;
     }, LABEL_MOTION.nameOutMs + 40);
+  }
+
+  /**
+   * 🆕 **就地重投影**（`moveend` / `zoomend` 调）：把容器上那份位移烘进节点坐标，**只重投影、不重排**。
+   *
+   * 为什么还要举一帧 `is-snap`（2026-10-01 真浏览器逐帧实测）：
+   *   这次坐标重写是一次"传送"——容器同时从 `translate3d(Δ)` 归零、节点坐标加上同一个 Δ，
+   *   **两者同帧 ⇒ 画面本该一动不动**。但 `.ws-lab` 上有 `transition: transform 90ms`，
+   *   浏览器会把节点自己的坐标变化**做成过渡** ⇒ 实测屏幕 x 序列出现
+   *   `…273,273,**190**,234,261,280,283…`：先退回拖动前（反向行程 **84px** = 拖动量），再用 ~88ms 滑到位。
+   *   ⇒ 举旗一帧把过渡掐掉（**只掐传送**：`:not(.is-enter):not(.is-ghost)` ⇒ 淡入淡出照旧）。
+   *
+   * 🔴 举旗必须在**同一 tick**、且在 `reproject()` 之前：Vue 的 patch 是微任务，两者会落在同一次 DOM 变更里
+   *   （只加类不换坐标 = 白掐；只换坐标不加类 = 又滑一遍）。
+   *   摘旗用 **rAF 两帧**（不是 `setTimeout` 猜时长）：第一帧让浏览器带着 `transition:none` 画完这次传送，
+   *   第二帧恢复常态；此时 transform 没再变 ⇒ 不会补一次过渡。
+   */
+  function reprojectNow(): void {
+    if (!namesOn.value || !alive) return;
+    snapping.value = true;
+    const rp = nameLayer.reproject();                 // → onPlan → 节点新坐标（同一 tick 入队）
+    if (!rp) { snapping.value = false; return; }      // 还没算过任何一批 ⇒ 别留一个死类
+    if (snapRaf1) cancelAnimationFrame(snapRaf1);
+    if (snapRaf2) cancelAnimationFrame(snapRaf2);
+    snapRaf1 = requestAnimationFrame(() => {
+      snapRaf1 = 0;
+      snapRaf2 = requestAnimationFrame(() => {
+        snapRaf2 = 0;
+        if (alive) snapping.value = false;
+      });
+    });
   }
 
   /** 名字层刷新（moveend / load 之后调；**不阻塞首屏**） */
@@ -4513,7 +4552,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          现在：`reproject()` **只重投影、不重排**（O(N)，N ≤ 26；集合/避让/上限/batch 一律不动）
          ⇒ 同一 tick 内 Vue 就把 transform 落下去（微任务先于下一帧绘制）⇒ 看不到跳变。
          ⚠️ 它**不替代** `refreshNames`：600ms 后那一轮仍照跑（该重算时重算、该增删时增删）。 */
-      nameLayer.reproject();
+      reprojectNow();
       if (bldTimer) window.clearTimeout(bldTimer);
       bldTimer = window.setTimeout(() => {
         bldTimer = 0;
@@ -4527,7 +4566,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       onMoveEndNames();
       /* 🆕 同 `moveend`：先**就地重投影**（缩放不是刚体平移，容器跟手只是近似），
          160ms 后那一轮 `refreshNames("zoom")` 照旧（跨档才重算，档内复用 —— 见 `wsNameLayer`）。 */
-      nameLayer.reproject();
+      reprojectNow();
       if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
       zoomNameTimer = window.setTimeout(() => { zoomNameTimer = 0; if (alive) void refreshNames("zoom"); }, 160);
     });
@@ -4546,6 +4585,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (switchTimer) window.clearTimeout(switchTimer);
     if (enterTimer) window.clearTimeout(enterTimer);      // 🆕 进场淡入的收尾定时器
     if (ghostTimer) window.clearTimeout(ghostTimer);      // 🆕 退场幽灵的移除定时器
+    if (snapRaf1) cancelAnimationFrame(snapRaf1);         // 🆕 传送帧的举旗/摘旗
+    if (snapRaf2) cancelAnimationFrame(snapRaf2);
     if (watchdog) window.clearTimeout(watchdog);
     watchdog = 0;
     if (recoverTimer) window.clearTimeout(recoverTimer);
@@ -4936,6 +4977,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }
   .ws-lab.is-ghost.is-ghost-out {
     opacity: 0;
+  }
+  /* 🆕 「传送帧」：相机停下时 `reproject()` 会把容器位移烘进节点坐标（容器同时归零 ⇒ 画面本该一动不动），
+     但 `.ws-lab` 上的 `transition: transform 90ms` 会把这次重写做成过渡 ⇒ 先退回拖动前再滑过来
+     （2026-10-01 逐帧实测：反向行程 84px）。这一帧把过渡掐掉。
+     🔴 `:not(.is-enter):not(.is-ghost)` = **只掐"传送"，不掐淡入淡出**：
+        正在进场的（`is-enter`）与正在退场的幽灵（`is-ghost`）**照旧走它们自己的过渡**。 */
+  .ws-labs.is-snap .ws-lab:not(.is-enter):not(.is-ghost) {
+    transition: none;
   }
   /* 🔴 三档样式**必须不同**（机主拍板）：真名 / 数据驱动区名 / 示意区名 */
   .ws-lab.is-real {

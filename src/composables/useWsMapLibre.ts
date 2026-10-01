@@ -838,10 +838,13 @@ export function useWsMapLibre(o: UseWsMapLibreOpts) {
     const t0 = performance.now();
     try {
       if (!webglAvailable()) throw new Error("WebGL 不可用（软件渲染被禁 / 低端设备）");
+      /* 🎨 **样式表要在引擎之前发**（2026-10-01 首屏审计）：`injectCss()` 只插一个 `<link>`
+         （幂等、不阻塞 JS），而 `importEngine()` 是 584KB 的 await ⇒ 排在它后面发请求
+         等于白等一次解析。WebGL 预检放在最前面是有意的：2D 降级那条路**不该付这份 CSS**。 */
+      injectCss();
       const mod = await importEngine();
       if (destroyed) return;
       info.value.version = mod.getVersion?.() || "?";
-      injectCss();
 
       const el = ensureContainer(host);
 

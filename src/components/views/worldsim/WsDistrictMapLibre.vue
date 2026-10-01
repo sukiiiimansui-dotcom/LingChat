@@ -4290,6 +4290,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        （`TS2307: Cannot find module`），而它在运行时是 public/ 下的静态文件、根本没有类型。
        用变量之后 TS 不再解析（`any`），Vite 也不参与（public/ 原样发布）—— 两边都干净。 */
     const ML_URL = "/vendor/maplibre/maplibre-gl.mjs";
+    /* 🎨 **样式表放在引擎前面发**（2026-10-01 首屏审计，施工图 `BLUEPRINT-FIRSTPAINT.md` 方案 1）：
+       `ensureMlCss()` 只是往 `<head>` 插一个 `<link>`（幂等、不阻塞 JS），而引擎是 584KB 的
+       `await import(...)` ⇒ 原来 CSS 要**等引擎解析完**才发请求（实测：页面 chunk 的 CSS @t≈1419，
+       而 maplibre-gl.css 83,195B 直到 @t≈2481 才到）⇒ 提前到 import 之前，两张表并行下载，
+       预估省 **≈0.9s**（推算，需复量）。 */
+    ensureMlCss();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let maplibregl: any = null;
     try {
@@ -4313,8 +4319,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
            它们的 `translate(x,y)` 只是叠在流式位置上（实测 4 个钉子被推到 y 589~958，视口只有 557 高）；
          · `.maplibregl-canvas-container{position:absolute}` 同样缺失（容器成了 static）。
        实测脚本：`~/chk/_mlcss_probe.mjs`（`position: "static"` / `markerRule: null` / `mlLinks: []`）。
-       ⇒ 与 composable 那条路**用同一个注入函数**（幂等；`wsmaplibre_selftest.mjs` ⑤ 盯着这条配对）。 */
-    ensureMlCss();
+       ⇒ 与 composable 那条路**用同一个注入函数**（幂等；`wsmaplibre_selftest.mjs` ⑤ 盯着这条配对）。
+       ⚠️ 2026-10-01 起这次调用**已经提前到 `import(ML_URL)` 之前**（见上面那段注释），
+       这里不再重复调用 —— 两处都在只会是同一个幂等操作。 */
     mapAvailable.value = true;
     if (!alive || !maplibregl?.Map) {
       phase.value = "done";

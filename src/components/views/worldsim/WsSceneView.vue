@@ -70,6 +70,13 @@
         <button class="ws-btn" type="button" @click="emit('done')">进入这个世界</button>
       </div>
     </div>
+
+    <!-- 📱 悬浮手机（切片①，2026-10-01）：把孤儿 `WsPhone.vue` 挂回 App 入口。
+         `phone` 默认 false ⇒ 老调用点逐字不变（`WorldSim.vue` 自己已经在挂，见上面那条注释）；
+         新入口 `WsCityEntry.vue` 传 `:phone="!guideOpen"`（引导 sheet 开着时不挂，免得挡着它）。
+         手机本体、八个应用、`READY` 清单全在 `WsPhone.vue` 里 —— 这里**一行渲染逻辑都没有**。
+         z-index 用令牌（手机 `--z-ws-phone:60`，手机自己在样式里定义），不会盖住验证面板。 -->
+    <WsPhone v-if="phone" @open-app="onPhoneApp" />
   </div>
 </template>
 
@@ -88,6 +95,11 @@
   import { planEnsureRoadOrder } from "./wsLayerOrder";
   import worldMapApi from "@/api/services/worldMap";
   import { useWsPerf } from "./wsPerf";
+  /* 📱 悬浮手机（切片①，2026-10-01）：手机本体与八个应用都在 `worldmap/WsPhone.vue`（**一行不改**），
+     这里只做两件事：**挂上去** + 没接进来的应用被点时**如实提示**。 */
+  import WsPhone from "@/components/views/worldmap/WsPhone.vue";
+  import { phoneNotWiredText } from "@/components/views/worldmap/wsPhoneApps";
+  import { wsToast } from "./wsToast";
 
   const props = withDefaults(
     defineProps<{
@@ -129,11 +141,32 @@
        * 默认 `true` ⇒ 老调用点（`WorldSim.vue` 的引导主线）**逐字不变**。
        */
       tf?: boolean;
+      /**
+       * 📱 悬浮手机开关（**默认 false**，切片① 2026-10-01）。
+       *
+       * 为什么默认是 **false**（与 `chrome`/`tf` 默认 true 相反）：老调用点 `WorldSim.vue`
+       * **自己已经挂了** `<WsPhone>`（`WorldSim.vue:242` 与 `:352`）⇒ 这里若也默认挂，
+       * 老路径上会出现**两部手机**（两个 📱 悬浮按钮）。所以只有新入口 `WsCityEntry.vue` 显式传 `true`。
+       *
+       * ⚠️ 挂的是**同一个组件**（`worldmap/WsPhone.vue`），八个应用、`READY` 清单、收起记忆
+       * 全在那边 —— 这里**不写第二份**（PR 门禁 C1）。
+       */
+      phone?: boolean;
     }>(),
-    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true }
+    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, phone: false }
   );
 
   const emit = defineEmits<{ (e: "back"): void; (e: "done"): void }>();
+
+  /**
+   * 📱 手机上**没接进来**的应用被点了（`WsPhone.vue:164` 那条 `emit("open-app", key)` 路径）⇒ 如实提示。
+   *
+   * 这句话的**唯一真源**在 `worldmap/wsPhoneApps.ts`（老宿主 `WorldSim.vue` 用同一份）——
+   * 两个宿主各写一份文案，说法迟早漂移（PR 门禁 C1 防的就是这个）。
+   */
+  function onPhoneApp(key: string): void {
+    wsToast(phoneNotWiredText(key), "info");
+  }
 
   /** 交通设施的 HUD 原文（来自 `transportHudLine`，**不改写**） */
   const tfHud = ref("");

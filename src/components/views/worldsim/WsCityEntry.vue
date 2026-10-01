@@ -343,7 +343,19 @@
     guideOpen.value = !installed.value.length && !skipped();
     /* 🧑‍🤝‍🧑 装配「地图上的人」：**有界重试**（最多 20 次 × 500ms ≈ 10s，成功即停、不常驻轮询）——
        与代拍页 `kickBldBundle` / 名字层 `kickNames` 同一个形状。这一屏原来只装配一次，
-       而"名单 / 头像 / 日程"三条通路任一慢半拍就会**静默出 0 个人**（机主看到的就是"地图上没人"）。 */
+       而"名单 / 头像 / 日程"三条通路任一慢半拍就会**静默出 0 个人**（机主看到的就是"地图上没人"）。
+
+       🔴 **F7（2026-10-01 性能审计 §5.3）**：原来的发起判据是 `n === 0 || n % 4 === 0` ⇒
+       **每一次重试都把整轮重打一遍**（`actors.load()` = 5 条 `/api/schedule` + `/api/schedule/chars`），
+       首屏实测这些请求全挤在 2.9~4.2s 的关键路径上；而"装配成功、只是今天没有人"那种情况它照样再打 5 轮
+       （用户感知不到任何好处，纯属白花 5 轮请求）。
+       ⇒ 现在**只在必要时才打**：① 第一轮必打；② 之后**只有上一轮真的失败**（判据用**真源自己的**
+       `loadError`，不另造一套）**且**离上次发起 ≥4 拍，才再打一次（保留原来的退避节奏）。
+       装配成功（哪怕今天一个人都没有）⇒ 后面一拍都不再打；`done`（有人了）⇒ 立刻停。
+       纪律逐条不变：**有界**（最多 6 次尝试 / 20 拍 ≈10s）、**成功即停**、**不常驻轮询**。 */
+    let actorsInflight = false;    // 这一拍有没有在飞的装配（不许叠着打）
+    let actorsLoadFailed = false;  // 上一次装配的实况（真源 loadError；没试过 = false）
+    let actorsTriedAt = -99;       // 上一次**发起**在第几拍（退避用）
     (function kickActors(tries) {
       const n = tries || 0;
       const done = districtPins.value.filter((p) => !p.isMe).length > 0;
@@ -352,7 +364,15 @@
          DOM 契约（`.maplibregl-marker` 的数量/位置/`title`）与**协议事实**（`/api/schedule` 请求）。
          （同理**不留**"只给探针看"的 computed：没人读的读数就是死代码 + 调试残留，主对话复核时删过一份。） */
       if (done) return;
-      if (n === 0 || n % 4 === 0) void actors.load();
+      if (n === 0 || (!actorsInflight && actorsLoadFailed && n - actorsTriedAt >= 4)) {
+        actorsTriedAt = n;
+        actorsInflight = true;
+        void actors
+          .load()
+          .then(() => { actorsLoadFailed = !!actors.loadError.value; })
+          .catch(() => { actorsLoadFailed = true; })
+          .finally(() => { actorsInflight = false; });
+      }
       if (n >= 20) return;
       window.setTimeout(() => kickActors(n + 1), 500);
     })(0);

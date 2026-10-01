@@ -3258,10 +3258,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
             }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
           } catch { return null; }
         })(),
-        onPicked: (s) => { bldPickWhy = s.why; try { renderBundleHud(); } catch { /* HUD 失败不影响落图 */ } },
+        onPicked: (s) => { bldPickWhy = s.why; scheduleBundleHud(); },
         beforeDraw: (why0) => {
           bldFlushWhy = why0;
-          renderBundleHud();
+          scheduleBundleHud();
         },
       },
       why
@@ -3289,7 +3289,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
             /* 行人吸附用的段：拿到数据就留着（与画出去的是同一份，不重算一套） */
             roadSegs = roadSegments(data as never);
             roadFlushWhy = why0;
-            renderBundleHud();
+            scheduleBundleHud();
           },
           afterDraw: (_why0, data) => {
             const m = map as BldMapLike | null;
@@ -3619,6 +3619,32 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }
 
   /**
+   * 🔴 **F4（2026-10-01 性能审计 §5.4）：HUD 一次落图只渲染一次。**
+   *
+   * 问题：一次楼/路落图里 `renderBundleHud()` 会被调好几处 —— `bldFlush.onPicked`、
+   * `bldFlush.beforeDraw`、`roadsFlush.beforeDraw`、以及 `refreshBundles` 收尾（审计点名的三处 +
+   * 复核时又找到的路那处）。每次写 **4 个 reactive ref** ⇒ 每次都是**一次整组件重渲染**，
+   * 而审计把松手后的 DOM 变更分类统计出来：HUD 文本是**最大的一类（28 次）**。
+   * 注意它单次都 <50ms（没量到 long task）—— 这里省的是"同一批数据被渲染好几遍"的抖动/GC，
+   * **不是**在消灭某一帧的大卡顿（别把收益说过头）。
+   *
+   * 做法：**脏标记 + 微任务**。同一轮里调用 N 次 ⇒ 只在微任务里 `renderBundleHud()` 一次；
+   * 读到的是**调用那一刻之后的最新 facts**（`facts()` 是同步快照，晚一点读只会更新、不会更旧）。
+   * ⚠️ 这里只管**计数/判词那一行**（`stats.bldBundle/bldVerdict/…`）；名字层那条纪律
+   * （`stats.names` 必须与节点**同一刻**写，`applyNamePlanWithHud`）**不归这里管，不许并进来**。
+   */
+  let bundleHudQueued = false;
+  function scheduleBundleHud(): void {
+    if (bundleHudQueued) return;
+    bundleHudQueued = true;
+    queueMicrotask(() => {
+      bundleHudQueued = false;
+      if (!alive) return;
+      try { renderBundleHud(); } catch { /* HUD 失败不影响落图（与原来那处 try 同一口径） */ }
+    });
+  }
+
+  /**
    * 按视野补离线格（**后台、串行、每格独立超时**；一次最多 2 格，不堵首屏）。
    * 楼/路/水绿各一条管道，三条互不阻塞；**都不打 `/api/*`**。
    */
@@ -3631,7 +3657,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (z >= ROAD_MIN_ZOOM) await roadsFeed.refresh(why);
     /* 🌊🌳 水/绿地**不设 zoom 闸门**（远景下它才最有用；判词由真源回填 `stats.gwVerdict`） */
     await gwLayer.refresh(why);
-    renderBundleHud();
+    scheduleBundleHud();
   }
 
   /**
@@ -3972,15 +3998,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         lat = (districtBbox[1] + districtBbox[3]) / 2;
         lng = (districtBbox[0] + districtBbox[2]) / 2;
       }
-      try {
-        if (lat !== undefined && lng !== undefined) throw new Error("skip-ip");
-        const loc = await worldMapApi.location({ fast: true });
-        if (Number.isFinite(loc?.lat) && Number.isFinite(loc?.lng)) {
-          lat = Number(loc.lat);
-          lng = Number(loc.lng);
-        }
-      } catch {
-        /* 定位拿不到：保持 undefined，让后端兜底（与原来行为一致） */
+      /* 🔴 **F2（2026-10-01 性能审计 §5.1）：定位不再挡在建图的关键路径上。**
+         · **谁在等它**：只有下面 `if (!districtWide && bldLive.live)` 那一段 —— 本文件里读 `lat/lng`
+           的**全部只有两处**（`:fetchBuildingsWithRetry(lat, lng, props.radius)` 与"楼房稀疏放大半径"
+           那次重试），两处都在 live 分支里。
+         · **现在谁不等了**：默认口径（楼从**离线楼房包**来、`bldLive.live=false`）—— 它根本不用这个结果，
+           却原来要**串着等**这一跳（审计实测 1289ms / 忙时 1870ms，§4「关键路径」那一行）。
+         · **live 路径为什么不受影响**：请求还是同一个 `?fast=1`、参数逐字相同，只是**发起点提前到这里**
+           而**等待点搬进 live 分支**（下面 `await locP`）；`Number.isFinite` 判据、失败后「保持 undefined、
+           让后端兜底」这条语义、以及"有坐标就不打定位"（原来 `throw new Error("skip-ip")` 的语义）
+           全部逐字保留 ⇒ 那两处的输入与原来完全一致。
+         ⚠️ 默认口径下**一个 `/api/location` 都不发**（省的是"算完就扔"的那一跳，不是拿别的东西顶替）。 */
+      type LocRes = Awaited<ReturnType<typeof worldMapApi.location>> | null;
+      let locP: Promise<LocRes> | null = null;
+      if (lat === undefined && lng === undefined && bldLive.live) {
+        /* `worldMapApi.location` 内部三级降级、自己**永不抛**；这里仍兜一层 `catch(() => null)`
+           ⇒ 与原来那个 `catch`（"定位拿不到：保持 undefined，让后端兜底"）同一语义。 */
+        locP = worldMapApi.location({ fast: true }).catch(() => null);
       }
       let geo: { features?: unknown[] } | null = null;
       /* 🧱 **offline-first**（切片 A）：默认**不发**这条 `/api/buildings`（决策在真源
@@ -3995,6 +4029,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
            而人看到的只是"这一带没楼"（真因却是"我们没等够"）。
            现在：**放宽到 55s** + **最多重试 2 次**（第 2 次开始后端多半已在写缓存 ⇒ 命中很快），
            并把"超时/失败 + 试了几次 + 原文"如实写进 HUD（**三态：失败/空数据/成功，不许混**）。 */
+        /* 🧭 F2：**live 是唯一要用定位结果的通路** ⇒ 只有这里 await 它（默认口径连发起都不发、
+           更不等）。上面那次 `throw new Error("skip-ip")` 的语义因此也没丢：有坐标时压根没有这条 promise。 */
+        if (locP) {
+          try {
+            const loc = await locP;
+            /* `loc` 可能为 null（发起时 `.catch(() => null)` 兜底）⇒ 先判空再读字段。
+               与原判据**等价**：`Number.isFinite(undefined)` 本来就是 false（原来那句用
+               `loc?.lat` 可选链，null 一样进不来）。 */
+            if (loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
+              lat = Number(loc.lat);
+              lng = Number(loc.lng);
+            }
+          } catch {
+            /* 定位拿不到：保持 undefined，让后端兜底（与原来行为一致） */
+          }
+        }
         geo = (await fetchBuildingsWithRetry(lat, lng, props.radius)) as { features?: unknown[] } | null;
       } else if (!districtWide) {
         /* 没走 live ⇒ 如实留一句"楼从离线包来"（不写"没有楼"，也不写 0） */

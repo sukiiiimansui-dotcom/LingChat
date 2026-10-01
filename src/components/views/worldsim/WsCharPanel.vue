@@ -577,6 +577,18 @@
     /* 面板里滚动到底不该带动背后的地图 */
     overscroll-behavior: contain;
   }
+  /* 🔴 2026-10-01（机主：「按钮互相遮挡」的**真因**，探针在短视口下量出来）：
+     body 是 flex 列，而**子项默认 `flex-shrink:1`** ⇒ 视口一变矮，每个 `.ws-cp`/`.ws-sec`
+     就被**压到内容高度以下**；而 `WsCollapse` 的根带 `overflow:hidden` ⇒ 内容被自家裁掉，
+     body 的 `scrollHeight` 却**不涨**（实测短视口 500×417：`scrollH 369 = clientH 369`）
+     ⇒ **既放不下、又滚不动**：8 个控件排在折线下够不着，标题还压在别行的内容上（视觉顺序错乱）。
+     ⇒ 直接子项一律 `flex: none`（保持内容高度）⇒ body 真的溢出 ⇒ 上面 `.ws-scroll` 的
+     `overflow-y:auto` 才生效，用户能滚到"送礼物/约他出/干预开关"。
+     注：面板本体另有 `.ws-drawer__panel{display:flex;flex-direction:column}`，
+     body 自己是 `flex:1; min-height:0`，所以这条不会把面板撑出屏幕。 */
+  .ws-drawer__body > * {
+    flex: none;
+  }
   .ws-sec {
     display: flex;
     flex-direction: column;

@@ -86,6 +86,16 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean } = {}): Rec
       type: "raster",
       tiles: basemapTiles(dark),
       tileSize: 256,
+      /* ⚠️ 2026-10-01 首屏审计（`BLUEPRINT-FIRSTPAINT.md` 方案 3）发现的**白等**，**还没修**：
+         有 `baseFade` 的主题到 `to`（薄荷/暗色 14.8）就完全透明，而 App 默认机位 z=16.4
+         ⇒ 这里 `maxzoom: 20` 会让它白取 8~10 张 z16 瓦片（每张 330~424ms，画出来全透明）。
+         想按 `ceil(baseFade.to)` 收口，但 **`GeoTheme`（本函数的入参类型）上没有 `baseFade`**
+         —— 它在 `WsMapTheme`/`WsMapLookSpec`（`wsMapTheme.ts:149/597`），也就是主题 JSON 的
+         `themes[*].baseFade`（实测 `public/wstheme.json` 的 `night` 是 `null`、其他主题才有值）。
+         ⇒ 正确改法是给 `styleFor`/`styleForStage` 加一个**可选** `opts.baseMaxZoom`，由调用方
+         （`useWsMapLibre.ts:890` 那条，它手里有主题 JSON 的 parts）把淡出终点传进来；
+         没有 `baseFade` 的主题（如对照组 `gray`）必须**保持 20** —— 它们真的要瓦片。
+         **别直接写死数字**，也别把这个类型错误用 `as any` 糊过去。 */
       maxzoom: 20,
       attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS User Community",
     };

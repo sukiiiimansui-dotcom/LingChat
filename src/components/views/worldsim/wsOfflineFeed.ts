@@ -545,7 +545,7 @@ interface BundleKindSpec<T> {
    *      **仍然拒绝取数**并写 `sizemismatch`（"说成包外"这条路永远不许走）。
    */
   cellDeg: number;
-  /* 🔴 **格尺寸政策（2026-09-26 定案，别再改回去）**：**一律以包自报的 `index.json.cellSize` 为准** ——
+  /* 🔴 **格尺寸政策（2026-09-26 定案，别再改回去）**：**本管道（bld / roads / places）一律以包自报的 `index.json.cellSize` 为准**（⚠️ 范围仅限本管道：水/绿地在 `wsGwLayer` 里有自己的常量关卡） ——
      0.05 / 0.02 / 0.01 的包都能跑（分片包 `bldbundle-002` 就是 0.01°）。
      唯一的防线是**调用方显式钉**（`BundleFeedOptions.expectCellDeg`；页面用 `?cell=` 给）：
      钉住的值与包不符 ⇒ **拒绝取数**（`sizemismatch`），绝不把"有数据"说成「包外」。
@@ -756,7 +756,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   let indexState: "未读" | "读取中" | "已读" | "失败" | "口径不符" = "未读";
   let indexWhy: string | null = null;
   let indexPromise: Promise<BundleIndexFact> | null = null;
-  /* 🧷 这一场**钉住的期望格尺寸**（调用方显式钉 > 目录自己的真值；都没有 = null）——
+  /* 🧷 这一场**钉住的期望格尺寸**（= 调用方显式钉；**没有隐式钉**（曾有一版「逐目录真值」，已撤回））——
      回证里要看得见"到底拿哪个数去对的"，判词里的「前端 X°」也念它（不能拿包自报的那个数冒充期望值）。 */
   let pinDeg: number | null = null;
 
@@ -859,9 +859,17 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         const pin = (Number.isFinite(callerPin) && callerPin > 0) ? callerPin : NaN;
         pinDeg = Number.isFinite(pin) ? pin : null;
         if (pkg === null) {
-          /* 老包没有 `cellSize` 字段：**不猜**，用兜底常量，并如实标注 */
+          /* 老包没有 `cellSize` 字段：**不猜**。但调用方**显式钉了**就按钉住的算格键 —— 钉住的含义就是
+             「我知道这个目录是多大」；旧代码在这里直接忽略钉值（复核代理 2026-10-01 指出：
+             钉了等于没钉，而这恰恰是最需要拦的场景）。两种情况都在 why 里如实写出来。 */
           indexState = "已读";
-          indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
+          if (Number.isFinite(pin) && pin > 0) {
+            effCellDeg = pin;
+            indexWhy = `包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按调用方**钉住的** ${pin}° 算格键`;
+          } else {
+            effCellDeg = spec.cellDeg;
+            indexWhy = "包里没有可用的 cellSize（缺字段 / 坏值）⇒ 按兜底常量 " + spec.cellDeg + "° 算（数不出来就说不出来）";
+          }
           return f;
         }
         if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
@@ -921,7 +929,10 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     return {
       n, have: have.size, missing: missing.size, failed: failed.size,
       pending, cap, wanted, capped, got, asked,
-      refused: refused, cellDeg: effectiveDeg(), cellDegPin: (Number.isFinite(Number(opts.expectCellDeg)) ? Number(opts.expectCellDeg) : null),
+      /* 🧷 钉住的值走**同一套校验**（有限且 > 0）—— 复核代理 2026-10-01 抓到：旧写法用
+         `Number(opts.expectCellDeg)`，`?cell=0` 时 `Number(null)===0` 会被当成合法值 ⇒
+         facts 里印「钉 0°」而 `cellDegExpect=null`，同一条回证自相矛盾。 */
+      refused: refused, cellDeg: effectiveDeg(), cellDegPin: pinDeg,
       /* 🧷 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,

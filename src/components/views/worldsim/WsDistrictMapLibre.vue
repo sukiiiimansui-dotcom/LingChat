@@ -2260,6 +2260,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       "justify-content:center",
       "background:transparent",
       "pointer-events:auto",
+      /* 🔴 2026-10-01（切片② 真页面验收代理发现）：**「我」那颗钉不要压在别人身上**。
+         `districtPinsOf` 把 me 排在最后 ⇒ 同 z-index 时它后画、盖在最上面；
+         而没定位时 me 落在格心、只有一个角色时散点也在格心 ⇒ 那颗角色钉的 44×44 里
+         **每一点都打到 me**（实测 `blockedBy: me`、点谁都是自己）。
+         这里只给 z-index 排个序（角色 2 > 我 1）：命中判定看的是**最上面**那个元素，
+         所以点下去先落到角色身上；视觉上也是"别人站在我前面"，与直觉一致。 */
+      a.isMe ? "z-index:1" : "z-index:2",
     ].join(";");
     /* 钉子 id 落在**命中区**上（这是产品自己的 DOM 契约，不是调试出口）：
        自动化点外层任意一处都算点到这个人。 */

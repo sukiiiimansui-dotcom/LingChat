@@ -129,15 +129,29 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
   if (cmd === "get_character_list") {
     const pick = (j: unknown): unknown[] | null => {
       if (Array.isArray(j)) return j;
-      const arr = (j as { characters?: unknown })?.characters;
+      const box = j as { characters?: unknown; items?: unknown };
+      const arr = box?.characters ?? box?.items;
       return Array.isArray(arr) ? arr : null;
     };
+    /* 🔴 形状必须与 `characterGetAll()` 的返回类型**逐字一致**
+       （`CharacterPageResult` = `{ items, total, page, page_size, total_pages }`）。
+       2026-10-01 实测（切片② 真页面验收代理发现）：这里原来回的是**裸数组**
+       ⇒ `loadWorldCharacters()` 读 `res.items` 拿到 undefined ⇒ **预览里角色名单恒空**，
+       地图上只剩 `roster:` 兜底钉、点谁都不能开面板（切片② 的 `+6` 因此一度没法验）。
+       真机走 Tauri 真命令、**没有这个问题** ⇒ 这是**预览壳**的 bug，修这里不影响真机。 */
+    const pageOf = (list: unknown[]) => ({
+      items: list,
+      total: list.length,
+      page: 1,
+      page_size: list.length || 6,
+      total_pages: 1,
+    });
     // ① 先试前端约定的那条（⚠️ 实测调试服务上**是 404**，见本文件末尾备注）
     try {
       const r = await fetch("http://127.0.0.1:8791/api/schedule/chars");
       if (r.ok) {
         const got = pick(await r.json());
-        if (got) return got;
+        if (got) return pageOf(got);
       }
     } catch {
       /* 后端没起 → 往下试 */
@@ -147,12 +161,12 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const r2 = await fetch("http://127.0.0.1:8791/api/schedule");
       if (r2.ok) {
         const got2 = pick(await r2.json());
-        if (got2) return got2;
+        if (got2) return pageOf(got2);
       }
     } catch {
-      /* 纯静态预览：维持空数组，调用方的降级照旧 */
+      /* 纯静态预览：维持空名单，调用方的降级照旧 */
     }
-    return [];
+    return pageOf([]);
   }
 
   if (cmd === "get_locale_messages") {

@@ -740,9 +740,13 @@ pub fn run() {
             world_map::move_cmd::world_map_trip_start,
             world_map::move_cmd::world_map_trip_cancel,
             world_map::move_cmd::world_map_trip_speedup,
-            // ── 世界模拟现实事件引擎（P5-2/P5-3：驱动器 / 读最近事件 / 取待写记忆）──
+            // ── 世界模拟现实事件引擎（P5-2/P5-3：驱动器 / 读最近事件 / 待写记忆）──
+            // ⚠️ 待写记忆两条路：`world_map_pending_memory` 是**只读预览**（前端用），
+            //    `world_map_take_pending_memory` 是 drain（记忆管线用）。
+            //    消费权裁定见 `event_cmd.rs::world_map_pending_memory` 的注释。
             world_map::event_cmd::world_map_tick,
             world_map::event_cmd::world_map_events_recent,
+            world_map::event_cmd::world_map_pending_memory,
             world_map::event_cmd::world_map_take_pending_memory,
             // ── 城市级**真拼接**大图（T5-1：区县街区图按经纬度拼成一张大 SVG）──
             // 与 `world_map_geo_svg`（行政区划总览）是两件事，不互相替代。

@@ -523,6 +523,34 @@ impl MapRuntime {
     pub fn pending_memory_len(&self) -> usize {
         self.pending_memory.len()
     }
+
+    /// **只读预览**待写记忆（看一眼，**一行都不取走**）—— `world_map_pending_memory` 用它。
+    ///
+    /// ## 消费权裁定（期 1，2026-10-02 —— 与上屏同期定死）
+    ///
+    /// 这个队列**只有一个消费方**：[`MapRuntime::injection_text`]（注入路径）。
+    /// 理由不是偏好，是它自己的语义 —— 那些行之所以能删，是因为
+    /// [`summary::memory_block`] 已经把内容**交付给模型**了（"交付即消费"）；
+    /// 换任何一方来删，删的都是"还没被交付的东西"。
+    ///
+    /// 前端/面板从今天起只能是**只读预览**（本函数）：它关心的是"角色还没说出口的经历"，
+    /// 而"谁有权把一行从队列里划掉"是另一件事。两边抢同一个队列的后果是**静默**的 ——
+    /// 前端一 drain，AI 那一轮注入就少一段，没有任何报错
+    /// （命令侧同一份裁定写在 `event_cmd.rs::world_map_pending_memory` 的注释里）。
+    ///
+    /// 匹配宽容度与 [`MapRuntime::take_memory`] **共用** [`memory_role_matches`]：
+    /// 预览看到的行 = drain 会取走的行，两条路对"这一行是不是他的"必须是同一个判据。
+    pub fn pending_lines(&self, role: Option<&str>) -> Vec<PendingMemory> {
+        let want = role.map(str::trim).filter(|s| !s.is_empty());
+        self.pending_memory
+            .iter()
+            .filter(|m| match want {
+                Some(w) => memory_role_matches(&m.role, w),
+                None => true,
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 /// `app.manage` 的状态壳。
@@ -1058,6 +1086,65 @@ mod tests {
         assert_eq!(rt.pending_memory_len(), 0);
         // 消费完之后预览里也不该再有它
         assert!(!rt.preview("小满").contains("只看看不拿走"));
+    }
+
+    /// 🔴 **消费权裁定**（期 1，2026-10-02）：`world_map_pending_memory` 这条路
+    /// **只看不取**，所以"先让前端跑一轮，再跑一次对话注入"之后，
+    /// 那件事**仍然能被 AI 看见**。
+    ///
+    /// 这一条就是计划里的**能证红的判据**（`PLAN-GAMEPLAY.md:57` 的 ③）：
+    /// 把 `pending_lines` 换成 `take_memory`（= 修好前前端那条 drain 的行为），
+    /// 下面第一条断言立刻红（`injection_text` 里再也不会出现那行）。
+    #[test]
+    fn frontend_preview_never_steals_the_line_from_the_injection() {
+        let mut rt = runtime_with_scene();
+        rt.push_memory("小满", "旁白: 刚才在便利店买了伞", 1);
+
+        // ① 前端跑一轮（只读预览）：**看到的和 drain 会取走的是同一批行**
+        let seen = rt.pending_lines(Some("小满"));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].line, "旁白: 刚才在便利店买了伞");
+        assert_eq!(rt.pending_memory_len(), 1, "预览一行都不许取走");
+
+        // ② 再跑一次对话注入：那件事仍然能被 AI 看到（同一个判据 = 注入正文）
+        let injected = rt.injection_text("小满", &Local::now());
+        assert!(
+            injected.contains("记忆：旁白: 刚才在便利店买了伞"),
+            "前端预览过之后，注入里必须还有这一行：{injected}"
+        );
+        // ③ 消费只发生在注入那条路；消费完队列归零、预览也跟着空
+        assert_eq!(rt.pending_memory_len(), 0);
+        assert!(rt.pending_lines(None).is_empty());
+
+        // ④ 只读预览的**筛选判据**与 drain 同一套宽容度（去空白 + 忽略 ASCII 大小写）
+        let mut rt2 = runtime_with_scene();
+        rt2.push_memory("Alice", "旁白: 别人的事", 2);
+        rt2.push_memory("小满", "旁白: 我的事", 2);
+        let mine = rt2.pending_lines(Some(" alice "));
+        assert_eq!(mine.len(), 1, "大小写/空白不该让行漂走");
+        assert_eq!(mine[0].line, "旁白: 别人的事");
+        assert_eq!(rt2.pending_memory_len(), 2, "筛选不等于取走");
+    }
+
+    /// 反向对照（**这条是"修好前"的样子**）：前端若用 drain 那条路跑一轮，
+    /// 注入就再也看不到那一行了 —— 这正是期 1 要堵的洞。
+    ///
+    /// 它故意用 `take_memory`（drain 语义）而不是预览，为的是把"两种做法的差别"
+    /// 钉在测试里：上一条绿、这一条红，差别只有那一个调用。
+    #[test]
+    fn draining_from_the_frontend_would_steal_the_line() {
+        let mut rt = runtime_with_scene();
+        rt.push_memory("小满", "旁白: 刚才在便利店买了伞", 1);
+        let taken = rt.take_memory(Some("小满")); // ← 修好前前端干的事
+        assert_eq!(taken.len(), 1);
+        let injected = rt.injection_text("小满", &Local::now());
+        /* ⚠️ 判据必须咬**记忆行本身**（`旁白: …` / 「记忆：」那一块），不能咬"便利店"这种词 ——
+           测试场景自己就写着「…·便利店里」（第一版就是这么假的绿：`!contains("便利店")` 直接红）。
+           这一条要证明的是"那行**记忆**没进注入"，不是"这几个字没出现在文本里"。 */
+        assert!(
+            !injected.contains("旁白: 刚才在便利店买了伞") && !injected.contains("记忆："),
+            "反例失效：drain 之后注入里怎么还会有这一行？{injected}"
+        );
     }
 
     /// 世界模拟关着（没有 scene）时：一个字都不注入，记忆也一行都不消费。

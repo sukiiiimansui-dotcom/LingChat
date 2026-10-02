@@ -38,8 +38,23 @@
   · 体感边界（如实）：片区内**没有**离线包覆盖的名点 ⇒ 家会写「数不出来（原因）」，**不编一个家**；
     冷缓存下这是正常态（places 是新管道，包外机位永远选不到家）。
 
-  ## 🆕 2026-10-01（切片①）· `WsPhone` 悬浮手机**挂回来了**
-  当初去掉它的理由是"老入口在小区级本来也不显示它"；但它是这一屏**唯一能点开的玩法入口**
+  ## 🆕 2026-10-02（期 1 · 世界开口）· **事件上屏 + 天气角标 + 消费权定死**
+  三件事都与玩家可见的变化有关，所以放在一个切片里（`PLAN-GAMEPLAY.md:51-59` §期 1）：
+    ① **事件上屏**：现实事件引擎（`useWorldEvents`，早就在跑）抽中一条时冒一个**瞬时气泡**
+       （`WsEventBubble`，≈4.2 秒后自己消失 ⇒ **不是**常驻浮块，上面那条 ≤3 的账没被破坏）；
+       popup 通道照孤儿页的语义弹一条 `wsToast`（配色按事件类别）。
+       ⚠️ 气泡挂空名单（屏幕中央 + 写明是谁），因为这一屏是 MapLibre 真地理视图、
+          `WsEventBubble` 的格网数学只对老 `WsDistrict` 成立（见 `bubblePlaced` 的注释）。
+    ② **天气角标**接回（`WsWeatherBadge` + `useWorldWeather`）：孤儿页那一轮做完了却一直 0 挂载点。
+    ③ 🔴 **待写记忆的消费权**（这一期最要紧的一条，计划里标红）：队列原先有两个消费方 ——
+       Rust 注入路径（`state.rs::injection_text`）与前端面板的 `world_map_take_pending_memory`（drain）。
+       两边抢同一个队列，前端一取走，AI 那一轮注入就**静默**少一段。
+       **裁定：唯一消费方 = 注入路径**（行交付给模型后才划掉，`summary::memory_block` 的"交付即消费"）；
+       前端从此只走新命令 `world_map_pending_memory`（**只读预览**，一行不取走；
+       `useWorldEvents` 里 `drainMemory` 随之改名 `previewMemory`）。
+       本页因此**不再**在任何检查点"顺手收一遍队列"。
+
+  ## 🆕 2026-10-01（切片①）· `WsPhone` 悬浮手机**挂回来了**  当初去掉它的理由是"老入口在小区级本来也不显示它"；但它是这一屏**唯一能点开的玩法入口**
   （地图/导航、打车、公交地铁、日程、通讯、天气六个 app **早就实现了**，只缺一个挂载点）
   ⇒ 现在传 `:phone="!guideOpen"`（引导 sheet 开着时不挂，免得挡着那张 sheet）。
   手机本体一行没改（`worldmap/WsPhone.vue`），挂载点与兜底提示在 `WsSceneView.vue`。
@@ -90,6 +105,35 @@
       :note="dailyNote"
       @toggle="onDailyToggle"
     />
+
+    <!-- 💬 期 1（2026-10-02）·**事件上屏**：现实事件引擎抽中一条时冒一个气泡（≈4.2 秒后自己消失）。
+         数据层（tick 轮询 + `world_map:event` 广播 + 三通道开关）一行不在本文件：全在
+         `useWorldEvents`（**已在跑**、也被孤儿页 `WorldSim.vue` 挂着）——这里只做接线。
+         🔴 它是**瞬时**元素，不是常驻浮块（上面那条 ≤3 的账没被它破坏）。
+         ⚠️ `:placed="[]"` 是**故意**的（详见 script 里 `bubblePlaced` 的注释）：
+            这一屏是 MapLibre **真地理**视图，而 `WsEventBubble` 的定位数学
+            （`letterboxOf` + `gridToBox` 那套 28×28 素描格网）只在老 `WsDistrict` 视图里成立；
+            硬套过来气泡会**飘到错的地方**（比"居中说清是谁"更糟：那等于编了一个位置）。
+            空名单 ⇒ 组件走它自己的兜底分支：屏幕中央浮一个并写明是谁（绝不静默丢弃）。
+         ⚠️ `:max="1"` 也是同一个理由：都在屏幕正中 ⇒ 同时画 4 条会叠成一坨（谁也读不出来）。
+            只画最新那条；到点它们照样自己消失（`WS_BUBBLE_MAX=4` 那个上限是给"有人头可挂"的场景用的）。 -->
+    <WsEventBubble
+      v-if="!guideOpen"
+      :bubbles="wsEventBubbles"
+      :placed="bubblePlaced"
+      :grid="28"
+      :me-name="meName"
+      :max="1"
+      :low="perfLow"
+    />
+
+    <!-- 🌤 期 1（2026-10-02）·**天气角标**接回 App 入口（孤儿页那一轮实现后一直 0 挂载点：
+         `PLAYABLE-COVERAGE.md:396`）。真源是 `useWorldWeather`（真壳 invoke / 预览 HTTP 双通路，
+         拿不到就显示「天气不可用」——**不显示晴天、不留空白**，见 `WsWeatherBadge.vue` 头注释）。
+         ⚠️ 它自带 `backdrop-filter: blur(6px)`（`worldsim-weather.css:47`）⇒ 本页在 scoped 样式里
+            就地改成 `none`（见文件末尾；**不改那个共享样式文件**，别的页还在用）。
+         位置：右上角下来一点（顶栏那一排按钮在 top:0，角标默认 `top:.7em` 会压住「🗺 城市数据」）。 -->
+    <WsWeatherBadge v-if="!guideOpen" :weather="wxState" />
 
     <!-- ── 顶栏（一行三件；引导开着时让位给 sheet）───────────────────────── -->
     <header v-if="!guideOpen" class="wsce__top">
@@ -157,6 +201,18 @@
   import { createDailyStore } from "./wsDailyStore";
   import type { DailyTask, PlacePoint, Resident, Spot } from "./wsDaily";
   import { type InstalledCity, cityStore } from "./wsCityStore";
+  /* 💬🌤 期 1（2026-10-02）·「事件上屏 + 天气角标」：
+     事件数据层 = `useWorldEvents`（**同一份** composable，孤儿页 `WorldSim.vue` 挂的也是它）；
+     画气泡 = `WsEventBubble.vue`（一行渲染逻辑都不在本文件）；
+     天气 = `useWorldWeather`（真壳 invoke / 预览 HTTP 双通路）+ `WsWeatherBadge.vue`。
+     ⚠️ 天气角标的样式在**全局** `worldsim-weather.css` 里（组件自己不带 style），必须 import，
+        否则角标是一行没有底色的裸字（换入口漏挂全局依赖是本页犯过两次的病，见文件头）。 */
+  import WsEventBubble from "./WsEventBubble.vue";
+  import WsWeatherBadge from "./WsWeatherBadge.vue";
+  import { popupKindOf, useWorldEvents } from "@/composables/useWorldEvents";
+  import { useWorldWeather } from "@/composables/useWorldWeather";
+  import { useWsPerf } from "./wsPerf";
+  import "@/assets/styles/worldsim-weather.css";
   /* 🧑‍🤝‍🧑 **地图上的人**（M1-1）：装配逻辑全在既有的 `useWsActors` 里（**不新造第二套**）；
      钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
   import { useWsActors } from "@/composables/useWsActors";
@@ -504,6 +560,77 @@
     syncDaily();
   }
 
+  /* ══ 💬 期 1（2026-10-02）·**事件上屏** + 待写记忆只读预览 ═══════════════════════════
+     数据层（tick 轮询 + `world_map:event` 广播 + 三通道开关 + 待写记忆预览）**一行都不在本文件**：
+     全在共享 composable `useWorldEvents`（孤儿页 `WorldSim.vue` 挂的是同一份 ⇒ 不存在第二份实现）。
+     本页只做三件事：
+       ① 把当前说话的角色名传进 tick（事件挂到正确的人头上靠它）；
+       ② popup 通道：抽中时 `wsToast` 弹一条（配色按事件类别；气泡那一路由 composable 自己写 `bubbles`）；
+       ③ 把 `bubbles` 交给 `WsEventBubble` 画（组件只负责画）。
+     ⚠️ 生命周期：`/worldsim` 进来就是地图 ⇒ `autoStart`（引擎要 `scene` 才有意义，而本页
+        `pushRuntime` 是 `immediate` 的）。离开本页：composable 自己 `onScopeDispose(stop)`，
+        下面再显式 `stop()` 一次（自然检查点，与孤儿页同款）。
+     ⚠️ 场景还没推上去（引导 sheet 开着 / 一个城市都没装）时，后端 `world_map_tick` 返回
+        `reason:"no_scene"` 且**不写任何事件、不写任何记忆**（后端守「别污染对话记忆」的纪律）
+        ⇒ 这一段不会凭空造出事件来。 */
+  /**
+   * 当前正在对话的角色名（= `settings.yml` 的 `ai_name`，也是 runtime 里 `actors` 的键）。
+   * 照抄孤儿页 `WorldSim.vue:1013-1020`：**不新造口径**，否则事件会挂到另一个名字上。
+   */
+  const currentRoleName = computed(() => {
+    const id = currentRoleId.value;
+    const r = id
+      ? (gameStore.gameRoles as Record<number, { roleName?: string } | undefined>)[id]
+      : undefined;
+    return String(r?.roleName || "").trim();
+  });
+
+  const wsEvents = useWorldEvents({
+    role: currentRoleName,
+    autoStart: true,
+    onFired: (e) => {
+      // 关掉这一路就该安静（气泡那一路由 composable 内部按 `channels.bubble` 自己判）
+      if (!wsEvents.channels.value.popup) return;
+      wsToast(e.popup || e.event?.title || "", popupKindOf(e.event?.category));
+    },
+  });
+  /* 模板只对**顶层** ref 自动解包 ⇒ 从对象里解出来的必须单独拿（嵌套的不会解）。 */
+  const { bubbles: wsEventBubbles } = wsEvents;
+
+  /**
+   * 气泡要挂的人：**故意给空名单**。
+   *
+   * 🔴 为什么不是 `actors.placed`：`WsEventBubble` 的定位数学（`useWorldEvents.bubbleAnchorOf`
+   *    → `letterboxOf` + `gridToBox`）算的是**老 `WsDistrict` 那套 28×28 素描格网**在
+   *    信箱折算后的盒子像素 —— 那一屏的地图就是这个格网。而本页是 MapLibre **真地理**视图
+   *    （人物钉子是 `maplibregl.Marker`：`WsDistrictMapLibre.vue:2594` 的 `setLngLat`，
+   *    跟格网像素没有任何关系）⇒ 把 `actors.placed` 传进来，气泡会**飘到错的地方**。
+   *    飘着的气泡比没有气泡更糟：它看起来像数据，其实是编的位置。
+   *    空名单 ⇒ 走组件自己的兜底分支（屏幕中央浮一个 + 写明是谁，绝不静默丢弃一条已发生的事件）。
+   *    给这一屏做**真**锚定（`map.project(lngLat)` 那条路）是新的定位实现，属 UI 线，
+   *    不在期 1 的范围（`PLAN-GAMEPLAY.md:54` 的改动面只有"挂上去"）。
+   */
+  const bubblePlaced: PlacedActor[] = [];
+  /** 气泡上那个"是谁"的兜底名字 = 玩家自己（`placed` 里 `isMe` 那一个；拿不到就留空） */
+  const meName = computed(() => String(actors.placed.value.find((a) => a.isMe)?.name || "").trim());
+  /** 低性能档：气泡入场动画退化成纯淡入（与 `WsSceneView` 读的是同一份 `wsPerf` 单例） */
+  const perf = useWsPerf();
+  const perfLow = perf.low;
+
+  /* ══ 🌤 期 1 · 天气角标 ══════════════════════════════════════════════════════════
+     真源 = `useWorldWeather`（唯一真源，角标/粒子层都读它；拿不到就降级成「天气不可用」，
+     **不显示晴天、不留空白**）。城市名取值器照抄孤儿页 `WorldSim.vue:875-883`：
+     取 `area` 里最后一段**不是裸 adcode** 的名字（裸 adcode 给 wttr.in 查不到东西）。 */
+  const wxCity = computed(() => {
+    const parts = String(areaLabel.value || "")
+      .split(/[·・>]/)
+      .map((x) => x.trim())
+      .filter((x) => x && !/^\d+$/.test(x) && x !== "中国");
+    return parts.length ? parts[parts.length - 1]! : "";
+  });
+  const wx = useWorldWeather({ city: () => wxCity.value });
+  const { state: wxState } = wx;
+
   /** 当前在用哪座城市的数据（HUD 之外唯一的一处状态显示） */
   const cityLabel = computed(() => {
     if (!installed.value.length) return t("worldsim.city.noCityTag");
@@ -615,6 +742,10 @@
       window.clearTimeout(dailyTimer);
       dailyTimer = 0;
     }
+    /* 💬 期 1：离开这一屏就停掉事件引擎（tick 轮询 + 广播订阅 + drain 定时器）。
+       下面 `clearRuntime()` 会把 `scene` 推成 null ⇒ 就算没停，后端 tick 也只会返回 `no_scene`；
+       但两条都做才是"这一屏走了，它的事就该停"（与孤儿页 `WorldSim.vue:1633` 同款）。 */
+    wsEvents.stop();
     void clearRuntime();
   });
 </script>
@@ -642,6 +773,24 @@
   .wsce.ws-root {
     --ws-blur: none;
     --ws-blur-low: none;
+  }
+
+  /* 🌤 期 1：**天气角标自带一层毛玻璃**（`worldsim-weather.css:47-48` 写死 `blur(6px)`），
+     而它不是走 `--ws-blur` 令牌的 ⇒ 上面那两行令牌压不住它。这一屏底下是每帧重画的 WebGL 画布，
+     值只要不是 `none` 就每帧读回像素 ⇒ 在本页**就地把它改成 `none`**。
+     ⚠️ 不改那个共享样式文件：它还有别的读法（角标/粒子层共用一份），改它等于替所有人做决定；
+     这里是"这一屏不用毛玻璃"的局部决定（口径与上面那条 R1 一致）。 */
+  .wsce :deep(.ws-wxtag) {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    /* 顶栏那一排按钮在 `top:0`（44px 高）⇒ 角标默认的 `top:.7em` 会压在「🗺 城市数据」上 */
+    top: 52px;
+  }
+
+  /* 💬 期 1：事件气泡的位置由组件自己算（`position:absolute`），这里只保证它**不吃地图手势**：
+     整层已经是 `pointer-events:none`（组件内），气泡本体 `pointer-events:auto` —— 与老宿主一致。 */
+  .wsce :deep(.ws-ebx) {
+    z-index: 8; /* 压在地图与交通 HUD（6）之上、顶栏（30）之下：它是"刚发生的事"，该被看见 */
   }
 
   /* 📱 角色面板开着时，把**悬浮手机的按钮**让开（机主：「UI互相挤压」）。

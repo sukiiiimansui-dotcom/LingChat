@@ -1201,6 +1201,11 @@ function applyPitchGuard(map) {
 }
 
 // src/components/views/worldsim/wsMapTheme.ts
+function baseMaxZoomFor(theme) {
+  const f = theme && theme.baseFade;
+  if (!f || typeof f.to !== "number" || !Number.isFinite(f.to)) return void 0;
+  return Math.ceil(f.to);
+}
 function themeForTier(theme, low) {
   if (!low) return { sky: theme.sky, outlineWidth: theme.outline.width, tint: theme.tint };
   return {
@@ -1215,6 +1220,9 @@ function themeStyleParts(theme, low = false, transitionMs = 0) {
     base: { type: "raster", ...theme.sources.base, tileSize: 256, crossOrigin: "anonymous" },
     ref: { type: "raster", ...theme.sources.ref, tileSize: 256, crossOrigin: "anonymous" }
   };
+  const baseCap = baseMaxZoomFor(theme);
+  const baseSrc = sources.base;
+  if (baseCap !== void 0 && (typeof baseSrc.maxzoom !== "number" || baseCap < baseSrc.maxzoom)) baseSrc.maxzoom = baseCap;
   const layers = [
     {
       id: "bg",
@@ -1373,6 +1381,47 @@ function bldArtParamsOf(theme, opts) {
   };
 }
 
+// src/components/views/worldsim/wsBldDetailTiers.ts
+var WS_BLD_DETAIL_ROOF_ZOOM = 14;
+var WS_BLD_DETAIL_EQUIP_ZOOM = 16;
+var BLD_PART_TIER = Object.freeze({
+  body: 0,
+  podium: 0,
+  tower: 0,
+  setback: 0,
+  roof: 1,
+  parapet: 1,
+  equip: 2,
+  antenna: 2
+});
+function bldTierOfPart(part) {
+  const t = BLD_PART_TIER[String(part ?? "")];
+  return t === 0 || t === 1 || t === 2 ? t : 0;
+}
+var WS_BLD_VECTOR_MINZOOM_MIRROR = 11;
+function bldDetailTierZoom(tier) {
+  if (tier === 0) return WS_BLD_VECTOR_MINZOOM_MIRROR;
+  if (tier === 1) return WS_BLD_DETAIL_ROOF_ZOOM;
+  if (tier === 2) return WS_BLD_DETAIL_EQUIP_ZOOM;
+  return null;
+}
+function bldLayerVisibilityAt(minzoom, maxzoom, z) {
+  const lo = typeof minzoom === "number" && isFinite(minzoom) ? minzoom : 0;
+  const hi = typeof maxzoom === "number" && isFinite(maxzoom) ? maxzoom : Infinity;
+  const zz = typeof z === "number" && isFinite(z) ? z : 0;
+  return zz >= lo && zz < hi ? "visible" : "none";
+}
+function bldPartsVisibleAt(parts, z) {
+  const out = [];
+  for (const p of parts) {
+    const t = bldTierOfPart(p);
+    const mz = bldDetailTierZoom(t);
+    if (mz === null) continue;
+    if (bldLayerVisibilityAt(mz, null, z) === "visible") out.push(String(p));
+  }
+  return out;
+}
+
 // src/components/views/worldsim/wsBuildingLook.ts
 var KIND_HEIGHT_M = {
   house: 7,
@@ -1449,8 +1498,8 @@ function decorateBuildings(fc, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
     levels: 0,
     kind: 0,
     /* ⚠️ 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
-       `detail` 只在代拍页 `?bld=2` 打开。 */
-    mode: opts.mode === "detail" ? "detail" : "base",
+       `roof` = 默认档的屋顶系（2026-10-02 B1）；`detail` 只在代拍页 `?bld=2` 打开。 */
+    mode: opts.mode === "detail" ? "detail" : opts.mode === "roof" ? "roof" : "base",
     low: !!opts.low,
     body: 0,
     podium: 0,
@@ -1585,7 +1634,9 @@ function partFeature(src, ring, base, top, part, color, extra = {}) {
   return {
     type: "Feature",
     id: `${String(src.id || "")}#${part}${extra.tier ? "-t" + String(extra.tier) : ""}${extra.idx !== void 0 ? "-" + String(extra.idx) : ""}`,
-    properties: { ...src.properties || {}, part, h3d: top, h_base: base, color3d: color, ...extra },
+    /* 🏢 `zt` = 这个体块属于哪一档（0 一直画 / 1 z≥14 女儿墙 / 2 z≥16 设备箱+天线）。
+       写进属性而不是在图层的 filter 里拼表达式 —— 表达式报错是静默的（见文件头）。 */
+    properties: { ...src.properties || {}, part, zt: bldTierOfPart(part), h3d: top, h_base: base, color3d: color, ...extra },
     geometry: { type: "Polygon", coordinates: [ring] }
   };
 }
@@ -1605,6 +1656,7 @@ function buildingPartSet(f, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
     properties: {
       ...props,
       part: "body",
+      zt: bldTierOfPart("body"),
       h3d: h,
       h_from: from,
       h_base: base,
@@ -1615,6 +1667,27 @@ function buildingPartSet(f, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
   const ring = outerRing(f.geometry);
   if (!ring) return { parts: [body], info };
   if (opts.low) return { parts: [body], info };
+  if ((opts.mode ?? "base") === "roof") {
+    const parts2 = [body];
+    const topH2 = base + h;
+    if (h >= PARAPET_MIN_H) {
+      const fm = footprintMetrics(ring);
+      const t = Math.max(0.2, Math.min(PARAPET_THICK_M, fm.minSideM * 0.18));
+      parts2.push(partFeature(f, ringBand(ring, insetRingMeters(ring, t)), topH2, topH2 + PARAPET_H, "parapet", shade(color, 1.08), { wallThickM: +t.toFixed(2), win: 0 }));
+      const eq = equipBoxes(ring, seed, topH2);
+      info.equipWanted = eq.wanted;
+      info.equipPlaced = eq.boxes.length;
+      info.equipSkipped = eq.skipped;
+      for (let i = 0; i < eq.boxes.length; i++) {
+        const b = eq.boxes[i];
+        parts2.push(partFeature(f, b.ring, b.base, b.top, "equip", shade(color, 0.72), { side: b.side, idx: i, win: 0 }));
+      }
+    }
+    if (h >= ANTENNA_MIN_H) {
+      parts2.push(partFeature(f, antennaRing(ring), topH2, topH2 + ANTENNA_M, "antenna", shade(color, 1.25), { win: 0 }));
+    }
+    return { parts: parts2, info };
+  }
   const detail = (opts.mode ?? "base") === "detail";
   if (!detail) {
     const parts2 = [body];
@@ -1966,26 +2039,80 @@ function bldFootprintAreaM2(f) {
   }
   return Math.abs(a) / 2;
 }
-function dressBase(features) {
+function dressBase(features, opts = {}) {
   const counts = { n: 0, real: 0, levels: 0, kind: 0 };
   const out = [];
+  const ramp = opts.ramp ?? HEIGHT_COLOR_RAMP;
+  const zoom = typeof opts.zoom === "number" && isFinite(opts.zoom) ? opts.zoom : null;
+  const roofOn = zoom === null || bldLayerVisibilityAt(WS_BLD_DETAIL_ROOF_ZOOM, null, zoom) === "visible";
+  const equipOn = zoom === null || bldLayerVisibilityAt(WS_BLD_DETAIL_EQUIP_ZOOM, null, zoom) === "visible";
+  const mode = "roof";
   for (const f of features || []) {
-    const { h, from } = renderHeight(f.properties || {});
     const fp = bldFootprintAreaM2(f);
+    const set = buildingPartSet(
+      f,
+      ramp,
+      { mode }
+    );
     counts.n += 1;
-    if (from === "real") counts.real += 1;
-    else if (from === "levels") counts.levels += 1;
-    else counts.kind += 1;
-    out.push({
-      ...f,
-      properties: { ...f.properties || {}, h3d: h, h_from: from, fp: Math.round(fp), small: fp < WS_BLD_SMALL_M2 ? 1 : 0 }
-    });
+    if (set.parts[0]) {
+      const from = set.parts[0].properties?.h_from;
+      if (from === "real") counts.real += 1;
+      else if (from === "levels") counts.levels += 1;
+      else counts.kind += 1;
+    }
+    for (const part of set.parts) {
+      const p = part.properties || {};
+      const zt = bldTierOfPart(p.part);
+      if (zt === 1 && !roofOn) continue;
+      if (zt === 2 && !equipOn) continue;
+      out.push({
+        ...part,
+        properties: { ...p, fp: Math.round(fp), small: fp < WS_BLD_SMALL_M2 ? 1 : 0 }
+      });
+    }
   }
   return { features: out, counts };
 }
 function bldLayerSpecsFor(theme, tier, opts = {}) {
   const th = theme;
   const P = bldArtParamsOf(th, { art: opts.art ?? 1, look: opts.look ?? 1 });
+  const tierFilter = (t) => t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+  const detailPaint = {
+    "fill-extrusion-height": ["get", "h3d"],
+    "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
+    "fill-extrusion-opacity": P.opacity,
+    "fill-extrusion-vertical-gradient": P.vgrad,
+    "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor]
+  };
+  const roofLayer = {
+    id: "bld-roof",
+    type: "fill-extrusion",
+    source: "bld",
+    minzoom: WS_BLD_DETAIL_ROOF_ZOOM,
+    filter: tierFilter(1),
+    paint: { ...detailPaint }
+  };
+  const equipLayer = {
+    id: "bld-equip",
+    type: "fill-extrusion",
+    source: "bld",
+    minzoom: WS_BLD_DETAIL_EQUIP_ZOOM,
+    filter: tierFilter(2),
+    paint: { ...detailPaint }
+  };
+  const outlineLayers = tier.outlineWidth !== null ? [{
+    id: "bld-line",
+    type: "line",
+    source: "bld",
+    minzoom: WS_BLD_VECTOR_MINZOOM,
+    /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
+       `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。 */
+    paint: {
+      "line-color": P.outline.color,
+      "line-width": P.lineWidth
+    }
+  }] : [];
   if ((opts.mode ?? "base") === "base") {
     return [
       {
@@ -1993,29 +2120,12 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
         type: "fill-extrusion",
         source: "bld",
         minzoom: WS_BLD_VECTOR_MINZOOM,
-        paint: {
-          "fill-extrusion-color": P.rampColor,
-          "fill-extrusion-height": ["get", "h3d"],
-          "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-          "fill-extrusion-opacity": P.opacity,
-          "fill-extrusion-vertical-gradient": P.vgrad
-        }
+        filter: tierFilter(0),
+        paint: { ...detailPaint }
       },
-      ...tier.outlineWidth !== null ? [{
-        id: "bld-line",
-        type: "line",
-        source: "bld",
-        minzoom: WS_BLD_VECTOR_MINZOOM,
-        /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
-           `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。
-           🔴 这是**可见变化**（2026-09-26 机主 (a′) 第 3 笔）：App 原来**一律** zoom 插值
-           （`z11 → 0` 平滑长到 `z15 → 主题宽`），现在 `art=1` 是**固定主题宽**
-           ⇒ **z11~15 的描边比原来粗**（真机观感只有机主能判）。 */
-        paint: {
-          "line-color": P.outline.color,
-          "line-width": P.lineWidth
-        }
-      }] : []
+      roofLayer,
+      equipLayer,
+      ...outlineLayers
     ];
   }
   return [
@@ -2024,28 +2134,12 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
       type: "fill-extrusion",
       source: "bld",
       minzoom: WS_BLD_VECTOR_MINZOOM,
-      paint: {
-        "fill-extrusion-height": ["get", "h3d"],
-        /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
-        "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
-        "fill-extrusion-opacity": P.opacity,
-        "fill-extrusion-vertical-gradient": P.vgrad,
-        /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）；
-           `color3d` 缺席（没上妆的要素）才走高度色阶 —— 与页面同一条表达式。 */
-        "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor]
-      }
+      filter: tierFilter(0),
+      paint: { ...detailPaint }
     },
-    ...tier.outlineWidth !== null ? [{
-      id: "bld-line",
-      type: "line",
-      source: "bld",
-      minzoom: WS_BLD_VECTOR_MINZOOM,
-      paint: {
-        "line-color": P.outline.color,
-        /* 🖊 同 `base` 档：宽度取共享取参（`art=1` ⇒ 主题固定宽）—— 与代拍页逐字段相同 */
-        "line-width": P.lineWidth
-      }
-    }] : []
+    roofLayer,
+    equipLayer,
+    ...outlineLayers
   ];
 }
 var planConsumed = false;
@@ -4314,6 +4408,193 @@ function capBuildingsPerCell(feats, input = {}) {
   };
 }
 
+// src/components/views/worldsim/wsBldBudget.ts
+var WS_BLD_BUDGET_PX2 = 4e5;
+var WS_BLD_BUDGET_VERTS = 4e4;
+var WS_BLD_VERTS_PER_SEGMENT = 4;
+function bldRingVertices(ringPoints) {
+  const n = Number(ringPoints);
+  if (!isFinite(n) || n < 4) return 0;
+  return 5 * (n - 1);
+}
+function bldMetersPerCssPixel(zoom, lat) {
+  const z = isFinite(zoom) ? zoom : 0;
+  const la = isFinite(lat) ? Math.max(-85, Math.min(85, lat)) : 0;
+  return 156543.03392 * Math.cos(la * Math.PI / 180) / Math.pow(2, z);
+}
+function bldPxPerMeter(zoom, lat, pitchDeg) {
+  const mpp = bldMetersPerCssPixel(zoom, lat);
+  if (!(mpp > 0)) return 0;
+  const p = isFinite(pitchDeg) ? Math.max(0, Math.min(85, pitchDeg)) : 0;
+  return Math.sin(p * Math.PI / 180) / mpp;
+}
+function outerRingOf(f) {
+  const g = f?.geometry;
+  if (!g || g.type !== "Polygon" || !Array.isArray(g.coordinates)) return null;
+  const ring = g.coordinates[0];
+  if (!Array.isArray(ring) || ring.length < 4) return null;
+  return ring;
+}
+function h3dOf(f) {
+  const p = f?.properties || {};
+  const h = Number(p.h3d);
+  return isFinite(h) && h > 0 ? h : 0;
+}
+function readFirstPoint(f) {
+  const c = f?.geometry?.coordinates;
+  let cur = c;
+  for (let i = 0; i < 6 && Array.isArray(cur); i++) {
+    if (typeof cur[0] === "number" && typeof cur[1] === "number") return cur;
+    cur = cur[0];
+  }
+  return null;
+}
+function bldScreenCost(f, ctx, outCost) {
+  const ring = outerRingOf(f);
+  if (!ring) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const pt of ring) {
+    const lng = Number(pt[0]), lat = Number(pt[1]);
+    if (!isFinite(lng) || !isFinite(lat)) continue;
+    let xy;
+    try {
+      xy = ctx.project(lng, lat);
+    } catch {
+      continue;
+    }
+    const x = Number(xy[0]), y = Number(xy[1]);
+    if (!isFinite(x) || !isFinite(y)) continue;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (!(x1 >= x0) || !(y1 >= y0)) return null;
+  const w = x1 - x0, h = y1 - y0;
+  const h3d = h3dOf(f);
+  const ppm = isFinite(ctx.pxPerMeter) && ctx.pxPerMeter > 0 ? ctx.pxPerMeter : 0;
+  const roofPx = w * h;
+  const wallPx = (w + h) * (h3d * ppm);
+  const verts = bldRingVertices(ring.length);
+  const cost = {
+    id: String(f?.id ?? ""),
+    roofPx,
+    wallPx,
+    px: roofPx + wallPx,
+    verts,
+    ringPoints: ring.length,
+    h3d
+  };
+  if (outCost) outCost.v = cost;
+  return cost;
+}
+function pickBuildingsByBudget(input) {
+  const feats = input.features || [];
+  const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
+  const budgetVerts = Number.isFinite(input.budgetVerts) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
+  const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
+  const b = input.bounds;
+  const stats = {
+    total: feats.length,
+    considered: 0,
+    outOfView: 0,
+    noRing: 0,
+    chosen: 0,
+    px2: 0,
+    verts: 0,
+    px2Budget: budgetPx2,
+    vertsBudget: budgetVerts,
+    px2Bound: false,
+    vertsBound: false,
+    minInView,
+    floorAdded: 0,
+    overBudget: false,
+    why: ""
+  };
+  if (!b) {
+    stats.why = "数不出来：没给视野（bounds），挑不出楼";
+    return { features: [], stats };
+  }
+  let w, s, e, n;
+  try {
+    w = Number(b.getWest());
+    s = Number(b.getSouth());
+    e = Number(b.getEast());
+    n = Number(b.getNorth());
+  } catch {
+    stats.why = "数不出来：读视野失败（getBounds 抛错）";
+    return { features: [], stats };
+  }
+  if (![w, s, e, n].every((v) => isFinite(v))) {
+    stats.why = "数不出来：视野不是四个有限数";
+    return { features: [], stats };
+  }
+  const cands = [];
+  for (const f of feats) {
+    const ring = outerRingOf(f);
+    const p0 = ring ? ring[0] : readFirstPoint(f);
+    const inView = !!p0 && p0[0] >= w && p0[0] <= e && p0[1] >= s && p0[1] <= n;
+    if (!inView) {
+      stats.outOfView += 1;
+      continue;
+    }
+    if (!ring) {
+      stats.noRing += 1;
+      continue;
+    }
+    const c = bldScreenCost(f, input.screen);
+    if (!c) {
+      stats.noRing += 1;
+      continue;
+    }
+    stats.considered += 1;
+    const denom = c.verts > 0 ? c.verts : 1;
+    cands.push({ f, c, ratio: c.px / denom });
+  }
+  cands.sort((A, B) => {
+    if (B.ratio !== A.ratio) return B.ratio - A.ratio;
+    if (B.c.px !== A.c.px) return B.c.px - A.c.px;
+    return A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0;
+  });
+  const chosen = [];
+  const taken = new Array(cands.length).fill(false);
+  let sumPx = 0, sumV = 0;
+  for (let i = 0; i < cands.length; i++) {
+    const c = cands[i];
+    const overPx = sumPx + c.c.px > budgetPx2;
+    const overV = sumV + c.c.verts > budgetVerts;
+    if (overPx || overV) {
+      if (overPx) stats.px2Bound = true;
+      if (overV) stats.vertsBound = true;
+      continue;
+    }
+    taken[i] = true;
+    chosen.push(c);
+    sumPx += c.c.px;
+    sumV += c.c.verts;
+  }
+  if (chosen.length < minInView) {
+    for (let i = 0; i < cands.length && chosen.length < minInView; i++) {
+      if (taken[i]) continue;
+      const c = cands[i];
+      taken[i] = true;
+      chosen.push(c);
+      sumPx += c.c.px;
+      sumV += c.c.verts;
+      stats.floorAdded += 1;
+    }
+  }
+  stats.chosen = chosen.length;
+  stats.px2 = Math.round(sumPx);
+  stats.verts = Math.round(sumV);
+  stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+  const bd = [];
+  if (stats.px2Bound) bd.push("像素");
+  if (stats.vertsBound) bd.push("顶点");
+  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
+  return { features: chosen.map((c) => c.f), stats };
+}
+
 // src/components/views/worldsim/wsBldPickStore.ts
 var WS_BLD_CELL_CAP_REF_DEG = 0.05;
 var WS_BLD_INVIEW_DEFAULT = 10;
@@ -4393,6 +4674,19 @@ function createBldPickStore(opts) {
     },
     frozenTotal() {
       return Object.keys(frozen).length;
+    },
+    /* 🏙 **双预算挑楼** —— 规则一行都不在这里（在 `wsBldBudget.pickBuildingsByBudget`）。
+       本方法之所以存在：页面与 App **都只认 `createBldPickStore()` 这一个口**
+       （2026-09-26 抽真源的初衷），新口径不该让宿主去 import 第二个模块。 */
+    pickBudget(input) {
+      return pickBuildingsByBudget({
+        features: input.features,
+        bounds: input.bounds,
+        screen: input.screen,
+        budgetPx2: input.budgetPx2,
+        budgetVerts: input.budgetVerts,
+        minInView: input.minInView
+      });
     },
     frozenObject() {
       return frozen;
@@ -6326,6 +6620,7 @@ export {
   BLD_BUNDLE_CELL_DEG,
   BLD_BUNDLE_MAX_CELLS,
   BLD_BUNDLE_PER_REFRESH,
+  BLD_PART_TIER,
   BLD_STORE_CAP,
   BLD_STORE_CAP_MAX,
   BLD_STORE_CAP_RECOMMENDED,
@@ -6445,9 +6740,13 @@ export {
   WIN_PATTERN_SIZE,
   WS_ART_PATCHES,
   WS_ART_RAMP_HI,
+  WS_BLD_BUDGET_PX2,
+  WS_BLD_BUDGET_VERTS,
   WS_BLD_CELL_CAP,
   WS_BLD_CELL_CAP_REF_DEG,
   WS_BLD_CELL_DEG,
+  WS_BLD_DETAIL_EQUIP_ZOOM,
+  WS_BLD_DETAIL_ROOF_ZOOM,
   WS_BLD_FALLBACK_OPACITY,
   WS_BLD_FALLBACK_OUTLINE,
   WS_BLD_FALLBACK_RAMP,
@@ -6458,6 +6757,7 @@ export {
   WS_BLD_OUTLINE_STOPS,
   WS_BLD_SMALL_M2,
   WS_BLD_VECTOR_MINZOOM,
+  WS_BLD_VERTS_PER_SEGMENT,
   WS_BLD_VIEW_CAP,
   WS_FETCH_R_BACKEND_MAX,
   WS_FETCH_R_LADDER,
@@ -6497,13 +6797,21 @@ export {
   bldBundleCellOf,
   bldBundleCellsForView,
   bldCapForCellDeg,
+  bldDetailTierZoom,
   bldFootprintAreaM2,
   bldIdOf,
   bldLayerSpecsFor,
+  bldLayerVisibilityAt,
   bldLiveDecision,
+  bldMetersPerCssPixel,
+  bldPartsVisibleAt,
   bldPointOf,
   bldPointOfRaw,
+  bldPxPerMeter,
   bldRampColorExpr,
+  bldRingVertices,
+  bldScreenCost,
+  bldTierOfPart,
   bldVerdictState,
   bldVerdictText,
   buildBldBoxes,
@@ -6636,6 +6944,7 @@ export {
   parseBldnParam,
   parseInViewParam,
   parseLookParam,
+  pickBuildingsByBudget,
   pickBuildingsForView,
   pickHome,
   pickLabels,

@@ -34,12 +34,27 @@ import { themeForTier, themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { sceneLayerPlan } from "./wsScene";
 /* 🎨 **取参只有一份**（`bldArtParamsOf`）—— 本文件只决定"参数怎么变成图层"，不决定参数从哪来 */
 import { bldArtParamsOf } from "./wsArtParams";
-/* 🎨 基准上妆要 `renderHeight`（楼属性 → 渲染高度，纯函数）。⚠️ 本文件**只**用它的纯函数，
-   不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。 */
-import { renderHeight } from "./wsBuildingLook";
+/* 🎨 基准上妆要 `buildingPartSet`（拆件：主体 + 屋顶系，纯函数）。
+   ⚠️ 本文件**只**用它的纯函数，不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。
+   `renderHeight` 已不再直接调（它现在在 `buildingPartSet` 里算，两边各算一次迟早漂移）。 */
+import { buildingPartSet, HEIGHT_COLOR_RAMP, type ShapeMode } from "./wsBuildingLook";
+/* 🏢 **拆件的 zoom 分档真源**（2026-10-02 B1）：两个固定阈值 + `part→档位` 查表 + 离线可见性判定。
+   ⚠️ 它是**单向**依赖（本文件 → 它），它不 import 任何东西 ⇒ 不成环。 */
+import {
+  WS_BLD_DETAIL_ROOF_ZOOM,
+  WS_BLD_DETAIL_EQUIP_ZOOM,
+  bldTierOfPart,
+  bldLayerVisibilityAt,
+} from "./wsBldDetailTiers";
 /* 🏙 挑选的**统计类型**来自编排真源（`wsBldPickStore`）；规则类型（`wsBuildingPick`）本文件已不再直接用 ——
    `pickBuildingsForView` 那条"按视野挑、无冻结"的旧路**已从这里移除**（App 会"挪一下就变"，机主否过）。 */
 import type { BldPickStats } from "./wsBldPickStore"
+/* 🏙 双预算挑楼的**统计类型**（真源在 `wsBldBudget`）—— 落图通路对两种口径一视同仁：
+   它只把挑出来的那批交给 `dress()`、把 `stats` 转给 `onPicked()`，**不解读**统计里的字段。 */
+import type { BldBudgetStats } from "./wsBldBudget"
+
+/** 两种挑楼口径的统计（按格 / 双预算）—— 落图通路只转交，不解读 */
+export type BldPickAnyStats = BldPickStats | BldBudgetStats;
 
 /** 楼层档位（`themeForTier()` 的返回；层序/描边这些"随主题变"的参数都从这里取） */
 export type ThemeTier = ReturnType<typeof themeForTier>;
@@ -100,7 +115,7 @@ export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number)
 /* ══ ② 楼房图层规格 ═══════════════════════════════════════════════════════════════ */
 
 /**
- * 楼房那几条图层（`bld-ext` / `bld-roof` / `bld-antenna` / `bld-line`）（原宿主 `bldLayerSpecs()`，逐字搬）。
+ * 楼房那几条图层（`bld-ext` / `bld-roof` / `bld-equip` / `bld-line`；2026-10-02 起按 zoom 分三条挤出层）。
  * 颜色/描边/色阶**全从主题取**（`theme` / `themeTier`），这里不写死任何色号。
  */
 /**
@@ -169,35 +184,69 @@ export function bldFootprintAreaM2(f: { geometry?: { coordinates?: unknown } | n
 }
 
 /**
- * 🎨 **基准上妆（不拆件）**：给每栋楼补 `h3d`（渲染高度）/ `h_from`（高度来源）/ `fp`（脚印 m²）/ `small`。
+ * 🎨 **基准上妆（默认档 = 主体 + 屋顶系）**：给每栋楼补 `h3d`/`h_from`/`color3d`/`h_base`/`part`/`zt`/`fp`/`small`。
  *
- * **只补字段、不动几何、不拆件** —— 默认档两页共用这一条（机主 (a′)）。
- * 拆件（裙楼/塔楼/女儿墙/设备箱/天线）走 `wsBuildingLook.decorateBuildings(..., {mode:"detail"})`，
- * 那是 `?bld=2` 那条路（页面本来就有，App 侧本次补上）。
+ * ## 🏢 2026-10-02 改口径（机主拍板的 B1：「拆件进默认档 + 按 zoom 分层」）
+ * 以前这里是"**只补渲染字段、不拆件**"（一栋楼一个要素，屏上全是平顶柱体）。
+ * 现在默认档走 `buildingPartSet(mode:"roof")` ⇒ 一栋楼变成 **1~5 个要素**：
+ *   · `body`（第 0 档，**一直画**）；
+ *   · `parapet` 女儿墙（第 1 档，`z ≥ 14` 才画）；
+ *   · `equip` 设备箱 1~3 个 + `antenna` 天线（第 2 档，`z ≥ 16` 才画）。
+ * **裙楼/塔楼/退台仍然只在 `?bld=2`**（`mode:"detail"`）—— 默认档的轮廓始终是原始脚印。
  *
- * @returns `features`（新对象，**不改入参**）+ `counts`（HUD 的高度来源分布；口径与 `ShapeCounts` 同名）
+ * ## 两条闸（同一份固定阈值，都**不**看帧率/设备）
+ * ① **图层侧**：`bld-roof` / `bld-equip` 各自的 `minzoom`（`bldLayerSpecsFor`）——
+ *    这是真正让渲染器"这一档 0 顶点 / 0 draw call"的那条闸（`bldLayerVisibilityAt` 可离线判定）；
+ * ② **生成侧**：`opts.zoom` 给了就**连体块都不生成**（省 `setData` 的解析与内存）。
+ *    两条闸同值 ⇒ 不存在"生成了却没人画"的白工，也不存在"该画却没生成"的空档。
+ *
+ * @param features 楼栋要素（**不动入参**）
+ * @param opts.ramp 高度色阶（拆件的 `color3d` 从它派生；不给 ⇒ `HEIGHT_COLOR_RAMP`）
+ * @param opts.zoom 当前 zoom（生成侧分档；不给/非有限数 ⇒ **全档都生成**，离线与自检用）
+ * @returns `features`（新对象，**不改入参**）+ `counts`（HUD 的高度来源分布；`n` **永远是楼栋数**）
  */
 export function dressBase<T extends { properties?: Record<string, unknown> | null; geometry?: unknown }>(
-  features: readonly T[] | null | undefined
+  features: readonly T[] | null | undefined,
+  opts: { ramp?: Array<[number, string]>; zoom?: number | null } = {}
 ): { features: Array<Record<string, unknown>>; counts: DressBaseCounts } {
   const counts: DressBaseCounts = { n: 0, real: 0, levels: 0, kind: 0 };
   const out: Array<Record<string, unknown>> = [];
+  const ramp = opts.ramp ?? HEIGHT_COLOR_RAMP;
+  const zoom = typeof opts.zoom === "number" && isFinite(opts.zoom) ? opts.zoom : null;
+  /* 生成侧分档：与图层侧的 `minzoom` **同一份常量**（`wsBldDetailTiers`） */
+  const roofOn = zoom === null || bldLayerVisibilityAt(WS_BLD_DETAIL_ROOF_ZOOM, null, zoom) === "visible";
+  const equipOn = zoom === null || bldLayerVisibilityAt(WS_BLD_DETAIL_EQUIP_ZOOM, null, zoom) === "visible";
+  const mode: ShapeMode = "roof";
   for (const f of features || []) {
-    const { h, from } = renderHeight(f.properties || {});
     const fp = bldFootprintAreaM2(f as { geometry?: { coordinates?: unknown } | null });
+    const set = buildingPartSet(
+      f as { id?: unknown; geometry?: unknown; properties?: Record<string, unknown> },
+      ramp,
+      { mode }
+    );
+    /* 🔴 计数口径 = **楼栋数**（拆件后要素变多，HUD 的「🏢 N」必须还是"这里有几栋楼"） */
     counts.n += 1;
-    if (from === "real") counts.real += 1;
-    else if (from === "levels") counts.levels += 1;
-    else counts.kind += 1;
-    out.push({
-      ...f,
-      properties: { ...(f.properties || {}), h3d: h, h_from: from, fp: Math.round(fp), small: fp < WS_BLD_SMALL_M2 ? 1 : 0 },
-    });
+    if (set.parts[0]) {
+      const from = (set.parts[0].properties as Record<string, unknown> | undefined)?.h_from;
+      if (from === "real") counts.real += 1;
+      else if (from === "levels") counts.levels += 1;
+      else counts.kind += 1;
+    }
+    for (const part of set.parts) {
+      const p = (part.properties || {}) as Record<string, unknown>;
+      const zt = bldTierOfPart(p.part);
+      if (zt === 1 && !roofOn) continue;   // 女儿墙那一档：z<14 连生成都不生成
+      if (zt === 2 && !equipOn) continue;  // 设备箱/天线那一档：z<16 同上
+      out.push({
+        ...part,
+        properties: { ...p, fp: Math.round(fp), small: fp < WS_BLD_SMALL_M2 ? 1 : 0 },
+      });
+    }
   }
   return { features: out, counts };
 }
 
-/** 楼体图层的形体档（**两页共用**）：`base` = 原始脚印一条挤出层（默认）· `parts` = 拆件后的 body/roof/antenna 三层 */
+/** 楼体图层的形体档（**两页共用**）：`base` = 默认档（主体 + 屋顶系，2026-10-02 起）· `parts` = `?bld=2` 拆件档（多裙楼/塔楼/退台） */
 export type BldLayerMode = "base" | "parts";
 
 export interface BldLayerOpts {
@@ -215,73 +264,87 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
   const th = theme;
   const P = bldArtParamsOf(th, { art: opts.art ?? 1, look: opts.look ?? 1 });
 
-  /* ── ① `base` 档（**默认**，机主 (a′) 后两页共用）：原始脚印、一条挤出层 + 一条描边层 ──
+  /* ── 🏢 **按 zoom 分档的三条挤出层**（机主 2026-10-02 拍板的 B1）────────────────────────
+     档位来自 `wsBldDetailTiers`（唯一真源）：0 = 主体/裙楼/塔楼/退台（**一直画**）·
+     1 = 女儿墙（`z ≥ WS_BLD_DETAIL_ROOF_ZOOM` = 14）· 2 = 设备箱 + 天线（`z ≥ WS_BLD_DETAIL_EQUIP_ZOOM` = 16）。
+
+     🔴 **闸是 `minzoom`**：MapLibre 的 `layout.visibility` 在 v6.10.0 **不接受 zoom 表达式**
+     （vendor 里那份 style-spec 的 `parameters` 只有 `global-state`；写了 zoom 表达式 ⇒ **整份 style
+     校验失败 ⇒ 地图永不 load**，这个坑项目踩过）。`minzoom` 是官方"按 zoom 开关整层"的那一档，
+     语义上就是"z 低于阈值 ⇒ 该层不可见 ⇒ **0 顶点 / 0 draw call**"（离线判定 `bldLayerVisibilityAt`）。
+     ⚠️ **固定阈值**：这两个数只跟 zoom 走，**不看帧率、不看设备**（机主红线：不许性能档位自动降级）。
+
+     分层筛选靠要素上算好的 `zt`（0/1/2），**不在 filter 里拼表达式** —— 表达式报错是静默的
+     （本项目为此付过代价）。`zt` 缺席（没上妆的要素）**按第 0 档算** ⇒ 照旧画，绝不"少画楼"。 */
+  const tierFilter = (t: 0 | 1 | 2): unknown[] =>
+    t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+  /** 屋顶系两条层共用的 paint：颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：
+   *  女儿墙偏亮、设备箱偏深），底座读 `h_base`（屋顶件不是从地面长出来的）。 */
+  const detailPaint = {
+    "fill-extrusion-height": ["get", "h3d"],
+    "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
+    "fill-extrusion-opacity": P.opacity,
+    "fill-extrusion-vertical-gradient": P.vgrad,
+    "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
+  };
+  const roofLayer = {
+    id: "bld-roof", type: "fill-extrusion", source: "bld",
+    minzoom: WS_BLD_DETAIL_ROOF_ZOOM,
+    filter: tierFilter(1),
+    paint: { ...detailPaint },
+  };
+  const equipLayer = {
+    id: "bld-equip", type: "fill-extrusion", source: "bld",
+    minzoom: WS_BLD_DETAIL_EQUIP_ZOOM,
+    filter: tierFilter(2),
+    paint: { ...detailPaint },
+  };
+  const outlineLayers = tier.outlineWidth !== null
+    ? [{
+        id: "bld-line", type: "line", source: "bld",
+        minzoom: WS_BLD_VECTOR_MINZOOM,
+        /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
+           `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。 */
+        paint: {
+          "line-color": P.outline.color,
+          "line-width": P.lineWidth,
+        },
+      }]
+    : [];
+
+  /* ── ① `base` 档（**默认**，机主 (a′) 后两页共用）：原始脚印 + 屋顶系两条 ──
      规格**逐字段等于代拍页默认档**（`bldLayerSpecs()` 的 else 分支）—— 这是"两页完全一样"的判据，
-     由 `ws_pages_consistency.mjs` 的 ④a/④b 盯着。 */
+     由 `ws_pages_consistency.mjs` 的 ④a/④b 盯着。
+     ⚠️ `bld-ext` 从 2026-10-02 起也读 `color3d`/`h_base`：默认档的数据**现在也拆件**
+     （`dressBase` 走 `mode:"roof"`），主体与屋顶件必须是**同一条取色**（各读各的会一片楼两种色）。
+     ⇒ 两个档位的 `bld-ext` 规格因此**逐字段相同**，这是有意的。 */
   if ((opts.mode ?? "base") === "base") {
     return [
       {
         id: "bld-ext", type: "fill-extrusion", source: "bld",
         minzoom: WS_BLD_VECTOR_MINZOOM,
-        paint: {
-          "fill-extrusion-color": P.rampColor,
-          "fill-extrusion-height": ["get", "h3d"],
-          "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-          "fill-extrusion-opacity": P.opacity,
-          "fill-extrusion-vertical-gradient": P.vgrad,
-        },
+        filter: tierFilter(0),
+        paint: { ...detailPaint },
       },
-      ...(tier.outlineWidth !== null
-        ? [{
-            id: "bld-line", type: "line", source: "bld",
-            minzoom: WS_BLD_VECTOR_MINZOOM,
-            /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
-               `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。
-               🔴 这是**可见变化**（2026-09-26 机主 (a′) 第 3 笔）：App 原来**一律** zoom 插值
-               （`z11 → 0` 平滑长到 `z15 → 主题宽`），现在 `art=1` 是**固定主题宽**
-               ⇒ **z11~15 的描边比原来粗**（真机观感只有机主能判）。 */
-            paint: {
-              "line-color": P.outline.color,
-              "line-width": P.lineWidth,
-            },
-          }]
-        : []),
+      roofLayer,
+      equipLayer,
+      ...outlineLayers,
     ];
   }
 
   /* ── ② `parts` 档（`?bld=2` 拆件）：**与代拍页 `?bld=2` 同形** ────────────────────
-     🔴 2026-09-26 机主 (a′) 之后特意**不**再按 `part` 拆成三条层：代拍页 `?bld=2` 一直是
-     "**一条 `bld-ext` 画全部 body/roof/antenna**"（颜色读要素自带的 `color3d`，拆件时每条都写了）。
-     三条层的版本（`bld-ext`/`bld-roof`/`bld-antenna` + `part` 过滤）是 App 自己的旧形状，
-     它会让两页"同一个 `?bld=2`"给出**不同的图层清单**（`ws_pages_consistency.mjs` ④ 会红），
-     而且同一个 `bld-ext` 换了宿主就可能匹配 0 栋（`part` 过滤 + 数据没 `part`）。
-     ⇒ 两页同形，两个档位（默认 / `?bld=2`）的清单都一致。 */
+     拆件档比默认档多出来的只是**数据**（裙楼/塔楼/退台/窗格），图层这边不再需要第二套 paint
+     ⇒ 两档共用上面那三条层，只有 `bld-win`（`?win=1`）是**代拍页独有**的一层，不进本函数。 */
   return [
     {
       id: "bld-ext", type: "fill-extrusion", source: "bld",
       minzoom: WS_BLD_VECTOR_MINZOOM,
-      paint: {
-        "fill-extrusion-height": ["get", "h3d"],
-        /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
-        "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
-        "fill-extrusion-opacity": P.opacity,
-        "fill-extrusion-vertical-gradient": P.vgrad,
-        /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）；
-           `color3d` 缺席（没上妆的要素）才走高度色阶 —— 与页面同一条表达式。 */
-        "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
-      },
+      filter: tierFilter(0),
+      paint: { ...detailPaint },
     },
-    ...(tier.outlineWidth !== null
-      ? [{
-          id: "bld-line", type: "line", source: "bld",
-          minzoom: WS_BLD_VECTOR_MINZOOM,
-          paint: {
-            "line-color": P.outline.color,
-            /* 🖊 同 `base` 档：宽度取共享取参（`art=1` ⇒ 主题固定宽）—— 与代拍页逐字段相同 */
-            "line-width": P.lineWidth,
-          },
-        }]
-      : []),
+    roofLayer,
+    equipLayer,
+    ...outlineLayers,
   ];
 }
 
@@ -359,10 +422,14 @@ export interface BldFlushOpts<T> {
    * ⚠️ 上一版这里叫 `pickNearView`，内部调 `pickBuildingsForView`（**按视野**挑、**没有冻结**）——
    * App 因此"挪走再挪回，那批楼就变了"（机主真机原话：「**每次滑动建筑都变了**」），
    * 而代拍页早已是按格那套 ⇒ 两页不是一个东西。**别把按视野那套加回来。**
+   *
+   * 🏙 **2026-10-02（B2）**：默认口径换成 `store.pickBudget()`（**双预算**：Σ投影 px² + Σ顶点，
+   * 两个固定常量）。`store.pick()`（按格 + 冻结）留给 `?bldn=` 的 A/B 逃生口与两页一致闸第③组。
+   * 本参数的类型因此放宽成"两种统计都收"（`BldPickAnyStats`）—— 通路只转交，不解读。
    */
-  pick?: ((feats: readonly T[]) => { features: readonly T[]; stats: BldPickStats }) | null;
+  pick?: ((feats: readonly T[]) => { features: readonly T[]; stats: BldPickAnyStats }) | null;
   /** 挑完回报（**只读**，给 HUD 写"显示 N / 视野内 M"；不许在这里改数据） */
-  onPicked?: (stats: BldPickStats) => void;
+  onPicked?: (stats: BldPickAnyStats) => void;
 }
 
 /**

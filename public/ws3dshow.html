@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-09-26-v92";
+      const BUILD = "ws3dshow-2026-10-02-v93";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -831,6 +831,10 @@
       function bldLayerSpecs() {
         /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数 */
         if (bldMinzoom() === null) return [];
+        /* 🏢 分档阈值同样来自共享真源：读不到 ⇒ **整批不建**（同一条判词纪律）。
+           为什么是"整批"而不是"少建一条"：三条层是同一条分档规则的三个切面，
+           缺一个门槛就会出现"该画的没画、不该画的画了"这种**看不出来**的错。 */
+        if (bldDetailTierZoom(1) === null || bldDetailTierZoom(2) === null) return [];
         /* 🎨 **取参只有一份**（2026-09-26 抽真源）：色阶（含 `artRamp`）/ 描边 / 平涂开关 / 不透明度 /
            铺平的停靠点 / 描边 zoom 插值 / 高度分档表达式 —— 全从 `wsArtParams.bldArtParamsOf()` 来，
            本页**不再持有第二份**（原来那 5 行内联就是"两页观感不同"的来源：App 侧根本没有它们）。
@@ -844,38 +848,9 @@
         /* 🏢 `?bld=2` 走"拆件"那套图层（颜色读要素自带的 `color3d`、底座读 `h_base`） */
         if (BLD === 2) return bldShadowLayers().concat(bldLayerSpecsDetail(P));
         if (BST === 2) return bldShadowLayers().concat(bstLayers(P));
-        return bldShadowLayers().concat([
-          {
-            id: "bld-ext", type: "fill-extrusion", source: "bld",
-            minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
-            paint: {
-              /* 按**渲染高度**上色：矮的沉下去、高的亮起来 ⇒ 一眼看出天际线的高低起伏。
-                 （按"数据来源"上色就会是一整片平色 —— 数据口径不该当美术用。）
-                 🎮 `?look=2`：同一张色阶，但换成**硬边分档**（cel）。 */
-              "fill-extrusion-color": P.rampColor,
-              "fill-extrusion-height": ["get", "h3d"],
-              "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-              "fill-extrusion-opacity": P.opacity,
-              /* 墙面竖向渐变：楼顶比楼底亮一点，体块才有"立起来"的感觉；
-                 二次元的**平涂**要关掉它（楼是一块纯色板才"动画"）。
-                 🎮 `?look=2` 把主题的 `verticalGradient` 打开了（受光面/背光面 + 落地感）。 */
-              "fill-extrusion-vertical-gradient": P.vgrad,
-            },
-          },
-          {
-            /* 轮廓线。暗色里它只是淡淡一圈；**二次元里它是主角** ——
-               BA 风的地面(0.919)和矮楼(0.87)亮度几乎一样，全靠这条深藏青细线把楼"勾"出来。
-               🎮 `?look=2` 地面压暗之后，这条线**翻成亮线**（深底亮线），颜色同样来自主题。 */
-            id: "bld-line", type: "line", source: "bld",
-            minzoom: bldMinzoomSpec(),   /* 🔴 同上：起点 = 共享真源（不许写死）*/
-            paint: {
-              "line-color": P.outline.color,
-              /* 🎨 art=2：描边**随 zoom 变细/变粗**（近粗 ⇒ 动画感；远细 ⇒ 不糊成一片）。
-                 art=1 保持主题给的固定宽度（旧版逐字节不变）。停靠点只有一份（`WS_BLD_OUTLINE_STOPS`）。 */
-              "line-width": P.lineWidth,
-            },
-          },
-        ]);
+        /* 🏢 **默认档**（2026-10-02 起也拆件：主体 + 女儿墙 + 设备箱 + 天线，按 zoom 固定分档）——
+           三条挤出层的规格与 App 侧 `bldLayerSpecsFor(mode:"base")` **逐字段相同**。 */
+        return bldShadowLayers().concat(bldTierSpecs(P), [bldLineLayer(P)]);
       }
 
       /**
@@ -932,6 +907,58 @@
         ];
       }
 
+      /**
+       * 🏢 **按 zoom 分档的三条挤出层**（2026-10-02 机主拍板的 B1）——
+       * 与 App 侧 `wsDistrictScene.bldLayerSpecsFor()` **逐字段同形**（`ws_pages_consistency.mjs` ④a/④b 盯着）。
+       *
+       * 档位（阈值来自共享真源 `bldDetailTierZoom`，页面不写死）：
+       *   · `bld-ext`   第 0 档 = 主体/裙楼/塔楼/退台 → **一直画**（`minzoom` = 共享 `WS_BLD_VECTOR_MINZOOM`）；
+       *   · `bld-roof`  第 1 档 = 女儿墙          → `z ≥ 14`；
+       *   · `bld-equip` 第 2 档 = 设备箱 + 天线    → `z ≥ 16`。
+       * 🔴 **闸是 `minzoom`**（图层级开关 ⇒ z 低于阈值时该层**不可见 = 0 顶点 / 0 draw call**）：
+       *    MapLibre 的 `layout.visibility` **不接受 zoom 表达式**（v6.10.0 的 spec 里
+       *    `parameters` 只有 `global-state`）⇒ 写成 zoom 表达式会让**整份 style 校验失败、地图永不 load**。
+       * ⚠️ **固定阈值**：只跟 zoom 走，**不看帧率、不看设备**（机主红线：不许性能档位自动降级）。
+       * 🔴 分层靠要素上算好的 `zt`（拆件时写的 0/1/2），**不在 filter 里拼表达式** ——
+       *    表达式报错是静默的（本项目为此付过代价）。`zt` 缺席（没上妆的要素）**按第 0 档算** ⇒ 照旧画。
+       *
+       * @param P           美术取参（`bldArtParamsOf` 的产物；本函数只读它，不自己算颜色）
+       * @param extExtra    额外的 `bld-ext` 过滤条件（只有 `?win=1` 的窗格层需要：与窗格层互补）；
+       *                    不给 ⇒ `bld-ext` 的 filter **逐字段等于 App 侧那一条**
+       */
+      function bldTierSpecs(P, extExtra) {
+        /* 屋顶系两层共用的 paint：颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗），
+           底座读 `h_base`（屋顶件不是从地面长出来的）—— 与 App 侧 `detailPaint` 逐字段相同。 */
+        const paint = {
+          "fill-extrusion-height": ["get", "h3d"],
+          "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
+          "fill-extrusion-opacity": P.opacity,
+          "fill-extrusion-vertical-gradient": P.vgrad,
+          "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
+        };
+        const z0 = ["==", ["coalesce", ["get", "zt"], 0], 0];
+        return [
+          {
+            id: "bld-ext", type: "fill-extrusion", source: "bld",
+            minzoom: bldMinzoomSpec(),
+            filter: extExtra ? ["all", z0, extExtra] : z0,
+            paint: { ...paint },
+          },
+          {
+            id: "bld-roof", type: "fill-extrusion", source: "bld",
+            minzoom: bldDetailTierZoom(1),
+            filter: ["==", ["get", "zt"], 1],
+            paint: { ...paint },
+          },
+          {
+            id: "bld-equip", type: "fill-extrusion", source: "bld",
+            minzoom: bldDetailTierZoom(2),
+            filter: ["==", ["get", "zt"], 2],
+            paint: { ...paint },
+          },
+        ];
+      }
+
       /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
       function bldLineLayer(P) {
         return {
@@ -957,31 +984,26 @@
       function bldLayerSpecsDetail(P) {
         /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数 */
         if (bldMinzoom() === null) return [];
+        if (bldDetailTierZoom(1) === null || bldDetailTierZoom(2) === null) return [];
+        /* 🏢 三条挤出层与默认档**同一份构造**（`bldTierSpecs`）—— 拆件档多出来的只是**数据**
+           （裙楼/塔楼/退台/窗格），图层这边不再需要第二套 paint。
+           `?win=1` 时 `bld-ext` 多一条"与窗格层互补"的过滤（`win != 1`）。 */
+        const tiers = bldTierSpecs(P, WINS ? ["!=", ["get", "win"], 1] : null);
+        if (!WINS) return tiers.concat([bldLineLayer(P)]);
         const paintCommon = {
           "fill-extrusion-height": ["get", "h3d"],
-          /* ⚠️ 拆件的体块**没有 `min_height`** ⇒ 必须先读 `h_base`（裙楼/塔楼/退台各自落在不同高度） */
           "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
           "fill-extrusion-opacity": P.opacity,
           "fill-extrusion-vertical-gradient": P.vgrad,
         };
-        const colorLayer = {
-          id: "bld-ext", type: "fill-extrusion", source: "bld",
-            minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
-          paint: {
-            ...paintCommon,
-            /* 颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深）。
-               🎮 `?look=2` 时兜底那条换成硬边分档（`color3d` 缺席的要素才走它）。 */
-            "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
-          },
-        };
-        if (WINS) colorLayer.filter = ["!=", ["get", "win"], 1]; // 与窗格层互补
         const winLayer = {
           id: "bld-win", type: "fill-extrusion", source: "bld",
-            minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
+          minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
           filter: ["==", ["get", "win"], 1],
           paint: { ...paintCommon, "fill-extrusion-pattern": WIN_IMAGE_ID },
         };
-        return WINS ? [colorLayer, winLayer, bldLineLayer(P)] : [colorLayer, bldLineLayer(P)];
+        /* 顺序与图层语义：色彩层 → 窗格层（互补）→ 屋顶系两条 → 描边层 */
+        return [tiers[0], winLayer].concat(tiers.slice(1), [bldLineLayer(P)]);
       }
 
       /* ══ 🎨 美术变体 `?art=2`（机主 2026-09-21：先在**代拍页**做一版，别碰 App 与角色）════
@@ -1070,6 +1092,35 @@
       /* 写进 spec 的值：数不出来时给 **24**（MapLibre 的 zoom 上限 ⇒ 合法值、实际永不显示）。
          ⚠️ 不许用 99 这类**非法**值 —— addLayer 会抛错，那比"不显示"更糟（楼整层消失）。 */
       function bldMinzoomSpec() { const v = bldMinzoom(); return typeof v === "number" ? v : 24; }
+      /**
+       * 🏢 **拆件的 zoom 分档阈值**（2026-10-02 机主拍板的 B1）—— 与 `bldMinzoom()` **同一条纪律**：
+       * 从**共享真源**（`wsBldDetailTiers.bldDetailTierZoom`，经 vendor 到手）读，页面**不许**写死 14/16；
+       * 读不到就返回 `null` ⇒ 调用方**不建那一档的层**（并在徽标里如实写原因），**绝不**拿猜的数顶上。
+       * 档位：0 = 主体（一直画）· 1 = 女儿墙（z ≥ 14）· 2 = 设备箱 + 天线（z ≥ 16）。
+       */
+      function bldDetailTierZoom(tier) {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.bldDetailTierZoom === "function") return T.bldDetailTierZoom(tier);
+          return null;
+        } catch (e) { return null; }
+      }
+      /**
+       * 🔭 **"1 米楼高 = 多少屏幕像素"**（共享真源 `wsBldBudget.bldPxPerMeter`，经 vendor 到手）。
+       *
+       * 双预算的成本模型（Σ投影 px²）要用它：`map.project` 是**地面**投影、不带高度，
+       * 墙面的屏幕高度必须自己算 —— 而且**两页必须同一把尺子**（各写一份必然漂）。
+       * 共享符号读不到时返回 `0`（= 只算屋顶、不算墙）并**记进 `errs`**（徽标可见）：
+       * 那是"vendor 还没到 / 产物旧"的瞬时状态，`FEED_NEEDED` 里有它 ⇒ `ensureVendor()` 会带版本号重取。
+       */
+      function bldPxPerMeterAt(zoom, lat, pitch) {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.bldPxPerMeter === "function") return T.bldPxPerMeter(zoom, lat, pitch);
+        } catch (e) { /* 落下面 */ }
+        errs.push("bldPxPerMeter 缺符号：墙高按 0 算（vendor 未到？会自动重取）");
+        return 0;
+      }
       /* 🌐 **楼房直画 WebGL**（`?glbld=1`，默认关）：MapLibre 自定义层 + 实例化方盒。
          为什么做它：`fill-extrusion` 开销随要素数线性增长（官方性能要点），今天为了不卡只能"只画 100 栋"；
          直画 GL 上万栋也只是几次 draw call ⇒ 密与清楚**可以不再是取舍**。
@@ -1185,7 +1236,13 @@
         /* 🎨🏙 2026-09-26 抽真源后**本页新增依赖的符号**（挑选/冻结编排 + 美术取参）：
            它们是**函数**（`tfMissing()` 的判据就是 `typeof === "function"`，常量**不能**进这张表）。
            进了这张表 ⇒ 浏览器缓存里的旧产物会被"带版本号重取"治好，而不是表现成"这个开关没反应"。 */
-        "createBldPickStore", "bldArtParamsOf"];
+        "createBldPickStore", "bldArtParamsOf",
+        /* 🏢 2026-10-02（B1 按 zoom 分档 + B2 双预算挑楼）本页新增依赖的两个**函数**：
+           · `bldDetailTierZoom` —— 三条挤出层的分档阈值（14/16）真源，页面**不许**写死；
+           · `bldPxPerMeter` —— "1 米楼高 = 多少屏幕像素"（`sin(pitch)/metersPerPixel`），
+             双预算的成本模型要用它，两页**必须同一把尺子**。
+           ⚠️ 那两个阈值本身是**常量**，所以只查上面这两个函数在不在（常量不进这张表）。 */
+        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
         "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",
@@ -2075,7 +2132,17 @@
           const pt = e && e.point;
           let feats = [];
           let qerr = "";
-          try { if (pt && map.queryRenderedFeatures) feats = map.queryRenderedFeatures(pt, { layers: ["bld-ext"] }) || []; } catch (e2) { qerr = String(e2).slice(0, 60); feats = []; }
+          /* 🏢 三条挤出层**都要查**（2026-10-02 B1 按 zoom 分了三条：主体 / 女儿墙 / 设备箱+天线）——
+             只查 `bld-ext` 会让"点屋顶件"落空（下面还有屏幕距离兜底，但那是降级不是正常路径）。
+             多条命中时**按档位升序取第一条**（`zt` 小的 = 主体优先，卡片信息最全）。 */
+          try {
+            if (pt && map.queryRenderedFeatures) {
+              feats = (map.queryRenderedFeatures(pt, { layers: ["bld-ext", "bld-roof", "bld-equip"] }) || []).slice().sort(function (a, b) {
+                const za = Number((a.properties || {}).zt || 0), zb = Number((b.properties || {}).zt || 0);
+                return za - zb;
+              });
+            }
+          } catch (e2) { qerr = String(e2).slice(0, 60); feats = []; }
           /* 🔴 **自证一行**（本页是试验台，`window.__*` 是它的既有契约）：点楼这条路以前**什么都不说**，
              于是"点不到楼"和"根本没点中"看起来一模一样。诊断三件事都写出来：
              库查到几条 / 画出去的楼几个点（`drawnBldPts`）/ 当时的 zoom。 */
@@ -2736,7 +2803,10 @@
         row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "BA 的**平涂**（机主拍板的美术方向）⇒ 渐变保持关；受光/背光改由 cel 分档表达");
         row("bld-ext", "fill-extrusion-opacity", THEME.extrudOpacity, "远景淡出**已撤回基准值**（亮底上把远景调透明 = 楼化进地面，与「底要看得清」相反）");
         row("bld-line", "line-color", THEME.outline.color, "描边 = BA 的深藏青（**没有翻成亮线** —— 那是第一版改错的，已撤）");
-        const cel = (function () { const p = live("bld-ext", "fill-extrusion-color"); return p.v; })();
+        const celRaw = (function () { const p = live("bld-ext", "fill-extrusion-color"); return p.v; })();
+        /* 🏢 2026-10-02：`bld-ext` 的颜色外层是 `coalesce(color3d, 色阶)`（默认档也拆件了，
+           主体与屋顶件必须同一条取色）⇒ 判"是不是 cel"要**剥掉那层 coalesce** 再看里层。 */
+        const cel = (Array.isArray(celRaw) && celRaw[0] === "coalesce") ? celRaw[2] : celRaw;
         const isCel = Array.isArray(cel) && cel[0] === "step";
         rows.push({
           id: "bld-ext", key: "fill-extrusion-color", now: isCel ? ("step（" + THEME.ramp.length + " 档）") : (Array.isArray(cel) ? cel[0] : cel),
@@ -3055,7 +3125,26 @@
        * 所以这里收成一份：`applyBuildings` 与 `flushBld` 都调它。
        * （之前没暴露，是因为离线取数一直坏着 ⇒ 楼根本没画出来；今天修好取数才露出来。）
        */
-      function dressBldBase(features) {
+      function dressBldBase(features, zoom) {
+        const z = (typeof zoom === "number" && isFinite(zoom)) ? zoom : null;
+        const T = window.__TF__;
+        /* 🏢 **首选 = 共享真源**（`wsDistrictScene.dressBase`，经 vendor 到手）——
+           2026-10-02 起默认档也拆件（主体 + 女儿墙 + 设备箱 + 天线，按 zoom 固定分档），
+           而"怎么拆"只许有一份（PR 门禁 C1；App 宿主调的就是它）⇒ 本页**不再持有第二份形体逻辑**。
+           窗口参数 `zoom` 决定**生成侧的档**（与图层侧 `minzoom` 同一份常量）：`z<14` 连女儿墙
+           体块都不生成 ⇒ `setData` 的解析量与改造前同样轻。 */
+        if (T && typeof T.dressBase === "function") {
+          try {
+            const ramp = bldArtRamp();
+            const out = T.dressBase(features, ramp ? { ramp: ramp, zoom: z } : { zoom: z });
+            return (out && out.features) || [];
+          } catch (e) { errs.push("dressBase " + e); }
+        }
+        /* ⚠️ **退化路径**（只在"vendor 还没到"的那一刻，或共享函数抛错时）：
+           只补渲染字段、**不拆件** —— 与 2026-10-02 之前的形状**逐字节相同**
+           （要素上没有 `zt` ⇒ 三条层都按**第 0 档**画 ⇒ 平顶主体，不会画错也不会少画楼）。
+           徽标里如实写这次没拆件（`window.__BLD_FALLBACK__`），**不假装拆了**。 */
+        window.__BLD_FALLBACK__ = window.__BLD_FALLBACK__ || "数不出来：vendor 未到（屋顶系未生成，只画主体）";
         return (features || []).map((f) => {
           const [h, src] = renderHeight(f.properties || {});
           const fp = fpAreaM2Of(f);
@@ -3101,10 +3190,20 @@
           const feats = (fc && fc.features) ? fc.features : [];
           drawnBldPts = feats.map(function (f) {
             const props = (f && f.properties) || {};
-            const id = f.i || f.id || props.store_id || props.osm_id || props.id || null;
+            /* 🏢 **一栋楼只留一个锚点**（2026-10-02：默认档也拆件了）——
+               拆件的要素 id 形如 `X#parapet` / `X#equip-0`，直接用会把同一栋楼记 3~5 次
+               ⇒ 生成名会指向同一栋楼好几次。这里**剥掉 `#部位` 后缀**，回到楼栋 id。 */
+            const rawId = f.i || f.id || props.store_id || props.osm_id || props.id || null;
+            const id = rawId === null ? null : String(rawId).split("#")[0];
             const pt = f ? bldRepPt(f) : null;
             return (id && pt) ? { id: String(id), lng: pt[0], lat: pt[1] } : null;
           }).filter(Boolean);
+          /* 同一栋楼可能既有主体又有屋顶件 ⇒ 按 id 去重（**保留第一条**：主体在拆件输出里排最前） */
+          (function () {
+            const seen = Object.create(null), uniq = [];
+            for (const b of drawnBldPts) { if (!seen[b.id]) { seen[b.id] = 1; uniq.push(b); } }
+            drawnBldPts = uniq;
+          })();
           window.__GENN_ANCHOR__ = { source: "drawn", n: drawnBldPts.length, of: feats.length, why: String(why || "") };
           /* 🎯 **画出去那批楼的屏幕坐标**（试验台自证，与 `__GENN_ANCHOR__` 同族）：
              用途只有一个 —— 回答「**为什么点不到楼**」。实测踩过：54 个网格点
@@ -3138,7 +3237,9 @@
               window.__BLD_GL__ = { err: "vendor 缺符号（旧产物？）" };
               return;
             }
-            const dressed = dressBldBase(all.features);
+            /* ⚠️ 直画方盒只要**主体**：`zoom: bldDetailTierZoom(1)` ⇒ 生成侧就停在"平顶"那一档
+               （方盒本来也表达不了女儿墙/设备箱，白生成只是多花 `setData`） */
+            const dressed = dressBldBase(all.features, bldDetailTierZoom(1));
             const boxes = TFg.buildBldBoxes(dressed.map((f) => ({
               ring: (f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]) || null,
               h3d: f.properties.h3d,
@@ -3157,7 +3258,7 @@
             try {
               const gs0 = glBldLayer.glStats ? glBldLayer.glStats() : null;
               if (gs0 && gs0.draws > 0) {
-                for (const id of ["bld-ext", "bld-line", "bld-roof", "bld-antenna"]) {
+                for (const id of ["bld-ext", "bld-line", "bld-roof", "bld-equip"]) {
                   try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none"); } catch (e2) { /* 忽略 */ }
                 }
               } else {
@@ -3198,21 +3299,27 @@
           /* ⚠️ **一轮里只读一次**（`bldCellDeg()` 每次都问管道）—— 保证"冻结键 / 挑选 / 分组"三者同值 */
           const BLDCELL = bldCellDeg();
           const BLDN = bldnEff();
-          if (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && bldMz !== null && z >= bldMz) {
-            /* 🧊 **按格冻结**（**编排已搬到共享真源** `wsBldPickStore`，2026-09-26）：
-               原来这 40 行内联在本页 ⇒ **App 宿主拿不到它** ⇒ 机主真机「每次滑动建筑都变了」。
-               现在页面只接线：给「仓库全量 + 上限 + 格尺寸 + 视野 + 视野下限」，拿回 `{features, stats}`。
-               · 模块内部口径（自检 `ws_bld_pick_store_selftest.mjs` 与**本页旧实现原文**逐字节对拍过）：
-                 先算 base（每块 ≤cap、只依赖固定经纬格）→ **只冻结 base** →
-                 视野补齐件每帧重算、**不进冻结集**（补进冻结集就会"挪一下就乱变"，机主明确否过）。
-               · `window.__BLD_FROZEN__` 仍可核 —— 它就是模块内部那个冻结缓存对象**本身**（不是拷贝）。 */
+          /* 🔀 **两套口径的岔口**（与 App 宿主同一规则）：
+             · `?bldn=` **显式钉住** ⇒ 走**旧口径**（按固定经纬格挑 + 按格冻结，`store.pick`）——A/B 逃生口；
+             · 没给 ⇒ **双预算挑楼**（机主 2026-10-02 拍板的 B2）：候选 = 视野内全部楼，
+               预算 = Σ投影 px² + Σ顶点，两个**固定常量**，每次落图（moveend/zoomend）重算一次。 */
+          const LEGACY_CELL = BLDN_PIN !== null;
+          const canPick = LEGACY_CELL
+            ? (TFp && typeof TFp.capBuildingsPerCell === "function" && BLDN > 0 && bldMz !== null && z >= bldMz)
+            : (bldMz !== null && z >= bldMz);
+          if (canPick) {
+            /* 🏙 双预算的把规则/成本模型/确定性排序**全在共享真源** `wsBldBudget`（两页共用同一份）；
+               🔀 旧口径的按格冻结编排在 `wsBldPickStore`（2026-09-26 从本页搬走的那一份）。
+               页面只接线：给「仓库全量 + 视野 + 屏幕投影 + 下限」，拿回 `{features, stats}`。
+               · 双预算的确定性：**同视野 + 同数据 ⇒ 逐字节同一批**（无随机/无时间/无帧率输入）；
+               · 旧口径的确定性：**同一格永远同一批**（冻结集；`window.__BLD_FROZEN__` 可核）。 */
             const store = bldPickStore();
             if (!store) {
               /* 🔴 模块在、但这个符号不在（**旧 vendor**）⇒ **如实报"数不出来"**，不静默退化。
                  `FEED_NEEDED` 里有 `createBldPickStore` ⇒ `ensureVendor()` 会带版本号重取一次。 */
               window.__BLD_PICK__ = { skipped: true, why: "数不出来：vendor 缺 createBldPickStore（旧产物？会在下一次取数时带版本号重取）" };
               pickWhy = "（未挑：" + window.__BLD_PICK__.why + "）";
-            } else {
+            } else if (LEGACY_CELL) {
               const r = pmTime("bld.pick", function () {
                 return store.pick({
                   features: all.features,           /* 仓库**全量**（含视野外）——"画面可以编，事实不许编" */
@@ -3227,6 +3334,29 @@
               /* ⚠️ 这条人话串**只由共享模块产出**（`stats.why` 里已经含"冻结 N + 视野补 M / 视野内 X（下限 10 · 补 +M / 仍差 Y）"）
                  —— 页面**不许**再拼第二份（拼两份就是下一次"两边口径不一致"）。 */
               pickWhy = r.stats.why;
+              window.__BLD_PICK__ = r.stats;
+              try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", pickWhy, r.stats); } catch (e2) { /* 忽略 */ }
+            } else {
+              /* 🏙 **双预算挑楼**（默认口径）—— 屏幕投影与"1 米楼高 = 多少像素"都取自共享真源
+                 （`bldPxPerMeter`：两页**同一把尺子**；写两份必然漂）。 */
+              const center = (function () { try { return map.getCenter(); } catch (e2) { return null; } })();
+              const pitch = (function () { try { return map.getPitch(); } catch (e2) { return 0; } })();
+              const r = pmTime("bld.pick", function () {
+                return store.pickBudget({
+                  features: all.features,           /* 仓库**全量**（含视野外）——"画面可以编，事实不许编" */
+                  bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
+                  screen: {
+                    project: function (lng, lat) {
+                      const p = map.project([lng, lat]);
+                      return [p ? Number(p.x) : NaN, p ? Number(p.y) : NaN];
+                    },
+                    pxPerMeter: bldPxPerMeterAt(z, center ? Number(center.lat) : 0, pitch),
+                  },
+                  minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
+                });
+              }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });
+              data = { type: "FeatureCollection", features: r.features };
+              pickWhy = r.stats.why;                /* 判词只由共享模块产出，页面不拼第二份 */
               window.__BLD_PICK__ = r.stats;
               try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", pickWhy, r.stats); } catch (e2) { /* 忽略 */ }
             }
@@ -3267,10 +3397,19 @@
           })();
           return;                                                   // 异步那次负责落图，这里不再 setData
         }
-        /* 🎨 **上妆（补 h3d）**：没有这一步，`fill-extrusion-height: ["get","h3d"]` 取不到 = 高度 0 = 平躺的板 */
-        const dressed = pmTime("bld.dress", function () { return dressBldBase(data.features); });
+        /* 🎨🏢 **上妆**：没有这一步，`fill-extrusion-height: ["get","h3d"]` 取不到 = 高度 0 = 平躺的板。
+           🏢 2026-10-02 起默认档**也拆件**（只拆屋顶系：女儿墙 + 设备箱 + 天线，按 zoom 固定分档）⇒
+           `dressed.length` 是**要素数**（≥ 栋数），所以：
+             · `stats.n`（HUD 的「🏢 N」）必须仍是**楼栋数** = 上妆**前**那批的长度；
+             · 要素数另记 `stats.parts`（拆件到什么程度一眼可数）。 */
+        const bldCount = data.features.length;
+        /* ⚠️ 这里**不能**复用挑楼那段里的 `z`：那是在上面的 `try` 块里声明的（块作用域）。
+           自己现读一次当前机位（同一轮里相机不动 ⇒ 与挑楼读到的是同一个数）。 */
+        const dressZoom = (function () { try { return map.getZoom(); } catch (e2) { return null; } })();
+        const dressed = pmTime("bld.dress", function () { return dressBldBase(data.features, dressZoom); });
         data = { type: "FeatureCollection", features: dressed };
-        stats.n = dressed.length;
+        stats.n = bldCount;
+        stats.parts = dressed.length;
         stats.real = dressed.filter((f) => f.properties.h_from === "real").length;
         stats.levels = dressed.filter((f) => f.properties.h_from === "levels").length;
         stats.kind = dressed.filter((f) => f.properties.h_from === "kind").length;
@@ -3878,7 +4017,9 @@
             bldWhy = "数不出来：模块里没有 decorateBuildings（" + tfState + "）—— 若产物里明明有，多半是**浏览器缓存了旧的 /vendor/wsScene.mjs**（服务端 immutable、URL 无内容哈希）：强刷/清缓存，或让主会话重建预览包";
           }
         }
-        if (!feats) feats = dressBldBase(fc.features);
+        /* 🏢 `?bld=2` 之外的那条路（live 取数）也走**共享上妆**；zoom 取当前机位 ⇒
+           生成侧的档与图层侧的 `minzoom` 同一份固定阈值（`?bld=2` 分支在上面的 `if` 里，不经过这里）。 */
+        if (!feats) feats = dressBldBase(fc.features, (function () { try { return map.getZoom(); } catch (e2) { return null; } })());
         window.__BLD_COUNT__ = bldCount || null;
         window.__BLD_FALLBACK__ = bldWhy || null;
         window.__LASTFC__ = fc; // 🚌 `?tf=1` 要用楼栋轮廓（停车场/出入口按脚印算）

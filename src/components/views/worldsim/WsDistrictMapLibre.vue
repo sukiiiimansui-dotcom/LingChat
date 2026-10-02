@@ -163,6 +163,11 @@
            可数一行：已取 x 格 / 包外 y / 失败 z + 仓库 N 栋（**数不出来不写 0**）。
            `title` 是真源判词（`wsScene.bldVerdictText`）——"包外"必须与"这里没有楼"分得开。 -->
       <span v-if="stats.bldBundle" :title="stats.bldVerdict">{{ stats.bldBundle }}</span>
+      <!-- 🏙 **挑楼口径那一行**（2026-10-02 B2：双预算 = Σ投影 px² + Σ顶点，两个**固定常量**）。
+           原文由共享真源 `wsBldBudget.stats.why` 产出（宿主不许再拼第二份）。
+           机主判"卡不卡"时：这一行给**可数**的那一半（画了几栋 / 花了多少像素与顶点），
+           另一半（帧率）看同一栏的 `fps`。 -->
+      <span v-if="stats.bldPick" :title="stats.bldPick">{{ stats.bldPick }}</span>
       <!-- 🏷🗺 **名字层**那一行（真源判词，三态：正数 / 0（已量）/ 数不出来 + 原因）。
            🔴 三档**分开计数**（真名 / 数据驱动 / 示意），并明写 **生成名上屏 0**
            —— 机主拍板"生成名只进信息卡"，这一条在这里是**看得见的**机器证据。 -->
@@ -322,6 +327,9 @@ import {
   WS_BLD_CELL_CAP_REF_DEG,
   type BldPickStats,
 } from "./wsBldPickStore";
+/* 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2）：成本模型/两个固定常量/确定性排序全在那一份里；
+   这里只取"1 米楼高 = 多少屏幕像素"这把尺子（**两页必须同一把**，所以公式也只有那一份）。 */
+import { bldPxPerMeter, type BldBudgetBounds, type BldBudgetStats } from "./wsBldBudget";
 import { bldArtParamsOf, parseArtParam, type BldArtThemeLike } from "./wsArtParams";
 /* 🏙 挑选的**入参类型**（`wsBuildingPick` 的纯函数类型）；实际编排在上一行那个 store 里 */
 import type { PickBounds, PickFeature } from "./wsBuildingPick";
@@ -333,8 +341,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   import {
     bldLayerSpecsFor,
     districtStyleOf,
-    /* 🎨 基准上妆（`h3d`/`h_from`/`fp`/`small`，**不拆件**）—— 两页默认档共用这一条（机主 (a′)）。
-       以前 App 用 `decorateBuildings` base 档，那份**照样拆 roof/antenna** ⇒ 两页默认档不是一个东西。 */
+  /* 🎨 基准上妆（`h3d`/`h_from`/`color3d`/`h_base`/`part`/`zt`/`fp`/`small`）—— 两页默认档共用这一条。
+      🏢 2026-10-02 起默认档**也拆件**（只拆屋顶系：女儿墙 + 设备箱 + 天线，按 zoom 固定分档）；
+      裙楼/塔楼/退台仍只在 `?bld=2`。以前 App 用 `decorateBuildings` base 档，
+      那份**照样拆 roof/antenna** ⇒ 两页默认档不是一个东西 —— 现在两页调同一个 `dressBase`。 */
     dressBase,
     flushBldStore,
     flushRoadsStore,
@@ -1016,8 +1026,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     bldBundle: "",
     /** 🏢 形体档：1 = 原始脚印（默认，与代拍页同源）· 2 = 拆件（`?bld=2`）—— 探针/回证要读它 */
     bldMode: 1,
-    /** 🏢 拆件档拆出来几个要素（`ShapeCounts.parts`；默认档不拆 ⇒ 0） */
+    /** 🏢 拆件档拆出来几个要素（`ShapeCounts.parts`；默认档也会拆屋顶系 ⇒ 要素数 ≥ 栋数） */
     parts: 0,
+    /** 🏙 **双预算挑楼那一行**（真源 `wsBldBudget.stats.why`：视野内 N 栋 / Σ投影 px² / Σ顶点 / 谁拦住了）
+     *  —— 机主在真机上判"卡不卡"时，这一行是**可数**那一半的证据（另一半是 fps） */
+    bldPick: "",
     /** 🛣 离线路网包那一行（同式） */
     roadsBundle: "",
     /** 🏢 判词（**真源** `wsScene.bldVerdictText`：包外 / 取数失败 / 正常，三态不混） */
@@ -1162,16 +1175,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     type: "FeatureCollection";
     features: unknown[];
   } {
-    /* 🎨 **默认档 = 基准上妆（不拆件）** —— 机主拍板 **(a′)：App 向代拍页看齐**
-       （原话「**我的要求是代拍页和App页完全一样喵**」）。
-       两页默认档走**同一个** `dressBase()`（共享真源 `wsDistrictScene`）：只补
-       `h3d`/`h_from`/`fp`/`small`，**不拆件** ⇒ 图层清单与 paint 才可能逐字段相同
-       （`ws_pages_consistency.mjs` 的 ④a/④b 盯着）。
-       ⚠️ 以前这里调 `decorateBuildings(fc, ramp)`（base 档）—— 那份**照样拆出 roof/antenna**，
-       于是 App 默认档比页面多两条层、还多一套 `part` 过滤（同一条 `bld-ext` 的过滤在页面上会
-       匹配 0 栋 = 一栋都不画）。这是"凑 id 式假绿"的根，别再走回去。
+    /* 🏢 **默认档 = 主体 + 屋顶系（按 zoom 固定分档）** —— 机主拍板 **(a′)：App 向代拍页看齐**
+       （原话「**我的要求是代拍页和App页完全一样喵**」）+ **2026-10-02 B1**（`<14` 平顶 /
+       `14–16` 女儿墙 / `≥16` 设备箱+天线）。
+       两页默认档走**同一个** `dressBase()`（共享真源 `wsDistrictScene`）：
+       `h3d`/`h_from`/`color3d`/`h_base`/`part`/`zt`/`fp`/`small`，拆件口径 = `mode:"roof"`。
+       ⚠️ 这里要把**当前 zoom** 喂进去：生成侧与图层侧用**同一份固定阈值**（`wsBldDetailTiers`），
+       `z<14` 连女儿墙体块都不生成 ⇒ `setData` 的解析量与改造前**同样轻**。
+       🔴 **不许**把 zoom 换成"实测帧率/设备能力"（机主红线：那是他不批的性能档位降级）。
        🏢 **`?bld=2` = 拆件档**（与代拍页同一个开关）：走 `decorateBuildings(..., {mode:"detail"})`，
-       颜色写进要素属性 `color3d` ⇒ 图层那边用 `mode:"parts"` 的规格（三条 part 层）读它。 */
+       多出裙楼/塔楼/退台/窗格；颜色写进要素属性 `color3d` ⇒ 图层读它。 */
     if (WS_BLD_MODE === 2) {
       const { features, count } = decorateBuildings(fc, artTheme(theme.value).ramp, { mode: "detail" });
       stats.count = count.n;
@@ -1181,11 +1194,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       stats.parts = count.parts;
       return { type: "FeatureCollection", features };
     }
-    const { features, counts } = dressBase(fc?.features as readonly BldFeature[] | undefined);
+    const { features, counts } = dressBase(fc?.features as readonly BldFeature[] | undefined, {
+      ramp: artTheme(theme.value).ramp,
+      zoom: map ? map.getZoom() : null,
+    });
     stats.count = counts.n;
     stats.height = counts.real;
     stats.levels = counts.levels;
     stats.default = counts.kind; // HUD 里这一列叫「按类型估」
+    stats.parts = features.length;
     return { type: "FeatureCollection", features };
   }
 
@@ -3275,30 +3292,58 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         afterDraw: (_why0, data) => {
           drawnBld = (data as { features?: unknown[] })?.features || [];
         },
-        /* 🏙 **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`：**按格挑 + 按格冻结 + 视野补齐**）。
-           🔴 2026-09-26 改（机主真机「**每次滑动建筑都变了**」）：原来这里是
-           `pickNearView` → `pickBuildingsForView`（**按视野**挑、**没有冻结**）⇒ 视野一变那批楼就换了一批，
-           而代拍页早就是"按格挑 + 按格冻结"那套 ⇒ 两页不是一个东西。现在两页调**同一个** store。
+        /* 🏙 **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`）。
+           🔴 2026-10-02 换口径（机主拍板的 **B2**）：「每格 4 栋」**改成双预算挑楼** ——
+           候选 = 视野内**全部**楼，预算 = **Σ投影 px²（`WS_BLD_BUDGET_PX2`）+ Σ顶点（`WS_BLD_BUDGET_VERTS`）**，
+           两个都是**固定常量**（不是按帧率自动缩），`moveend`/`zoomend` 每次落图重算一次。
+           规则/成本模型/确定性排序**一行都不在这里**（在 `wsBldBudget`，两页共用）。
+           🔀 **A/B 逃生口**：`?bldn=N` 显式钉住 ⇒ 走**旧口径**（按固定经纬格挑 + 按格冻结，`store.pick`），
+           同一个 store、同一份实现 ⇒ 机主可以在**真机**上同一个机位对比新旧两套（帧率只有他能判）。
            近景才挑（远景走预渲染瓦片，挑它没意义）—— 阈值与楼房矢量层**同一个共享常量**。 */
         pick: (() => {
           try {
-            const z = map ? map.getZoom() : null;
-            if (z === null || z < WS_BLD_VECTOR_MINZOOM) return null;
+            const z0 = map ? map.getZoom() : null;
+            if (z0 === null || z0 < WS_BLD_VECTOR_MINZOOM) return null;
             const store = bldPickStore();
             if (!store) return null;
-            /* 一轮只读一次（与代拍页 `BLDCELL`/`BLDN` 同一口径）：保证"冻结键 / 挑选 / 分组"三者同值 */
-            const cellDeg = bldCellDegNow();
-            const cap = bldCapForCellDeg(cellDeg, WS_BLDN_PIN);
-            return (feats: readonly BundleBuildingFeature[]) => store.pick({
-              features: feats as unknown as PickFeature[],
-              cap,
-              cellDeg,
-              bounds: map ? (map.getBounds() as unknown as PickBounds) : null,
-              minInView: WS_BLD_INVIEW,
-            }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
+            const legacyCell = WS_BLDN_PIN !== null;   // `?bldn=` 一给就退回旧口径（A/B）
+            return (feats: readonly BundleBuildingFeature[]) => {
+              /* ⚠️ 相机三件（zoom / bounds / 中心纬度与俯角）在**调用这一刻**现读：
+                 闭包捕获会拿到旧机位，而预算挑楼的全部输入就是机位。 */
+              const z = map ? map.getZoom() : WS_BLD_VECTOR_MINZOOM;
+              const bounds = map ? (map.getBounds() as unknown as BldBudgetBounds) : null;
+              if (legacyCell) {
+                /* 一轮只读一次格尺寸（与代拍页 `BLDCELL`/`BLDN` 同一口径）：冻结键/挑选/分组三者同值 */
+                const cellDeg = bldCellDegNow();
+                const cap = bldCapForCellDeg(cellDeg, WS_BLDN_PIN);
+                return store.pick({
+                  features: feats as unknown as PickFeature[],
+                  cap,
+                  cellDeg,
+                  bounds: bounds as unknown as PickBounds,
+                  minInView: WS_BLD_INVIEW,
+                }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
+              }
+              const centerLat = map && typeof map.getCenter === "function" ? Number(map.getCenter().lat) : 0;
+              const pitch = map && typeof map.getPitch === "function" ? Number(map.getPitch()) : 0;
+              return store.pickBudget({
+                features: feats,
+                bounds,
+                screen: {
+                  /* 屏幕投影：直接用地图库那把尺子（`map.project` 是**地面**投影，不带高度 —— 墙面的
+                     屏幕高度由共享的 `bldPxPerMeter` 补，两页同一把尺子） */
+                  project: (lng: number, lat: number): [number, number] => {
+                    const p = map ? map.project([lng, lat]) : null;
+                    return [p ? Number(p.x) : NaN, p ? Number(p.y) : NaN];
+                  },
+                  pxPerMeter: bldPxPerMeter(z, centerLat, pitch),
+                },
+                minInView: WS_BLD_INVIEW,
+              });
+            };
           } catch { return null; }
         })(),
-        onPicked: (s) => { bldPickWhy = s.why; scheduleBundleHud(); },
+        onPicked: (s) => { bldPickWhy = s.why; stats.bldPick = s.why; scheduleBundleHud(); },
         beforeDraw: (why0) => {
           bldFlushWhy = why0;
           scheduleBundleHud();
@@ -3705,7 +3750,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       const pt = e?.point;
       let feats: Array<{ properties?: Record<string, unknown>; id?: unknown }> = [];
       if (m?.queryRenderedFeatures && pt) {
-        try { feats = m.queryRenderedFeatures(pt, { layers: ["bld-ext"] }) || []; } catch { feats = []; }
+        /* 🏢 三条挤出层**都要查**（2026-10-02 B1 按 zoom 分了三条：主体 / 女儿墙 / 设备箱+天线）——
+           只查 `bld-ext` 会让"点屋顶件"落空（虽然下面还有屏幕距离兜底，但那是降级不是正常路径）。
+           多条命中时**按档位升序取第一条**（`zt` 小的 = 主体优先，卡片信息最全）。 */
+        try {
+          const hit = m.queryRenderedFeatures(pt, { layers: ["bld-ext", "bld-roof", "bld-equip"] }) || [];
+          feats = hit.slice().sort((a, b) => {
+            const za = Number((a.properties || {}).zt ?? 0), zb = Number((b.properties || {}).zt ?? 0);
+            return (isFinite(za) ? za : 0) - (isFinite(zb) ? zb : 0);
+          });
+        } catch { feats = []; }
       }
       /* 🔴 无头/无 WebGL 下 `queryRenderedFeatures` 恒空（本项目栽过的**假阴性闸**）⇒ 如实降级：
          用**屏幕距离**在"这一轮真画出去的那批楼"里找最近的一栋（锚点来自 `afterDraw`，不是猜的）。 */

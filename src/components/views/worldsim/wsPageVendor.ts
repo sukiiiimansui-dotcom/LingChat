@@ -61,6 +61,19 @@ export * from "./wsBuildingPick";
    否则"模块是旧的"只会表现成"这个开关没反应"，而不是报"缺符号"。 */
 export * from "./wsBldPickStore";
 export * from "./wsArtParams";
+/* 🏢 **拆件的 zoom 分档真源**（2026-10-02 机主拍板的 B1）：
+   `WS_BLD_DETAIL_ROOF_ZOOM`(14) / `WS_BLD_DETAIL_EQUIP_ZOOM`(16) 两个**固定阈值** +
+   `bldTierOfPart`（体块 → 档位）+ `bldDetailTierZoom`（档位 → minzoom，**页面唯一的取数口**）+
+   `bldLayerVisibilityAt`（离线判定"某档在某个 zoom 上 visibility=none ⇒ 0 顶点/0 draw call"）。
+   ⚠️ 页面只许读，**不许**在自己那边写死 14/16（`?bld=2` 与默认档共用同一份分档）。 */
+export * from "./wsBldDetailTiers";
+/* 🏙 **双预算挑楼**（2026-10-02 机主拍板的 B2：「每格 4 栋」→ 候选=视野内全部楼，
+   预算 = Σ投影 px² + Σ顶点，两个**固定常量**，每次落图重算）：
+   `pickBuildingsByBudget` / `WS_BLD_BUDGET_PX2` / `WS_BLD_BUDGET_VERTS` / `bldPxPerMeter` /
+   `bldMetersPerCssPixel` / `bldScreenCost` / `bldRingVertices`。
+   🔴 `bldPxPerMeter` 是"1 米楼高 = 多少屏幕像素"的**唯一一把尺子**（两页必须同一把，否则同一个机位
+   算出来的预算不是一个东西）。 */
+export * from "./wsBldBudget";
 export * from "./wsBldGl";
 export * from "./wsDaily"; // 日常循环（我的家 + 今日三件事）
 export * from "./wsNameGen"; // 🏷 生成名层（**示意·非真实**：确定性楼名 + 沿街小摊）

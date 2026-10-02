@@ -230,7 +230,10 @@
               <span class="ws-aff__k">好感</span>
               <span class="ws-aff__v">{{ affinity ?? 0 }}</span>
               <span class="ws-aff__r">{{ affinityRank || "陌生" }}</span>
-              <i class="ws-aff__bar"><b :style="{ width: Math.max(0, Math.min(100, affinity ?? 0)) + '%' }" /></i>
+              <!-- 🎬 动画预算·步①「清违禁」（2026-10-02）：好感条**不再动 `width`**（布局属性，
+                   每帧重排这一行）—— 填充条静态满宽，进度 = `transform: scaleX(好感/100)`（合成属性）。
+                   数值口径一字未动（仍是同一个 `Math.max(0, Math.min(100, …))` 夹取，只是 /100）。 -->
+              <i class="ws-aff__bar"><b :style="{ transform: `scaleX(${Math.max(0, Math.min(100, affinity ?? 0)) / 100})` }" /></i>
             </div>
             <button class="ws-btn" type="button" @click="quick('gift')">
               🎁 {{ t("worldsim.action.gift") }}
@@ -489,9 +492,16 @@
   }
   .ws-aff__bar > b {
     display: block;
+    /* 🎬 步①（2026-10-02）：填充条**静态满宽** —— `width` 从此不参与动画（只在首次布局算一次），
+       进度全部由 `transform: scaleX(k)` 表达（合成属性，不触发布局/重排）。 */
+    width: 100%;
     height: 100%;
     background: var(--accent-color, #79d9ff);
-    transition: width 0.3s cubic-bezier(0, 0, 0, 1);
+    /* 🔴 变换原点**必须是左端**：原来 `width:N%` 是**左对齐**生长（左边缘不动、只有右边缘走），
+       而 `transform-origin` 默认 `50% 50%` ⇒ 不改就成了"从中间往两边长"，与原来**不等价**。
+       纯色填充 ⇒ `scaleX` 与 `width` 除亚像素外逐帧等价（渐变色见 WsCityGuide 那条注释）。 */
+    transform-origin: left center;
+    transition: transform 0.3s cubic-bezier(0, 0, 0, 1);
   }
   .ws-drawer {
     position: absolute;

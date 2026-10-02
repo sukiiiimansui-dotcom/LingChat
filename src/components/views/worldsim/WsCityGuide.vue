@@ -142,8 +142,12 @@
             <b>{{ stageLabel }}</b>
             <span>{{ progressLine }}</span>
           </div>
+          <!-- 🎬 动画预算·步①「清违禁」（2026-10-02）：进度条**不再动 `width`**（布局属性），
+               改 `transform: scaleX(进度)`（合成属性）。`pct` 仍是 0~100 的整数、夹取与取整口径未动；
+               `total === null` 时 `pct` 照旧为 0 ⇒ `scaleX(0)`，再由 `.is-indet` 那条 `!important`
+               压成 `scaleX(1)`（原来是压 `width:100% !important`，同一件事）。 -->
           <div class="wscg__bar" :class="{ 'is-indet': progress.total === null }">
-            <i :style="{ width: pct + '%' }" />
+            <i :style="{ transform: `scaleX(${pct / 100})` }" />
           </div>
         </div>
 
@@ -616,13 +620,22 @@
   }
   .wscg__bar i {
     display: block;
+    /* 🎬 步①（2026-10-02）：**静态满宽** + 行内 `transform: scaleX(k)` —— `width` 退出动画。
+       原来那条过渡动的是 `width`（布局属性）⇒ 每帧重排这一行；改后只走合成器。
+       ⚠️ 为什么**渐变也等价**：`linear-gradient(90deg, …)` 的两端取色是"元素自身宽度的 0% / 100%"，
+       而仿射缩放（scaleX）把整块背景连同渐变一起压 ⇒ 屏幕上仍是"同一条渐变铺满可见宽度"，
+       与 `width:N%` 时逐帧一致（缩放不改变两端的颜色，也不改变线性插值）。 */
+    width: 100%;
     height: 100%;
     background: linear-gradient(90deg, #409cd6, #7eebb2);
-    transition: width 0.18s linear;
+    /* 🔴 原点 = **左端**：原来 `width:N%` 左对齐生长，默认的 `50% 50%` 会变成从中间往两边长。 */
+    transform-origin: left center;
+    transition: transform 0.18s linear;
   }
   /* 没有分母 ⇒ 不画"确定进度"，只留一条呼吸的底色（如实：我们不知道还剩多少） */
   .wscg__bar.is-indet i {
-    width: 100% !important;
+    /* 原来是 `width: 100% !important` 压掉行内百分比；现在压的是行内 `scaleX`（等价）。 */
+    transform: scaleX(1) !important;
     opacity: 0.35;
     animation: wscg-breathe 1.4s ease-in-out infinite;
   }

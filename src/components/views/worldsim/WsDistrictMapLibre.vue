@@ -118,17 +118,28 @@
     </div>
 
     <!-- 2D 降级路的"人"（WebGL 路用地图库 Marker，不在这里画） -->
+    <!-- 🎬 动画预算·步①「清违禁」（2026-10-02）：钉子**不再用 `left/top` 百分比**（布局属性，
+         每来一次位置更新 = 一次重排）—— 外层 `.ws-dml__pinat` 铺满整层（100%×100%），
+         `translate3d(X%, Y%, 0)` 的百分比**相对自身盒子**解算，而它就是这一层 ⇒ 落点与原来的
+         `left/top:X%` **是同一个点**（纯位移 ⇒ `transform-origin` 无关）。
+         内层 `.ws-dml__pin` 就是原来那颗元素（class / `@click` / `::after` 44px 命中区 / `is-me`
+         尺寸都没换），只是回到 `left:0; top:0` + 原有 `margin:-12px 0 0 -12px` 居中。
+         外层 `pointer-events:none`（铺满整层，绝不能挡地图手势）；点击照旧落在内层（它自己 `auto`）。 -->
     <div v-if="!mapAvailable" class="ws-dml__pins">
-      <i
+      <span
         v-for="p in domPins"
         :key="p.id"
-        class="ws-dml__pin"
-        :class="{ 'is-me': p.isMe, 'is-aff': p.affinity }"
-        :style="{ left: p.left, top: p.top }"
-        :title="p.name + (p.affinity ? '（特地来找你）' : '')"
-        @click.stop="emit('pick-actor', p.id)"
-        >{{ (p.name || '我').slice(0, 1) }}</i
+        class="ws-dml__pinat"
+        :style="{ transform: `translate3d(${p.tx}, ${p.ty}, 0)` }"
       >
+        <i
+          class="ws-dml__pin"
+          :class="{ 'is-me': p.isMe, 'is-aff': p.affinity }"
+          :title="p.name + (p.affinity ? '（特地来找你）' : '')"
+          @click.stop="emit('pick-actor', p.id)"
+          >{{ (p.name || '我').slice(0, 1) }}</i
+        >
+      </span>
     </div>
 
     <!-- 🪪 **信息卡**：点楼体 / 点名字 / 点区名 ⇒ **同一张卡**（`wsBuildingCard.buildingCardData`）。
@@ -2691,8 +2702,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           name: a.name,
           isMe: !!a.isMe,
           affinity: a.posSource === "affinity",
-          left: `${(((lng - w) / spanX) * 100).toFixed(2)}%`,
-          top: `${(((n - lat) / spanY) * 100).toFixed(2)}%`,
+          /* 🎬 步①（2026-10-02）：这两个百分比**不再是 `left/top`**，而是喂给外层
+             `.ws-dml__pinat` 的 `translate3d(X%, Y%, 0)`（合成属性）。
+             分子分母一字未动（还是"网格→bbox"那一套），只是换了个用法 ⇒ 落点不变。 */
+          tx: `${(((lng - w) / spanX) * 100).toFixed(2)}%`,
+          ty: `${(((n - lat) / spanY) * 100).toFixed(2)}%`,
         };
       })
       .slice(0, 60); // 防呆：再多人也不至于把 DOM 撑爆
@@ -4806,8 +4820,27 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     z-index: 1;
     pointer-events: none;
   }
+  /* 🎬 步①（2026-10-02）：每颗钉子的**定位层** —— 铺满 `.ws-dml__pins`（它无 padding/border ⇒
+     `width:100%` 解算依据的 padding box，与 `left:X%` 当初参照的 containing block **是同一个盒子**），
+     行内 `translate3d(X%, Y%, 0)` 的百分比相对**自身**border box 解算 ⇒ 位移量 = X% × 整层宽。
+     ⚠️ 这就是"不量尺寸也要百分比"的原因：不需要 ResizeObserver / 不需要 `clientWidth`。
+     `pointer-events: none` 是**必须**的：它铺满整层，若可点会把整个地图的手势吃掉
+     （命中照旧由内层 `.ws-dml__pin` 的 `auto` 提供，先例见 `.ws-dml__pins` 那条注释）。 */
+  .ws-dml__pinat {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
   .ws-dml__pin {
     position: absolute;
+    /* 🎬 步①：定位从"`left/top` 百分比"改成"父级 `translate3d` 位移"——
+       这里固定回到原点，再由上面 `margin:-12px 0 0 -12px` 把圆心对到那个点上
+       （绝对定位元素 `left` 定的是**外边距盒**左边 ⇒ 圆心落在父级原点）。 */
+    left: 0;
+    top: 0;
     width: 24px;
     height: 24px;
     margin: -12px 0 0 -12px;

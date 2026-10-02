@@ -25,9 +25,14 @@
 // ③ `world_map_events_recent({limit?})` → `{ ok, items:[PlannedEvent], count, limit }`
 //    默认 20、上限 100，**时间正序的尾巴**（最早在前）—— 要「最新在上」得自己 reverse。
 //
-// ④ `world_map_take_pending_memory({role?})` → `{ ok, role, lines:[String], count,
-//    items:[{role,line,at}], pending_after }` —— **drain 语义（取走即清空）**，
-//    `role` 省略 = 全取。
+// ④ `world_map_pending_memory({role?})` → `{ ok, role, lines:[String], count,
+//    items:[{role,line,at}], pending_after, readonly:true }` —— **只读预览**（一行都不取走）。
+//    ⚠️ 消费权（期 1，2026-10-02）：待写记忆队列的**唯一消费方是注入路径**
+//    （Rust `state.rs::injection_text` —— 它把行交付给模型之后才删，`summary::memory_block`
+//    的注释写死了「交付即消费」）。前端原来调的是 `world_map_take_pending_memory`
+//    （drain：取走即清空）⇒ 两边抢同一个队列，前端一取走，AI 那一轮注入就**静默**少一段
+//    （不报错、页面上也看不出来，只是角色"忘了刚才发生的事"）。
+//    ⇒ 前端只许走这条只读命令；`world_map_take_pending_memory` 留给记忆管线，本文件不再调它。
 //
 // ══ 三条纪律 ═══════════════════════════════════════════════════════════════
 //
@@ -881,9 +886,9 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
     const isHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
     hidden.value = isHidden;
     if (!isHidden) {
-      // 「回来立刻对齐」：马上 tick 一次（可能已经出过事了）+ 把待写记忆取回来
+      // 「回来立刻对齐」：马上 tick 一次（可能已经出过事了）+ 把待写记忆重新预览一遍
       nowMs.value = Date.now();
-      void drainMemory();
+      void previewMemory();
       void poll().finally(schedule);
       return;
     }
@@ -909,22 +914,28 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
     return events.value;
   }
 
-  /* ── 记忆交接（drain）─────────────────────────────────────────────────
-   * ⚠️ 前端**没有**「写记忆」命令可调，这里也**不猜**一个：当前后端的设计是
-   *    事件文本已经通过 `runtime.events` 进了对话注入的「最近：…」那一行，
-   *    所以角色本来就「知道」。drain 出来的行只做两件事：
-   *      ① 让队列别攒满（`PENDING_MEMORY_MAX = 64`，满了丢最旧的）；
-   *      ② 在面板的「待写记忆」区把「角色记下了什么」如实显示给用户看。
+  /* ── 待写记忆（**只读预览**）───────────────────────────────────────────
+   * 🔴 期 1（2026-10-02）把这里从 `drainMemory`（`world_map_take_pending_memory`，
+   *    取走即清空）改成 `previewMemory`（`world_map_pending_memory`，一行不取走）：
+   *    那个队列的**唯一消费方是 Rust 注入路径**（`state.rs::injection_text`）——
+   *    它才是把行交付给模型的那条路（`summary::memory_block`：「交付即消费」）。
+   *    两边抢的后果是**静默**的：前端取走一次，AI 那一轮注入就少一段，
+   *    页面/日志都看不出来。函数名也一并改掉："drain" 这个词会让人以为这里该清空。
+   *
+   * 前端拿到这些行只做两件事（语义一行没变）：
+   *   ① 在面板的「待写记忆」区把「角色记下了什么」如实显示给用户看；
+   *   ② 队列别攒满（`PENDING_MEMORY_MAX = 64`，满了后端丢最旧的）—— 这件事
+   *      现在由**注入那条路**负责（每轮最多交付 5 行），前端不再抢着做。
    */
-  async function drainMemory(role?: string): Promise<WsPendingLine[]> {
+  async function previewMemory(role?: string): Promise<WsPendingLine[]> {
     if (!supported.value) return [];
     try {
       const args: Record<string, unknown> = {};
       const who = String(role || "").trim();
       if (who) args.role = who;
-      const r = await invoke<unknown>("world_map_take_pending_memory", args);
+      const r = await invoke<unknown>("world_map_pending_memory", args);
       const { lines, pendingAfter: after } = normalizeDrain(r);
-      pendingLines.value = lines; // 取走即清空 → 前端这份也整体替换（不是累加）
+      pendingLines.value = lines; // 只读：这是"现在队列里有什么"，整份替换（不是累加）
       pendingAfter.value = after;
       lastError.value = "";
       return lines;
@@ -1006,11 +1017,11 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
     nowMs.value = Date.now();
     void subscribe();
     void refreshHistory();
-    void drainMemory(); // 进小区图就先把上次没取走的行收掉
+    void previewMemory(); // 进小区图先把队列预览一次（只读：取走归注入那条路）
     void poll().finally(schedule); // 第一发立刻打（同时兼心跳）
     if (drainTimer === null) {
       drainTimer = window.setInterval(() => {
-        void drainMemory();
+        void previewMemory();
       }, WS_DRAIN_EVERY_MS);
     }
   }
@@ -1071,7 +1082,8 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
     stop,
     poll,
     refreshHistory,
-    drainMemory,
+    /** 🔴 只读预览（不再消费队列）；原来叫 `drainMemory`，见函数体上的裁定注释 */
+    previewMemory,
     // 开关
     setChannel,
   };

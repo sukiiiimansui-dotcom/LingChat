@@ -13,13 +13,18 @@
 //! 命令体里只剩下"取锁 → 调纯函数 → `app.emit`"。这也是 [`build_context`] 的
 //! 签名（`&RuntimeSnapshot` + `role` + `now`）的由来。
 //!
-//! ## 三条命令
+//! ## 四条命令
 //!
 //! | 命令 | 作用 | 谁调 |
 //! |---|---|---|
 //! | [`world_map_tick`] | 事件引擎的驱动器（兼心跳） | 前端地图页，每 5–30 秒一次 |
 //! | [`world_map_events_recent`] | 读最近 N 条已发生事件 | 事件流面板 / 调试 |
+//! | [`world_map_pending_memory`] | **只读预览**待写记忆（一行不取走） | 前端地图页的「待写记忆」区 |
 //! | [`world_map_take_pending_memory`] | **取走**待写记忆（drain） | 记忆管线的接入点 |
+//!
+//! ⚠️ 消费权（期 1，2026-10-02）：待写记忆队列的**唯一消费方是注入路径**
+//! （`state.rs::injection_text`）。前端只能只读预览 —— 两边抢会让 AI 的注入**静默**少一段，
+//! 详见 [`world_map_pending_memory`] 的注释。
 //!
 //! ## 锁纪律（本项目踩过 `std::sync::Mutex` 非重入自死锁，这里刻意避开）
 //!
@@ -622,6 +627,54 @@ pub async fn world_map_take_pending_memory(
         "items": items,
         // 取走之后队列里还剩几行（别的角色的）—— 前端据此判断要不要再来一次
         "pending_after": left,
+    }))
+}
+
+/// `world_map_pending_memory` —— **只读预览**待写记忆（看一眼，**一行都不取走**）。
+///
+/// ## 消费权裁定（期 1，2026-10-02：与"事件上屏"同期定死）
+///
+/// 待写记忆队列原先有**两个**消费方：注入路径（`state.rs::injection_text`）与前端面板的
+/// [`world_map_take_pending_memory`]。两边抢同一个队列 —— 前端一 drain，AI 那一轮注入就
+/// **静默**少一段（不报错、日志里也看不出来，只是角色"忘了刚才发生的事"）。
+///
+/// 裁定：**唯一消费方 = 注入路径**。判据不是偏好，是它自己的语义 ——
+/// `summary::memory_block` 那些行之所以能删，是因为内容**已经交付给模型**了（"交付即消费"）；
+/// 换任何一方来删，删的都是"还没被交付的东西"。前端/面板从此只走本命令（只读预览），
+/// [`world_map_take_pending_memory`] 保留给记忆管线的接入方（`event_cmd.rs` 文件头那张表），
+/// **App 侧不再调用它**。
+///
+/// 回包形状刻意与 [`world_map_take_pending_memory`] **逐字同形**
+/// （`{ ok, role, lines, count, items, pending_after }`）：前端那套解析函数只此一份，
+/// 换的只是命令名 —— 名字里没有 "take"，语义就不会再被读错。唯一区别：
+/// 返回之后队列**一行不少**（`pending_after` = 本次看到的行数，不是"剩下的"）。
+#[tauri::command]
+pub async fn world_map_pending_memory(
+    state: State<'_, MapRuntimeHandle>,
+    role: Option<String>,
+) -> Result<Value, String> {
+    let wanted = role
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    // 🔴 读锁（不是写锁）：这一层连"想改队列"的能力都不给自己 —— 只读是结构上的，
+    //    不靠调用方自觉（`take_memory` 那条路要 `write()`）。
+    let guard = state.0.read().await;
+    let items = guard.pending_lines(wanted.as_deref());
+    let lines: Vec<String> = items.iter().map(|p| p.line.clone()).collect();
+    let count = lines.len();
+    Ok(json!({
+        "ok": true,
+        "role": wanted,
+        "lines": lines,
+        "count": count,
+        "items": pending_json(&items),
+        // 语义与 take 那条路对齐：`pending_after` = 队列里还剩几行。
+        // 只读 ⇒ 它恒等于 `count` + 别的角色的行（消费之前队列没变过）。
+        "pending_after": guard.pending_memory_len(),
+        // 明写一句，免得下一个人把它当成 drain 用（前端面板会把它显示成"只读预览"）
+        "readonly": true,
     }))
 }
 

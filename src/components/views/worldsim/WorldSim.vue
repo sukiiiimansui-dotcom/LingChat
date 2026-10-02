@@ -1099,10 +1099,11 @@
     running: wsEventRunning,
   } = wsEvents;
 
-  /** 面板展开 / 点刷新：两个自然检查点，顺手把事件历史与待写记忆各拉一次 */
+  /** 面板展开 / 点刷新：两个自然检查点，顺手把事件历史与待写记忆各拉一次
+      ⚠️ 待写记忆是**只读预览**（`previewMemory`）—— 消费权在注入那条路，见 `useWorldEvents` 头部 ④ */
   function onEventPanelOpen() {
     void wsEvents.refreshHistory();
-    void wsEvents.drainMemory();
+    void wsEvents.previewMemory();
   }
 
   /** 组一次 patch 并推上去（幂等；失败只记日志，绝不打断界面） */
@@ -1627,8 +1628,8 @@
     clearToasts();
     if (syncTimer !== null) window.clearTimeout(syncTimer);
     if (sizeResizeTimer !== null) window.clearTimeout(sizeResizeTimer);
-    // P5-2：卸载前把待写记忆收一遍（自然检查点），再停掉 tick 轮询、广播订阅与气泡
-    void wsEvents.drainMemory();
+    // P5-2：卸载前把待写记忆**预览**一遍（只读；消费在注入那条路），再停掉 tick 轮询、广播订阅与气泡
+    void wsEvents.previewMemory();
     wsEvents.stop();
     // P5-5：fps 表也是 rAF —— 页面走了就必须停（与 useWorldTrips / WsTripCard 同款纪律）
     perf.teardown();

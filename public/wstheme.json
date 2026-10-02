@@ -155,7 +155,7 @@
    },
    "road": {
     "casing": "#0b1017",
-    "casingOpacity": 0.75,
+    "casingOpacity": 0.85,
     "rankColors": {
      "0": "#e8dcc0",
      "1": "#dfd2b4",
@@ -334,8 +334,8 @@
     "water": "rgba(46, 158, 214, 0.92)"
    },
    "road": {
-    "casing": "#8FBBD4",
-    "casingOpacity": 0.9,
+    "casing": "#6FA6C8",
+    "casingOpacity": 0.95,
     "rankColors": {
      "0": "#FFFFFF",
      "1": "#FBFDFF",
@@ -527,7 +527,7 @@
     },
     "road": {
      "casing": "#0b1017",
-     "casingOpacity": 0.75,
+     "casingOpacity": 0.85,
      "rankColors": {
       "0": "#e8dcc0",
       "1": "#dfd2b4",
@@ -734,8 +734,8 @@
      "water": "rgba(46, 158, 214, 0.92)"
     },
     "road": {
-     "casing": "#8FBBD4",
-     "casingOpacity": 0.9,
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
      "rankColors": {
       "0": "#FFFFFF",
       "1": "#FBFDFF",
@@ -996,7 +996,7 @@
     },
     "road": {
      "casing": "#0b1017",
-     "casingOpacity": 0.75,
+     "casingOpacity": 0.85,
      "rankColors": {
       "0": "#e8dcc0",
       "1": "#dfd2b4",
@@ -1175,8 +1175,8 @@
      "water": "rgba(46, 158, 214, 0.92)"
     },
     "road": {
-     "casing": "#8FBBD4",
-     "casingOpacity": 0.9,
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
      "rankColors": {
       "0": "#FFFFFF",
       "1": "#FBFDFF",
@@ -1387,7 +1387,7 @@
     },
     "road": {
      "casing": "#0b1017",
-     "casingOpacity": 0.75,
+     "casingOpacity": 0.85,
      "rankColors": {
       "0": "#e8dcc0",
       "1": "#dfd2b4",
@@ -1554,8 +1554,8 @@
      "water": "rgba(46, 158, 214, 0.92)"
     },
     "road": {
-     "casing": "#8FBBD4",
-     "casingOpacity": 0.9,
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
      "rankColors": {
       "0": "#FFFFFF",
       "1": "#FBFDFF",
@@ -1751,7 +1751,7 @@
     },
     "road": {
      "casing": "#0b1017",
-     "casingOpacity": 0.75,
+     "casingOpacity": 0.85,
      "rankColors": {
       "0": "#e8dcc0",
       "1": "#dfd2b4",
@@ -1918,8 +1918,8 @@
      "water": "rgba(46, 158, 214, 0.92)"
     },
     "road": {
-     "casing": "#8FBBD4",
-     "casingOpacity": 0.9,
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
      "rankColors": {
       "0": "#FFFFFF",
       "1": "#FBFDFF",
@@ -2115,7 +2115,7 @@
     },
     "road": {
      "casing": "#0b1017",
-     "casingOpacity": 0.75,
+     "casingOpacity": 0.85,
      "rankColors": {
       "0": "#e8dcc0",
       "1": "#dfd2b4",
@@ -2282,8 +2282,8 @@
      "water": "rgba(46, 158, 214, 0.92)"
     },
     "road": {
-     "casing": "#8FBBD4",
-     "casingOpacity": 0.9,
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
      "rankColors": {
       "0": "#FFFFFF",
       "1": "#FBFDFF",
@@ -2480,7 +2480,7 @@
     },
     "road": {
      "casing": "#0b1017",
-     "casingOpacity": 0.75,
+     "casingOpacity": 0.85,
      "rankColors": {
       "0": "#e8dcc0",
       "1": "#dfd2b4",
@@ -2648,8 +2648,8 @@
      "water": "rgba(46, 158, 214, 0.92)"
     },
     "road": {
-     "casing": "#8FBBD4",
-     "casingOpacity": 0.9,
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
      "rankColors": {
       "0": "#FFFFFF",
       "1": "#FBFDFF",

@@ -16,6 +16,11 @@
  * 三档必须分得开。混在一起报一个数，就是"把估计值当真数据"。
  */
 
+/* 🏢 **拆件的 zoom 分档真源**（2026-10-02 B1）：`part` → 档位 0/1/2，只此一份。
+   本文件不 import 别的实现模块（纯逻辑、可单测），而 `wsBldDetailTiers` **什么都不 import**
+   ⇒ 不会成环，也不会把地图/DOM 拖进来。 */
+import { bldTierOfPart } from "./wsBldDetailTiers";
+
 /** 渲染高度是从哪来的（HUD 与配色都按它分档） */
 export type HeightFrom = "real" | "levels" | "kind";
 
@@ -180,8 +185,8 @@ export function decorateBuildings(fc: {
   const count: ShapeCounts = {
     n: feats.length, real: 0, levels: 0, kind: 0,
     /* ⚠️ 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
-       `detail` 只在代拍页 `?bld=2` 打开。 */
-    mode: opts.mode === "detail" ? "detail" : "base", low: !!opts.low,
+       `roof` = 默认档的屋顶系（2026-10-02 B1）；`detail` 只在代拍页 `?bld=2` 打开。 */
+    mode: opts.mode === "detail" ? "detail" : opts.mode === "roof" ? "roof" : "base", low: !!opts.low,
     body: 0, podium: 0, tower: 0, setback: 0, roof: 0, parapet: 0, equip: 0, antenna: 0,
     equipSkipped: 0, skipped: 0, skippedWhy: "", parts: 0,
   };
@@ -386,7 +391,9 @@ function partFeature(
   return {
     type: "Feature",
     id: `${String(src.id || "")}#${part}${extra.tier ? "-t" + String(extra.tier) : ""}${extra.idx !== undefined ? "-" + String(extra.idx) : ""}`,
-    properties: { ...(src.properties || {}), part, h3d: top, h_base: base, color3d: color, ...extra },
+    /* 🏢 `zt` = 这个体块属于哪一档（0 一直画 / 1 z≥14 女儿墙 / 2 z≥16 设备箱+天线）。
+       写进属性而不是在图层的 filter 里拼表达式 —— 表达式报错是静默的（见文件头）。 */
+    properties: { ...(src.properties || {}), part, zt: bldTierOfPart(part), h3d: top, h_base: base, color3d: color, ...extra },
     geometry: { type: "Polygon", coordinates: [ring] },
   };
 }
@@ -431,6 +438,7 @@ export function buildingPartSet(
     properties: {
       ...props,
       part: "body",
+      zt: bldTierOfPart("body"),
       h3d: h,
       h_from: from,
       h_base: base,
@@ -444,6 +452,34 @@ export function buildingPartSet(
      ⚠️ 这一条必须在 `base` 分支**之前**判 —— 低档要的正是"连压顶/天线都不要"，
      落到 base 分支就会把压顶和天线又画回来（自检里踩过：低档出来 3 个要素）。 */
   if (opts.low) return { parts: [body], info };
+  /* ── `roof` 档（🆕 **默认档**，机主 2026-10-02 拍板的 B1「拆件进默认档 + 按 zoom 分层」）───────
+     **只加屋顶系**：女儿墙（一圈 0.6m 薄墙）+ 设备箱 + 天线。
+     与 `detail` 档的**唯一**区别 = 不切裙楼/塔楼/退台 ⇒ 楼的轮廓仍是**原始脚印**
+     ⇒ `z < WS_BLD_DETAIL_ROOF_ZOOM(14)` 时这一档生成的所有体块都不画（图层 minzoom 闸），
+        画出来的东西与改造前**逐字节相同**（= 机主要的"`<14` 平顶"）。
+     配色仍从**同一张高度色阶**派生（`shade()` 调明暗），不引入第二套配色。 */
+  if ((opts.mode ?? "base") === "roof") {
+    const parts: Array<Record<string, unknown>> = [body];
+    const topH = base + h;
+    if (h >= PARAPET_MIN_H) {
+      /* 墙厚：与 `detail` 档同式（**同一份常量**，不另定一套）——"薄墙"但不许吃掉整栋楼 */
+      const fm = footprintMetrics(ring);
+      const t = Math.max(0.2, Math.min(PARAPET_THICK_M, fm.minSideM * 0.18));
+      parts.push(partFeature(f, ringBand(ring, insetRingMeters(ring, t)), topH, topH + PARAPET_H, "parapet", shade(color, 1.08), { wallThickM: +t.toFixed(2), win: 0 }));
+      const eq = equipBoxes(ring, seed, topH);
+      info.equipWanted = eq.wanted;
+      info.equipPlaced = eq.boxes.length;
+      info.equipSkipped = eq.skipped;
+      for (let i = 0; i < eq.boxes.length; i++) {
+        const b = eq.boxes[i]!;
+        parts.push(partFeature(f, b.ring, b.base, b.top, "equip", shade(color, 0.72), { side: b.side, idx: i, win: 0 }));
+      }
+    }
+    if (h >= ANTENNA_MIN_H) {
+      parts.push(partFeature(f, antennaRing(ring), topH, topH + ANTENNA_M, "antenna", shade(color, 1.25), { win: 0 }));
+    }
+    return { parts, info };
+  }
   const detail = (opts.mode ?? "base") === "detail";
   if (!detail) {
     /* ── `base` 档 = 2026-09-19 那一版，**一字不改**（App 侧走的就是这条） ───────────── */
@@ -514,8 +550,14 @@ export function buildingPartSet(
  *   · 配色仍从**同一张高度色阶**派生（`shade()` 调明暗），不引入第二套配色。
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/** 形体档位：`base` = App 现在这一版（主体/压顶/天线）；`detail` = 上面那六条 */
-export type ShapeMode = "base" | "detail";
+/**
+ * 形体档位（2026-10-02 起三档）：
+ *   · `base` = 2026-09-19 那一版（主体 + 屋顶压顶 + 天线）；
+ *   · `roof` = 🆕 **默认档**（B1）：主体 + **女儿墙 + 设备箱 + 天线**，轮廓就是原始脚印
+ *     （不切裙楼/塔楼/退台 —— 那些仍归 `?bld=2`）；三档各自按 zoom 分档闸门（`zt`）。
+ *   · `detail` = `?bld=2` 那一版（裙楼/塔楼 + 退台 + 女儿墙 + 设备箱 + 天线）。
+ */
+export type ShapeMode = "base" | "detail" | "roof";
 
 /** 形体生成开关（**默认 base**：App 侧不传 opts ⇒ 行为不变） */
 export interface ShapeOpts {

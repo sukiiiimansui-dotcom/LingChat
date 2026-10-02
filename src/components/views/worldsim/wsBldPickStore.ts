@@ -36,6 +36,14 @@ import {
   type PickBounds,
   type PickFeature,
 } from "./wsBuildingPick";
+/* 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2）：规则/成本模型/固定常量都在那一份里，
+   本模块只做"宿主调哪一个口"的接线（页面与 App 都只认 `createBldPickStore()`）。 */
+import {
+  pickBuildingsByBudget,
+  type BldBudgetStats,
+  type BldBudgetBounds,
+  type BldScreenCtx,
+} from "./wsBldBudget";
 
 /** 一次挑选的输入（**全部显式传入**，本模块不读 `window`/`location`/全局主题） */
 export interface BldPickInput<T extends PickFeature> {
@@ -65,6 +73,22 @@ export interface BldPickOutcome<T extends PickFeature> {
   /** **base（冻结后）在前、视野补充件在后** —— 顺序稳定，"冻结集"可独立核对 */
   features: T[];
   stats: BldPickStats;
+}
+
+/**
+ * `pickBudget()` 的输入 —— 与 `wsBldBudget.BldBudgetInput` 同形，只是**泛型放宽**
+ * （预算路的候选不需要 `PickFeature` 那套字段，只要有个 `id` 就能做确定性排序的兜底键）。
+ */
+export interface BldBudgetInputLite<T> {
+  /** 仓库**全量**要素（含视野外）——"画面可以编，事实不许编" */
+  features: readonly T[];
+  /** 当前视野（`map.getBounds()` 那种四个 getter 的对象） */
+  bounds: BldBudgetBounds | null | undefined;
+  /** 屏幕投影（`project` + `pxPerMeter`；公式真源 `wsBldBudget.bldPxPerMeter`） */
+  screen: BldScreenCtx;
+  budgetPx2?: number;
+  budgetVerts?: number;
+  minInView?: number;
 }
 
 /* ══ 🏙 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
@@ -138,6 +162,20 @@ export interface BldPickSnapshot {
 export interface BldPickStore {
   /** 挑一次。**纯编排**：不改入参要素，只更新内部的冻结集 */
   pick<T extends PickFeature>(input: BldPickInput<T>): BldPickOutcome<T>;
+  /**
+   * 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2，**现在的默认口径**）。
+   *
+   * 与 `pick()` 的区别（一句话）：`pick()` 按**固定经纬格**挑（"同一格永远同一批"，有冻结集）；
+   * 本方法按**代价**挑（候选 = 视野内全部楼，预算 = Σ投影 px² + Σ顶点，两个**固定常量**）。
+   * ⇒ 本方法**没有冻结集**（它的确定性来自"同视野 + 同数据 ⇒ 逐字节同一批"，见 `wsBldBudget`）。
+   *
+   * ⚠️ `pick()` **仍然保留**：① 它是两页一致闸 `ws_pages_consistency.mjs` 第③组的判据对象
+   *    （那一组拿它逐字节比两页口径）；② `?bldn=` 那条 A/B 老路还在。**两条路都只有一份实现。**
+   */
+  pickBudget<T extends { id?: unknown }>(input: BldBudgetInputLite<T>): {
+    features: T[];
+    stats: BldBudgetStats;
+  };
   /** 冻结集里多少格（等价页面旧实现的 `window.__BLD_FROZEN_N__`） */
   frozenTotal(): number;
   /**
@@ -235,6 +273,23 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
 
     frozenTotal(): number {
       return Object.keys(frozen).length;
+    },
+
+    /* 🏙 **双预算挑楼** —— 规则一行都不在这里（在 `wsBldBudget.pickBuildingsByBudget`）。
+       本方法之所以存在：页面与 App **都只认 `createBldPickStore()` 这一个口**
+       （2026-09-26 抽真源的初衷），新口径不该让宿主去 import 第二个模块。 */
+    pickBudget<T extends { id?: unknown }>(input: BldBudgetInputLite<T>): {
+      features: T[];
+      stats: BldBudgetStats;
+    } {
+      return pickBuildingsByBudget<T>({
+        features: input.features,
+        bounds: input.bounds,
+        screen: input.screen,
+        budgetPx2: input.budgetPx2,
+        budgetVerts: input.budgetVerts,
+        minInView: input.minInView,
+      });
     },
 
     frozenObject(): BldFrozenCellsObj {

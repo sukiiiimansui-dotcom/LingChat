@@ -220,8 +220,15 @@
     border: 0;
     cursor: pointer;
     background: rgba(18, 26, 36, 0.72);
-    backdrop-filter: saturate(1.2) blur(12px);
-    -webkit-backdrop-filter: saturate(1.2) blur(12px);
+    /* 🔴 2026-10-02（UI 方案 `PLAN-UI.md` P1 抓到）：**写死的毛玻璃令牌管不到**，
+       而项目红线是「`backdrop-filter` 只要不是 `none`，浏览器就每帧把底下像素读回来重合成」
+       （`worldsim.css:198-201`）——手机这颗按钮**浮在每帧都在重画的 WebGL 地图**上，
+       写死 `blur(12px)` 等于每帧白读一次像素。
+       ⇒ 改走令牌：世界观那一屏（`WsCityEntry`）把 `--ws-blur` 置 `none` ⇒ `blur(none)` 在计算值阶段非法
+         ⇒ 整条声明退回 `none`（不建 backdrop 层）；别的宿主里令牌有值就照旧毛玻璃。
+       ⚠️ **别写成 `blur(var(--ws-blur, 0px))`**：`blur(0px)` 不是"没有模糊"，照样建层（红线原文）。 */
+    backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
+    -webkit-backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
     box-shadow:
       0 10px 26px rgba(0, 0, 0, 0.42),
       inset 0 0 0 1px rgba(255, 255, 255, 0.1);
@@ -249,8 +256,9 @@
     border-radius: 22px;
     padding: 12px;
     background: rgba(14, 20, 28, 0.9);
-    backdrop-filter: saturate(1.2) blur(16px);
-    -webkit-backdrop-filter: saturate(1.2) blur(16px);
+    /* 同上（`PLAN-UI.md` P1）：令牌驱动，世界观那一屏解析成 `none` ⇒ 不每帧读回像素。 */
+    backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
+    -webkit-backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
     box-shadow:
       0 18px 48px rgba(0, 0, 0, 0.5),
       inset 0 0 0 1px rgba(255, 255, 255, 0.09);

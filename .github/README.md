@@ -1,8 +1,8 @@
 <div align="center">
 
-# 世界模拟喵 · LingChat 个人实验分支
+# 世界模拟 · LingChat 个人实验分支
 
-**这不是官方仓库喵** 官方项目在这 → [SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat) 想玩官方的 下载和反馈都去那边喵
+**这不是官方仓库喵**　官方项目在这 → [SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)　要下载、要反馈都去那边
 
 [![官方仓库](https://img.shields.io/badge/官方仓库-SlimeBoyOwO%2FLingChat-blue?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat)
 [![开发分支](https://img.shields.io/badge/开发分支-feat%2Fworldsim-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
@@ -12,49 +12,57 @@
 
 ---
 
-## 这是什么喵
+![当前部分功能演示](docs/worldsim/worldsim-demo-2026-10-03.jpg)
 
-LingChat 的个人实验分支喵 想给聊天加一层「世界」 让角色不只在聊天框里 还能在一张**真实的地图**上活动
+> 上图为当前部分功能演示（重庆 · 渝中半岛一带；右侧是角色面板与立绘）。
 
-- 官方项目：**[SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)**（想玩官方的去这里喵）
+## 这是什么
+
+LingChat 的个人实验分支：想给聊天加一层「世界」，让角色不只在聊天框里，还能在一张**真实的地图**上活动喵。
+
+- 官方项目：**[SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)**（想玩官方的去这里）
 - 本仓库在改的分支：[`feat/worldsim`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
 - 进度都记在：**[issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)**
 
-## 改了什么喵
+## 改了什么
 
 |  | 原来 | 现在 |
 |---|---|---|
 | 地图 | 五层下钻 + AI 实时生成街区 | **真实 2.5D 地图** |
 | 建筑 | AI 画 | **真实 3D 建筑** |
-| 数据 | 靠联网生成 | **离线数据包**，城市用户自己选 |
+| 数据 | 靠联网生成 | **离线数据包**，城市由用户自己选 |
 
-原来那套方案（[issue #804](https://github.com/SlimeBoyOwO/LingChat/issues/804)）的文件还在喵 实测下来 ai实时画出来的属实不太行捏 就换成了真实地图＋真实建筑
+原来那套方案（[issue #804](https://github.com/SlimeBoyOwO/LingChat/issues/804)）的文件还在。实测下来 AI 实时生成的街区效果不理想，于是换成了真实地图 ＋ 真实建筑。
 
-## 现在能玩吗喵
+## 当前进度喵
 
-**还不能喵** 只有网页预览里跑得起来（真实路网 水域 楼房都看得到） 界面也还比较糙
+**目前只做完了功能实现喵，可玩性、准确性、稳定性都还在改。**
 
-- 这条分支没有安装包 没有下载 也没有公开的试用入口喵
-- 只有稳定、能玩的版本才会更新到 [issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858) 暂时不会往上游提PR喵
+- 已经跑通的：真实路网 / 水域 / 绿地 / 楼房（离线数据包，按缩放分层显示）、走近说话、角色摇杆移动。
+- 可玩性：操作手感、镜头、界面都还比较粗糙；玩法目前只到「世界事件 ＋ 心情体力 ＋ 走近说话」。
+- 准确性：建筑高度大部分是按规则推断的（数据源里带真实高度的比例很低，画面上会区分）；片区名与 POI 有示意成分，真数据都带来源署名。
+- 稳定性：帧率、内存占用与长时间拖动缩放尚未系统验证。
+- 这条分支**没有安装包、没有下载、也没有公开的试用入口**。只有稳定、能玩的版本才会更新到 [issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)；暂时不会往上游提 PR。
 
-## 分支说明喵
+## 分支说明
 
-本仓库只留三条分支喵
+本仓库只留两条分支喵：
 
 | 分支 | 用途 |
 |---|---|
-| [`main`](https://github.com/sukiiiimansui-dotcom/LingChat) | 仓库首页说明 |
-| [`feat/worldsim`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim) | 世界模拟开发分支（**现在在改的**） |
-| [`dev`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/dev) | 跟着上游 方便对齐 |
+| [`feat/worldsim`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim) | 世界模拟开发分支（**默认分支，现在在改的**） |
+| [`dev`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/dev) | 跟着上游，方便对齐 |
 
-其它分支 9月30号清掉了喵 想找旧内容 去标签页看 `attic/*` 每个tag的说明里写了它原来是哪条分支 怎么恢复喵
+`main` 已经删掉了喵（留着没用）。它的历史没丢 —— 删之前按本仓惯例打了标签 `attic/main-20261003`，
+要恢复就 `git branch main attic/main-20261003` 再推上来。其它更早的分支 9 月 30 日清掉过，
+同样都在标签页的 `attic/*` 里，每个 tag 的说明写了它原来是哪条分支、怎么恢复。
 
-## 许可与致谢喵
+## 许可与致谢
 
-- LingChat 是 [SlimeBoyOwO](https://github.com/SlimeBoyOwO) 和贡献者们做的喵 许可 **AGPL-3.0**
-- 这边只是在它基础上做实验性改动 改动量比官方希望的单个PR（1k行以内）大不少 所以先放自己仓库里改 稳了再拆开提喵
-- 素材版权和免责声明以官方为准喵（气泡 音效 立绘这些请勿商用捏） 官方那套完整说明也还在官方仓库
+- LingChat 由 [SlimeBoyOwO](https://github.com/SlimeBoyOwO) 和贡献者们开发，许可 **AGPL-3.0**。
+- 这里只是在它基础上做实验性改动。改动量比官方期望的单个 PR（1k 行以内）大不少，所以先放在自己仓库里改，稳定之后再拆开提。
+- 素材版权与免责声明以官方为准（气泡、音效、立绘等请勿商用）；官方那套完整说明也仍在官方仓库。
 
 ---
 
-_本页是 `feat/worldsim` 分支的首页（`.github/README.md`） main 上放的是同一套说明喵_
+_本页是 `feat/worldsim` 分支的首页（`.github/README.md`）喵。_

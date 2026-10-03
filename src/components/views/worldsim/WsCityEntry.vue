@@ -174,6 +174,8 @@
       :current-role-id="currentRoleId"
       :affinity="currentAffinity"
       :affinity-rank="currentAffinityRank"
+      :needs="panelNeeds"
+      :needs-note="panelNeedsNote"
       @close="closePanel"
       @portrait="togglePortrait"
       @goto-chat="onGotoChat"
@@ -213,6 +215,10 @@
   import { useWorldWeather } from "@/composables/useWorldWeather";
   import { useWsPerf } from "./wsPerf";
   import "@/assets/styles/worldsim-weather.css";
+  /* ❤️⚡ 期 2（2026-10-02）·「心情 / 体力」：
+     数值层的唯一真源 = `wsNeeds.ts`（0–1 量程 + 昼夜基线 + 天气/三件事折算 + 事件脉冲按半衰期衰减）。
+     本页只**喂真实输入 + 推上去**，不在这里写任何一条换算（PR 门禁 C1：不许第二份实现）。 */
+  import { localHourOf, needPairOf, useWsNeeds } from "./wsNeeds";
   /* 🧑‍🤝‍🧑 **地图上的人**（M1-1）：装配逻辑全在既有的 `useWsActors` 里（**不新造第二套**）；
      钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
   import { useWsActors } from "@/composables/useWsActors";
@@ -589,6 +595,11 @@
     role: currentRoleName,
     autoStart: true,
     onFired: (e) => {
+      /* ❤️⚡ 期 2：事件带的 `effects` → 一条脉冲（**页面里 0 处算术**，全在 `wsNeeds` 里）。
+         ⚠️ 这一句必须放在**通道判断之前**：三个通道（弹窗/气泡/口述）按本仓既有口径只控制
+         **展示**，引擎与注入照常（`useWorldEvents` 的 `setChannel` 注释写着）——
+         把"记不记后果"挂在展示开关上，会变成"关掉气泡 ⇒ 世界不再有因果"，那是另一套语义。 */
+      if (needs.applyEvent(e.event)) needsEpoch.value += 1;
       // 关掉这一路就该安静（气泡那一路由 composable 内部按 `channels.bubble` 自己判）
       if (!wsEvents.channels.value.popup) return;
       wsToast(e.popup || e.event?.title || "", popupKindOf(e.event?.category));
@@ -676,6 +687,8 @@
 
   onMounted(() => {
     installed.value = store.installed();
+    /* ❤️⚡ 期 2：对齐下一个整点重算一次基线（一次性 setTimeout 链；卸载时清掉，见 onBeforeUnmount） */
+    armNeedsHour();
     /* 首次引导的开屏判据（**唯一一处**）：没装过任何城市 + 没跳过过 ⇒ 开。
        ⚠️ 这里**不读清单**：读清单是 sheet 自己的事（它要显示三态与原因）。
        入口只关心"要不要问"，这样清单服务挂了也不影响进地图。 */
@@ -717,20 +730,105 @@
     })(0);
   });
 
+  /* ══ ❤️⚡ 期 2（2026-10-02）·「心情 / 体力真的推上去」（因果通电）───────────────────
+     背景（一句话）：Rust 侧 `event_cmd.rs` 一直在读 `actors[role].mood/.energy`（须落在 0–1），
+     `events.rs::weight_for` 的 ④⑤ 拿它做权重修正（心情 <0.35 ⇒ 情绪类 ×2.2；体力 <0.30 ⇒
+     健康 ×1.6 / 工作学习 ×0.6）—— 但**前端从来没推过这两个键**，所以那两条修正一直没生效。
+
+     本页只做三件事，规矩都写在 `wsNeeds.ts` 头部（那里是唯一真源）：
+       ① 把**已经到手的真实输入**（本机时间 / 真实天气 / 事件表的 `effects` / 今日三件事完成数）
+          交给 `wsNeeds.compute()` 换成 0–1 —— 它是**推导值**，不是测量值，判词里必须写明；
+       ② 事件发生（`onFired`）时把它带的 `effects` 记成一条脉冲 —— **页面里 0 处算术**；
+       ③ 把结果随 `pushRuntime` 推上去（只给**当前对话角色**：别人的数值我们没有任何真实输入）。
+
+     🔴 两条刻意的不做：
+       · **不挂常驻轮询**：数值只在"输入变了"时重算（事件 / 天气 / 今日三件事 / 整点 / 换角色），
+         整点那一下用**一次性 `setTimeout` 对齐下一个整点**（不是 `setInterval`，与 `useWorldEvents`
+         的定时链同一口径）；
+       · **拿不到就什么都不推**（`needPairOf` 返回 `null` ⇒ patch 里没有 `needs`）——
+         Rust 侧读到 `None` = "不知道"，与"0.0 = 很累"是两件事（`events.rs` 文件头写明）。 */
+  /* 🔴 角色按**函数**给：换聊天对象时 `currentRoleName` 会变，脉冲与算值必须立刻跟着换一套
+     （旧写法把角色定死在薄壳创建那一刻 ⇒ 换人后会把上一个角色的脉冲算到新角色头上）。 */
+  const needs = useWsNeeds({ role: () => currentRoleName.value });
+  /** 事件脉冲变了 ⇒ 手动通知重算（`wsNeeds` 与 `wsRelation` 一样**不 import vue**，不是响应式的） */
+  const needsEpoch = ref(0);
+  /** 当前钟点（整点对齐那一下要重算基线；`null` = 时钟读不出来 ⇒ 判"数不出来"） */
+  const needsHour = ref(localHourOf(Date.now()));
+  let needsHourTimer = 0;
+
+  /** 对齐**下一个整点**再算一次（一次性定时器；组件卸载时清掉） */
+  function armNeedsHour(): void {
+    const now = Date.now();
+    const next = new Date(now);
+    next.setMinutes(0, 0, 0);
+    const at = next.getTime() + 3600_000; // 下一个整点
+    needsHourTimer = window.setTimeout(() => {
+      needsHour.value = localHourOf(Date.now());
+      armNeedsHour();
+    }, Math.max(1000, at - now));
+  }
+
+  /**
+   * 这一屏的读数（**推导值**）：输入全部来自别处的真源，本页一个数都不编。
+   * `dailyTasks` 还没排出来 ⇒ `null`（"数不出来"，不是 0 件）。
+   */
+  const needsResult = computed(() => {
+    void needsEpoch.value; // 显式依赖（见 needsEpoch 的注释）
+    void needsHour.value;
+    const tasks = dailyTasks.value || [];
+    return needs.compute({
+      weather: wxState.value,
+      dailyDone: tasks.length ? tasks.filter((t) => t.done).length : null,
+    });
+  });
+  /** 能推给 Rust 的那两个数；`null` = 这一轮不推（**绝不用 0.5 顶替**） */
+  const needsPair = computed(() => needPairOf(needsResult.value));
+  /** 推之前先归一：只给**当前对话角色**（键 = display_name，与 `actors` 同一套） */
+  const needsForPush = computed<Record<string, { mood?: number; energy?: number }> | undefined>(() => {
+    const role = currentRoleName.value;
+    const pair = needsPair.value;
+    if (!role || !pair) return undefined;
+    return { [role]: pair };
+  });
+  /** 参与 watch 判据的签名（数值没变就不重推 —— 后端 `changed` 也就不用背包袱） */
+  const needsSig = computed(() => {
+    const p = needsPair.value;
+    return p ? `${currentRoleName.value}:${p.mood}|${p.energy}` : "none";
+  });
+
+  /** 面板那一格：**只有面板对着的正是当前对话角色**时才有值（别人的数值没有来源） */
+  const panelNeeds = computed(() =>
+    currentActor.value && currentActor.value.name === currentRoleName.value ? needsPair.value : null
+  );
+  const panelNeedsNote = computed(() => {
+    if (!currentActor.value) return "";
+    if (currentActor.value.name !== currentRoleName.value) {
+      // ⚠️ 这行会经 `{{ needsNote }}` **原样上屏**（不是 Markdown 渲染器）⇒ 不许写 `**` 之类的记号
+      return "数不出来：心情/体力只对当前对话角色有真实输入，别人的没有来源";
+    }
+    return needsResult.value.why;
+  });
+
   /* ── 🔌 把场景推给 Rust（`MapRuntime.scene`）────────────────────────────────────
      **为什么必须推**（真源 = `wsRuntimePush.ts` 头部注释，这里只复述结论）：
        · `scene` 在不在 = `world_sim_enabled()`（`src-tauri/src/world_map/state.rs:618`）的**唯一判据**；
        · 它 false 时：`producer.rs:63` 的位置指令剥离器**不启用**（AI 回话里的 `⟦wm:…⟧` 会漏进正文），
          且 `role_manager.rs:360` 的 `injection_for()` 返回空 ⇒ **角色不知道自己在哪**；
        · 老入口 `WorldSim.vue:1132` 一直在推，但 `/worldsim` 现在指向**本组件** ⇒ 这两件事**全关了**。
-     推什么：`area`（本屏就是"在用哪座城市"）+ 地图上的人（键必须是角色的 display_name，见契约 ①）。
+     推什么：`area`（本屏就是"在用哪座城市"）+ 地图上的人（键必须是角色的 display_name，见契约 ①）
+             + 期 2 的 `needs`（当前角色的 mood/energy，见上面那一段）。
      ⚠️ **退出必须推 `{scene:null}`**（`clearRuntime()`）—— 不清的话 AI 会一直带着上次的地图上下文说话。 */
   watch(
-    () => [areaLabel.value, districtPins.value.map((p) => p.id + ":" + (p.posSource || "")).join(",")] as const,
+    () => [
+      areaLabel.value,
+      districtPins.value.map((p) => p.id + ":" + (p.posSource || "")).join(","),
+      needsSig.value,
+    ] as const,
     () => {
       void pushRuntime({
         area: areaLabel.value || undefined,
         actors: actors.placed.value || [],
+        needs: needsForPush.value,
       });
     },
     { immediate: true }
@@ -741,6 +839,11 @@
     if (dailyTimer) {
       window.clearTimeout(dailyTimer);
       dailyTimer = 0;
+    }
+    /* ❤️⚡ 期 2：整点对齐那一下也要收掉（不留下"离开这一屏还在排下一发"的定时器） */
+    if (needsHourTimer) {
+      window.clearTimeout(needsHourTimer);
+      needsHourTimer = 0;
     }
     /* 💬 期 1：离开这一屏就停掉事件引擎（tick 轮询 + 广播订阅 + drain 定时器）。
        下面 `clearRuntime()` 会把 `scene` 推成 null ⇒ 就算没停，后端 tick 也只会返回 `no_scene`；

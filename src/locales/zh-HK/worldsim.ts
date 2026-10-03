@@ -122,7 +122,11 @@ export default {
     "goto": "去找他聊聊",
     "gotoNow": "你們正在聊着，點了直接回對話",
     "gotoWarn": "注意：這個角色不是當前對話對象，聊天裏還要再選一次 ta",
-    "actions": "快捷動作"
+    "actions": "快捷動作",
+    /* ❤️⚡ 期 2（2026-10-02）：心情 / 體力（0–1 的**推導值**，口徑寫在 `wsNeeds.ts`） */
+    "needsMood": "心情",
+    "needsEnergy": "體力",
+    "needsNone": "數不出來（沒有可用的世界狀態）"
   },
   "action": {
     "hi": "打招呼",

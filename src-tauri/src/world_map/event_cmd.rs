@@ -911,6 +911,7 @@ mod tests {
             text: "路上堵成一片".into(),
             weight_used: 3.0,
             at_secs: 1_700_000_000,
+            effects: Vec::new(),
         };
         let value = serde_json::to_value(&ev).unwrap();
         let recent = recent_from(&[value]);
@@ -1029,6 +1030,7 @@ mod tests {
             text: "闹钟响了三次都没听见，一睁眼已经十点半了。".into(),
             weight_used: 1.5,
             at_secs: 1_700_000_000,
+            effects: Vec::new(),
         };
         let out = commit_event(&mut rt, &ev, "小满", 1_700_000_000).unwrap();
 
@@ -1058,6 +1060,7 @@ mod tests {
             text: "路上堵成一片，车挪得像蜗牛。".into(),
             weight_used: 2.0,
             at_secs: 42,
+            effects: Vec::new(),
         };
         let out = commit_event(&mut rt, &ev, "小满", 42).unwrap();
         assert_eq!(out.popup, events::popup_text(&ev));
@@ -1075,6 +1078,44 @@ mod tests {
         assert!(payload["speech_hint"].as_str().unwrap().starts_with("刚才发生了："));
     }
 
+    /// 期 2：事件的 `effects`（心情/体力增量）必须**原样**过广播载荷 ——
+    /// 前端 `wsNeeds.applyEvent` 只认 `payload.event.effects` 这一份（页面里 0 处算术）。
+    /// 同时核对：不带 effects 的事件在载荷里是**空数组**，不是缺字段（"没有"要说得出来）。
+    #[test]
+    fn payload_carries_need_effects_for_the_frontend() {
+        let mut rt = MapRuntime::new();
+        let def = events::table().get("mood.low").unwrap();
+        assert!(!def.effects.is_empty(), "mood.low 表里就没有 effects，这条测试没意义了");
+        let ev = PlannedEvent {
+            id: def.id.into(),
+            category: def.category,
+            title: def.title.into(),
+            text: "有点低落".into(),
+            weight_used: def.weight,
+            at_secs: 7,
+            effects: def.effects.to_vec(),
+        };
+        let payload = commit_event(&mut rt, &ev, "小满", 7).unwrap().payload();
+        assert_eq!(
+            payload["event"]["effects"],
+            json!([{"mood": -0.22, "energy": 0.0}]),
+            "广播载荷里的 effects 与事件表不一致：{}",
+            payload["event"]
+        );
+
+        let plain = PlannedEvent {
+            id: "luck.win".into(),
+            category: events::Category::Luck,
+            title: "抽到想要的".into(),
+            text: "抽到了".into(),
+            weight_used: 1.0,
+            at_secs: 8,
+            effects: Vec::new(),
+        };
+        let p2 = commit_event(&mut rt, &plain, "小满", 8).unwrap().payload();
+        assert_eq!(p2["event"]["effects"], json!([]));
+    }
+
     #[test]
     fn double_check_sees_an_event_committed_a_moment_ago() {
         let mut rt = MapRuntime::new();
@@ -1087,6 +1128,7 @@ mod tests {
             text: "一脚踩进积水里".into(),
             weight_used: 1.0,
             at_secs: now,
+            effects: Vec::new(),
         };
         commit_event(&mut rt, &ev, "小满", now).unwrap();
         // 同一秒的第二次 tick：写锁内的双检必须拦住它
@@ -1176,6 +1218,7 @@ mod tests {
                 text: "文案".into(),
                 weight_used: 1.0,
                 at_secs: at,
+                effects: Vec::new(),
             })
             .unwrap()
         };

@@ -84,6 +84,14 @@ export interface WsEventItem {
   text: string;
   weight_used?: number;
   at_secs: number;
+  /**
+   * 事件对心情/体力的**副作用**（Rust `events.rs::NeedEffect` 的序列化形状）—— 期 2。
+   *
+   * `undefined` = **这份数据没有**（期 2 之前的老壳 / 老事件条目）；
+   * `[]` = 表里明写"这条不改需求"。两者不是一回事 ⇒ 原样透传，**不在这里补默认值**。
+   * 应用它的地方只有一处（`wsNeeds.applyEventToImpulses`），页面里 0 处算术。
+   */
+  effects?: Array<{ mood?: number; energy?: number }>;
 }
 
 /** 弹窗通道用的 kind（与 `wsToast` 的 `WsToastKind` 结构一致；这里不 import 组件层类型） */
@@ -244,6 +252,9 @@ export function normalizeEvent(raw: unknown): WsEventItem | null {
   // id 都没有的条目对「去重 / 冷却」毫无意义（与后端 `recent_one` 同款判断）
   if (!id) return null;
   const w = Number(o.weight_used);
+  // 期 2：`effects` **原样透传**（数组才认；缺字段就是缺 —— 别在这里补 `[]`，
+  // 「没有这份数据」与「表里说不改」在下游是两条不同的路，见 `wsNeeds.effectOfEvent`）
+  const fx = Array.isArray(o.effects) ? (o.effects as WsEventItem["effects"]) : undefined;
   return {
     id,
     category: categoryOf({ category: o.category, id }),
@@ -251,6 +262,7 @@ export function normalizeEvent(raw: unknown): WsEventItem | null {
     text,
     ...(Number.isFinite(w) ? { weight_used: w } : {}),
     at_secs: at,
+    ...(fx ? { effects: fx } : {}),
   };
 }
 

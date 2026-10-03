@@ -17,7 +17,7 @@
 //   "me":      {"lat": 23.13, "lng": 113.29, "source": "gps", "area": "广州市·越秀区",
 //               "gx": 3.5, "gy": 4.0},
 //   "actors":  {"小满": {"facility": "便利店", "type": "commercial", "x": 3, "y": 4,
-//                        "since": "19:20"}},
+//                        "since": "19:20", "mood": 0.42, "energy": 0.31}},
 //   "facilities": [{"name": "咖啡馆", "type": "commercial", "grid": [6, 7]}],
 //   "cell_m": 30
 // }
@@ -56,6 +56,17 @@ export interface RuntimeActorRecord {
   lat?: number;
   /** 什么时候到这儿的（`"19:20"` 这种展示用字符串） */
   since?: string;
+  /**
+   * 心情 / 体力（**0–1，含端点**）—— 期 2「因果通电」。
+   *
+   * 契约真源 = `src-tauri/src/world_map/event_cmd.rs` 头部的字段映射表：
+   * `mood ← actors[role].mood`、`energy ← actors[role].energy`（别名 `stamina`），
+   * **须落在 0–1**；读它的地方是 `events.rs::weight_for` 的权重修正 ④⑤
+   * （心情 < 0.35 ⇒ 情绪类 ×2.2；体力 < 0.30 ⇒ 健康 ×1.6 / 工作学习 ×0.6）。
+   * 取不到就**不写这两个键**（Rust 侧得到 `None` = "不知道"，与"0.0 = 很累"是两件事）。
+   */
+  mood?: number;
+  energy?: number;
 }
 
 export interface RuntimePatchInput {
@@ -77,6 +88,14 @@ export interface RuntimePatchInput {
   facilities?: unknown[];
   /** 一个格子等于多少米（Rust 侧兜底 30） */
   cellM?: number;
+  /**
+   * 心情 / 体力：**角色名 → 两个 0–1 的数**（期 2）。
+   *
+   * 只给**真有这两项的那个角色**（当前对话角色）—— 别人的数值我们没有任何真实输入，
+   * 编一套出来等于"给所有人写同一个数"（本仓铁律：数不出来就写数不出来）。
+   * 键名与 `actors` 同一套（= 角色的 `display_name`，见文件头契约 ①）。
+   */
+  needs?: Record<string, { mood?: number; energy?: number }> | null;
 }
 
 /** 非空字符串才算数（前端常把没值的字段写成 `''`） */
@@ -142,6 +161,24 @@ export function buildPatch(input: RuntimePatchInput): Record<string, unknown> {
     if (!name || name === "——") continue;
     const rec = actorRecordOf(a);
     if (rec) actors[name] = rec;
+  }
+  /* 期 2：心情/体力按**角色名**贴到已存在的那条记录上。
+     三条刻意的取舍（都是为了"别造数据"）：
+       ① 只贴给**已经在 `actors` 里的人** —— 凭空插入一条只有 mood 的记录，
+          Rust 那边会当成"有这么个角色站在那儿"，而我们并不知道他在哪；
+       ② 只认 **0–1 的有限数**（与 `event_cmd.rs::actor_unit` 的判据逐字对齐）——
+          越界/NaN 一律**不写这个键**（写了也会被 Rust 当"不知道"，但让 JSON 说谎更糟）；
+       ③ 一个键都不写就不塞 `needs` 对象（`buildPatch` 的"只放有值的键"口径）。 */
+  const needs = input.needs;
+  if (needs && typeof needs === "object") {
+    for (const [name, pair] of Object.entries(needs)) {
+      const rec = actors[name];
+      if (!rec || !pair) continue;
+      const mood = num(pair.mood);
+      const energy = num(pair.energy);
+      if (mood !== undefined && mood >= 0 && mood <= 1) rec.mood = mood;
+      if (energy !== undefined && energy >= 0 && energy <= 1) rec.energy = energy;
+    }
   }
   if (Object.keys(actors).length) patch.actors = actors;
 

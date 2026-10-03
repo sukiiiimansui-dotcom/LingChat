@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-10-03-v95";
+      const BUILD = "ws3dshow-2026-10-03-v96";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -979,9 +979,17 @@
 
       /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
       function bldLineLayer(P) {
+        const outlineFoot = bldFootprintMaxZoom();
         return {
           id: "bld-line", type: "line", source: "bld",
-            minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
+          /* 🌆 2026-10-03（PLAN-BLD-LOWZOOM §4 表那一笔）：**低缩放不再给同一批要素画第二遍** ——
+             足迹档（z<14）已经有 `bld-foot`（`fill`）在画同一批要素，再叠描边就是那片"深色小面"。
+             🔴 闸开在 `minzoom` 这一侧（= 只在立体档画）：方案表里写的是"加 `maxzoom`"，但按 MapLibre
+                语义 `maxzoom: 14` 会把 **z≥14 的描边整层关掉**（近景那套描边是机主认过的，
+                见方案 §验收 6）⇒ 取两侧意图都满足的那一侧，与 App 真源**同一份规格**
+                （`ws_pages_consistency.mjs` ④b 逐字段对拍 minzoom）。
+             ⚠️ 分界线读不到（**旧产物**）⇒ 退回 `bldMinzoomSpec()`（改造前的起点 11），不拿猜的数顶上。 */
+          minzoom: (typeof outlineFoot === "number") ? outlineFoot : bldMinzoomSpec(),
           paint: {
             "line-color": P.outline.color,
             "line-width": P.lineWidth,   /* 🎨 art≥2 ⇒ zoom 插值；art=1 ⇒ 主题固定宽度（都在共享取参里决定） */
@@ -1152,14 +1160,35 @@
       }
       /** 🏙🌆 **档位 × zoom → 栋数上限**（共享真源 `wsBldBudget.bldMaxDrawnFor`，经 vendor 到手）。
        *  页面**没有档位 UI** ⇒ 恒严格档（`"lean"`，与 App 的默认档同一个值），按 zoom 分档交给真源
-       *  （z<14 足迹档走宽档 4000 / z≥14 立体档严格 100）—— 页面**不写** 100/4000、也不写 14。
+       *  （`z<14` 足迹档 = **静态重要度取前 K**（2026-10-03 第四条，不再是宽档 4000）/
+       *   `z≥14` 立体档严格 100）—— 页面**不写** 100/4000/K、也不写 14。
+       *  第三个参数 = **上一次落图的档**（`bldTierAt` 的返回值）⇒ 与 App 侧同一个入口、同一份 0.25 滞回。
        *  符号读不到（旧产物）⇒ `undefined` ⇒ 规则模块退回严格档 100（= 改造前的行为，**不是**放开）。 */
-      function bldMaxDrawnAt(z) {
+      function bldMaxDrawnAt(z, prevTier) {
         try {
           const T = window.__TF__ || {};
-          if (typeof T.bldMaxDrawnFor === "function") return T.bldMaxDrawnFor("lean", z);
+          if (typeof T.bldMaxDrawnFor === "function") return T.bldMaxDrawnFor("lean", z, prevTier);
         } catch (e) { /* 落 undefined */ }
         return undefined;
+      }
+      /** 🌆 **上一次落图的形体档**（滞回判据的 prev；与 App 侧 `bldFlushedTier` 同一个角色）。 */
+      let BLD_TIER_PREV = null;
+      /**
+       * 🌆 **这一轮走哪一档形体**（`0` = 足迹 z<14 · `1` = 立体 z≥14 · `null` = 读不出来）——
+       * 共享真源 `wsBldBudget.bldTierOfZoom(zoom, prev)`（**含 0.25 滞回**）经 vendor 到手；
+       * 页面**不写** 14、也不写滞回宽度（判据只有真源那一份）。
+       * ⚠️ 符号读不到（**旧产物**）⇒ 退回"按**共享分界线**裸比一次"：那是**改造前的行为**
+       *   （无滞回），且**仍然不写死数字**（分界线来自 `bldFootprintMaxZoom()`）；
+       *   两个都读不到 ⇒ `null`（"数不出来"）⇒ 规则模块按严格档走，宁可少画不猜。
+       */
+      function bldTierAt(z) {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.bldTierOfZoom === "function") return T.bldTierOfZoom(z, BLD_TIER_PREV);
+        } catch (e) { /* 落下面那条 */ }
+        const line = bldFootprintMaxZoom();
+        if (typeof line !== "number" || typeof z !== "number" || !isFinite(z)) return null;
+        return z < line ? 0 : 1;
       }
       /**
        * 🔭 **"1 米楼高 = 多少屏幕像素"**（共享真源 `wsBldBudget.bldPxPerMeter`，经 vendor 到手）。
@@ -1176,6 +1205,21 @@
         } catch (e) { /* 落下面 */ }
         errs.push("bldPxPerMeter 缺符号：墙高按 0 算（vendor 未到？会自动重取）");
         return 0;
+      }
+      /**
+       * 📏 **"1 CSS 像素 = 多少米"**（共享真源 `wsBldBudget.bldMetersPerCssPixel`，经 vendor 到手）。
+       *
+       * 谁要用它：足迹档（z<14）的**静态路**——那条路的全部意义就是"`map.project()` 一次都不调"
+       * （PLAN-BLD-LOWZOOM §验收 1）⇒ 屏幕量只能由这把尺子换算（米数 ÷ 它 = 像素）。
+       * 读不到（**旧产物**）⇒ `undefined` ⇒ 规则模块如实写"px² 数不出来"，**不谎报 0 面积**、
+       * 也**不偷偷退回投影路**（那会让"0 投影"这条验收变成空话）。
+       */
+      function bldMetersPerPixelAt(zoom, lat) {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.bldMetersPerCssPixel === "function") return T.bldMetersPerCssPixel(zoom, lat);
+        } catch (e) { /* 落 undefined */ }
+        return undefined;
       }
       /* 🌐 **楼房直画 WebGL**（`?glbld=1`，默认关）：MapLibre 自定义层 + 实例化方盒。
          为什么做它：`fill-extrusion` 开销随要素数线性增长（官方性能要点），今天为了不卡只能"只画 100 栋"；
@@ -1303,7 +1347,16 @@
              双预算的成本模型要用它，两页**必须同一把尺子**。
            ⚠️ 那两个阈值本身是**常量**，所以只查上面这两个函数在不在（常量不进这张表）。
          🏙🌆 2026-10-03「按 zoom 分层」本页又新增依赖一个**函数**：`bldMaxDrawnFor`（档位 × zoom → 栋数上限）。
-            它是**函数** ⇒ 可以进这张表（常量那两个走下面的 `BLD_CONSTS`）。 */
+            它是**函数** ⇒ 可以进这张表（常量那两个走下面的 `BLD_CONSTS`）。
+         🌆 2026-10-03 第四条（PLAN-BLD-LOWZOOM）本页又依赖两个**函数**：`bldTierOfZoom`（分界线 +
+            0.25 滞回）与 `bldMetersPerCssPixel`（静态路的尺子）。
+            🔴 **它们故意不进这张表**（与上面那条惯例的一次**有记录**的例外）：本页是**先接线、
+            vendor 后重建**（`bash scripts/build-ws-vendor.sh`，由机主跑）⇒ 重建之前这两个符号必然不在，
+            进表就会让每次开页都白打三趟 vendor、`tfState` 常驻"重取后仍缺"，而 `ws_bld_page_selftest`
+            的"自愈"那几条也会当场变红（那个夹具里的"新产物"就是 `public/vendor/wsScene.mjs`）。
+            传播机制本来就不靠它：`VENDOR_VER` 是**产物内容哈希**，重建后 URL 必换 ⇒ 一定拿到新的。
+            ⚠️ 读不到时页面各自退回**改造前的行为**（`bldTierAt` / `bldMetersPerPixelAt` 里的兜底），
+            不静默画错、也不往 `errs` 堆噪声；vendor 重建之后可以把这两行加进表里（等价，只是更严）。 */
         "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget", "bldMaxDrawnFor"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
@@ -3408,12 +3461,16 @@
               window.__BLD_PICK__ = r.stats;
               try { window.__WSLOG__ && window.__WSLOG__.info("bld-pick", pickWhy, r.stats); } catch (e2) { /* 忽略 */ }
             } else {
-              /* 🏙 **双预算挑楼**（默认口径）—— 屏幕投影与"1 米楼高 = 多少像素"都取自共享真源
-                 （`bldPxPerMeter`：两页**同一把尺子**；写两份必然漂）。 */
+              /* 🏙 **双预算挑楼**（默认口径）—— 三把尺子全部取自共享真源（`bldPxPerMeter` /
+                 `bldMetersPerCssPixel` / `bldTierOfZoom`：两页**同一把**；写两份必然漂）。
+                 🌆 2026-10-03 第四条（PLAN-BLD-LOWZOOM）：足迹档（`tier === 0`）⇒ 规则模块走
+                 **静态重要度**那条路 —— `project` **一次都不会被调**，屏幕量由 `metersPerPixel` 换算。 */
               const center = (function () { try { return map.getCenter(); } catch (e2) { return null; } })();
               const pitch = (function () { try { return map.getPitch(); } catch (e2) { return 0; } })();
+              const centerLat = center ? Number(center.lat) : 0;
+              const tierNow = bldTierAt(z);           /* 带 0.25 滞回（prev = 上一次落图的档） */
               const r = pmTime("bld.pick", function () {
-                return store.pickBudget({
+                const out = store.pickBudget({
                   features: all.features,           /* 仓库**全量**（含视野外）——"画面可以编，事实不许编" */
                   bounds: map.getBounds(),          /* LngLatBounds 自带 getWest/South/East/North */
                   screen: {
@@ -3421,15 +3478,23 @@
                       const p = map.project([lng, lat]);
                       return [p ? Number(p.x) : NaN, p ? Number(p.y) : NaN];
                     },
-                    pxPerMeter: bldPxPerMeterAt(z, center ? Number(center.lat) : 0, pitch),
+                    pxPerMeter: bldPxPerMeterAt(z, centerLat, pitch),
+                    /* 🌆 静态路的尺子（1 px = 多少米）—— 旧产物读不到 ⇒ undefined ⇒ 那一栏如实报"数不出来" */
+                    metersPerPixel: bldMetersPerPixelAt(z, centerLat),
                   },
-                  /* 🏙🌆 **栋数上限 = 档位 × zoom**（2026-10-03 按 zoom 分层：`z<14` 足迹档走宽档 4000 /
-                     `z≥14` 立体档严格 100）。页面**没有档位 UI** ⇒ 恒严格档；换算是**共享真源**
-                     `bldMaxDrawnFor`（页面不写 100/4000、也不写 14，与 App 侧同一个入口）。
+                  /* 🏙🌆 **栋数上限 = 档位 × zoom**（2026-10-03 按 zoom 分层：`z<14` 足迹档 =
+                     **静态重要度取前 K**（第四条，不再是宽档 4000）/ `z≥14` 立体档严格 100）。
+                     页面**没有档位 UI** ⇒ 恒严格档；换算与滞回都是**共享真源** `bldMaxDrawnFor`
+                     （页面不写 100/4000/K、也不写 14、更不写 0.25，与 App 侧同一个入口）。
                      符号读不到（旧产物）⇒ `undefined` ⇒ 规则模块退回严格档 100（改造前的行为）。 */
-                  maxDrawn: bldMaxDrawnAt(z),
+                  maxDrawn: bldMaxDrawnAt(z, BLD_TIER_PREV),
+                  /* 🌆 `0` = 足迹档 ⇒ **静态路**；`1`/`null` ⇒ 原样投影路（旧产物会忽略这个字段） */
+                  shapeTier: tierNow,
                   minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
                 });
+                /* 落图用的档记成下一次的 prev（滞回判据；与 App 侧"落图后写 `bldFlushedTier`"同一个角色） */
+                BLD_TIER_PREV = tierNow;
+                return out;
               }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });
               data = { type: "FeatureCollection", features: r.features };
               pickWhy = r.stats.why;                /* 判词只由共享模块产出，页面不拼第二份 */

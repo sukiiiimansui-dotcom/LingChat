@@ -2028,14 +2028,28 @@ var WS_BLD_BUDGET_VERTS = 4e4;
 var WS_BLD_MAX_DRAWN = 100;
 var WS_BLD_MAX_DRAWN_MANY = 4e3;
 var WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
+var WS_BLD_STATIC_TOP_K = 200;
+var WS_BLD_STATIC_TOP_K_MAX = 400;
+function bldStaticTopK() {
+  return Math.min(WS_BLD_STATIC_TOP_K_MAX, Math.max(0, Math.floor(WS_BLD_STATIC_TOP_K)));
+}
+var WS_BLD_TIER_HYSTERESIS = 0.25;
+function bldTierOfZoom(zoom, prevTier) {
+  const v = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
+  if (!isFinite(v)) return null;
+  const line = WS_BLD_FOOTPRINT_MAXZOOM;
+  if (prevTier === 0) return v < line + WS_BLD_TIER_HYSTERESIS ? 0 : 1;
+  if (prevTier === 1) return v < line - WS_BLD_TIER_HYSTERESIS ? 0 : 1;
+  return v < line ? 0 : 1;
+}
 function bldMaxDrawnOf(mode) {
   return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
 }
-function bldMaxDrawnFor(mode, zoom) {
+function bldMaxDrawnFor(mode, zoom, prevTier) {
   if (bldMaxDrawnOf(mode) === WS_BLD_MAX_DRAWN_MANY) return WS_BLD_MAX_DRAWN_MANY;
-  const z = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
-  if (!isFinite(z)) return WS_BLD_MAX_DRAWN;
-  return z < WS_BLD_FOOTPRINT_MAXZOOM ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+  const tier = bldTierOfZoom(zoom, prevTier);
+  if (tier === null) return WS_BLD_MAX_DRAWN;
+  return tier === 0 ? bldStaticTopK() : WS_BLD_MAX_DRAWN;
 }
 var WS_BLD_VERTS_PER_SEGMENT = 4;
 function bldRingVertices(ringPoints) {
@@ -2114,6 +2128,68 @@ function bldScreenCost(f, ctx, outCost) {
   if (outCost) outCost.v = cost;
   return cost;
 }
+var WS_BLD_M_PER_DEG_LNG = 111320;
+var WS_BLD_M_PER_DEG_LAT = 110540;
+var staticMemo = /* @__PURE__ */ new WeakMap();
+function bldDrawHeightOf(f) {
+  const h = h3dOf(f);
+  if (h > 0) return h;
+  try {
+    const r = renderHeight(f?.properties);
+    return r && isFinite(r.h) && r.h > 0 ? r.h : 0;
+  } catch {
+    return 0;
+  }
+}
+function bldStaticMeasureOf(f) {
+  const ring = outerRingOf(f);
+  if (!ring) return null;
+  const key = f;
+  if (key && typeof key === "object") {
+    const hit = staticMemo.get(key);
+    if (hit) return hit;
+  }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, latSum = 0, n = 0;
+  for (const pt of ring) {
+    const lng = Number(pt[0]), lat = Number(pt[1]);
+    if (!isFinite(lng) || !isFinite(lat)) continue;
+    if (lng < x0) x0 = lng;
+    if (lng > x1) x1 = lng;
+    if (lat < y0) y0 = lat;
+    if (lat > y1) y1 = lat;
+    latSum += lat;
+    n += 1;
+  }
+  if (!(x1 >= x0) || !(y1 >= y0) || n === 0) return null;
+  const kx = WS_BLD_M_PER_DEG_LNG * Math.cos(latSum / n * Math.PI / 180);
+  const wM = (x1 - x0) * kx;
+  const hM = (y1 - y0) * WS_BLD_M_PER_DEG_LAT;
+  const h3d = bldDrawHeightOf(f);
+  const m = { score: h3d * (wM * hM), wM, hM, h3d, ringPoints: ring.length };
+  if (key && typeof key === "object") staticMemo.set(key, m);
+  return m;
+}
+function bldStaticScoreOf(f) {
+  const m = bldStaticMeasureOf(f);
+  return m ? m.score : null;
+}
+function bldStaticScreenCost(m, id, mpp, pxPerMeter) {
+  const canPx = isFinite(mpp) && mpp > 0;
+  const w = canPx ? m.wM / mpp : 0;
+  const h = canPx ? m.hM / mpp : 0;
+  const ppm = isFinite(pxPerMeter) && pxPerMeter > 0 ? pxPerMeter : 0;
+  const roofPx = w * h;
+  const wallPx = (w + h) * (m.h3d * ppm);
+  return {
+    id,
+    roofPx,
+    wallPx,
+    px: roofPx + wallPx,
+    verts: bldRingVertices(m.ringPoints),
+    ringPoints: m.ringPoints,
+    h3d: m.h3d
+  };
+}
 function pickBuildingsByBudget(input) {
   const feats = input.features || [];
   const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
@@ -2121,6 +2197,9 @@ function pickBuildingsByBudget(input) {
   const maxDrawn = Number.isFinite(input.maxDrawn) ? Math.max(0, Math.floor(Number(input.maxDrawn))) : WS_BLD_MAX_DRAWN;
   const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
+  const staticPick = input.shapeTier === 0;
+  const mpp = staticPick && Number.isFinite(input.screen?.metersPerPixel) ? Number(input.screen.metersPerPixel) : 0;
+  const ppm = staticPick && Number.isFinite(input.screen?.pxPerMeter) && input.screen.pxPerMeter > 0 ? Number(input.screen.pxPerMeter) : 0;
   const stats = {
     total: feats.length,
     considered: 0,
@@ -2135,6 +2214,8 @@ function pickBuildingsByBudget(input) {
     vertsBound: false,
     countBound: false,
     maxDrawn,
+    staticPick,
+    staticMpp: mpp > 0 ? mpp : 0,
     minInView,
     floorAdded: 0,
     overBudget: false,
@@ -2159,6 +2240,7 @@ function pickBuildingsByBudget(input) {
     return { features: [], stats };
   }
   const cands = [];
+  const zeroCap = maxDrawn === 0;
   for (const f of feats) {
     const ring = outerRingOf(f);
     const p0 = ring ? ring[0] : readFirstPoint(f);
@@ -2171,6 +2253,21 @@ function pickBuildingsByBudget(input) {
       stats.noRing += 1;
       continue;
     }
+    if (zeroCap) {
+      stats.considered += 1;
+      continue;
+    }
+    if (staticPick) {
+      const m = bldStaticMeasureOf(f);
+      if (!m) {
+        stats.noRing += 1;
+        continue;
+      }
+      stats.considered += 1;
+      const c2 = bldStaticScreenCost(m, String(f.id ?? ""), mpp, ppm);
+      cands.push({ f, c: c2, ratio: m.score });
+      continue;
+    }
     const c = bldScreenCost(f, input.screen);
     if (!c) {
       stats.noRing += 1;
@@ -2180,9 +2277,10 @@ function pickBuildingsByBudget(input) {
     const denom = c.verts > 0 ? c.verts : 1;
     cands.push({ f, c, ratio: c.px / denom });
   }
+  if (zeroCap && stats.considered > 0) stats.countBound = true;
   cands.sort((A, B) => {
     if (B.ratio !== A.ratio) return B.ratio - A.ratio;
-    if (B.c.px !== A.c.px) return B.c.px - A.c.px;
+    if (!staticPick && B.c.px !== A.c.px) return B.c.px - A.c.px;
     return A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0;
   });
   const chosen = [];
@@ -2225,7 +2323,9 @@ function pickBuildingsByBudget(input) {
   if (stats.px2Bound) bd.push("像素");
   if (stats.vertsBound) bd.push("顶点");
   if (stats.countBound) bd.push("栋数");
-  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
+  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + /* 🌆 静态路（z<14 足迹档）：**判词本体也由真源给**（页面直接把 `why` 显示出来，
+     宿主不许再拼第二份）—— 写明"这一屏是按静态重要度取前 N 挑的、全程没投影"。 */
+  (staticPick ? " · 静态重要度取前 " + maxDrawn + "（足迹档 z<14 · 与相机无关 · 0 次投影）" : "") + (staticPick && !(mpp > 0) ? " · ⚠️ 没给 metersPerPixel：px² 数不出来（只剩顶点预算在管）" : "") + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
      "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）
      由宿主加在最前面 —— 档位是**用户的选择**，不是挑楼规则的一部分。 */
   (stats.countBound ? " · 栋数上限 " + maxDrawn + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
@@ -2347,7 +2447,17 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
     id: "bld-line",
     type: "line",
     source: "bld",
-    minzoom: WS_BLD_VECTOR_MINZOOM,
+    /* 🌆 2026-10-03（PLAN-BLD-LOWZOOM §4 表那一笔）：**低缩放不再给同一批要素画第二遍**。
+       足迹档（z<14）已经有一层 `fill`（`bld-foot`）在画同一批要素，再叠一层描边就是方案 §1②
+       里那片"深色小面/灯芯绒"（每栋 1~2px，描边把填充整个盖掉）。
+       🔴 **闸开在 `minzoom` 这一侧**（= 描边只在立体档 `z ≥ WS_BLD_FOOTPRINT_MAXZOOM` 画）。
+          方案 §4 表把这一步写成"加 `maxzoom`"，但按 MapLibre 语义（`minzoom ≤ z < maxzoom`，
+          见上面 `bld-foot` 那段注释）`maxzoom: 14` 是**把 z≥14 的描边整层关掉** —— 那既治不了
+          低缩放（z<14 照样两层），又违反同一个方案 §验收 6「**`bld-line` 行为与 v95 同
+          （近景是机主认过的，不许动）**」。⇒ 取**能满足两边意图**的那一侧：低缩放不画、
+          z≥14 与 v95 逐字节同（`?bldn=`/`?bld=2`/低端档那几条路都不受影响）。
+       ⚠️ 代拍页 `bldLineLayer()` 必须同一份规格（`ws_pages_consistency.mjs` ④b 盯着 minzoom）。 */
+    minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
     /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
        `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。 */
     paint: {
@@ -2403,12 +2513,24 @@ function planBeforeOf(m, group) {
     return void 0;
   }
 }
+var bldDataSig = /* @__PURE__ */ new WeakMap();
+function bldDataSigOf(data) {
+  const feats = data?.features;
+  if (!Array.isArray(feats)) return null;
+  let sig = feats.length + "|";
+  for (const f of feats) sig += String(f?.id ?? "") + ",";
+  return sig;
+}
 function applyBuildingsTo(m, data, specs) {
+  const sig = bldDataSigOf(data);
   if (m.getSource("bld")) {
+    if (sig !== null && bldDataSig.get(m) === sig) return;
+    if (sig !== null) bldDataSig.set(m, sig);
     m.getSource("bld").setData(data);
     return;
   }
   m.addSource("bld", { type: "geojson", data });
+  if (sig !== null) bldDataSig.set(m, sig);
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : void 0);
   for (const l of specs) m.addLayer(l, before);
 }
@@ -4745,7 +4867,10 @@ function createBldPickStore(opts) {
         /* 栋数上限**原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
-        minInView: input.minInView
+        minInView: input.minInView,
+        /* 🌆 形体档同样**原样透传**（`0` ⇒ 静态路）：算档位的是宿主 + `bldTierOfZoom`，
+           本模块既不判 `z < 14`、也不存滞回状态。 */
+        shapeTier: input.shapeTier
       });
     },
     frozenObject() {
@@ -6821,6 +6946,9 @@ export {
   WS_BLD_OUTLINE_FULL_ZOOM,
   WS_BLD_OUTLINE_STOPS,
   WS_BLD_SMALL_M2,
+  WS_BLD_STATIC_TOP_K,
+  WS_BLD_STATIC_TOP_K_MAX,
+  WS_BLD_TIER_HYSTERESIS,
   WS_BLD_VECTOR_MINZOOM,
   WS_BLD_VERTS_PER_SEGMENT,
   WS_BLD_VIEW_CAP,
@@ -6878,7 +7006,11 @@ export {
   bldRampColorExpr,
   bldRingVertices,
   bldScreenCost,
+  bldStaticMeasureOf,
+  bldStaticScoreOf,
+  bldStaticTopK,
   bldTierOfPart,
+  bldTierOfZoom,
   bldVerdictState,
   bldVerdictText,
   buildBldBoxes,

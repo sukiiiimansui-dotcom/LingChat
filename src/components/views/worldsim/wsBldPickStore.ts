@@ -100,6 +100,14 @@ export interface BldBudgetInputLite<T> {
    */
   maxDrawn?: number;
   minInView?: number;
+  /**
+   * 🌆 **形体档**（`wsBldBudget.bldTierOfZoom()` 的返回值；2026-10-03 第四条）。
+   * `0` = 足迹档（z<14）⇒ 规则模块走**静态重要度**那条路（0 次投影）；
+   * `1`/`null`/不给 ⇒ 投影路（与改造前逐字节相同）。
+   * ⚠️ 与 `maxDrawn` 同一条纪律：**档位由宿主用共享真源算**，本模块只原样透传 ——
+   * 这里不写 `z < 14`、也不写滞回宽度（那两样都只有 `wsBldBudget` 一份）。
+   */
+  shapeTier?: number | null;
 }
 
 /* ══ 🏙 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
@@ -303,6 +311,9 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
         minInView: input.minInView,
+        /* 🌆 形体档同样**原样透传**（`0` ⇒ 静态路）：算档位的是宿主 + `bldTierOfZoom`，
+           本模块既不判 `z < 14`、也不存滞回状态。 */
+        shapeTier: input.shapeTier,
       });
     },
 

@@ -76,6 +76,22 @@
  *    是**顶点**预算（40k ÷ 20 顶点/栋 ≈ **2000 栋**，见下面那条"如实"注释），栋数上限只是防呆线。
  * ⚠️ 这一层分档**只跟 zoom 走**：不读帧率、不读设备、不看候选多少（机主红线：不许自动降级）。
  *
+ * ## 🆕 2026-10-03（第四条）· **低缩放改按「与相机无关的静态重要度」取前 K**
+ * 方案：`world_map/PLAN-BLD-LOWZOOM.md`（机主已批准的**唯一方案**）§0 结论 / §2 量化表 / §4 ⒝。
+ * 病根（方案 §1③）：低缩放每轮 flush 对**每个候选**逐点调 `map.project()`（z13 实测 **107,098 次**），
+ * 且顶点预算被打满（39,995/40,000）⇒ 贪心落在背包边界，仓库每入库一格就换一批 + 整份 `setData`。
+ * 做法（**这一处就是全部口径**）：
+ *   · 排序键换成**静态分** = `h3d`（渲染高度，米）× 脚印 bbox 面积（m²）——**不含任何相机量**，
+ *     按 `id` 记忆化（同一栋楼只算一次）⇒ 同一份 bounds 连调两次，id 列表**逐字节相同**；
+ *   · 候选仍是"视野内全部楼"，但**一次都不投影**（判视野只用经纬度比较）；
+ *   · 取前 `WS_BLD_STATIC_TOP_K`（200，天花板 `WS_BLD_STATIC_TOP_K_MAX` = 400，见那两个常量）；
+ *   · 两个代价预算照旧兜底（px² 由 `metersPerPixel` 换算，**不投影**）；
+ *   · 跨 14 加 `WS_BLD_TIER_HYSTERESIS`（0.25）滞回（`bldTierOfZoom`）。
+ * ⚠️ `z ≥ 14` 那条路**一个字节都没动**（仍是 `px/verts` 全序 + 两个预算 + 严格档 100 栋）。
+ * ⚠️ `h3d` 在**挑楼那一刻**还没上妆（`flushBldStore` 是先挑后妆）⇒ 用共享真源
+ *    `wsBuildingLook.renderHeight()` 算出**将要画的那个高度**（`dressBase` 写进 `h3d` 的就是它）
+ *    —— 不是第二份口径，也不是"编高度"：同一个纯函数的同一份规则。
+ *
  * ## 确定性（项目纪律）
  * 同一输入（视野 + 楼数据 + 三个常量 + **zoom**）⇒ **挑出来的批次逐字节可复现**：
  *   · 没有任何 `Math.random()` / `Date.now()` / 帧率 / 设备能力输入；
@@ -89,6 +105,10 @@
    足迹/立体的分界线 = 女儿墙那一档的分界线（机主点名的那条 `<14` / `≥14`）。
    ⚠️ 单向依赖（本文件 → 它），它不 import 任何东西 ⇒ 不成环。 */
 import { WS_BLD_DETAIL_ROOF_ZOOM } from "./wsBldDetailTiers";
+/* 🌆 静态重要度要 `h3d`，而**上妆还没发生**（`flushBldStore` 先挑后妆）⇒ 借共享真源
+   `renderHeight()` 算出"将要画的那个高度"（`dressBase` 随后写进 `h3d` 的就是同一个数）。
+   ⚠️ 纯函数、只 import `wsBldDetailTiers` ⇒ 不成环（本文件 → 它 → 那一份阈值）。 */
+import { renderHeight } from "./wsBuildingLook";
 
 /** Σ投影面积预算（CSS 像素²）—— 见文件头"为什么是这个数" */
 export const WS_BLD_BUDGET_PX2 = 400_000;
@@ -130,6 +150,64 @@ export const WS_BLD_MAX_DRAWN_MANY = 4000;
 export const WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
 
 /**
+ * 🌆 **足迹档的「静态取前几栋」（K）** —— 方案 `PLAN-BLD-LOWZOOM.md` §2 量化表 / §4 ⒝ 那个 200。
+ *
+ * 为什么是 200：方案 §2 的同池对照（z13、真包 30,000 栋）实测 —— top-200 = `Σ顶点 15,075`
+ * （预算的 38%）·`Σpx² 29,681`（7.4%）⇒ **两个预算都不饱和**，贪心不再落在背包边界上；
+ * top-800 会超顶点预算（45,470 > 40,000）。K 只该有一份，所以取值口是 `bldStaticTopK()`。
+ */
+export const WS_BLD_STATIC_TOP_K = 200;
+
+/**
+ * 🌆 **K 的天花板**（方案 §2 那句「**K 的天花板在 400**」）。
+ *
+ * 400 是"再往上就会把顶点预算顶穿"的那条线（top-400 = 25,725 顶点，已在预算的 64%）——
+ * 它不参与选楼，只把 `bldStaticTopK()` 夹住：谁把 K 调到 800，夹完仍然是 400，
+ * 不会出现"改一个常量就把低缩放打回打满预算"的旧毛病。
+ */
+export const WS_BLD_STATIC_TOP_K_MAX = 400;
+
+/**
+ * 🌆 **足迹档取前几栋的唯一取值口**（K，夹在天花板之内）。
+ * 页面/App/自检都读它，不许各写一份 200（改一处漏一处 —— 本项目栽过）。
+ */
+export function bldStaticTopK(): number {
+  return Math.min(WS_BLD_STATIC_TOP_K_MAX, Math.max(0, Math.floor(WS_BLD_STATIC_TOP_K)));
+}
+
+/**
+ * 🌆 **跨 14 的滞回宽度**（zoom）—— 方案 `PLAN-BLD-LOWZOOM.md` §0/§4 ⒝ 的「0.25 滞回」。
+ *
+ * 病根（方案 §1c）：`tier !== bldFlushedTier` 就重挑 ⇒ 13.9↔14.1 来回 10 次就重挑 10 次。
+ * 加上 0.25 之后：足迹档要涨到 **14.25** 才转立体、立体档要跌回 **13.75** 才转足迹
+ * ⇒ 那 10 次来回**一次都不重挑**（方案 §验收 5）。代价是"可见性↔数据"最多差 0.25 zoom
+ * （方案 §2 表已如实写明那一档），这是机主批过的取舍。
+ */
+export const WS_BLD_TIER_HYSTERESIS = 0.25;
+
+/**
+ * 🌆 **足迹档 / 立体档 的档位号**（`0` = 足迹 z<14 · `1` = 立体 z≥14 · `null` = **数不出来**）。
+ *
+ * 🔴 **全项目只有这一份判据**（宿主/页面都调它，不许各自写 `z < 14`）：
+ *   · 三态纪律：`null` 表示"zoom 读不出来"，**不是** 0（0 = 确定在足迹档）；
+ *     判据与 `bldMaxDrawnFor` 逐字同式（`typeof === "number"` 且有限）——
+ *     `Number(null) === 0` 那种猜法会把"没测出来"当成"确定在足迹档"。
+ *   · `prevTier` = **上一次落图**用的档位（`0`/`1`/`null`）；给了就带 `WS_BLD_TIER_HYSTERESIS`
+ *     滞回。**上一次是哪一档由宿主存**（本模块无状态、纯函数）。
+ *
+ * @param zoom     当前 zoom（由宿主在**挑楼那一刻**现读 `map.getZoom()`）
+ * @param prevTier 上一次落图的档位；不给/给坏值 ⇒ 按裸阈值判（= 改造前的行为）
+ */
+export function bldTierOfZoom(zoom: unknown, prevTier?: number | null): number | null {
+  const v = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
+  if (!isFinite(v)) return null;
+  const line = WS_BLD_FOOTPRINT_MAXZOOM;
+  if (prevTier === 0) return v < line + WS_BLD_TIER_HYSTERESIS ? 0 : 1;
+  if (prevTier === 1) return v < line - WS_BLD_TIER_HYSTERESIS ? 0 : 1;
+  return v < line ? 0 : 1;
+}
+
+/**
  * 档位 → 栋数上限（**唯一映射处**，页面/App/自检都调它，不许各写一套 `mode === "many" ? … : …`）。
  *
  * @param mode 档位；**认不出来的值（含 `undefined`/`null`/对象/数字）一律按默认严格档** ——
@@ -145,24 +223,27 @@ export function bldMaxDrawnOf(mode: unknown): number {
  * | 输入 | 结果 | 为什么 |
  * |---|---|---|
  * | `mode === "many"`（任意 zoom） | `WS_BLD_MAX_DRAWN_MANY`（4000） | 用户明确开了"多楼房模式" ⇒ **全 zoom 一致**，不替他分档 |
- * | 其它档 + `zoom < 14` | `WS_BLD_MAX_DRAWN_MANY`（4000） | **足迹档**：1~2px 的点要够多才"看得见城市肌理" |
- * | 其它档 + `zoom ≥ 14` | `WS_BLD_MAX_DRAWN`（100） | **立体严格档**：一栋几百 px²，100 栋一眼数得清 |
+ * | 其它档 + **足迹档**（`z < 14`，带 0.25 滞回） | `bldStaticTopK()`（**200**） | 🆕 2026-10-03 第四条：低缩放改按**静态重要度取前 K**（方案 §4 ⒝）——不再是"宽档 4000"（那正是"地毯"） |
+ * | 其它档 + 立体档（`z ≥ 14`） | `WS_BLD_MAX_DRAWN`（100） | **立体严格档**：一栋几百 px²，100 栋一眼数得清 |
  * | 其它档 + `zoom` 读不出来 | `WS_BLD_MAX_DRAWN`（100） | **宁可少画，不许乱画**（缺省=严格档，与 `maxDrawn` 的默认同一口径） |
  *
  * ⚠️ 它是**纯函数**：不读地图/`window`/`localStorage` —— zoom 由宿主在**挑楼那一刻**现读
  * （`map.getZoom()`）传进来，否则用户在缩放后切档会用到旧 zoom（"点了没反应"那一类）。
- * ⚠️ 宽档**不是"没有上限"**：两个代价预算（Σ投影 px² / Σ顶点）与它同时生效（见文件头）。
+ * ⚠️ **多楼房模式那一支仍然排在最前面**（`z<14` 也是 4000 = 用户明确要的那一档）：
+ *    他点开的就是"不推荐的多"，不替他分档 —— 变的只是**挑法**（静态分，见 `pickBuildingsByBudget`）。
+ * ⚠️ 足迹档**不是"没有上限"**：两个代价预算（Σ投影 px² / Σ顶点）与它同时生效（见文件头）。
  *
  * @param mode 用户档位（`"many"` / 其它；归一规则与 `bldMaxDrawnOf` 完全相同，只有一份）
  * @param zoom 当前 zoom（**非有限数/非数** ⇒ 按严格档 —— `null`/`undefined`/`NaN` 都算读不出来，
  *             注意 `null < 14` 在 JS 里是 `true`，所以**必须**先判有限性，不能直接比大小）
+ * @param prevTier 🆕 上一次落图的形体档（`bldTierOfZoom` 的返回值）；给了就走 0.25 滞回
  */
-export function bldMaxDrawnFor(mode: unknown, zoom: unknown): number {
+export function bldMaxDrawnFor(mode: unknown, zoom: unknown, prevTier?: number | null): number {
   /* 多楼房模式：全 zoom 一致（复用 `bldMaxDrawnOf` ⇒ `mode === "many"` 这个判据只有一份） */
   if (bldMaxDrawnOf(mode) === WS_BLD_MAX_DRAWN_MANY) return WS_BLD_MAX_DRAWN_MANY;
-  const z = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
-  if (!isFinite(z)) return WS_BLD_MAX_DRAWN;
-  return z < WS_BLD_FOOTPRINT_MAXZOOM ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+  const tier = bldTierOfZoom(zoom, prevTier);
+  if (tier === null) return WS_BLD_MAX_DRAWN;
+  return tier === 0 ? bldStaticTopK() : WS_BLD_MAX_DRAWN;
 }
 
 /** 每段墙固定 4 个顶点（MapLibre `fill_extrusion_bucket` 的 `prepareSegment(4, …)` + 4×`addVertex`） */
@@ -209,6 +290,16 @@ export interface BldScreenCtx {
   project: (lng: number, lat: number) => [number, number];
   /** 1 米楼高 = 多少屏幕像素（`bldPxPerMeter(zoom, lat, pitch)`；页面/HUD 读数也用同一份） */
   pxPerMeter: number;
+  /**
+   * 🆕 **1 CSS 像素 = 多少米**（`bldMetersPerCssPixel(zoom, lat)`；只给**静态路**用）。
+   *
+   * 为什么要有它：静态路的全部意义就是"**`map.project()` 一次都不调**"（方案 §1③/§验收 1）
+   * ⇒ 屏幕尺寸不能再逐点投影，只能用这把尺子换算（房顶 bbox 米数 ÷ 它 = 屏幕 px）。
+   * 读数与相机无关的部分（房顶/墙的**面积**）仍然由它现算 —— 挑谁**不**受它影响。
+   * 缺了/非正数 ⇒ 静态路的 px² 数不出来（如实记 `stats.staticMpp = 0` + 判词里写明），
+   * **不会**偷偷退回投影路（那会把"0 投影"这条验收变成一句空话）。
+   */
+  metersPerPixel?: number;
 }
 
 /** 一个候选的一次成本测量结果（**中间量，导出给自检/回证用**） */
@@ -300,6 +391,118 @@ export function bldScreenCost(f: unknown, ctx: BldScreenCtx, outCost?: { v?: Bld
   return cost;
 }
 
+/* ══ 🌆 **静态重要度**（低缩放 z<14 的唯一排序键；方案 `PLAN-BLD-LOWZOOM.md` §4 ⒝）════════
+ * 🔴 **定义只有这一处**：`静态分 = 将要画的高度 h3d（米）× 脚印外环 bbox 面积（m²）`。
+ *     · **与相机无关**：不含 zoom / 屏幕坐标 / pitch / 视野 —— 同一栋楼永远同一个分
+ *       ⇒ 同一份 bounds 连调两次，排序后的 id 列表逐字节相同（方案 §验收 2）；
+ *     · **不编高度**：`h3d` 优先读要素上已有的（已上妆的输入）；没有就用共享真源
+ *       `wsBuildingLook.renderHeight()` 算出**同一个将要画的高度**（`dressBase` 写进 `h3d` 的
+ *       就是它）—— 挑楼发生在"先挑后妆"的**挑**那一步，所以要素上还没有 `h3d`；
+ *     · **按"同一栋楼"记忆化**（同一栋楼只算一次；z13 视野内近 3 万候选，逐轮全量重算是白工）。
+ *       🔴 方案原文写的是"**按 `id` 记忆化**"，这里落成 **`WeakMap` 按要素对象**（同一件事，但更稳）：
+ *         仓库里的同一栋楼**恒是同一个对象**（`createFeatureStore` 按 id 去重后保留引用，挑楼每轮
+ *         拿到的就是那批对象）⇒ 记忆照样命中；而"同一个 id 换了形状"这种输入**不会**命中旧值
+ *         （`id` 记忆表我实测撞过一次：自检里 `grid(6)` 与 `grid(100)` 的 `g000_000` 环长与首尾点
+ *         完全相同、形状却不同 ⇒ 只按 id 会把旧形状的分数/顶点数喂给新形状）。
+ *         `WeakMap` 还有两个好处：**不占内存**（对象被淘汰就自动释放）、对"没有 id 的要素"同样有效。
+ *     · 米制换算用 `111320·cos(lat)` / `110540` —— 与 `wsDistrictScene.bldFootprintAreaM2`
+ *       **同一对常数**（全项目只有那一份"经纬度→米"的口径，这里不另立）。
+ */
+const WS_BLD_M_PER_DEG_LNG = 111320;
+const WS_BLD_M_PER_DEG_LAT = 110540;
+
+/** 静态量（相机无关的那几个数）—— 记忆化的单位，也是"静态分"的可回证形状 */
+export interface BldStaticMeasure {
+  /** 🌆 静态分 = `h3d`（米）× 脚印 bbox 面积（m²）—— 唯一的排序键 */
+  score: number;
+  /** 脚印 bbox 的东西向米数 */
+  wM: number;
+  /** 脚印 bbox 的南北向米数 */
+  hM: number;
+  /** 将要画的渲染高度（米） */
+  h3d: number;
+  /** 闭合环点数（顶点预算按它算） */
+  ringPoints: number;
+}
+
+/** 记忆表：**要素对象 → 静态量**（`WeakMap` ⇒ 仓库淘汰谁，这里跟着释放谁） */
+const staticMemo = new WeakMap<object, BldStaticMeasure>();
+
+/** 将要画的渲染高度（米）：要素上已有 `h3d` ⇒ 用它；否则走共享真源 `renderHeight()` */
+function bldDrawHeightOf(f: unknown): number {
+  const h = h3dOf(f);
+  if (h > 0) return h;
+  try {
+    const r = renderHeight((f as { properties?: Record<string, unknown> } | null)?.properties);
+    return r && isFinite(r.h) && r.h > 0 ? r.h : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 🌆 **一栋楼的静态量**（唯一算法处）。
+ *
+ * @returns 外环取不到 ⇒ `null`（与 `bldScreenCost` 同一处置：调用方如实计 `noRing`，不塞进预算）
+ */
+export function bldStaticMeasureOf(f: unknown): BldStaticMeasure | null {
+  const ring = outerRingOf(f);
+  if (!ring) return null;
+  const key = f as object | null;
+  if (key && typeof key === "object") {
+    const hit = staticMemo.get(key);
+    if (hit) return hit;
+  }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, latSum = 0, n = 0;
+  for (const pt of ring) {
+    const lng = Number(pt[0]), lat = Number(pt[1]);
+    if (!isFinite(lng) || !isFinite(lat)) continue;
+    if (lng < x0) x0 = lng;
+    if (lng > x1) x1 = lng;
+    if (lat < y0) y0 = lat;
+    if (lat > y1) y1 = lat;
+    latSum += lat; n += 1;
+  }
+  if (!(x1 >= x0) || !(y1 >= y0) || n === 0) return null;
+  /* 米制换算用环上纬度均值（与 `bldFootprintAreaM2` 同一口径：同一栋楼两处算出来的米数同阶） */
+  const kx = WS_BLD_M_PER_DEG_LNG * Math.cos(((latSum / n) * Math.PI) / 180);
+  const wM = (x1 - x0) * kx;
+  const hM = (y1 - y0) * WS_BLD_M_PER_DEG_LAT;
+  const h3d = bldDrawHeightOf(f);
+  const m: BldStaticMeasure = { score: h3d * (wM * hM), wM, hM, h3d, ringPoints: ring.length };
+  if (key && typeof key === "object") staticMemo.set(key, m);
+  return m;
+}
+
+/**
+ * 🌆 **静态分**（排序键；`h3d` × 脚印 bbox m²）—— 自检/回证读它，规则本体在 `bldStaticMeasureOf`。
+ * 外环取不到 ⇒ `null`。
+ */
+export function bldStaticScoreOf(f: unknown): number | null {
+  const m = bldStaticMeasureOf(f);
+  return m ? m.score : null;
+}
+
+/**
+ * 🌆 **静态路的代价**（**不投影**）：把记忆下来的米数，按 `metersPerPixel` 换成屏幕像素。
+ *
+ * 公式与 `bldScreenCost` **逐字同式**（屋顶 = w×h、墙 = (w+h)×墙高像素），
+ * 只是 `w/h` 的来源从"逐点投影的 bbox"换成"米数 ÷ 米每像素" —— 同一把尺子、同一份口径。
+ * `mpp ≤ 0`（宿主没给）⇒ 屏幕量数不出来：返回全 0 的代价（判词里如实写 `staticMpp = 0`）。
+ */
+function bldStaticScreenCost(m: BldStaticMeasure, id: string, mpp: number, pxPerMeter: number): BldCost {
+  const canPx = isFinite(mpp) && mpp > 0;
+  const w = canPx ? m.wM / mpp : 0;
+  const h = canPx ? m.hM / mpp : 0;
+  const ppm = isFinite(pxPerMeter) && pxPerMeter > 0 ? pxPerMeter : 0;
+  const roofPx = w * h;
+  const wallPx = (w + h) * (m.h3d * ppm);
+  return {
+    id, roofPx, wallPx, px: roofPx + wallPx,
+    verts: bldRingVertices(m.ringPoints), ringPoints: m.ringPoints, h3d: m.h3d,
+  };
+}
+
 /** 视野（与 `wsBuildingPick.PickBounds` 同形：只要这四个 getter，宿主给 `map.getBounds()` 即可） */
 export interface BldBudgetBounds {
   getWest(): number;
@@ -327,6 +530,15 @@ export interface BldBudgetInput<T> {
   maxDrawn?: number;
   /** 视野内**至少**几栋（机主 2026-09-26：「视野内最少有十栋房」）；0 = 不启用 */
   minInView?: number;
+  /**
+   * 🌆 **形体档**（`bldTierOfZoom()` 的返回值：`0` = 足迹 z<14 / `1` = 立体 z≥14 / `null` = 读不出来）。
+   *
+   * 🆕 2026-10-03 第四条：**`0` ⇒ 走静态重要度那条路**（`map.project` 一次都不调 + 静态分排序，
+   * 方案 §4 ⒝）；`1`/`null`/不给 ⇒ 走**原样**的投影路（`z ≥ 14` 的行为逐字节不变）。
+   * 🔴 档位**由宿主用共享真源算**（`bldTierOfZoom(z, prevTier)`，含 0.25 滞回），
+   *    这里不许再写一遍 `z < 14`（判据只有那一份）。
+   */
+  shapeTier?: number | null;
 }
 
 /** 双预算挑楼的统计（**HUD 与自检的唯一读数口**；字段全部是有限数/布尔/字符串） */
@@ -361,6 +573,17 @@ export interface BldBudgetStats {
   countBound: boolean;
   /** 🆕 本轮的**栋数硬上限**（回证用：HUD 要能读出"这一屏是按 100 栋还是 4000 栋挑的"） */
   maxDrawn: number;
+  /**
+   * 🆕 本轮走的是不是**静态重要度**那条路（`shapeTier === 0` 的足迹档）——
+   * HUD/自检回证用；`false` = 走投影路（`z ≥ 14` 或宿主没给档位）。
+   */
+  staticPick: boolean;
+  /**
+   * 🆕 静态路的**米每 CSS 像素**（`screen.metersPerPixel`）。
+   * `0` = 宿主没给/给了坏值 ⇒ 静态路的 Σpx² **数不出来**（判词里如实写，不冒充 0 面积）。
+   * 投影路恒 `0`（它不需要这个数）。
+   */
+  staticMpp: number;
   /** 视野下限（`minInView`） */
   minInView: number;
   /** 为了让视野内够 `minInView` 栋而**破例**补进来的栋数（0 = 没破例） */
@@ -401,6 +624,14 @@ export interface BldBudgetOutcome<T> {
  * 🔴 **补齐也越不过 `maxDrawn`**（`minInView` 与 `maxDrawn` 打架时，以**先到**的那个为准）：
  *    栋数上限是"严格限制"这条命令本身，任何兜底都不许把它顶掉；
  *    因此真实结果可能是 `chosen < minInView` —— 那是**如实**的（`why` 里两个数都写着）。
+ *
+ * 🌆 **两条路，按 `shapeTier` 分**（2026-10-03 第四条）：
+ *   · `shapeTier === 0`（足迹档 z<14）⇒ **静态路**：候选照筛，但代价由"米数 ÷ `metersPerPixel`"
+ *     换算、排序键是**静态分**（`h3d` × 脚印 bbox m²，与相机无关）、`ctx.project` **一次都不调**；
+ *   · 其它（立体档 z≥14 / 档位读不出来 / 宿主没给）⇒ **投影路**：与 2026-10-02 那版**逐字节相同**
+ *     （`px/verts` 全序 + 两个预算 + 上限；`z ≥ 14` 的行为一个字节都没动）。
+ *   两条路的**预算/上限/下限**判据完全共用（同一段贪心、同一份 `stats`），差别只在"排序键"与
+ *   "屏幕量从哪来"这两处 —— 所以不存在"第二套挑楼规则"。
  */
 export function pickBuildingsByBudget<T extends { id?: unknown }>(
   input: BldBudgetInput<T>
@@ -415,11 +646,21 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     : WS_BLD_MAX_DRAWN;
   const minInView = Number.isFinite(input.minInView as number) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
+  /* 🌆 静态路开关：形体档 `0`（足迹 z<14）⇒ **一次都不投影**（方案 §4 ⒝）。
+     档位由宿主用共享真源 `bldTierOfZoom()` 算好传进来 —— 这里不写第二份 `z < 14`。 */
+  const staticPick = input.shapeTier === 0;
+  const mpp = staticPick && Number.isFinite(input.screen?.metersPerPixel as number)
+    ? Number(input.screen!.metersPerPixel)
+    : 0;
+  const ppm = staticPick && Number.isFinite(input.screen?.pxPerMeter) && (input.screen!.pxPerMeter as number) > 0
+    ? Number(input.screen!.pxPerMeter)
+    : 0;
 
   const stats: BldBudgetStats = {
     total: feats.length, considered: 0, outOfView: 0, noRing: 0, chosen: 0,
     px2: 0, verts: 0, px2Budget: budgetPx2, vertsBudget: budgetVerts,
     px2Bound: false, vertsBound: false, countBound: false, maxDrawn,
+    staticPick, staticMpp: mpp > 0 ? mpp : 0,
     minInView, floorAdded: 0, overBudget: false, why: "",
   };
 
@@ -439,9 +680,17 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     return { features: [], stats };
   }
 
-  /* ① 筛候选（视野内 + 有外环 + 量得出代价）。**按入参顺序**遍历，结果与顺序无关（后面全序排序） */
+  /* ① 筛候选（视野内 + 有外环 + 量得出代价）。**按入参顺序**遍历，结果与顺序无关（后面全序排序）
+     🌆 静态路（`shapeTier === 0`）：判视野只比经纬度、代价由**米数 ÷ metersPerPixel** 换算
+        ⇒ 这一整轮 `ctx.project` **一次都不调**（方案 §验收 1）。
+     🔴 **上限 0 那一支在算代价之前就短路**（方案 §4 表：「`maxDrawn===0` 在扫候选之前短路」）：
+        一栋不画 ⇒ 不必付投影/代价那笔钱；但**清点照做**（`outOfView`/`noRing`/`considered`
+        仍如实报 —— "统计照报、不静默"是项目纪律，短路不该把它优化掉）。
+        口径说明：这一支的 `considered` = "视野内 + 有外环"（**没算代价**）——与正常路只差
+        "投影失败"那种极角落的情形（`map.project` 对合法经纬度不会失败）。 */
   type Cand = { f: T; c: BldCost; ratio: number };
   const cands: Cand[] = [];
+  const zeroCap = maxDrawn === 0;
   for (const f of feats) {
     /* ⚠️ 先判视野、再判能不能算代价 —— 顺序反了会让视野外那些"没有外环"的要素被计进 `noRing`，
        而 `noRing` 的口径是"**视野内**但进不了成本模型的"，报错了等于判词撒谎。 */
@@ -450,17 +699,33 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     const inView = !!p0 && p0[0]! >= w && p0[0]! <= e && p0[1]! >= s && p0[1]! <= n;
     if (!inView) { stats.outOfView += 1; continue; }
     if (!ring) { stats.noRing += 1; continue; }
+    if (zeroCap) { stats.considered += 1; continue; }
+    if (staticPick) {
+      const m = bldStaticMeasureOf(f);
+      if (!m) { stats.noRing += 1; continue; }
+      stats.considered += 1;
+      const c = bldStaticScreenCost(m, String((f as { id?: unknown }).id ?? ""), mpp, ppm);
+      /* `ratio` 这一栏在静态路装的是**静态分**（排序键），投影路装的是"单位顶点换到的像素" */
+      cands.push({ f, c, ratio: m.score });
+      continue;
+    }
     const c = bldScreenCost(f, input.screen);
     if (!c) { stats.noRing += 1; continue; }
     stats.considered += 1;
     const denom = c.verts > 0 ? c.verts : 1;
     cands.push({ f, c, ratio: c.px / denom });
   }
+  /* 上限 0 + 真有候选 ⇒ 与旧行为同判：**是"被栋数拦住"**（旧版是循环第一圈就 break，
+     这里在扫候那时短路，判据合一）。真的一栋候选都没有 ⇒ false（不谎报上限起了作用）。 */
+  if (zeroCap && stats.considered > 0) stats.countBound = true;
 
-  /* ② 全序排序：单位顶点换到的像素降序 → 像素降序 → id 升序（第三键消除"等值不定序"） */
+  /* ② 全序排序。
+     投影路：单位顶点换到的像素降序 → 像素降序 → id 升序（第三键消除"等值不定序"）。
+     🌆 静态路：**静态分降序 → id 升序** —— 排序键里没有相机量 ⇒ 同一份 bounds 连调两次
+        得到的 id 列表逐字节相同（方案 §验收 2；换输入顺序也不变，因为它是全序）。 */
   cands.sort((A, B) => {
     if (B.ratio !== A.ratio) return B.ratio - A.ratio;
-    if (B.c.px !== A.c.px) return B.c.px - A.c.px;
+    if (!staticPick && B.c.px !== A.c.px) return B.c.px - A.c.px;
     return A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0;
   });
 
@@ -520,6 +785,10 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
   stats.why =
     "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen +
     " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts +
+    /* 🌆 静态路（z<14 足迹档）：**判词本体也由真源给**（页面直接把 `why` 显示出来，
+       宿主不许再拼第二份）—— 写明"这一屏是按静态重要度取前 N 挑的、全程没投影"。 */
+    (staticPick ? " · 静态重要度取前 " + maxDrawn + "（足迹档 z<14 · 与相机无关 · 0 次投影）" : "") +
+    (staticPick && !(mpp > 0) ? " · ⚠️ 没给 metersPerPixel：px² 数不出来（只剩顶点预算在管）" : "") +
     (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") +
     /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
        "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）

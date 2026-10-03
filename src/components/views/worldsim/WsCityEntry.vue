@@ -89,7 +89,7 @@
       :chrome="false"
       :tf="false"
       :phone="!guideOpen"
-      :markers="districtPins"
+      :markers="mapPins"
       @pick-actor="onPickActor"
       @daily-ready="onDailyReady"
     />
@@ -174,6 +174,42 @@
     <!-- ── 首次引导（一张 sheet；装过就不出现）────────────────────────── -->
     <WsCityGuide v-if="guideOpen" :store="store" @enter="closeGuide" />
 
+    <!-- 💬 期 3（2026-10-03）· **走近说话**：只有真量出"你在他旁边"才出现的那个入口。
+         · 判据全在共享真源 `wsNearby.ts`（12 进 / 20 出 + 滞回 + 冷却），本页只接线；
+         · **数不出来时不挂**（`nearEntry` 为 null）—— 宁可没有入口，也不给一个"可能在他旁边"
+           的假入口：那是本仓三态纪律的反面（"数不出来"不许装成"有"或"没有"）。
+         · 它在**左下角**（顶栏在上、日常卡与手机按钮在右下），而且只有真走近才出现、
+           走开就没 —— 不算第 4 个**常驻**浮块（`UI-DESIGN-SPEC.md:108` 那条上限管的是常驻）。 -->
+    <button
+      v-if="!guideOpen && nearEntry"
+      class="wsce__near"
+      type="button"
+      :title="nearEntryTitle"
+      @click="openChat(nearEntry.id, true)"
+    >
+      {{ t("worldsim.chatDrawer.entry") }} · {{ nearEntry.name }}（{{ nearEntry.meters }} 米）
+    </button>
+
+    <!-- 💬 期 3 · **对话抽屉**（发消息/判词/前缀都在本文件的接线里，抽屉只渲染 + 收字）。
+         给它的东西一律是**真源算完的原样读数**：判词 `nearWhy`（三态）、将要发出去的那一截
+         `chatPrefix`（`wsScenePrefix` 的产物）——界面显示什么，发出去就是什么。 -->
+    <WsChatDrawer
+      v-if="chatOpen"
+      :role="chatTarget"
+      :near-text="nearWhy"
+      :prefix="chatPrefix"
+      :messages="chatLines"
+      :busy="chatBusy"
+      :note="chatNote || chatBlockedNote"
+      :can-send="chatCanSend"
+      :low="perfLow"
+      :autofocus="chatFocus"
+      @close="closeChat"
+      @send="onChatSend"
+      @outing="onInviteOut(chatTargetActor)"
+      @goto="onChatGoto"
+    />
+
     <!-- 🧑 角色面板（切片②，2026-10-01）：点地图上的人 → **同一张** `WsCharPanel`。
          · **复用**，不重画：页面里没有第二份抽屉/送礼弹层（PR 门禁 C1）。送礼弹层由面板
            内部就地打开（`WsCharPanel.quick('gift')`），页面**不需要**也**不许**再开一个。
@@ -245,8 +281,28 @@
   /* 🧑 面板的开关/选中（模块级单例，与地图组件 `WsDistrictMapLibre.vue` 读的是同一份）。 */
   import { useWsPanel } from "@/composables/useWsPanel";
   /* 💗 好感的**唯一真源**：`+6` 是 `wsRelation.ts` 的 `SOURCE_WEIGHT.gift`，
-     页面只说"谁被送了什么"，**不写死任何数字**。 */
+     页面只说"谁被送了什么"，**不写死任何数字**。
+     ⚠️ 页面**不 import** `SOURCE_WEIGHT`（切片的既有断言 ⑩e 就是这么钉的：那张表只能在真源里，
+     页面连"提一句"都不许 —— 提了就有第二份口径的入口）。期 3 的聊天提示也照这条办：
+     显示的是**真源返回的那一行里的 `affinity`**，不是页面自己算的增量。 */
   import { rankOf as relRankOf, useWsRelation } from "./wsRelation";
+  /* 💬 期 3（2026-10-03）·「走近说话」（`PLAN-GAMEPLAY.md:69-76`）：
+       · 走近判定（12 进 / 20 出 + 滞回 + 冷却 + 三态判词）→ 共享真源 `wsNearby.ts`；
+       · 消息前那一截世界状态 → 共享真源 `wsScenePrefix.ts`；
+       · 抽屉本体 → `WsChatDrawer.vue`（只渲染 + 收字，**一个 invoke 都没有**）；
+       · 出门那条下游 → 共享 composable `useWorldTrips`（`world_map_trip_start`，
+         与孤儿页、与聊天里的 `⟦wm:⟧` 指令**同一条**）；位置插值也用它那份纯函数 `tripPosition`。 */
+  import WsChatDrawer, { type WsChatLine } from "./WsChatDrawer.vue";
+  import { meSpotOf, nearbyOf, type NearHit, type NearResult } from "./wsNearby";
+  import { scenePrefixOf } from "./wsScenePrefix";
+  import { DEFAULT_CELL_M } from "./wsIntervene";
+  import { isTripLive, tripPosition, useWorldTrips } from "@/composables/useWorldTrips";
+  /* 「是不是真壳」只有这一份判据（`api/services/worldMap.isTauriRuntime`，`useWorldTrips` 用的也是它）——
+     本页再加一个 `"__TAURI_INTERNALS__" in window` 就等于第二份实现。 */
+  import { isTauriRuntime } from "@/api/services/worldMap";
+  /* 📨 发消息走**既有**命令（不是新协议）：`send_chat_message`（`api/chat.rs:31`，`lib.rs:836` 注册）。
+     ⚠️ 它**没有角色参数** ⇒ 发给的是当前对话角色；目标对不上时本页**不发**（见 `chatCanSend`）。 */
+  import { invoke } from "@tauri-apps/api/core";
   /* 🔔 提示：push 进 `wsToast` 的模块级队列，由 `WsSceneView` 挂的 `WsToasts` 渲染
      （本页 `:phone="!guideOpen"` ⇒ 同一条开关；不自己再挂一份渲染处）。 */
   import { wsToast } from "./wsToast";
@@ -287,10 +343,11 @@
   /* ══ 🏙 2026-10-03 · 楼房档位（顶栏那颗 chip）══════════════════════════════════════════
      机主要的是**"默认就严格限制、想要多自己开"**，所以这一屏只需要三行接线：
        · 档位（`mode`）与切换（`toggleMode()`）来自 `wsBldMode`（模块级单例 ⇒ 地图那边同一份）；
-       · chip 上的**数字**来自真源 `bldMaxDrawnOf()`（本页不写 100 / 4000）；
+       · chip 上的**数字**来自真源 `bldMaxDrawnOf()`（本页不写 3 / 4000）——
+         ⚠️ 2026-10-03 第五条起它是**每格**上限（不是整屏），所以文案写的是「每格 {n} 栋」；
        · 文案来自 i18n（`worldsim.bld.*`）—— `title` 必须把"更卡、不推荐"讲出来。 */
   const { mode: bldMode, toggleMode: toggleBldMode } = useWsBldMode();
-  /** chip 上的字：严格档「楼房 100 栋」/ 多楼房「楼房 多（不推荐）」 */
+  /** chip 上的字：严格档「每格 3 栋」/ 多楼房「楼房 多（不推荐）」 */
   const bldChipText = computed(() =>
     bldMode.value === WS_BLD_MODE_MANY ? t("worldsim.bld.many") : t("worldsim.bld.lean", { n: bldMaxDrawnOf("lean") })
   );
@@ -425,14 +482,16 @@
   }
 
   /**
-   * 快捷动作分派（只接**本片真接了**的那两条，其余如实说"还没接"）。
+   * 快捷动作分派（只接**真接了**的那几条，其余如实说"还没接"）。
    *
    *   · 打招呼   → `onGotoChat`（跳 /chat，零副作用）
    *   · 送礼物   → 面板内部**已经就地打开** `WsGiftSheet`（`WsCharPanel.quick()`）⇒ 这里什么都不做，
    *                 真正的记账/好感在 `@gift` 那条路（`onGift`）。
    *                 ⚠️ 孤儿页这里是个空 `return` + "需求未澄清"的注释（`WorldSim.vue:1187-1200`）——
    *                 需求已经落地，**别照抄那句空转**，也**不许在页面重画一份弹层**。
-   *   · 约他出门 / 其它 → 那条线（`world_map_trip_start`）不在本片 ⇒ 如实 toast 一句「本片还没接」。
+   *   · 约他出门 → 期 3（2026-10-03）接上了：`onInviteOut` ⇒ `world_map_trip_start`
+   *                 （与聊天里说「你过来」同一条下游；`kind: "walk"`）。
+   *   · 其它     → 如实 toast 一句「本片还没接」。
    */
   function onQuick(action: string, a: PlacedActor): void {
     if (action === "hi") {
@@ -440,10 +499,18 @@
       return;
     }
     if (action === "gift") return; // 面板自己开了送礼弹层（本函数不是它的入口）
+    /* 🚶 期 3（2026-10-03）：**约他出门接上了**（以前这一支是"本片还没接"）。
+       下游与聊天里说「你过来」完全同一条：`world_map_trip_start`（见 `onInviteOut`）。 */
+    if (action === "outing") {
+      void onInviteOut(a);
+      return;
+    }
     wsToast(`「${actionLabel(action)}」本片还没接`, "info");
   }
 
-  /** 面板的「指挥他去某地」（P4-4）：要 `world_map_trip_start` + 干预开关那条线 —— 本片没接，如实说 */
+  /** 面板的「指挥他去某地」（P4-4）：要 `world_map_trip_start` + 干预开关那条线 —— 本片没接，如实说
+   *  （期 3 只接"约他出门"这一支：它的目的地**就是你身边**，不需要干预开关；
+   *    "把他拖到别处"属于期 3 明确不做的部分，见 `PLAN-GAMEPLAY.md:76`）。 */
   function onDirect(to: string): void {
     wsToast(`「去${to}」本片还没接`, "info");
   }
@@ -862,6 +929,278 @@
     return needsResult.value.why;
   });
 
+  /* ══ 💬 期 3（2026-10-03）·「走近说话」（`PLAN-GAMEPLAY.md:69-76`）══════════════════
+     三块，规则都在本文件之外，这里只接线（PR 门禁 C1）：
+       ① **走近**（12 米进 / 20 米出 + 滞回 + 冷却 + 三态判词）→ `wsNearby.ts`（纯函数）；
+       ② **说话** → `WsChatDrawer.vue`（渲染）+ 既有 `send_chat_message`（下行）；
+          消息前那一截世界状态 → `wsScenePrefix.ts`；
+       ③ **约他出门** → 共享 `useWorldTrips`（`world_map_trip_start`）。
+
+     🔴 三条刻意的不做，每条都会影响可数验收：
+       · **默认不轮询行程**（`autoStart: false`）：本屏的默认口径是"首屏 0 条 `/api/*`、
+         0 条后端命令"，只有玩家真按了「约他出门」才 `start()`；
+       · **不用** `actors.placed` 里那个"我"算距离：没定位时它被摆在图中心（`useWsActors.ts:418`），
+         拿它算距离会凭空得出"你离他 8 米"并自动弹抽屉 —— 只认 runtime 里真有坐标的那份（`meSpotOf`）；
+       · **不自己画第二份位置**：行程中的角色由共享纯函数 `tripPosition()` 插值，
+         插到 `districtPins` 那份**已有**的钉子上（`mapPins`），不另造一套坐标。
+
+     ⚠️ 走近的**手感**（12/20 米、自动弹的时机）只能真机判（`PLAN-GAMEPLAY.md:165`）；
+        本页能保证的是"判据可数、可复现、不抖"。 */
+
+  /** 每格米数：后端 runtime 里有就用它的，没有按 30 米（与孤儿页 `WorldSim.vue:1216` 同一口径） */
+  const cellM = computed(() => Number(actors.runtime.value?.cell_m) || DEFAULT_CELL_M);
+  /** 我在哪个格子（`null` = 还没拿到定位 ⇒ 三态里的"数不出来"） */
+  const meSpot = computed(() => meSpotOf(actors.runtime.value));
+
+  /* ── ③ 约他出门：共享 composable（数据/轮询/插值全在它里面）──
+     ⚠️ 参数名不能叫 `t`（会把上面 `useI18n` 的 `t` 遮蔽掉，孤儿页 `WorldSim.vue:959` 踩过） */
+  const trips = useWorldTrips({
+    autoStart: false, // 见上面"刻意不做"第一条
+    onArrive: (trip) => {
+      wsToast(
+        t("worldsim.trip.arrivedToast", { name: trip.role || "", place: trip.to?.name || "" }),
+        "ok"
+      );
+      /* 到达后**重读一次装配**（与孤儿页 `WorldSim.vue:966` 的 `loadActors(true)` 同一个理由）：
+         不重读的话，行程从后端滚动窗口里滚出去之后，那颗钉子会跳回**出发地**
+         —— 表现是"他走过来了，又瞬间回去了"，而且走近入口会跟着消失。 */
+      void actors.load();
+    },
+  });
+
+  /**
+   * 地图上那一份钉子：**归行程管的角色换成行程插值位置**（其余原样）。
+   *
+   * 为什么必须换：本入口没有行程卡/车辆层（那一层在被禁改的 `WsDistrictMapLibre.vue` 里），
+   * 而钉子读的是 `actors.placed`（装配那一刻的快照，`useWsActors` 不 watch runtime）
+   * ⇒ 不换的话"约他出门"会变成"他动身了，但钉子一直站在出发地"。
+   * 换法只借两样**已有**的东西：`trips` 那份名单与 `tripPosition()`（纯插值），
+   * 钉子本身的形状仍由 `districtPinsOf` 产出 —— 不新增第二套坐标换算。
+   *
+   * ⚠️ **到达之后仍然接管**（`arrived` 也算）：不然他一到，插值就撤，钉子当场跳回出发地。
+   *    真正交还给快照的时机是后端把这条行程滚出列表之后（那时 `onArrive` 里的重读早已落盘）。
+   */
+  const mapPins = computed<WsDistrictPin[]>(() => {
+    const live = trips.trips.value.filter((tr) => isTripLive(tr) || tr.status === "arrived");
+    if (!live.length) return districtPins.value;
+    const byRole = new Map(live.map((tr) => [tr.role, tr]));
+    const now = trips.now.value;
+    return districtPins.value.map((p) => {
+      const tr = byRole.get(p.name);
+      if (!tr) return p;
+      const pos = tripPosition(tr, now);
+      const gx = Number(pos.gx);
+      const gy = Number(pos.gy);
+      // 插值读不出（geo 行程/起点终点缺坐标）⇒ 原样不动，绝不编一个 0,0
+      return Number.isFinite(gx) && Number.isFinite(gy) ? { ...p, gx, gy, posSource: "runtime" } : p;
+    });
+  });
+
+  /* ── ① 走近：一次判定（滞回状态由本页拿着，喂回下一次）── */
+  const nearResult = ref<NearResult | null>(null);
+  /** 滞回记忆（键 = 钉子 id）。**故意不放进 ref**：它只被 `nearbyOf` 读写，
+   *  做成响应式会让"读结果 → 写状态 → 再触发计算"绕成环。 */
+  let nearState: Record<string, boolean> = {};
+  /** 各人**上一次开过抽屉**的时刻（含玩家自己关掉的那次）—— 冷却判据 */
+  const nearOpenedAt: Record<string, number> = {};
+
+  /* ── ② 说话：抽屉状态（**声明必须在 `recomputeNear` 之前**）──
+     `recomputeNear` 会被下面那个 `immediate: true` 的 watch 在 setup 期立刻跑一次，
+     它要读 `chatOpen`；把这几行写在后面会撞上 TDZ（`const` 不提升）。 */
+  const chatOpen = ref(false);
+  /** 抽屉对着谁（钉 id，从**同一份** `actors.placed` 反查 —— 与面板同一条口径） */
+  const chatTargetId = ref("");
+  const chatFocus = ref(false);
+  const chatLines = ref<WsChatLine[]>([]);
+  const chatBusy = ref(false);
+  const chatNote = ref("");
+
+  function openChat(id: string, focus: boolean): void {
+    chatTargetId.value = id;
+    chatFocus.value = focus;
+    chatNote.value = "";
+    chatOpen.value = true;
+  }
+
+  /** 候选＝地图上除我以外的所有人（判据是 **pin 的当前位置**，行程在途时就是插值位置） */
+  const nearCandidates = computed(() =>
+    (mapPins.value || [])
+      .filter((p) => !p.isMe && p.name)
+      .map((p) => ({ id: p.id, name: p.name, gx: p.gx, gy: p.gy, posSource: p.posSource || "" }))
+  );
+  /** 参与重算的签名：我 + 每个人 + 格边长。签名不变就不重算（每 200ms 的行程 tick 只改坐标，
+   *  坐标变了签名就变 ⇒ 该重算还是重算） */
+  const nearSig = computed(() => {
+    const me = meSpot.value;
+    return `${me ? `${me.gx},${me.gy}` : "-"}|${cellM.value}|${nearCandidates.value
+      .map((a) => `${a.id}@${a.gx},${a.gy}`)
+      .join(";")}`;
+  });
+
+  function hitOf(id: string): NearHit | null {
+    return (nearResult.value?.near || []).find((h) => h.id === id) || null;
+  }
+
+  /** 走近入口：只有**真的**量出"近"才挂（`entered` 之外的"保持近"也挂） */
+  const nearEntry = computed<NearHit | null>(() => nearResult.value?.nearest || null);
+  const nearEntryTitle = computed(() =>
+    nearEntry.value
+      ? t("worldsim.chatDrawer.entryTitle", { name: nearEntry.value.name, m: nearEntry.value.meters })
+      : ""
+  );
+  /** 判词（三态原样上屏） */
+  const nearWhy = computed(() => nearResult.value?.why || "");
+
+  function recomputeNear(): void {
+    const res = nearbyOf({
+      me: meSpot.value,
+      actors: nearCandidates.value,
+      cellM: cellM.value,
+      prev: nearState,
+      nowMs: Date.now(),
+      openedAt: nearOpenedAt,
+    });
+    nearState = res.state;
+    nearResult.value = res;
+    // 刚走近 ⇒ 自动把抽屉推出来（冷却内的人不会进 entered，见 `wsNearby.NEAR_COOLDOWN_MS`）
+    const hit = res.entered[0];
+    if (!hit) return;
+    if (chatOpen.value || panelOpen.value || guideOpen.value) return; // 已经有别的东西在屏幕上，不抢
+    nearOpenedAt[hit.id] = Date.now();
+    openChat(hit.id, false); // 自动弹**不抢焦点**（否则手机上会自己跳出键盘）
+  }
+
+  watch([nearSig, () => trips.now.value], recomputeNear, { immediate: true });
+
+  const chatTargetActor = computed<PlacedActor | null>(
+    () => actors.placed.value.find((a) => a.id === chatTargetId.value) || null
+  );
+  /** 抽屉顶上那三个字段（头像/名字/副标题来自真源，本页不加工） */
+  const chatTarget = computed(() => {
+    const a = chatTargetActor.value;
+    return a ? { name: a.name, subtitle: a.subtitle, avatarUrl: a.avatarUrl } : null;
+  });
+
+  /**
+   * 这一句**能不能发**：`send_chat_message` 没有角色参数，它发给当前对话角色
+   * （`api/chat.rs:220` 读 `gs.current_role_id`）⇒ 目标对不上时**不能发**，
+   * 否则话进了另一个人的对话里，而玩家以为在跟眼前这个人说。
+   */
+  const chatCanSend = computed(() => {
+    const name = String(chatTargetActor.value?.name || "").trim();
+    return !!name && name === currentRoleName.value;
+  });
+  /** 不能发时的那句说明（两种"没有当前角色"分开写，不许含糊成一句"发不了"） */
+  const chatBlockedNote = computed(() => {
+    if (chatCanSend.value) return "";
+    const who = currentRoleName.value;
+    if (!who) return t("worldsim.chatDrawer.notCurrentNoWho");
+    return t("worldsim.chatDrawer.notCurrent", { name: chatTargetActor.value?.name || "", who });
+  });
+
+  /** 将要拼在正文前面的那一截（显示什么就发什么 —— 同一个 computed 喂给抽屉与 invoke） */
+  const chatPrefixInfo = computed(() => {
+    const id = chatTargetId.value;
+    const hit = hitOf(id);
+    const res = nearResult.value;
+    const why = hit
+      ? `约 ${hit.meters} 米`
+      : res && res.verdict === "unknown"
+        ? res.missing.join("、") || res.why
+        : "这一格没量到（" + (res?.why || "还没判过") + "）";
+    return scenePrefixOf({
+      meters: hit ? hit.meters : null,
+      nearWhy: why,
+      myPlace: meSpot.value?.place || "",
+      alsoNear: (res?.near || []).filter((h) => h.id !== id).map((h) => h.name),
+    });
+  });
+  const chatPrefix = computed(() => chatPrefixInfo.value.text);
+
+  function closeChat(): void {
+    // 关掉也算"刚开过"：走开再回来要过冷却，不立刻弹第二次（与自动弹同一把尺子）
+    if (chatTargetId.value) nearOpenedAt[chatTargetId.value] = Date.now();
+    chatOpen.value = false;
+  }
+
+  /** 「去聊天页选 ta」：复用**已有**的换人确认那条路（`onGotoChat`），不另写一套 */
+  function onChatGoto(): void {
+    const a = chatTargetActor.value;
+    if (a) onGotoChat(a);
+  }
+
+  async function onChatSend(text: string): Promise<void> {
+    const a = chatTargetActor.value;
+    const role = String(a?.name || "").trim();
+    if (!role || !chatCanSend.value) {
+      chatNote.value = chatBlockedNote.value;
+      return;
+    }
+    const body = chatPrefix.value ? `${chatPrefix.value}${text}` : text;
+    // 先上屏（玩家的话立刻可见），发送结果由 `note` 如实回报 —— 不显示"已发送"那种假状态
+    chatLines.value = [...chatLines.value, { me: true, text, at: Date.now() }];
+    if (!isTauriRuntime()) {
+      chatNote.value = t("worldsim.chatDrawer.failed", {
+        reason: t("worldsim.intervene.unsupported"),
+      });
+      return;
+    }
+    chatBusy.value = true;
+    try {
+      await invoke("send_chat_message", { text: body });
+      /* 💗 好感：`chat` 当天只计一次（`wsRelation.ONCE_PER_DAY`）—— `counted` 是**真源的回执**，
+         照它写提示（第二次起写「不再加」，不许照旧报一个增量）。
+         ⚠️ 显示的数是**真源那一行的 `affinity`**（与 `onGift` 同一个口径），
+         页面不 import 权重表、也不自己做加法（既有断言 ⑩e）。 */
+      const r = relation.chat(role);
+      affinityTick.value += 1;
+      const head = r.counted
+        ? t("worldsim.chatDrawer.sentCounted", { role, n: r.row.affinity })
+        : t("worldsim.chatDrawer.sentOnce");
+      chatNote.value = `${head} · ${t("worldsim.chatDrawer.replyHint")}`;
+    } catch (e) {
+      chatNote.value = t("worldsim.chatDrawer.failed", {
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      chatBusy.value = false;
+    }
+  }
+
+  /* ── ③ 约他出门：与聊天里说「你过来」**同一条下游**（`world_map_trip_start`）── */
+  async function onInviteOut(a: PlacedActor | null): Promise<void> {
+    if (!a?.name) {
+      wsToast(t("worldsim.chat.noRole"), "warn");
+      return;
+    }
+    const me = meSpot.value;
+    if (!me) {
+      wsToast(t("worldsim.action.outingNoMe"), "warn");
+      return;
+    }
+    if (!trips.supported.value) {
+      wsToast(t("worldsim.intervene.unsupported"), "warn");
+      return;
+    }
+    // 目的地 = **我这一带**（拿不到地点名就用词条里的兜底称呼，与孤儿页 `WorldSim.vue:1391` 一致）；
+    // `kind: "walk"` 是显式给的：提示条说的"走过来"必须与实际口径同一个
+    const to = me.place.trim() || t("worldsim.action.outingHere");
+    const r = await trips.startTrip({
+      role: a.name,
+      to,
+      gx: me.gx,
+      gy: me.gy,
+      kind: "walk",
+      cell_m: cellM.value,
+    });
+    if (r.ok) {
+      trips.start(); // 起了行程才开始轮询/插值（默认 0 条查询，见上面"刻意不做"）
+      wsToast(t("worldsim.action.outingStarted", { name: a.name }), "ok");
+    } else {
+      wsToast(t("worldsim.action.outingFailed", { reason: r.message ? `（${r.message}）` : "" }), "warn");
+    }
+  }
+
   /* ── 🔌 把场景推给 Rust（`MapRuntime.scene`）────────────────────────────────────
      **为什么必须推**（真源 = `wsRuntimePush.ts` 头部注释，这里只复述结论）：
        · `scene` 在不在 = `world_sim_enabled()`（`src-tauri/src/world_map/state.rs:618`）的**唯一判据**；
@@ -876,11 +1215,16 @@
       areaLabel.value,
       districtPins.value.map((p) => p.id + ":" + (p.posSource || "")).join(","),
       needsSig.value,
+      trips.ownerRoles.value.join(","),
     ] as const,
     () => {
       void pushRuntime({
         area: areaLabel.value || undefined,
-        actors: actors.placed.value || [],
+        /* 🚶 期 3：**归行程管的角色要从这份静态推送里让开**（与孤儿页 `WorldSim.vue:1117` 同一个
+           filter）—— 在路上的位置由 `useWorldTrips` 按插值推；两边都推就会互相覆盖，
+           表现是"走两步被拉回去"。让位判据用真源自己的 `trips.isOwned()`，不另造一套。
+           `ownerRoles` 也进了上面的签名：行程一起一落都要重推一次，静态位置才接得回来。 */
+        actors: (actors.placed.value || []).filter((a) => !trips.isOwned(a.name)),
         needs: needsForPush.value,
       });
     },
@@ -902,6 +1246,8 @@
        下面 `clearRuntime()` 会把 `scene` 推成 null ⇒ 就算没停，后端 tick 也只会返回 `no_scene`；
        但两条都做才是"这一屏走了，它的事就该停"（与孤儿页 `WorldSim.vue:1633` 同款）。 */
     wsEvents.stop();
+    /* 🚶 期 3：行程轮询也收掉（它只在你按过「约他出门」之后才在跑；不留下"离开这一屏还在查"的循环） */
+    trips.stop();
     void clearRuntime();
   });
 </script>
@@ -1029,6 +1375,28 @@
     color: #ffcf8a;
     font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
     cursor: pointer;
+  }
+
+  /* 💬 期 3 ·「走近说话」那个入口（`nearEntry` 有值才挂）。
+     位置挑**左下角**：顶栏在上、日常卡与悬浮手机在右侧，左下是唯一空着的一块；
+     高度给足 44（触控目标），并且只有真走近才出现 ⇒ 它不跟那三个常驻浮块抢位。 */
+  .wsce__near {
+    position: absolute;
+    left: 8px;
+    bottom: 12px;
+    z-index: 30;
+    min-height: 44px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(143, 214, 192, 0.5);
+    background: rgba(7, 11, 17, 0.7);
+    color: #d8f5e8;
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    cursor: pointer;
+    max-width: 62vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* 🏙 2026-10-03 · 顶栏第三颗（楼房档位开关）。
      它是**常驻**的第三件，窄屏上必须先让位：`flex: 0 1 auto` + `min-width: 0` + 省略号，

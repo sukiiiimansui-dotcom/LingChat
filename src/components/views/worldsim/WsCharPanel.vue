@@ -242,6 +242,36 @@
               🚶 {{ t("worldsim.action.outing") }}
             </button>
           </div>
+          <!-- ❤️⚡ 期 2（2026-10-02）：心情 / 体力 —— 紧挨着好感（两者都是"世界的状态"，
+               不是装饰：它们**真的**被推给 Rust 并参与事件权重，见 `wsNeeds.ts` 头部）。
+
+               三条口径（一字不改地照 `wsNeeds` 的判词）：
+                ① 显示的是 **0–1 的原始值**（不是百分比）—— 与 `event_cmd.rs::actor_unit` 的
+                   量程逐字一致，**不在这里造第三套量程**；进度条只是同一个数的可视化。
+                ② 它是**推导值**（据本机时间/真实天气/事件/今日三件事算出来），不是测量值 ——
+                   所以那一行小字里必须带口径（`needsNote` 直接来自 `computeNeeds().why`）。
+                ③ 拿不到 ⇒ 显式写「数不出来」+ 原因，**不显示 0.5 装成有值**（本仓铁律）。
+               DOM 契约：`data-ws-needs-mood` / `data-ws-needs-energy`（探针读这个；App 里不塞 `window.__*`）。 -->
+          <div
+            v-if="needs"
+            class="ws-need"
+            :data-ws-needs-mood="needs.mood"
+            :data-ws-needs-energy="needs.energy"
+          >
+            <span class="ws-need__k">{{ t("worldsim.panel.needsMood") }}</span>
+            <span class="ws-need__v">{{ needs.mood.toFixed(2) }}</span>
+            <i class="ws-need__bar"><b :style="{ transform: `scaleX(${needPct(needs.mood)})` }" /></i>
+            <span class="ws-need__k">{{ t("worldsim.panel.needsEnergy") }}</span>
+            <span class="ws-need__v">{{ needs.energy.toFixed(2) }}</span>
+            <i class="ws-need__bar"><b :style="{ transform: `scaleX(${needPct(needs.energy)})` }" /></i>
+          </div>
+          <div v-else class="ws-need ws-need--none" data-ws-needs="none">
+            <span class="ws-need__k"
+              >{{ t("worldsim.panel.needsMood") }} / {{ t("worldsim.panel.needsEnergy") }}</span
+            >
+            <span class="ws-dim">{{ needsNote || t("worldsim.panel.needsNone") }}</span>
+          </div>
+          <div v-if="needs" class="ws-need__why">{{ needsNote }}</div>
           <div class="ws-panel__hint">{{ gx("actionsHint") }}</div>
         </WsCollapse>
       </div>
@@ -274,6 +304,8 @@
   import { emotionFile, type WsActors } from "@/composables/useWsActors";
   import type { PlacedActor, ActorPosSource } from "./wsActors";
   import { wsToast } from "./wsToast";
+  /* ❤️⚡ 期 2：进度条的夹取口径来自 `wsNeeds`（0–1 量程的唯一定义处），面板不重写判据 */
+  import { clampNeed } from "./wsNeeds";
 
   const props = withDefaults(
     defineProps<{
@@ -295,8 +327,15 @@
       affinity?: number;
       /** 好感档位文案（页面用 `rankOf()` 算好传进来，面板不重复实现判据） */
       affinityRank?: string;
+      /**
+       * ❤️⚡ 期 2：心情 / 体力（**0–1 的推导值**）。
+       * `null`/不传 = 没有可显示的数值（页面会同时给 `needsNote` 说明为什么）。
+       */
+      needs?: { mood: number; energy: number } | null;
+      /** 数值口径判词（页面用 `wsNeeds.compute()` 的 `why` 原样传进来；面板不重复实现判据） */
+      needsNote?: string;
     }>(),
-    { areaText: "", narrow: false, open: false, portraitOpen: false, currentRoleId: 0 }
+    { areaText: "", narrow: false, open: false, portraitOpen: false, currentRoleId: 0, needs: null, needsNote: "" }
   );
 
   const emit = defineEmits<{
@@ -319,6 +358,10 @@
   /** 服装：默认那套；用户切换后重取 */
   const clothesName = ref("default");
   const clothes = ref<string[]>(["default"]);
+
+  /* ❤️⚡ 期 2：进度条的填充比例 —— 直接用 `wsNeeds` 的夹取函数（**不在这里再写一次 0–1 判据**）。
+     与好感条同一口径：`transform: scaleX(k)`（合成属性，不触发布局/重排）。 */
+  const needPct = (v: number): number => clampNeed(v);
 
   // 换人 → 服装选择要重置（不然会拿上一个人的「泳装」去取新角色的图）
   watch(
@@ -490,6 +533,43 @@
     background: rgba(255, 255, 255, 0.16);
     overflow: hidden;
   }
+  /* ❤️⚡ 期 2：心情 / 体力那一行（与好感条同一套画法：静态满宽 + `transform: scaleX`） */
+  .ws-need {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    margin: 0.3em 0 0.5em;
+    font-size: 0.9em;
+    opacity: 0.95;
+  }
+  .ws-need__k { opacity: 0.66; }
+  .ws-need__v { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 2.6em; }
+  .ws-need__bar {
+    flex: 1;
+    min-width: 3em;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.16);
+    overflow: hidden;
+  }
+  .ws-need__bar > b {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: var(--accent-color, #79d9ff);
+    transform-origin: left center;
+    transition: transform 0.3s cubic-bezier(0, 0, 0, 1);
+  }
+  .ws-need--none { opacity: 0.8; }
+  /* 口径判词（"据本机时间 19 时 / 真实天气 小雨…"）：必须看得见，但别抢主信息 */
+  .ws-need__why {
+    margin: -0.2em 0 0.5em;
+    font-size: 0.78em;
+    line-height: 1.35;
+    opacity: 0.62;
+  }
+
   .ws-aff__bar > b {
     display: block;
     /* 🎬 步①（2026-10-02）：填充条**静态满宽** —— `width` 从此不参与动画（只在首次布局算一次），

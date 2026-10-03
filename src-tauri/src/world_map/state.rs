@@ -898,6 +898,37 @@ mod tests {
         assert!(rt.scene.is_some());
     }
 
+    /// 期 2（2026-10-02）**负数断言**：同一份 `mood`/`energy` 连推两次，第二次必须**什么都没改**。
+    ///
+    /// 为什么值得单钉一条：心情/体力是**按时间衰减的推导值**（前端 `wsNeeds.ts` 每次决策点重算），
+    /// 一旦哪里写成"每次推都 += 一点"，现象是"角色的体力自己在涨"——不报错、日志也看不出来，
+    /// 只有把两次 `apply_patch` 的返回值摆在一起才看得见。`changed` 为空 = 读数没增长。
+    #[test]
+    fn pushing_the_same_needs_twice_does_not_change_anything() {
+        let mut rt = MapRuntime::new();
+        let needs = json!({
+            "scene": {"area": "广州市·越秀区·东山口"},
+            "actors": {"小满": {"facility": "便利店", "mood": 0.42, "energy": 0.31}},
+        });
+        let first = rt.apply_patch(&needs);
+        assert!(first.contains(&"actors".to_string()), "第一次该有变化：{first:?}");
+        assert_eq!(rt.actors["小满"]["mood"], json!(0.42));
+        assert_eq!(rt.actors["小满"]["energy"], json!(0.31));
+
+        // 逐字节相同的第二次：`changed` 必须为空（没有增长，也没有被抹掉）
+        let second = rt.apply_patch(&needs);
+        assert!(second.is_empty(), "重复推同一份读数不该产生变化：{second:?}");
+        assert_eq!(rt.actors["小满"]["mood"], json!(0.42));
+        assert_eq!(rt.actors["小满"]["energy"], json!(0.31));
+        // 别的字段也没被这次"重推"碰掉
+        assert_eq!(rt.actors["小满"]["facility"], json!("便利店"));
+
+        // 换成"没有这两个键"的一次推送（= 数不出来，前端什么都不推）⇒ 旧值**原样留着**
+        // ⚠️ 这是字段级合并的既定语义，不是本期新加的：不推 ≠ 清零。
+        rt.apply_patch(&json!({"actors": {"小满": {"facility": "便利店"}}}));
+        assert_eq!(rt.actors["小满"]["mood"], json!(0.42));
+    }
+
     /// 事件环形缓冲 + 天气时间戳 + 过期判断。
     #[test]
     fn events_and_weather_bookkeeping() {

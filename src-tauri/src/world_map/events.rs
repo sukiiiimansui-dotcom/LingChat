@@ -373,13 +373,32 @@ pub fn weather_short(desc: &str) -> String {
 //  事件定义与事件表
 // ═══════════════════════════════════════════════════════════════════
 
+/// 一条事件对「需求」的副作用：心情 / 体力各加多少（**增量**，可正可负）。
+///
+/// 量程与 `EventContext.mood` / `.energy`、前端 `wsNeeds.ts` **同一套 0–1**
+/// （`event_cmd.rs` 头部的字段映射表：`actors[role].mood` / `.energy` 须落在 0–1）——
+/// 这里存的是**增量**，所以合法区间是 `-1.0..=1.0`（`validate()` 会检查）。
+/// 单独的 `0.0` = 这一项不动（不是"清零"）。
+///
+/// 为什么副作用写在事件表里、而不是前端按 id 再抄一张表：事件的语义真源就是这张表。
+/// 前端只做一件事 —— 把 `effects` 交给 `wsNeeds` 应用（`PLAN-GAMEPLAY.md:65` 的验收④：
+/// 「事件带的 `effects` 只改 `wsNeeds` 一处，页面里 0 处算术」）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NeedEffect {
+    /// 心情增量（0 = 不动）
+    pub mood: f64,
+    /// 体力增量（0 = 不动）
+    pub energy: f64,
+}
+
 /// 一条事件的定义（编译期常量，全 `'static`，`Copy`）。
 ///
-/// 字段分三组：
+/// 字段分四组：
 ///   · 身份/文案：`id` `category` `title` `text`（`text` 里可带占位符）
 ///   · 抽签参数：`weight` `cooldown_secs`
 ///   · **可选闸门**（不通过 → 该条权重置 0）：`hours` `places` `outdoor`
 ///     `weather` `not_weather` `festival_only` `min_temp_c` / `max_temp_c`
+///   · **可选副作用**：`effects`（空 = 这条事件不改需求/心情体力）
 ///
 /// 闸门之间是**与**关系：全部满足才可选。任何闸门留空表示"不限制"。
 ///
@@ -416,6 +435,9 @@ pub struct EventDef {
     pub min_temp_c: Option<f64>,
     /// 气温上限（≤ 才可选）
     pub max_temp_c: Option<f64>,
+    /// 对心情/体力的副作用（空 = 不改；见 [`NeedEffect`]）。
+    /// 前端把它当**增量**用（`wsNeeds.applyEvent`），一次事件可以带多条（会求和）。
+    pub effects: &'static [NeedEffect],
 }
 
 impl EventDef {
@@ -435,6 +457,7 @@ impl EventDef {
         festival_only: false,
         min_temp_c: None,
         max_temp_c: None,
+        effects: &[],
     };
 
     /// 这条事件的 id 前缀推出来的类别（与 `category` 字段应当时刻一致，
@@ -481,7 +504,8 @@ pub static EVENTS: &[EventDef] = &[
     ev!("social.stand_up", Category::Social, "被放鸽子", "{someone}临时说来不了，约在{place}的见面只能取消", 4.0, 7200),
 
     // ── 工作学习（4）──
-    ev!("work.overtime", Category::Work, "加班", "临时被留下加班，{place}的灯一直亮到很晚", 6.0, 5400, hours: (17, 23)),
+    // 加班带 `effects`（期 2）：体力掉 ⇒ 接下来"健康类升 / 工作学习类降"，也就是"累到容易病、也干不动活"。
+    ev!("work.overtime", Category::Work, "加班", "临时被留下加班，{place}的灯一直亮到很晚", 6.0, 5400, hours: (17, 23), effects: &[NeedEffect { mood: -0.06, energy: -0.15 }]),
     ev!("work.meeting", Category::Work, "临时会议", "突然被拉进一个临时会议，{role}的下午被打断了", 6.0, 3600, hours: (9, 18), outdoor: Some(false)),
     // 截止时间是会拖到凌晨的，所以这条**不设时段闸门** —— 深夜的"工作 ×0.2"修正
     // 正好也是靠它才测得到（其余工作类事件都在白天窗口里）
@@ -489,8 +513,10 @@ pub static EVENTS: &[EventDef] = &[
     ev!("work.exam", Category::Work, "考试", "明天有考试，{role}在{place}翻着书，有点心不在焉", 4.0, 86400, hours: (8, 23)),
 
     // ── 健康（4）──
+    // 失眠这条带 `effects`（期 2）：`energy` 掉到 `LOW_ENERGY_THRESHOLD`(0.3) 之下时，
+    // 权重修正 ⑤ 会抬健康类、压工作学习类 —— 一条"没睡好"从此**真的**影响接下来几小时出什么事。
     ev!("health.cold", Category::Health, "感冒", "{role}有点感冒，鼻子一直不通气", 5.0, 14400),
-    ev!("health.insomnia", Category::Health, "失眠", "躺下很久也没睡着，{role}听着{place}外面的动静", 6.0, 14400, hours: (23, 5), outdoor: Some(false)),
+    ev!("health.insomnia", Category::Health, "失眠", "躺下很久也没睡着，{role}听着{place}外面的动静", 6.0, 14400, hours: (23, 5), outdoor: Some(false), effects: &[NeedEffect { mood: -0.08, energy: -0.18 }]),
     ev!("health.unwell", Category::Health, "身体不适", "{role}忽然觉得有点不舒服，只好先坐下来歇一会儿", 4.0, 7200),
     ev!("health.oversleep", Category::Health, "睡过头", "闹钟没响，{role}睡过头了，早上慌成一团", 5.0, 43200, hours: (6, 10), outdoor: Some(false)),
 
@@ -513,8 +539,12 @@ pub static EVENTS: &[EventDef] = &[
     ev!("festival.crowd", Category::Festival, "人挤人", "节日的{place}人挤人，{role}走两步就要停一下", 8.0, 21600, festival_only: true),
 
     // ── 情绪（4）──
-    ev!("mood.good", Category::Mood, "心情不错", "{role}今天心情莫名地好，看什么都顺眼", 5.0, 7200),
-    ev!("mood.low", Category::Mood, "有点低落", "{role}忽然有点低落，说不上来为什么", 5.0, 7200),
+    // 🔴 这四条里的前两条带 `effects`（期 2「因果通电」）：心情类事件**真的**把 `mood` 推低/推高，
+    //    下一轮 `weight_for` 的 ④（`mood < LOW_MOOD_THRESHOLD` ⇒ 情绪类 ×2.2）就能读到 ——
+    //    这就是"心情低时更容易出情绪类事件"的闭环。数值是**手感值**（与权重同款，不是标定参数）：
+    //    ±0.22 足以把 0.55 上下的基线推过/推回 0.35 这条线，又不至于一条事件定生死。
+    ev!("mood.good", Category::Mood, "心情不错", "{role}今天心情莫名地好，看什么都顺眼", 5.0, 7200, effects: &[NeedEffect { mood: 0.22, energy: 0.0 }]),
+    ev!("mood.low", Category::Mood, "有点低落", "{role}忽然有点低落，说不上来为什么", 5.0, 7200, effects: &[NeedEffect { mood: -0.22, energy: 0.0 }]),
     ev!("mood.irritable", Category::Mood, "莫名烦躁", "{role}莫名有点烦躁，一点小动静都嫌吵", 5.0, 7200),
     ev!("mood.calm", Category::Mood, "安静发呆", "忙完一阵，{role}在{place}安静地发了会儿呆", 4.0, 7200),
 
@@ -621,6 +651,18 @@ impl EventTable {
             for ph in placeholders(e.text) {
                 if !KNOWN_PLACEHOLDERS.contains(&ph.as_str()) {
                     problems.push(format!("{} 用了不认识的占位符 {{{}}}", e.id, ph));
+                }
+            }
+            // 副作用是**增量**：合法区间 -1.0..=1.0（端点含），且必须是有限数。
+            // 越界的后果和闸门写错一样是"静默地不对劲"：前端 clamp 一下就看不出表里写错了。
+            for (j, fx) in e.effects.iter().enumerate() {
+                for (name, v) in [("mood", fx.mood), ("energy", fx.energy)] {
+                    if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                        problems.push(format!(
+                            "{} 的第 {j} 条 effects 里 {name} 不是 -1..=1 的增量：{v}",
+                            e.id
+                        ));
+                    }
                 }
             }
         }
@@ -793,6 +835,14 @@ pub struct PlannedEvent {
     pub weight_used: f64,
     /// 发生时刻（= 调用方传进来的 `now_secs`）
     pub at_secs: i64,
+    /// 这条事件对心情/体力的副作用（**照抄事件表的 `effects`**，前端据此改 `wsNeeds`）。
+    ///
+    /// `serde(default)`：`MapRuntime.events` 里可能还留着加这个字段**之前**写下的旧条目
+    /// （`event_cmd.rs::recent_events` 会 `from_value::<PlannedEvent>` 反序列化它们）——
+    /// 缺字段必须退回"空"（= 不改），**不许**让旧事件整条反序列化失败。
+    /// 空数组 = 这条事件不改需求（一个明确的"没有"，不是"不知道"）。
+    #[serde(default)]
+    pub effects: Vec<NeedEffect>,
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1102,6 +1152,7 @@ pub fn plan_event(
         text,
         weight_used,
         at_secs: now_secs,
+        effects: def.effects.to_vec(),
     })
 }
 
@@ -1360,6 +1411,7 @@ mod tests {
             text: render_text(def, ctx, &mut r),
             weight_used: def.weight,
             at_secs: NOW,
+            effects: def.effects.to_vec(),
         }
     }
 
@@ -2206,6 +2258,7 @@ mod tests {
             text: t.into(),
             weight_used: 1.0,
             at_secs: 0,
+            effects: Vec::new(),
         };
         let twenty: String = "字".repeat(20);
         assert_eq!(bubble_text(&mk(&twenty)), twenty);
@@ -2266,7 +2319,7 @@ mod tests {
         c.weather = "小雨".into();
         let ev = render_def(def, &c);
         let v = serde_json::to_value(&ev).unwrap();
-        for key in ["id", "category", "title", "text", "weight_used", "at_secs"] {
+        for key in ["id", "category", "title", "text", "weight_used", "at_secs", "effects"] {
             assert!(v.get(key).is_some(), "序列化结果缺字段 {key}：{v}");
         }
         assert_eq!(v["category"], serde_json::json!("weather"));
@@ -2327,5 +2380,99 @@ mod tests {
         assert!(bubble_text(&ev).chars().count() <= BUBBLE_MAX_CHARS);
         assert!(speech_hint(&ev).contains("刚才发生了"));
         assert!(memory_line(&ev).starts_with("旁白: "));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  期 2 · 事件 → 心情/体力（effects）
+    // ═══════════════════════════════════════════════════════════════
+
+    /// 带 `effects` 的正好是这四条（多一条少一条都要在这里显式改，防止悄悄扩散）。
+    ///
+    /// 为什么钉死名单：`effects` 是**玩法后果**，一条事件的后果一旦写上去，
+    /// 就会经"体力低 ⇒ 健康类升/工作学习降"这条链影响接下来几小时的出事件分布 ——
+    /// 这不是文案改动，是平衡改动，值得每次都在测试里过一遍眼。
+    const EFFECT_EVENT_IDS: [&str; 4] = ["mood.good", "mood.low", "health.insomnia", "work.overtime"];
+
+    #[test]
+    fn table_declares_effects_only_on_the_expected_events() {
+        let mut with: Vec<&str> = table()
+            .events()
+            .iter()
+            .filter(|e| !e.effects.is_empty())
+            .map(|e| e.id)
+            .collect();
+        // 比**集合**不比顺序：名单常量是按语义分组的，事件表是按类别排的
+        with.sort_unstable();
+        let mut want = EFFECT_EVENT_IDS.to_vec();
+        want.sort_unstable();
+        assert_eq!(with, want, "带 effects 的事件名单变了：{with:?}");
+        for id in EFFECT_EVENT_IDS {
+            let def = table().get(id).unwrap();
+            // 每条至少有一项真的动（两项都是 0 的 effects 等于没写，却会让前端以为"有后果"）
+            assert!(
+                def.effects.iter().any(|f| f.mood != 0.0 || f.energy != 0.0),
+                "{id} 的 effects 全是 0"
+            );
+            for f in def.effects {
+                assert!(f.mood.is_finite() && (-1.0..=1.0).contains(&f.mood));
+                assert!(f.energy.is_finite() && (-1.0..=1.0).contains(&f.energy));
+            }
+        }
+        // 内置总表本身必须无问题（含上面那条增量区间检查）
+        assert!(table().validate().is_empty(), "{:?}", table().validate());
+    }
+
+    /// 抽中的事件**照抄**表里的 `effects`（前端只认事件上带的那一份，不自己按 id 查表）。
+    #[test]
+    fn planned_event_carries_the_table_effects() {
+        // `mood.low` 是情绪类；把 roll 钉在 0（第一条候选）也能验证"抄没抄"，
+        // 但那样只证明了"某一条" —— 所以这里直接对四条走一遍 render_def。
+        for id in EFFECT_EVENT_IDS {
+            let def = table().get(id).unwrap();
+            let c = unlocking_ctx(def);
+            let ev = render_def(def, &c);
+            assert_eq!(ev.effects, def.effects.to_vec(), "{id} 的 effects 没抄到 PlannedEvent");
+        }
+        // 不带的必须是**空数组**（显式的"没有"，不是缺字段）
+        let plain = render_def(table().get("luck.win").unwrap(), &ctx_at(12));
+        assert!(plain.effects.is_empty());
+        assert_eq!(serde_json::to_value(&plain).unwrap()["effects"], serde_json::json!([]));
+    }
+
+    /// effects 过 JSON 边界：有则逐字节还原；**旧条目缺字段 ⇒ 空数组**（不许整条反序列化失败）。
+    #[test]
+    fn effects_survive_json_and_old_events_default_to_empty() {
+        let def = table().get("mood.low").unwrap();
+        let ev = render_def(def, &unlocking_ctx(def));
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["effects"], serde_json::json!([{"mood": -0.22, "energy": 0.0}]));
+        let back: PlannedEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back.effects, ev.effects, "effects 过一趟 JSON 就变了");
+
+        // 期 2 之前落进 `MapRuntime.events` 的旧条目：没有 `effects` 键
+        let old: PlannedEvent = serde_json::from_value(serde_json::json!({
+            "id": "mood.low", "category": "mood", "title": "有点低落",
+            "text": "有点低落", "weight_used": 5.0, "at_secs": 1
+        }))
+        .unwrap();
+        assert!(old.effects.is_empty(), "缺 effects 的旧事件必须退回空数组");
+    }
+
+    /// `validate()` 抓得住越界的副作用增量（写错了不许静默通过）。
+    #[test]
+    fn validate_rejects_out_of_range_effects() {
+        let bad = EventTable::new(vec![EventDef {
+            effects: &[NeedEffect { mood: 1.5, energy: -0.2 }],
+            ..tdef("mood.bad", Category::Mood, 1.0)
+        }]);
+        let problems = bad.validate();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("1.5"), "{problems:?}");
+
+        let good = EventTable::new(vec![EventDef {
+            effects: &[NeedEffect { mood: -1.0, energy: 1.0 }],
+            ..tdef("mood.ok", Category::Mood, 1.0)
+        }]);
+        assert!(good.validate().is_empty(), "{:?}", good.validate());
     }
 }

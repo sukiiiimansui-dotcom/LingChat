@@ -49,14 +49,18 @@
     joyThumbOffset,
     joyVectorFromPointer,
     type JoyFrameDelta,
+    type JoyMotion,
     type JoyVector,
   } from "./wsJoystick";
 
   /* 不要 `low` 之类的档位 prop：摇杆是**输入**，低端机也必须能推（推不动 = 这一屏废了）。
      真要有降级，降的是画面（挑楼/标签），不是操作。 */
   const emit = defineEmits<{
-    /** 每帧**至多一次**（向量为 0 的帧根本不发）——地图组件唯一允许驱动相机的地方 */
-    drive: [d: JoyFrameDelta, v: JoyVector];
+    /**
+     * 每帧**至多一次**（**停稳**的帧根本不发）——地图组件唯一允许驱动相机/角色/名字层的地方。
+     * 第三个参数是运动状态（角色位移 / 朝向 / 踏步相位），宿主照它写「我」那颗钉子（§3/§4）。
+     */
+    drive: [d: JoyFrameDelta, v: JoyVector, m: JoyMotion];
     /** 松手：**恰好一次**（地图组件在这里清 `joyActive` + 做那一次重算） */
     halt: [];
   }>();
@@ -81,7 +85,7 @@
 
   const driver = createJoyDriver({
     screenW: () => screenW,
-    onFrame: (d, v) => emit("drive", d, v),
+    onFrame: (d, v, m) => emit("drive", d, v, m),
     onHalt: () => {
       active.value = false;
       writeThumb(0, 0);

@@ -89,9 +89,14 @@ export interface BldBudgetInputLite<T> {
   budgetPx2?: number;
   budgetVerts?: number;
   /**
-   * 🔴 **栋数硬上限**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"）。
-   * 与 `budgetPx2`/`budgetVerts` 同一路透传：**算档位不在这里**（`bldMaxDrawnOf(mode)` 在
+   * 🔴 **栋数硬上限**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"；
+   * 同日第二条：**按 zoom 分层** —— `z<14` 画足迹（宽档 4000）/ `z≥14` 画立体（严格档 100））。
+   * 与 `budgetPx2`/`budgetVerts` 同一路透传：**算上限不在这里**（`bldMaxDrawnFor(档位, zoom)` 在
    * `wsBldBudget`、档位存储在 `wsBldMode`），本模块只把宿主算好的数原样交给规则模块。
+   *
+   * ⚠️ **zoom 由宿主现读**（`map.getZoom()`）：本模块**故意不碰地图对象**（见文件头"本模块不读
+   * `window`/`location`/全局主题"），所以"档位 × zoom ⇒ 上限"这一步只能发生在宿主那一侧，
+   * 而**换算规则一份都不许复制**（宿主只调 `bldMaxDrawnFor`，不写 100 / 4000、也不写 14）。
    */
   maxDrawn?: number;
   minInView?: number;

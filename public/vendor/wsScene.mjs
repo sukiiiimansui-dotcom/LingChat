@@ -514,6 +514,7 @@ function visibleRoadCount(fc, zoom) {
 // src/components/views/worldsim/wsLayerOrder.ts
 var TF_LAYER_ID_LIST = ["tf-cross", "tf-drive", "tf-park", "tf-bus", "tf-signal"];
 var BUILDING_LAYER_ID = "bld-ext";
+var FOOTPRINT_LAYER_ID = "bld-foot";
 var ROAD_LAYER_PREFIXES = ["road-casing-", "road-line-"];
 function roadLayersOf(m) {
   return m.layerIds().filter((id) => ROAD_LAYER_PREFIXES.some((p) => id.startsWith(p)));
@@ -529,15 +530,19 @@ function planEnsureRoadOrder(m) {
   const firstRoad = Math.min(...roads.map(idx));
   const tfIdx = TF_LAYER_ID_LIST.map(idx).filter((i) => i >= 0);
   const bldIdx = idx(BUILDING_LAYER_ID);
+  const footIdx = idx(FOOTPRINT_LAYER_ID);
   const blockers = [];
   const lowestTf = tfIdx.length ? Math.min(...tfIdx) : -1;
   if (lowestTf >= 0 && firstRoad > lowestTf) blockers.push("交通设施");
   if (bldIdx >= 0 && firstRoad > bldIdx) blockers.push("楼体");
+  if (footIdx >= 0 && firstRoad < footIdx) blockers.push("足迹层");
   if (!blockers.length) return ops;
   let before = "";
   if (lowestTf >= 0 && bldIdx >= 0) before = lowestTf < bldIdx ? ids[lowestTf] : ids[bldIdx];
   else if (lowestTf >= 0) before = ids[lowestTf];
-  else before = ids[bldIdx];
+  else if (bldIdx >= 0) before = ids[bldIdx];
+  else if (footIdx >= 0) before = ids[footIdx + 1] || "";
+  if (!before) return ops;
   for (const id of roads) ops.push({ op: "move", id, before, why: `路网被「${blockers.join("+")}」压在上面 ⇒ 显式移到它之下` });
   return ops;
 }
@@ -675,9 +680,14 @@ function cameraDefaults() {
   return { ...CAMERA_DEFAULTS };
 }
 var SCENE_LAYER_ORDER = [
+  /* 🌆 **足迹层**（`bld-foot`，2026-10-03「按 zoom 分层」）：`z<14` 时屏上的"楼"就是这一层。
+     它是**贴在地面上的平面**（`fill`），与路网/水绿同一档 —— 也就是**在它们之下**。
+     单列一组（而不是塞进 `buildings`）：混进去会让下面那条"路网被楼体压住"的判据**误报**
+     （2026-10-03 加这一层时实测到：`firstOf("buildings")` 取到的是最下面那条 `bld-foot`）。 */
+  { group: "footprint", idPrefixes: ["bld-foot"], beforeId: "bld-ext", why: "足迹是地面上的平面（在路网/水绿之下、楼体之下）" },
   { group: "roads", idPrefixes: ["road-casing-", "road-line-"], beforeId: "bld-ext", why: "路是地面上的东西，压在楼上会像从楼顶穿过" },
   { group: "transport", idPrefixes: ["tf-"], beforeId: "bld-ext", why: "交通设施**贴在路之上**（先插路网、后插设施 ⇒ 设施在上）" },
-  { group: "buildings", idPrefixes: ["bld-"], beforeId: null, why: "楼体在最上（数据层，交互载体）" },
+  { group: "buildings", idPrefixes: ["bld-"], excludePrefixes: ["bld-foot"], beforeId: null, why: "楼体在最上（数据层，交互载体）" },
   /* 🛰 LOD 第 1 步（2026-09-24）：预渲染瓦片层。**它在矢量层之上**是刻意的 ——
      远景（z≤12）要让瓦片**盖住**实时层，中间靠 `raster-opacity` 随 zoom 淡到 0 把画面交还矢量层；
      反过来放（瓦片在下）就得给 12 条路网 + 楼体各写一份"淡入"，那才是新造一套机制。
@@ -687,9 +697,13 @@ var SCENE_LAYER_ORDER = [
 function sceneLayerPlan() {
   return SCENE_LAYER_ORDER.map((e) => ({ ...e }));
 }
+function planEntryHas(e, id) {
+  if (!e.idPrefixes.some((p) => id.startsWith(p))) return false;
+  return !(e.excludePrefixes || []).some((p) => id.startsWith(p));
+}
 function sceneGroupOf(layerId) {
   const id = String(layerId || "");
-  for (const e of SCENE_LAYER_ORDER) if (e.idPrefixes.some((p) => id.startsWith(p))) return e.group;
+  for (const e of SCENE_LAYER_ORDER) if (planEntryHas(e, id)) return e.group;
   return null;
 }
 function sceneSelfReport(consumed) {
@@ -704,13 +718,17 @@ function sceneOrderViolations(layerIds) {
   const idx = (id) => layerIds.indexOf(id);
   const firstOf = (g) => {
     const e = SCENE_LAYER_ORDER.find((x) => x.group === g);
-    const positions = layerIds.map((id, i) => e.idPrefixes.some((p) => id.startsWith(p)) ? i : -1).filter((i) => i >= 0);
+    const positions = layerIds.map((id, i) => planEntryHas(e, id) ? i : -1).filter((i) => i >= 0);
     return positions.length ? Math.min(...positions) : -1;
   };
+  const foot = firstOf("footprint");
   const roads = firstOf("roads");
   const tf = firstOf("transport");
   const bld = firstOf("buildings");
   const pre = firstOf("prerender");
+  if (foot >= 0 && roads >= 0 && foot > roads) out.push("足迹层被路网压在上面（它是地面肌理，应在路网之下）");
+  if (foot >= 0 && tf >= 0 && foot > tf) out.push("足迹层被交通设施压在上面（应在下方）");
+  if (foot >= 0 && bld >= 0 && foot > bld) out.push("足迹层被楼体压在上面（应在下方）");
   if (roads >= 0 && tf >= 0 && roads > tf) out.push("路网被交通设施压在上面（应在下方）");
   if (roads >= 0 && bld >= 0 && roads > bld) out.push("路网被楼体压在上面（应在下方）");
   if (tf >= 0 && bld >= 0 && tf > bld) out.push("交通设施被楼体压在上面（应在下方）");
@@ -2004,6 +2022,216 @@ function windowPatternSpec(wall, pane, size = WIN_PATTERN_SIZE, cols = 4, rows =
   return { size, wall, pane, cols, rows, data };
 }
 
+// src/components/views/worldsim/wsBldBudget.ts
+var WS_BLD_BUDGET_PX2 = 4e5;
+var WS_BLD_BUDGET_VERTS = 4e4;
+var WS_BLD_MAX_DRAWN = 100;
+var WS_BLD_MAX_DRAWN_MANY = 4e3;
+var WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
+function bldMaxDrawnOf(mode) {
+  return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
+function bldMaxDrawnFor(mode, zoom) {
+  if (bldMaxDrawnOf(mode) === WS_BLD_MAX_DRAWN_MANY) return WS_BLD_MAX_DRAWN_MANY;
+  const z = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
+  if (!isFinite(z)) return WS_BLD_MAX_DRAWN;
+  return z < WS_BLD_FOOTPRINT_MAXZOOM ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
+var WS_BLD_VERTS_PER_SEGMENT = 4;
+function bldRingVertices(ringPoints) {
+  const n = Number(ringPoints);
+  if (!isFinite(n) || n < 4) return 0;
+  return 5 * (n - 1);
+}
+function bldMetersPerCssPixel(zoom, lat) {
+  const z = isFinite(zoom) ? zoom : 0;
+  const la = isFinite(lat) ? Math.max(-85, Math.min(85, lat)) : 0;
+  return 156543.03392 * Math.cos(la * Math.PI / 180) / Math.pow(2, z);
+}
+function bldPxPerMeter(zoom, lat, pitchDeg) {
+  const mpp = bldMetersPerCssPixel(zoom, lat);
+  if (!(mpp > 0)) return 0;
+  const p = isFinite(pitchDeg) ? Math.max(0, Math.min(85, pitchDeg)) : 0;
+  return Math.sin(p * Math.PI / 180) / mpp;
+}
+function outerRingOf(f) {
+  const g = f?.geometry;
+  if (!g || g.type !== "Polygon" || !Array.isArray(g.coordinates)) return null;
+  const ring = g.coordinates[0];
+  if (!Array.isArray(ring) || ring.length < 4) return null;
+  return ring;
+}
+function h3dOf(f) {
+  const p = f?.properties || {};
+  const h = Number(p.h3d);
+  return isFinite(h) && h > 0 ? h : 0;
+}
+function readFirstPoint(f) {
+  const c = f?.geometry?.coordinates;
+  let cur = c;
+  for (let i = 0; i < 6 && Array.isArray(cur); i++) {
+    if (typeof cur[0] === "number" && typeof cur[1] === "number") return cur;
+    cur = cur[0];
+  }
+  return null;
+}
+function bldScreenCost(f, ctx, outCost) {
+  const ring = outerRingOf(f);
+  if (!ring) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const pt of ring) {
+    const lng = Number(pt[0]), lat = Number(pt[1]);
+    if (!isFinite(lng) || !isFinite(lat)) continue;
+    let xy;
+    try {
+      xy = ctx.project(lng, lat);
+    } catch {
+      continue;
+    }
+    const x = Number(xy[0]), y = Number(xy[1]);
+    if (!isFinite(x) || !isFinite(y)) continue;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (!(x1 >= x0) || !(y1 >= y0)) return null;
+  const w = x1 - x0, h = y1 - y0;
+  const h3d = h3dOf(f);
+  const ppm = isFinite(ctx.pxPerMeter) && ctx.pxPerMeter > 0 ? ctx.pxPerMeter : 0;
+  const roofPx = w * h;
+  const wallPx = (w + h) * (h3d * ppm);
+  const verts = bldRingVertices(ring.length);
+  const cost = {
+    id: String(f?.id ?? ""),
+    roofPx,
+    wallPx,
+    px: roofPx + wallPx,
+    verts,
+    ringPoints: ring.length,
+    h3d
+  };
+  if (outCost) outCost.v = cost;
+  return cost;
+}
+function pickBuildingsByBudget(input) {
+  const feats = input.features || [];
+  const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
+  const budgetVerts = Number.isFinite(input.budgetVerts) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
+  const maxDrawn = Number.isFinite(input.maxDrawn) ? Math.max(0, Math.floor(Number(input.maxDrawn))) : WS_BLD_MAX_DRAWN;
+  const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
+  const b = input.bounds;
+  const stats = {
+    total: feats.length,
+    considered: 0,
+    outOfView: 0,
+    noRing: 0,
+    chosen: 0,
+    px2: 0,
+    verts: 0,
+    px2Budget: budgetPx2,
+    vertsBudget: budgetVerts,
+    px2Bound: false,
+    vertsBound: false,
+    countBound: false,
+    maxDrawn,
+    minInView,
+    floorAdded: 0,
+    overBudget: false,
+    why: ""
+  };
+  if (!b) {
+    stats.why = "数不出来：没给视野（bounds），挑不出楼";
+    return { features: [], stats };
+  }
+  let w, s, e, n;
+  try {
+    w = Number(b.getWest());
+    s = Number(b.getSouth());
+    e = Number(b.getEast());
+    n = Number(b.getNorth());
+  } catch {
+    stats.why = "数不出来：读视野失败（getBounds 抛错）";
+    return { features: [], stats };
+  }
+  if (![w, s, e, n].every((v) => isFinite(v))) {
+    stats.why = "数不出来：视野不是四个有限数";
+    return { features: [], stats };
+  }
+  const cands = [];
+  for (const f of feats) {
+    const ring = outerRingOf(f);
+    const p0 = ring ? ring[0] : readFirstPoint(f);
+    const inView = !!p0 && p0[0] >= w && p0[0] <= e && p0[1] >= s && p0[1] <= n;
+    if (!inView) {
+      stats.outOfView += 1;
+      continue;
+    }
+    if (!ring) {
+      stats.noRing += 1;
+      continue;
+    }
+    const c = bldScreenCost(f, input.screen);
+    if (!c) {
+      stats.noRing += 1;
+      continue;
+    }
+    stats.considered += 1;
+    const denom = c.verts > 0 ? c.verts : 1;
+    cands.push({ f, c, ratio: c.px / denom });
+  }
+  cands.sort((A, B) => {
+    if (B.ratio !== A.ratio) return B.ratio - A.ratio;
+    if (B.c.px !== A.c.px) return B.c.px - A.c.px;
+    return A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0;
+  });
+  const chosen = [];
+  const taken = new Array(cands.length).fill(false);
+  let sumPx = 0, sumV = 0;
+  for (let i = 0; i < cands.length; i++) {
+    if (chosen.length >= maxDrawn) {
+      stats.countBound = true;
+      break;
+    }
+    const c = cands[i];
+    const overPx = sumPx + c.c.px > budgetPx2;
+    const overV = sumV + c.c.verts > budgetVerts;
+    if (overPx || overV) {
+      if (overPx) stats.px2Bound = true;
+      if (overV) stats.vertsBound = true;
+      continue;
+    }
+    taken[i] = true;
+    chosen.push(c);
+    sumPx += c.c.px;
+    sumV += c.c.verts;
+  }
+  if (chosen.length < minInView) {
+    for (let i = 0; i < cands.length && chosen.length < minInView && chosen.length < maxDrawn; i++) {
+      if (taken[i]) continue;
+      const c = cands[i];
+      taken[i] = true;
+      chosen.push(c);
+      sumPx += c.c.px;
+      sumV += c.c.verts;
+      stats.floorAdded += 1;
+    }
+  }
+  stats.chosen = chosen.length;
+  stats.px2 = Math.round(sumPx);
+  stats.verts = Math.round(sumV);
+  stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+  const bd = [];
+  if (stats.px2Bound) bd.push("像素");
+  if (stats.vertsBound) bd.push("顶点");
+  if (stats.countBound) bd.push("栋数");
+  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
+     "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）
+     由宿主加在最前面 —— 档位是**用户的选择**，不是挑楼规则的一部分。 */
+  (stats.countBound ? " · 栋数上限 " + maxDrawn + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
+  return { features: chosen.map((c) => c.f), stats };
+}
+
 // src/components/views/worldsim/wsDistrictScene.ts
 function districtStyleOf(theme, low, fadeMs) {
   const parts = themeStyleParts(theme, low, fadeMs);
@@ -2021,6 +2249,7 @@ function districtStyleOf(theme, low, fadeMs) {
   };
 }
 var WS_BLD_VECTOR_MINZOOM = 11;
+var WS_BLD_FOOTPRINT_OPACITY = 0.35;
 var WS_BLD_OUTLINE_FULL_ZOOM = 15;
 var WS_BLD_SMALL_M2 = 220;
 function bldFootprintAreaM2(f) {
@@ -2078,12 +2307,25 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
   const th = theme;
   const P = bldArtParamsOf(th, { art: opts.art ?? 1, look: opts.look ?? 1 });
   const tierFilter = (t) => t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+  const bldColorExpr = ["coalesce", ["get", "color3d"], P.rampColor];
   const detailPaint = {
     "fill-extrusion-height": ["get", "h3d"],
     "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
     "fill-extrusion-opacity": P.opacity,
     "fill-extrusion-vertical-gradient": P.vgrad,
-    "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor]
+    "fill-extrusion-color": bldColorExpr
+  };
+  const footLayer = {
+    id: "bld-foot",
+    type: "fill",
+    source: "bld",
+    minzoom: WS_BLD_VECTOR_MINZOOM,
+    maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+    filter: tierFilter(0),
+    paint: {
+      "fill-color": bldColorExpr,
+      "fill-opacity": WS_BLD_FOOTPRINT_OPACITY
+    }
   };
   const roofLayer = {
     id: "bld-roof",
@@ -2115,11 +2357,12 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
   }] : [];
   if ((opts.mode ?? "base") === "base") {
     return [
+      footLayer,
       {
         id: "bld-ext",
         type: "fill-extrusion",
         source: "bld",
-        minzoom: WS_BLD_VECTOR_MINZOOM,
+        minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
         filter: tierFilter(0),
         paint: { ...detailPaint }
       },
@@ -2129,11 +2372,12 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
     ];
   }
   return [
+    footLayer,
     {
       id: "bld-ext",
       type: "fill-extrusion",
       source: "bld",
-      minzoom: WS_BLD_VECTOR_MINZOOM,
+      minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
       filter: tierFilter(0),
       paint: { ...detailPaint }
     },
@@ -4408,209 +4652,6 @@ function capBuildingsPerCell(feats, input = {}) {
   };
 }
 
-// src/components/views/worldsim/wsBldBudget.ts
-var WS_BLD_BUDGET_PX2 = 4e5;
-var WS_BLD_BUDGET_VERTS = 4e4;
-var WS_BLD_MAX_DRAWN = 100;
-var WS_BLD_MAX_DRAWN_MANY = 4e3;
-function bldMaxDrawnOf(mode) {
-  return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
-}
-var WS_BLD_VERTS_PER_SEGMENT = 4;
-function bldRingVertices(ringPoints) {
-  const n = Number(ringPoints);
-  if (!isFinite(n) || n < 4) return 0;
-  return 5 * (n - 1);
-}
-function bldMetersPerCssPixel(zoom, lat) {
-  const z = isFinite(zoom) ? zoom : 0;
-  const la = isFinite(lat) ? Math.max(-85, Math.min(85, lat)) : 0;
-  return 156543.03392 * Math.cos(la * Math.PI / 180) / Math.pow(2, z);
-}
-function bldPxPerMeter(zoom, lat, pitchDeg) {
-  const mpp = bldMetersPerCssPixel(zoom, lat);
-  if (!(mpp > 0)) return 0;
-  const p = isFinite(pitchDeg) ? Math.max(0, Math.min(85, pitchDeg)) : 0;
-  return Math.sin(p * Math.PI / 180) / mpp;
-}
-function outerRingOf(f) {
-  const g = f?.geometry;
-  if (!g || g.type !== "Polygon" || !Array.isArray(g.coordinates)) return null;
-  const ring = g.coordinates[0];
-  if (!Array.isArray(ring) || ring.length < 4) return null;
-  return ring;
-}
-function h3dOf(f) {
-  const p = f?.properties || {};
-  const h = Number(p.h3d);
-  return isFinite(h) && h > 0 ? h : 0;
-}
-function readFirstPoint(f) {
-  const c = f?.geometry?.coordinates;
-  let cur = c;
-  for (let i = 0; i < 6 && Array.isArray(cur); i++) {
-    if (typeof cur[0] === "number" && typeof cur[1] === "number") return cur;
-    cur = cur[0];
-  }
-  return null;
-}
-function bldScreenCost(f, ctx, outCost) {
-  const ring = outerRingOf(f);
-  if (!ring) return null;
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const pt of ring) {
-    const lng = Number(pt[0]), lat = Number(pt[1]);
-    if (!isFinite(lng) || !isFinite(lat)) continue;
-    let xy;
-    try {
-      xy = ctx.project(lng, lat);
-    } catch {
-      continue;
-    }
-    const x = Number(xy[0]), y = Number(xy[1]);
-    if (!isFinite(x) || !isFinite(y)) continue;
-    if (x < x0) x0 = x;
-    if (x > x1) x1 = x;
-    if (y < y0) y0 = y;
-    if (y > y1) y1 = y;
-  }
-  if (!(x1 >= x0) || !(y1 >= y0)) return null;
-  const w = x1 - x0, h = y1 - y0;
-  const h3d = h3dOf(f);
-  const ppm = isFinite(ctx.pxPerMeter) && ctx.pxPerMeter > 0 ? ctx.pxPerMeter : 0;
-  const roofPx = w * h;
-  const wallPx = (w + h) * (h3d * ppm);
-  const verts = bldRingVertices(ring.length);
-  const cost = {
-    id: String(f?.id ?? ""),
-    roofPx,
-    wallPx,
-    px: roofPx + wallPx,
-    verts,
-    ringPoints: ring.length,
-    h3d
-  };
-  if (outCost) outCost.v = cost;
-  return cost;
-}
-function pickBuildingsByBudget(input) {
-  const feats = input.features || [];
-  const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
-  const budgetVerts = Number.isFinite(input.budgetVerts) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
-  const maxDrawn = Number.isFinite(input.maxDrawn) ? Math.max(0, Math.floor(Number(input.maxDrawn))) : WS_BLD_MAX_DRAWN;
-  const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
-  const b = input.bounds;
-  const stats = {
-    total: feats.length,
-    considered: 0,
-    outOfView: 0,
-    noRing: 0,
-    chosen: 0,
-    px2: 0,
-    verts: 0,
-    px2Budget: budgetPx2,
-    vertsBudget: budgetVerts,
-    px2Bound: false,
-    vertsBound: false,
-    countBound: false,
-    maxDrawn,
-    minInView,
-    floorAdded: 0,
-    overBudget: false,
-    why: ""
-  };
-  if (!b) {
-    stats.why = "数不出来：没给视野（bounds），挑不出楼";
-    return { features: [], stats };
-  }
-  let w, s, e, n;
-  try {
-    w = Number(b.getWest());
-    s = Number(b.getSouth());
-    e = Number(b.getEast());
-    n = Number(b.getNorth());
-  } catch {
-    stats.why = "数不出来：读视野失败（getBounds 抛错）";
-    return { features: [], stats };
-  }
-  if (![w, s, e, n].every((v) => isFinite(v))) {
-    stats.why = "数不出来：视野不是四个有限数";
-    return { features: [], stats };
-  }
-  const cands = [];
-  for (const f of feats) {
-    const ring = outerRingOf(f);
-    const p0 = ring ? ring[0] : readFirstPoint(f);
-    const inView = !!p0 && p0[0] >= w && p0[0] <= e && p0[1] >= s && p0[1] <= n;
-    if (!inView) {
-      stats.outOfView += 1;
-      continue;
-    }
-    if (!ring) {
-      stats.noRing += 1;
-      continue;
-    }
-    const c = bldScreenCost(f, input.screen);
-    if (!c) {
-      stats.noRing += 1;
-      continue;
-    }
-    stats.considered += 1;
-    const denom = c.verts > 0 ? c.verts : 1;
-    cands.push({ f, c, ratio: c.px / denom });
-  }
-  cands.sort((A, B) => {
-    if (B.ratio !== A.ratio) return B.ratio - A.ratio;
-    if (B.c.px !== A.c.px) return B.c.px - A.c.px;
-    return A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0;
-  });
-  const chosen = [];
-  const taken = new Array(cands.length).fill(false);
-  let sumPx = 0, sumV = 0;
-  for (let i = 0; i < cands.length; i++) {
-    if (chosen.length >= maxDrawn) {
-      stats.countBound = true;
-      break;
-    }
-    const c = cands[i];
-    const overPx = sumPx + c.c.px > budgetPx2;
-    const overV = sumV + c.c.verts > budgetVerts;
-    if (overPx || overV) {
-      if (overPx) stats.px2Bound = true;
-      if (overV) stats.vertsBound = true;
-      continue;
-    }
-    taken[i] = true;
-    chosen.push(c);
-    sumPx += c.c.px;
-    sumV += c.c.verts;
-  }
-  if (chosen.length < minInView) {
-    for (let i = 0; i < cands.length && chosen.length < minInView && chosen.length < maxDrawn; i++) {
-      if (taken[i]) continue;
-      const c = cands[i];
-      taken[i] = true;
-      chosen.push(c);
-      sumPx += c.c.px;
-      sumV += c.c.verts;
-      stats.floorAdded += 1;
-    }
-  }
-  stats.chosen = chosen.length;
-  stats.px2 = Math.round(sumPx);
-  stats.verts = Math.round(sumV);
-  stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
-  const bd = [];
-  if (stats.px2Bound) bd.push("像素");
-  if (stats.vertsBound) bd.push("顶点");
-  if (stats.countBound) bd.push("栋数");
-  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
-     "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）
-     由宿主加在最前面 —— 档位是**用户的选择**，不是挑楼规则的一部分。 */
-  (stats.countBound ? " · 栋数上限 " + maxDrawn + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
-  return { features: chosen.map((c) => c.f), stats };
-}
-
 // src/components/views/worldsim/wsBldPickStore.ts
 var WS_BLD_CELL_CAP_REF_DEG = 0.05;
 var WS_BLD_INVIEW_DEFAULT = 10;
@@ -6661,6 +6702,7 @@ export {
   EQUIP_SIDE_STEPS,
   EQUIP_SIDE_STEP_M,
   FALLBACK_HEIGHT_M,
+  FOOTPRINT_LAYER_ID,
   GW_BUNDLE_CELL_DEG,
   GW_BUNDLE_DIR,
   GW_BUNDLE_MAX_CELLS,
@@ -6769,6 +6811,8 @@ export {
   WS_BLD_FALLBACK_OPACITY,
   WS_BLD_FALLBACK_OUTLINE,
   WS_BLD_FALLBACK_RAMP,
+  WS_BLD_FOOTPRINT_MAXZOOM,
+  WS_BLD_FOOTPRINT_OPACITY,
   WS_BLD_INVIEW_DEFAULT,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
@@ -6824,6 +6868,7 @@ export {
   bldLayerSpecsFor,
   bldLayerVisibilityAt,
   bldLiveDecision,
+  bldMaxDrawnFor,
   bldMaxDrawnOf,
   bldMetersPerCssPixel,
   bldPartsVisibleAt,

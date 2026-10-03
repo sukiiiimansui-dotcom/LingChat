@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-10-03-v94";
+      const BUILD = "ws3dshow-2026-10-03-v95";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -927,6 +927,10 @@
        *                    不给 ⇒ `bld-ext` 的 filter **逐字段等于 App 侧那一条**
        */
       function bldTierSpecs(P, extExtra) {
+        /* 🎨 **取色只有一份**：足迹层（`fill-color`）与三条挤出层（`fill-extrusion-color`）**共用同一个
+           表达式对象** —— "远了是足迹、近了是立体"的颜色口径同一个字节都不会漂（各写一份迟早一片楼两种色）。
+           ⚠️ 这个表达式就是下面 `paint` 里原来那一行的**原文**，只是提出来当共享项（与 App 侧同一处置）。 */
+        const bldColor = ["coalesce", ["get", "color3d"], P.rampColor];
         /* 屋顶系两层共用的 paint：颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗），
            底座读 `h_base`（屋顶件不是从地面长出来的）—— 与 App 侧 `detailPaint` 逐字段相同。 */
         const paint = {
@@ -934,13 +938,27 @@
           "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
           "fill-extrusion-opacity": P.opacity,
           "fill-extrusion-vertical-gradient": P.vgrad,
-          "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
+          "fill-extrusion-color": bldColor,
         };
         const z0 = ["==", ["coalesce", ["get", "zt"], 0], 0];
-        return [
+        /* 🌆 **2026-10-03 按 zoom 分层：足迹<14 / 立体≥14**（机主拍板：「z<14 画"足迹"（平面，看得见
+           城市肌理）；z≥14 画立体（严格档 100 栋）」）：
+             · `bld-foot`：`fill` + 同一个 source，`maxzoom` = 共享分界线 ⇒ **z ≥ 14 整层不可见**；
+             · `bld-ext` 的 `minzoom` 从 `bldMinzoomSpec()`(11) 抬到**同一条分界线** ⇒ 立体只在 z≥14 出现；
+             · 分界线读不出来（`null`）⇒ **不加足迹层、`bld-ext` 沿用旧起点**（照旧画，不拿猜的数顶上）；
+             · 足迹层的 filter 与 `bld-ext` **同一份**（含 `?win=1` 那一路的互补条件）⇒ 两层的要素集一致。 */
+        const footZoom = bldFootprintMaxZoom();
+        const footSpecs = (typeof footZoom === "number") ? [{
+          id: "bld-foot", type: "fill", source: "bld",
+          minzoom: bldMinzoomSpec(),
+          maxzoom: footZoom,
+          filter: extExtra ? ["all", z0, extExtra] : z0,
+          paint: { "fill-color": bldColor, "fill-opacity": bldFootprintOpacity() },
+        }] : [];
+        return footSpecs.concat([
           {
             id: "bld-ext", type: "fill-extrusion", source: "bld",
-            minzoom: bldMinzoomSpec(),
+            minzoom: (typeof footZoom === "number") ? footZoom : bldMinzoomSpec(),
             filter: extExtra ? ["all", z0, extExtra] : z0,
             paint: { ...paint },
           },
@@ -956,7 +974,7 @@
             filter: ["==", ["get", "zt"], 2],
             paint: { ...paint },
           },
-        ];
+        ]);
       }
 
       /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
@@ -1106,6 +1124,44 @@
         } catch (e) { return null; }
       }
       /**
+       * 🌆 **足迹档 / 立体档的分界线**（共享真源 `wsBldBudget.WS_BLD_FOOTPRINT_MAXZOOM`，2026-10-03 按 zoom 分层）。
+       *
+       * 与 `bldDetailTierZoom(1)`（女儿墙那一档）**是同一条分界线**（共享真源里只有那一个 14）
+       * ⇒ 共享符号读不到时**退回它**，页面里**绝不写死第二个 14**；两个都读不到 ⇒ `null`
+       * （调用方**不加**足迹层、立体层沿用 `bldMinzoomSpec()` = 改造前的形状 —— 宁可退回旧形状，也不拿猜的数乱画）。
+       */
+      function bldFootprintMaxZoom() {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.WS_BLD_FOOTPRINT_MAXZOOM === "number") return T.WS_BLD_FOOTPRINT_MAXZOOM;
+        } catch (e) { /* 落下面那条 */ }
+        return bldDetailTierZoom(1);
+      }
+      /** 🌆 足迹层不透明度的**降级兜底**（只在共享符号读不到时用：旧产物 / vendor 还没到）。
+       *  正常路径永远用共享真源 `WS_BLD_FOOTPRINT_OPACITY` ⇒ 这个数**不是第二份真源**，
+       *  只是"旧产物下页面还能画、观感与真源同一个量级"的兜底（与 `bldMinzoomSpec()` 那个 24 同一处置）。
+       *  它同时进了 `BLD_CONSTS` ⇒ 缺符号会被 `ensureVendor()` 带版本号重取治好。 */
+      const BLD_FOOT_OPACITY_FALLBACK = 0.35;
+      /** 🌆 足迹层的不透明度（共享常量优先；读不到 ⇒ 上面那个兜底，**永不返回 undefined**） */
+      function bldFootprintOpacity() {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.WS_BLD_FOOTPRINT_OPACITY === "number") return T.WS_BLD_FOOTPRINT_OPACITY;
+        } catch (e) { /* 落兜底 */ }
+        return BLD_FOOT_OPACITY_FALLBACK;
+      }
+      /** 🏙🌆 **档位 × zoom → 栋数上限**（共享真源 `wsBldBudget.bldMaxDrawnFor`，经 vendor 到手）。
+       *  页面**没有档位 UI** ⇒ 恒严格档（`"lean"`，与 App 的默认档同一个值），按 zoom 分档交给真源
+       *  （z<14 足迹档走宽档 4000 / z≥14 立体档严格 100）—— 页面**不写** 100/4000、也不写 14。
+       *  符号读不到（旧产物）⇒ `undefined` ⇒ 规则模块退回严格档 100（= 改造前的行为，**不是**放开）。 */
+      function bldMaxDrawnAt(z) {
+        try {
+          const T = window.__TF__ || {};
+          if (typeof T.bldMaxDrawnFor === "function") return T.bldMaxDrawnFor("lean", z);
+        } catch (e) { /* 落 undefined */ }
+        return undefined;
+      }
+      /**
        * 🔭 **"1 米楼高 = 多少屏幕像素"**（共享真源 `wsBldBudget.bldPxPerMeter`，经 vendor 到手）。
        *
        * 双预算的成本模型（Σ投影 px²）要用它：`map.project` 是**地面**投影、不带高度，
@@ -1232,6 +1288,10 @@
       const NAME_NEEDED = ["createNameLayer", "nameVerdictLine", "planZoneNames", "buildingCardData", "cardComposeTransform"];
       /** 名字层要的**常量**（对象/数组，不是函数）—— 只查在不在，不查是不是函数 */
       const NAME_CONSTS = ["LABEL_MOTION", "CARD_MOTION"];
+      /** 🌆 楼房分层要的**常量**（2026-10-03「按 zoom 分层」）——**同一条纪律**：只查 `undefined`。
+       *  `WS_BLD_FOOTPRINT_MAXZOOM` = 足迹/立体的分界线（14）· `WS_BLD_FOOTPRINT_OPACITY` = 足迹层不透明度。
+       *  ⚠️ 它们**绝不能**进 `FEED_NEEDED`/`NAME_NEEDED`（那两张表查 `typeof === "function"` ⇒ 会把好模块判成缺）。 */
+      const BLD_CONSTS = ["WS_BLD_FOOTPRINT_MAXZOOM", "WS_BLD_FOOTPRINT_OPACITY"];
       const FEED_NEEDED = ["createBundleFeed", "bundleCountsLine", "bundleCellUrl", "loadBundleIndex",
         /* 🎨🏙 2026-09-26 抽真源后**本页新增依赖的符号**（挑选/冻结编排 + 美术取参）：
            它们是**函数**（`tfMissing()` 的判据就是 `typeof === "function"`，常量**不能**进这张表）。
@@ -1241,8 +1301,10 @@
            · `bldDetailTierZoom` —— 三条挤出层的分档阈值（14/16）真源，页面**不许**写死；
            · `bldPxPerMeter` —— "1 米楼高 = 多少屏幕像素"（`sin(pitch)/metersPerPixel`），
              双预算的成本模型要用它，两页**必须同一把尺子**。
-           ⚠️ 那两个阈值本身是**常量**，所以只查上面这两个函数在不在（常量不进这张表）。 */
-        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget"];
+           ⚠️ 那两个阈值本身是**常量**，所以只查上面这两个函数在不在（常量不进这张表）。
+         🏙🌆 2026-10-03「按 zoom 分层」本页又新增依赖一个**函数**：`bldMaxDrawnFor`（档位 × zoom → 栋数上限）。
+            它是**函数** ⇒ 可以进这张表（常量那两个走下面的 `BLD_CONSTS`）。 */
+        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget", "bldMaxDrawnFor"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
         "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",
@@ -1276,11 +1338,13 @@
       function tfMissing(mod) {
         /* ⚠️ 常量（如 `LOD_FAR_ZOOM`）**不能进这张表** —— 判据是 `typeof === "function"`，
            常量会被永远判成"缺"，把好模块说成坏的（假报和漏报一样贵）。
-           🆕 名字层那两个常量走 `NAME_CONSTS`（只查 `undefined`）。 */
+           🆕 名字层那两个常量走 `NAME_CONSTS`（只查 `undefined`）；
+           🌆 楼房分层那两个常量走 `BLD_CONSTS`（同一条纪律；两张表在这里合并成一份判据）。 */
+        const consts = NAME_CONSTS.concat(BLD_CONSTS);
         const need = (LOD_ON ? TF_NEEDED.concat(LOD_NEEDED) : TF_NEEDED).concat(NAME_NEEDED, FEED_NEEDED);
-        if (!mod) return need.slice().concat(NAME_CONSTS.slice());
+        if (!mod) return need.slice().concat(consts.slice());
         return need.filter(function (k) { return typeof mod[k] !== "function"; })
-          .concat(NAME_CONSTS.filter(function (k) { return typeof mod[k] === "undefined"; }));
+          .concat(consts.filter(function (k) { return typeof mod[k] === "undefined"; }));
       }
       /**
        * 拿到"能用的" vendor 模块：够用就用现有的；缺符号就用**带版本号的 URL** 重取一次。
@@ -1705,7 +1769,14 @@
             if (o.op === "add-roads") { void applyRoads(); }
             else if (o.op === "move" && o.id && map.getLayer(o.id)) map.moveLayer(o.id, o.before);
             roadHeals++;
-            errs.push("roadHeal: " + o.why);
+            /* 🔴 2026-10-03：自愈**成功**的那一条**不进 `errs`**。
+               为什么：`errs` 是"这一屏出错了"的口径（闸里钉着「?lod=1：页面 errs 为空」，
+               还有一条专门守"瓦片级失败不许把 errs 淹掉"）。而这里是**修好了**——
+               证据就是 `roadHeals++` 计数 + HUD 的 `roadCountHud(…, roadHeals)` 会把次数写出来。
+               塞进 errs 的后果实测过：新增 `bld-foot` 后自愈每轮都要挪 12 条路网 ⇒ errs 里堆 3 条
+               "roadHeal: 路网被「足迹层」压在上面"，把两条真闸判红（红的是"报错口径"，不是功能）。
+               失败分支（下面那行 `roadHeal fail`）**照旧进 errs**——那个才是真错。 */
+            void o.why;
           } catch (e) { errs.push("roadHeal fail " + e); }
         }
         if (ops.length) { try { renderRoadHud(); } catch (e) { /* 忽略 */ } }
@@ -3352,6 +3423,11 @@
                     },
                     pxPerMeter: bldPxPerMeterAt(z, center ? Number(center.lat) : 0, pitch),
                   },
+                  /* 🏙🌆 **栋数上限 = 档位 × zoom**（2026-10-03 按 zoom 分层：`z<14` 足迹档走宽档 4000 /
+                     `z≥14` 立体档严格 100）。页面**没有档位 UI** ⇒ 恒严格档；换算是**共享真源**
+                     `bldMaxDrawnFor`（页面不写 100/4000、也不写 14，与 App 侧同一个入口）。
+                     符号读不到（旧产物）⇒ `undefined` ⇒ 规则模块退回严格档 100（改造前的行为）。 */
+                  maxDrawn: bldMaxDrawnAt(z),
                   minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
                 });
               }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });

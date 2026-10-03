@@ -52,6 +52,10 @@ import type { BldPickStats } from "./wsBldPickStore"
 /* 🏙 双预算挑楼的**统计类型**（真源在 `wsBldBudget`）—— 落图通路对两种口径一视同仁：
    它只把挑出来的那批交给 `dress()`、把 `stats` 转给 `onPicked()`，**不解读**统计里的字段。 */
 import type { BldBudgetStats } from "./wsBldBudget"
+/* 🌆 **足迹档的分界线**（2026-10-03「按 zoom 分层」）：`z < WS_BLD_FOOTPRINT_MAXZOOM` 画足迹
+   （`bld-foot`，平面）、`z ≥ 14` 画立体（`bld-ext`，挤出）—— 与上面的屋顶系阈值**同一条分界线**
+   （那个 14 全项目只有一份，在 `wsBldBudget` 里引用 `wsBldDetailTiers`）。 */
+import { WS_BLD_FOOTPRINT_MAXZOOM } from "./wsBldBudget";
 
 /** 两种挑楼口径的统计（按格 / 双预算）—— 落图通路只转交，不解读 */
 export type BldPickAnyStats = BldPickStats | BldBudgetStats;
@@ -115,18 +119,40 @@ export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number)
 /* ══ ② 楼房图层规格 ═══════════════════════════════════════════════════════════════ */
 
 /**
- * 楼房那几条图层（`bld-ext` / `bld-roof` / `bld-equip` / `bld-line`；2026-10-02 起按 zoom 分三条挤出层）。
+ * 楼房那几条图层（`bld-foot` / `bld-ext` / `bld-roof` / `bld-equip` / `bld-line`；
+ * 2026-10-02 起按 zoom 分三条挤出层，**2026-10-03 起再加一条足迹层**）。
  * 颜色/描边/色阶**全从主题取**（`theme` / `themeTier`），这里不写死任何色号。
  */
 /**
- * 🏢 **楼房矢量层从哪一档开始画**（= `bld-ext` / `bld-line` 的 minzoom）。
+ * 🏢 **楼房矢量层从哪一档开始画**（= `bld-foot` / `bld-line` 的 minzoom）。
  * 🔴 抽成共享常量的原因（2026-09-25 真机事故）：这个数以前在 specs 里写 12.8、而页面"挑楼"的门槛
  * 另写了 14 ⇒ 机主停在 **13.5 级**时**两不靠**：矢量楼在画（≥12.8）、封顶却没生效（<14）
  * ⇒ 12,000 栋全画出来 = 他截图里那片"黑点/还这么多"。**阈值只许有一份。**
  * 2026-09-25 二次更正（机主「**小范围一个区块最高 100 栋**」）后**统一到 14**：
  * `z < 14` 由**预渲染瓦片**负责（瓦片不透明度也延到 14 才归零），`z ≥ 14` 才画矢量楼并按区块封顶。
+ * 2026-10-03 **按 zoom 分层**后它的语义变成"**楼房矢量**（先足迹、后立体）从这一档开始"：
+ *   · `11 ≤ z < 14` ⇒ **足迹层** `bld-foot`（平面 `fill`，看得见城市肌理）；
+ *   · `z ≥ 14` ⇒ **立体层** `bld-ext`（挤出）。
+ * ⇒ **"瓦片归零点 = 矢量楼起点"那条三向不变量仍然成立**（`ws_lod_selftest.mjs` 盯着 11/11/11），
+ *   变的只是"11~14 这一段画的是什么形状"。
  */
 export const WS_BLD_VECTOR_MINZOOM = 11;   /* ← 2026-09-26 与 `LOD_NEAR_ZOOM` 对齐（机主：楼要一直显示） */
+
+/**
+ * 🌆 **足迹层的不透明度**（`bld-foot` 的 `fill-opacity`；2026-10-03「按 zoom 分层」那一笔）。
+ *
+ * 取值理由（不是拍脑袋 —— 机主的原话是"平面，**看得见城市肌理**"）：
+ *  ① **看得见**：z12 时一栋 30m 楼在屏上只有 0.9px、z13 只有 1.8px（1280px 视口实测表，见
+ *     `wsBldBudget` 文件头）⇒ 足迹是"这一片有没有城市、肌理是方格还是自由生长"的**唯一线索**，
+ *     低于 0.3 在一张亮底图上就快读不出来了；
+ *  ② **不压住路网/水绿**：路网层是**插在 `bld-ext` 之前**的（`flushRoadsStore` 的 `before` +
+ *     `wsLayerOrder.planEnsureRoadOrder` 的事后断言）⇒ 路恒在足迹**之上**；水/绿地是底图那批层，
+ *     0.35 的覆盖不会把它们压成一片死色（同一量级的先例：代拍页 `bld-contact` 接触阴影 = 0.35）；
+ *  ③ **它是一个常量、不是表达式**：足迹档**只在 z<14 出现**（`maxzoom` 那一刀），
+ *     zoom 插值在这里没有意义，还会多一个"低 zoom 越画越淡"的不确定观感；
+ *  ④ **只跟图层走**：不掺帧率/设备/候选数（机主红线：不许自动降级）。
+ */
+export const WS_BLD_FOOTPRINT_OPACITY = 0.35;
 
 /** 🖊 描边从哪一档才开始**可见**：小比例下每栋只有 1~3px，深色描边会把填充整个盖住（"灯芯绒"）。
  *  与 AI 绘制管线里那条经验同源（z12 小楼不许描边）；这里用 zoom 插值让线从 12.8 的 0 平滑长到 15 的正常宽。 */
@@ -264,20 +290,27 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
   const th = theme;
   const P = bldArtParamsOf(th, { art: opts.art ?? 1, look: opts.look ?? 1 });
 
-  /* ── 🏢 **按 zoom 分档的三条挤出层**（机主 2026-10-02 拍板的 B1）────────────────────────
-     档位来自 `wsBldDetailTiers`（唯一真源）：0 = 主体/裙楼/塔楼/退台（**一直画**）·
-     1 = 女儿墙（`z ≥ WS_BLD_DETAIL_ROOF_ZOOM` = 14）· 2 = 设备箱 + 天线（`z ≥ WS_BLD_DETAIL_EQUIP_ZOOM` = 16）。
+  /* ── 🏢🌆 **按 zoom 分档的楼房层**（2026-10-02 B1 三条挤出层 + 2026-10-03 足迹层）──────
+     档位来自 `wsBldDetailTiers`（唯一真源）：0 = 主体/裙楼/塔楼/退台 · 1 = 女儿墙
+     （`z ≥ WS_BLD_DETAIL_ROOF_ZOOM` = 14）· 2 = 设备箱 + 天线（`z ≥ WS_BLD_DETAIL_EQUIP_ZOOM` = 16）。
+     2026-10-03 **再按同一条分界线分"画法"**：`z < WS_BLD_FOOTPRINT_MAXZOOM`(14) ⇒ 足迹（`fill`）·
+     `z ≥ 14` ⇒ 立体（`fill-extrusion`）—— 机主原话：「z<14 画"足迹"（平面，看得见城市肌理）；
+     z≥14 画立体（严格档 100 栋）」。
 
-     🔴 **闸是 `minzoom`**：MapLibre 的 `layout.visibility` 在 v6.10.0 **不接受 zoom 表达式**
+     🔴 **闸是 `minzoom` / `maxzoom`**：MapLibre 的 `layout.visibility` 在 v6.10.0 **不接受 zoom 表达式**
      （vendor 里那份 style-spec 的 `parameters` 只有 `global-state`；写了 zoom 表达式 ⇒ **整份 style
-     校验失败 ⇒ 地图永不 load**，这个坑项目踩过）。`minzoom` 是官方"按 zoom 开关整层"的那一档，
-     语义上就是"z 低于阈值 ⇒ 该层不可见 ⇒ **0 顶点 / 0 draw call**"（离线判定 `bldLayerVisibilityAt`）。
-     ⚠️ **固定阈值**：这两个数只跟 zoom 走，**不看帧率、不看设备**（机主红线：不许性能档位自动降级）。
+     校验失败 ⇒ 地图永不 load**，这个坑项目踩过）。`minzoom`/`maxzoom` 是官方"按 zoom 开关整层"的那一档，
+     语义上就是"z 落在区间外 ⇒ 该层不可见 ⇒ **0 顶点 / 0 draw call**"（离线判定 `bldLayerVisibilityAt`）。
+     ⚠️ **固定阈值**：这几个数只跟 zoom 走，**不看帧率、不看设备**（机主红线：不许性能档位自动降级）。
 
      分层筛选靠要素上算好的 `zt`（0/1/2），**不在 filter 里拼表达式** —— 表达式报错是静默的
      （本项目为此付过代价）。`zt` 缺席（没上妆的要素）**按第 0 档算** ⇒ 照旧画，绝不"少画楼"。 */
   const tierFilter = (t: 0 | 1 | 2): unknown[] =>
     t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+  /** 🎨 **楼体取色（全项目唯一一份表达式）**：要素自带的 `color3d` 优先，缺了才走主题色阶。
+   *  足迹层（`fill-color`）与三条挤出层（`fill-extrusion-color`）**共用同一个数组对象** ⇒
+   *  "远了是足迹、近了是立体"的**颜色口径同一个字节都不会漂**（各写一份迟早变成一片楼两种色）。 */
+  const bldColorExpr: unknown[] = ["coalesce", ["get", "color3d"], P.rampColor];
   /** 屋顶系两条层共用的 paint：颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗：
    *  女儿墙偏亮、设备箱偏深），底座读 `h_base`（屋顶件不是从地面长出来的）。 */
   const detailPaint = {
@@ -285,7 +318,29 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
     "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
     "fill-extrusion-opacity": P.opacity,
     "fill-extrusion-vertical-gradient": P.vgrad,
-    "fill-extrusion-color": ["coalesce", ["get", "color3d"], P.rampColor],
+    "fill-extrusion-color": bldColorExpr,
+  };
+  /* ── 🌆 **足迹层**（`bld-foot`，2026-10-03 机主拍板：「z<14 画"足迹"（平面，看得见城市肌理）」）──
+     与立体层**同一个 source、同一批要素**，差别只在画法与 zoom 区间：
+       · `fill`（贴地平面）而不是 `fill-extrusion`；
+       · `maxzoom = WS_BLD_FOOTPRINT_MAXZOOM`(14) ⇒ **z ≥ 14 整层不可见**（MapLibre 语义：
+         `minzoom ≤ z < maxzoom`；这一档由 `bld-ext` 接手）——闸是 `maxzoom` 而不是 `visibility`，
+         理由与屋顶系那两条层完全相同（`layout.visibility` 不接受 zoom 表达式）；
+       · `minzoom = WS_BLD_VECTOR_MINZOOM`(11)：与"楼房矢量从 11 起"那条三向不变量同一个起点；
+       · `filter = tierFilter(0)`：只画主体（z<14 时屋顶系那两档连要素都不生成，见 `dressBase`）。
+     🔴 **层序**：它是 specs 数组的**第一条** ⇒ `applyBuildingsTo()` 里那句 `addLayer(l, before)`
+     先加它（`before` 取法与同文件其它层**逐字相同**：场景计划 → `ref` 注记层兜底，没有第二套）
+     ⇒ 它落在 `bld-ext` 以及**后插进来的路网**之下 —— 足迹是地面上的东西，压住路网/注记就成了
+     "一层半透明脏膜"。 */
+  const footLayer = {
+    id: "bld-foot", type: "fill", source: "bld",
+    minzoom: WS_BLD_VECTOR_MINZOOM,
+    maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+    filter: tierFilter(0),
+    paint: {
+      "fill-color": bldColorExpr,
+      "fill-opacity": WS_BLD_FOOTPRINT_OPACITY,
+    },
   };
   const roofLayer = {
     id: "bld-roof", type: "fill-extrusion", source: "bld",
@@ -317,12 +372,14 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
      由 `ws_pages_consistency.mjs` 的 ④a/④b 盯着。
      ⚠️ `bld-ext` 从 2026-10-02 起也读 `color3d`/`h_base`：默认档的数据**现在也拆件**
      （`dressBase` 走 `mode:"roof"`），主体与屋顶件必须是**同一条取色**（各读各的会一片楼两种色）。
-     ⇒ 两个档位的 `bld-ext` 规格因此**逐字段相同**，这是有意的。 */
+     ⚠️ 2026-10-03 **按 zoom 分层**：`bld-foot`（足迹，z<14）打头、`bld-ext` 的 `minzoom` 抬到
+     `WS_BLD_FOOTPRINT_MAXZOOM`(14)（立体只在 z≥14 出现）；屋顶系两条不动。 */
   if ((opts.mode ?? "base") === "base") {
     return [
+      footLayer,
       {
         id: "bld-ext", type: "fill-extrusion", source: "bld",
-        minzoom: WS_BLD_VECTOR_MINZOOM,
+        minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
         filter: tierFilter(0),
         paint: { ...detailPaint },
       },
@@ -334,11 +391,12 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
 
   /* ── ② `parts` 档（`?bld=2` 拆件）：**与代拍页 `?bld=2` 同形** ────────────────────
      拆件档比默认档多出来的只是**数据**（裙楼/塔楼/退台/窗格），图层这边不再需要第二套 paint
-     ⇒ 两档共用上面那三条层，只有 `bld-win`（`?win=1`）是**代拍页独有**的一层，不进本函数。 */
+     ⇒ 两档共用上面那几条层，只有 `bld-win`（`?win=1`）是**代拍页独有**的一层，不进本函数。 */
   return [
+    footLayer,
     {
       id: "bld-ext", type: "fill-extrusion", source: "bld",
-      minzoom: WS_BLD_VECTOR_MINZOOM,
+      minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
       filter: tierFilter(0),
       paint: { ...detailPaint },
     },

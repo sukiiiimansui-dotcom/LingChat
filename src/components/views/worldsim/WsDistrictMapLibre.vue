@@ -174,8 +174,11 @@
            可数一行：已取 x 格 / 包外 y / 失败 z + 仓库 N 栋（**数不出来不写 0**）。
            `title` 是真源判词（`wsScene.bldVerdictText`）——"包外"必须与"这里没有楼"分得开。 -->
       <span v-if="stats.bldBundle" :title="stats.bldVerdict">{{ stats.bldBundle }}</span>
-      <!-- 🏙 **挑楼口径那一行**（2026-10-02 B2：双预算 = Σ投影 px² + Σ顶点，两个**固定常量**）。
-           原文由共享真源 `wsBldBudget.stats.why` 产出（宿主不许再拼第二份）。
+      <!-- 🏙 **挑楼口径那一行**（2026-10-02 B2：双预算 = Σ投影 px² + Σ顶点，两个**固定常量**；
+           2026-10-03 追加第三个上限：**栋数** —— 默认严格档 100 栋，用户在顶栏可切"多楼房模式"）。
+           判词原文由共享真源 `wsBldBudget.stats.why` 产出（宿主不许再拼第二份）；
+           宿主只在最前面加"现在哪一档 / 上限几栋 / 到没到上限"（`bldPickLine`）——
+           机主要能一眼看出"这么少是因为我设了 100 栋"，还是"这一带本来就没几栋"。
            机主判"卡不卡"时：这一行给**可数**的那一半（画了几栋 / 花了多少像素与顶点），
            另一半（帧率）看同一栏的 `fps`。 -->
       <span v-if="stats.bldPick" :title="stats.bldPick">{{ stats.bldPick }}</span>
@@ -339,8 +342,13 @@ import {
   type BldPickStats,
 } from "./wsBldPickStore";
 /* 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2）：成本模型/两个固定常量/确定性排序全在那一份里；
-   这里只取"1 米楼高 = 多少屏幕像素"这把尺子（**两页必须同一把**，所以公式也只有那一份）。 */
-import { bldPxPerMeter, type BldBudgetBounds, type BldBudgetStats } from "./wsBldBudget";
+   这里只取"1 米楼高 = 多少屏幕像素"这把尺子（**两页必须同一把**，所以公式也只有那一份）。
+   🆕 2026-10-03 起还要取 `bldMaxDrawnOf` —— 机主拍板的**严格档（默认 100 栋）+ 多楼房模式开关**：
+   档位存在 `wsBldMode`，**上限是多少**只有 `wsBldBudget` 那一份（宿主不写任何数字）。 */
+import { bldMaxDrawnOf, bldPxPerMeter, type BldBudgetBounds } from "./wsBldBudget";
+/* 🏙 **楼栋档位的存储**（`localStorage["wsm:v1:bldmode"]`；默认严格档）——
+   顶栏那颗 chip（`WsCityEntry.vue`）与本组件读的是**同一个模块级单例 ref** ⇒ 点一下这里就收到。 */
+import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
 import { bldArtParamsOf, parseArtParam, type BldArtThemeLike } from "./wsArtParams";
 /* 🏙 挑选的**入参类型**（`wsBuildingPick` 的纯函数类型）；实际编排在上一行那个 store 里 */
 import type { PickBounds, PickFeature } from "./wsBuildingPick";
@@ -360,6 +368,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     flushBldStore,
     flushRoadsStore,
     scenePlanConsumed,
+    type BldPickAnyStats,
   } from "./wsDistrictScene";
   /* 🧱 **累积式要素仓库 + 离线格数学**（`createFeatureStore` / `*BundleCellsForView`）：
      机主「之前的没了…必须保证视野内完整」那条。合并/淘汰/格键的规则只有那一份，这里只调用。 */
@@ -1039,7 +1048,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     bldMode: 1,
     /** 🏢 拆件档拆出来几个要素（`ShapeCounts.parts`；默认档也会拆屋顶系 ⇒ 要素数 ≥ 栋数） */
     parts: 0,
-    /** 🏙 **双预算挑楼那一行**（真源 `wsBldBudget.stats.why`：视野内 N 栋 / Σ投影 px² / Σ顶点 / 谁拦住了）
+    /** 🏙 **挑楼那一行**（真源 `wsBldBudget.stats.why`：视野内 N 栋 / Σ投影 px² / Σ顶点 / 谁拦住了；
+     *  宿主在最前面加"用户现在选的是哪一档 + 栋数上限 + 有没有到上限"，见 `bldPickLine`）
      *  —— 机主在真机上判"卡不卡"时，这一行是**可数**那一半的证据（另一半是 fps） */
     bldPick: "",
     /** 🛣 离线路网包那一行（同式） */
@@ -3268,6 +3278,31 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }
 
   /**
+   * 🏙 **楼栋档位**（机主 2026-10-03 拍板：默认严格档 + 一个"多楼房模式（不推荐）"开关）。
+   * 模块级单例 ⇒ 顶栏那颗 chip（`WsCityEntry.vue`）改了这里立刻看得到（下面的 `watch` 重挑重绘）。
+   * 🔴 档位到上限的换算只有一份（`bldMaxDrawnOf`），本组件**不写 100 / 4000 这两个数**。
+   *
+   * ⚠️ **别名是刻意的**：本文件里早就有个 `WS_BLD_MODE`（**形体档** `?bld=2`：楼长什么样），
+   *    这里是**另一件事**（**画几栋**：lean/many）—— 两个都叫 `bldMode` 迟早有人改错那一个。
+   */
+  const { mode: bldDrawMode } = useWsBldMode();
+
+  /**
+   * 🏙 **HUD 那一行的档位前缀**（机主验收要能一眼看出"现在按哪一档在挑、是不是被栋数拦住的"）。
+   * 🔴 判词本体**仍然只由真源给**（`wsBldBudget.stats.why`，宿主不许再拼第二份）——
+   *    这里只加"用户现在选的是哪一档"这件事：档位是**用户的选择**，不属于挑楼规则，
+   *    所以它不该写进 `why`（写进去会让页面与 App 的判词对不上）。
+   */
+  function bldPickLine(s: BldPickAnyStats): string {
+    /* `?bldn=` 那条 A/B 老路（按固定经纬格挑）**没有档位这回事**：原样转交它自己的判词
+       （那个口径的"画几栋"由每块上限决定，写"严格档 ≤100 栋"就是撒谎）。 */
+    if (!("maxDrawn" in s)) return s.why;
+    const many = bldDrawMode.value === WS_BLD_MODE_MANY;
+    return (many ? "🏙 楼房 多（不推荐）" : "🏙 楼房 严格档") + " ≤" + s.maxDrawn + " 栋" +
+      (s.countBound ? "（已到栋数上限）" : "") + " · " + s.why;
+  }
+
+  /**
    * 🧱 **区块/数据格边长（度）** —— 与代拍页 `bldCellDeg()` **同一口径**：
    * 包自报的 `index.cellSize`（`feed.facts().cellDeg`）优先，读不到才退回 0.05（老包 / 索引还没读到）。
    * 🔴 绝不写死：分片包里格是 0.01°，写死 0.05 会让"同一个子格"的键两页对不上。
@@ -3288,6 +3323,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   function bldFlush(why: string): void {
     if (!alive) return;
+    bldFlushedOnce = true;
     flushBldStore<BundleBuildingFeature>(
       {
         features: () => bldStore.features(),
@@ -3352,12 +3388,21 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                   },
                   pxPerMeter: bldPxPerMeter(z, centerLat, pitch),
                 },
+                /* 🏙 **栋数硬上限**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"）：
+                   与上面三件相机参数同一个道理 —— 在**调用这一刻**现读档位，
+                   否则用户在顶栏切了档，闭包还拿着旧档（表现就是"点了没反应"）。 */
+                maxDrawn: bldMaxDrawnOf(bldDrawMode.value),
                 minInView: WS_BLD_INVIEW,
               });
             };
           } catch { return null; }
         })(),
-        onPicked: (s) => { bldPickWhy = s.why; stats.bldPick = s.why; scheduleBundleHud(); },
+        onPicked: (s) => {
+          const line = bldPickLine(s);
+          bldPickWhy = line;
+          stats.bldPick = line;
+          scheduleBundleHud();
+        },
         beforeDraw: (why0) => {
           bldFlushWhy = why0;
           scheduleBundleHud();
@@ -3370,6 +3415,26 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let bldFlushWhy = "";
   /** 🏙 上一次"近景挑楼"的口径（机主要 100 栋/视野）——面板回证用，没挑过就是空串 */
   let bldPickWhy = "";
+  /** 这一屏**至少落过一次楼图**了（档位开关只在它之后才补一次重挑重绘，见下面的 `watch`） */
+  let bldFlushedOnce = false;
+
+  /**
+   * 🏙 **档位一变 ⇒ 立刻重挑一次 + 重绘**（机主 2026-10-03：「用户可选择是否启用多楼房模式」，
+   * 点了必须真的生效，不能等下一次 `moveend`）。
+   *
+   * 走的就是本组件**既有**的那条通路，一行新机制都没有：
+   *   `bldFlush("bldmode")` → 真源 `flushBldStore()` → 里面的 `pick` 闭包**再跑一次**
+   *   （`maxDrawn` 在那里现读档位）→ `pickBuildingsByBudget` 重挑 → `setData` 重绘
+   *   → `onPicked` 回填 HUD（`bldPickLine` 会带上新档位）。
+   * ⚠️ 与 `moveend`/`zoomend` 那条 600ms 去抖**不同**：这是**用户点的一下**，
+   *    必须当场看到变化（去抖只会让它"点了像是没反应"）。
+   * ⚠️ `bldFlushedOnce` 这道闸：地图还没建好时 `bldFlush` 会落到 2D 降级那支
+   *    （`onNoMap` → `draw2d`），那属于初始化本身要干的事，不归这个开关管。
+   */
+  watch(bldDrawMode, () => {
+    if (!alive || !bldFlushedOnce) return;
+    bldFlush("bldmode");
+  });
 
   /**
    * 🧱 **落图（路）**：仓库并集 → **一次 `setData`**（首次建源建层）。

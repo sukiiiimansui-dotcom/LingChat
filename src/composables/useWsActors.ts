@@ -25,6 +25,7 @@ import worldMapApi, { isTauriRuntime } from "@/api/services/worldMap";
 import { loadWorldCharacters } from "@/composables/useWorldMapBindings";
 import { useGameStore } from "@/stores/modules/game";
 import { EMOTION_CONFIG_EMO } from "@/controllers/emotion/config";
+import { previewCharAssetUrl } from "@/components/views/worldsim/wsPreviewAssets";
 import {
   K_ME_AVATAR,
   checkMeAvatarData,
@@ -95,9 +96,16 @@ async function avatarUrlOf(folder: string, emotion: string, clothes: string): Pr
   const key = `${folder}|${emotion}|${clothes}|small`;
   const hit = avatarCache.get(key);
   if (hit !== undefined) return hit;
-  // 纯 web 预览（含 web-mock）：Tauri 命令一律不存在 —— 直接画占位，
-  // 别去 invoke 一个注定失败的 mock（与 worldMap.ts 里 isTauriRuntime() 的用法同款纪律）
-  if (!folder || !isTauriRuntime()) return "";
+  // 纯 web 预览（含 web-mock）：Tauri 命令一律不存在 —— **别去 invoke 一个注定失败的 mock**
+  // （与 worldMap.ts 里 isTauriRuntime() 的用法同款纪律）。但也不再直接画占位：
+  // 2026-10-03 起走**预览直通** `/char/<目录>/avatar/头像.webp`（由 webdev-preview-server 只读直通官方素材），
+  // 认不出目录时 previewCharAssetUrl 会返回 ""⇒ 仍旧退回"名字首字色块"（不留 404 破图）。
+  if (!folder) return "";
+  if (!isTauriRuntime()) {
+    const u = previewCharAssetUrl(folder, "头像", clothes);
+    avatarCache.set(key, u);
+    return u;
+  }
   let url = "";
   try {
     // ① 首选角色自带的**头像小方图**（avatar/头像.webp，≈45KB）

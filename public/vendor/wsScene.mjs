@@ -4411,6 +4411,11 @@ function capBuildingsPerCell(feats, input = {}) {
 // src/components/views/worldsim/wsBldBudget.ts
 var WS_BLD_BUDGET_PX2 = 4e5;
 var WS_BLD_BUDGET_VERTS = 4e4;
+var WS_BLD_MAX_DRAWN = 100;
+var WS_BLD_MAX_DRAWN_MANY = 4e3;
+function bldMaxDrawnOf(mode) {
+  return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
 var WS_BLD_VERTS_PER_SEGMENT = 4;
 function bldRingVertices(ringPoints) {
   const n = Number(ringPoints);
@@ -4492,6 +4497,7 @@ function pickBuildingsByBudget(input) {
   const feats = input.features || [];
   const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
   const budgetVerts = Number.isFinite(input.budgetVerts) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
+  const maxDrawn = Number.isFinite(input.maxDrawn) ? Math.max(0, Math.floor(Number(input.maxDrawn))) : WS_BLD_MAX_DRAWN;
   const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
   const stats = {
@@ -4506,6 +4512,8 @@ function pickBuildingsByBudget(input) {
     vertsBudget: budgetVerts,
     px2Bound: false,
     vertsBound: false,
+    countBound: false,
+    maxDrawn,
     minInView,
     floorAdded: 0,
     overBudget: false,
@@ -4560,6 +4568,10 @@ function pickBuildingsByBudget(input) {
   const taken = new Array(cands.length).fill(false);
   let sumPx = 0, sumV = 0;
   for (let i = 0; i < cands.length; i++) {
+    if (chosen.length >= maxDrawn) {
+      stats.countBound = true;
+      break;
+    }
     const c = cands[i];
     const overPx = sumPx + c.c.px > budgetPx2;
     const overV = sumV + c.c.verts > budgetVerts;
@@ -4574,7 +4586,7 @@ function pickBuildingsByBudget(input) {
     sumV += c.c.verts;
   }
   if (chosen.length < minInView) {
-    for (let i = 0; i < cands.length && chosen.length < minInView; i++) {
+    for (let i = 0; i < cands.length && chosen.length < minInView && chosen.length < maxDrawn; i++) {
       if (taken[i]) continue;
       const c = cands[i];
       taken[i] = true;
@@ -4591,7 +4603,11 @@ function pickBuildingsByBudget(input) {
   const bd = [];
   if (stats.px2Bound) bd.push("像素");
   if (stats.vertsBound) bd.push("顶点");
-  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
+  if (stats.countBound) bd.push("栋数");
+  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
+     "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）
+     由宿主加在最前面 —— 档位是**用户的选择**，不是挑楼规则的一部分。 */
+  (stats.countBound ? " · 栋数上限 " + maxDrawn + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
   return { features: chosen.map((c) => c.f), stats };
 }
 
@@ -4685,6 +4701,9 @@ function createBldPickStore(opts) {
         screen: input.screen,
         budgetPx2: input.budgetPx2,
         budgetVerts: input.budgetVerts,
+        /* 栋数上限**原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
+           否则两处各写一份默认数，改一处漏一处） */
+        maxDrawn: input.maxDrawn,
         minInView: input.minInView
       });
     },
@@ -6753,6 +6772,8 @@ export {
   WS_BLD_INVIEW_DEFAULT,
   WS_BLD_LIVE_DEFAULT,
   WS_BLD_LIVE_VERDICT,
+  WS_BLD_MAX_DRAWN,
+  WS_BLD_MAX_DRAWN_MANY,
   WS_BLD_OUTLINE_FULL_ZOOM,
   WS_BLD_OUTLINE_STOPS,
   WS_BLD_SMALL_M2,
@@ -6803,6 +6824,7 @@ export {
   bldLayerSpecsFor,
   bldLayerVisibilityAt,
   bldLiveDecision,
+  bldMaxDrawnOf,
   bldMetersPerCssPixel,
   bldPartsVisibleAt,
   bldPointOf,

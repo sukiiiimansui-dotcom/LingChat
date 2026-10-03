@@ -88,6 +88,12 @@ export interface BldBudgetInputLite<T> {
   screen: BldScreenCtx;
   budgetPx2?: number;
   budgetVerts?: number;
+  /**
+   * 🔴 **栋数硬上限**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"）。
+   * 与 `budgetPx2`/`budgetVerts` 同一路透传：**算档位不在这里**（`bldMaxDrawnOf(mode)` 在
+   * `wsBldBudget`、档位存储在 `wsBldMode`），本模块只把宿主算好的数原样交给规则模块。
+   */
+  maxDrawn?: number;
   minInView?: number;
 }
 
@@ -288,6 +294,9 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         screen: input.screen,
         budgetPx2: input.budgetPx2,
         budgetVerts: input.budgetVerts,
+        /* 栋数上限**原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
+           否则两处各写一份默认数，改一处漏一处） */
+        maxDrawn: input.maxDrawn,
         minInView: input.minInView,
       });
     },

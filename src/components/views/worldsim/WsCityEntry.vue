@@ -19,10 +19,14 @@
   本文件只做三件：**挂地图 + 决定引导开不开 + 决定顶栏显示什么**。
 
   ## 顶栏的取舍（机主：「多余的UI，按钮」）
-  只留一行、常驻元素 ≤3（`UI-DESIGN-SPEC.md` 的浮块上限）：
+  只留一行（`UI-DESIGN-SPEC.md` 的浮块上限按**块**算，顶栏整体仍是 1 块）：
     · `←`            回主菜单（老入口也有，**不是**新造的）
     · `🌏 世界模拟 + 城市名`  唯一的状态显示（当前在用哪座城市的数据）
     · `🗺 城市数据`   打开引导 sheet（改选/重下/删除城市都在这张 sheet 里）
+    · `🏙 楼房 100 栋` 🆕 2026-10-03 **楼房档位开关**（机主：「一开始直接固定可显示的楼房数据，
+      严格限制，但是要求用户可在选择是否启用多楼房模式（不推荐）」）—— 默认严格档，
+      点一下切"多楼房模式（不推荐）"。**只在这一行里加一颗按钮**，没有再冒第四个浮块；
+      上限数字与档位分别来自真源 `wsBldBudget` / `wsBldMode`，本页不写数（见 script 里那段注释）。
   去掉的：`⋯ 抽屉`（地图主题/皮肤/深浅 —— 3D 地图自己那套主题在 HUD 的 🎨 里，
   "重新引导"被"城市数据"取代）· 未读角标 · 小地图 · 缩放按钮 · 「选别的地方」·
   DataV 的 34 个区划与「进入」按钮。
@@ -144,6 +148,21 @@
         <span class="wsce__tag">{{ cityLabel }}</span>
       </div>
       <button class="wsce__btn" type="button" @click="openGuide">🗺 {{ t("worldsim.city.data") }}</button>
+      <!-- 🏙 2026-10-03 · **楼房档位开关**（顶栏第三个 chip；机主：「严格限制…但是要求用户
+           可在选择是否启用多楼房模式（不推荐）」）。
+           · 严格档显示「楼房 100 栋」（数字由真源给），点一下进多楼房模式；
+           · 多楼房模式显示「楼房 多（不推荐）」，点一下回严格档；
+           · `title` 是**鼠标悬停/长按能看懂代价**的那一句（更卡、不推荐）；
+           · 点一下**立刻生效**：`toggleBldMode()` 改的是 `wsBldMode` 的模块级 ref，
+             地图组件 `watch(bldMode)` → 既有的 `bldFlush("bldmode")` 通路当场重挑 + 重绘。 -->
+      <button
+        class="wsce__btn wsce__btn--bld"
+        type="button"
+        :title="bldChipTitle"
+        @click="toggleBldMode"
+      >
+        {{ bldChipText }}
+      </button>
     </header>
 
     <!-- 没装过城市数据时的**常驻提示**（点了就开引导）——"少了一整座城市的楼房"这种事
@@ -243,6 +262,14 @@
      `worldsim.css` 里的令牌定义在 `.ws-root.theme-*` 下 ⇒ 根元素也必须挂 `ws-root`（见模板）。
      它是**全局皮肤**（不是 scoped）：这一屏内的 `.ws-btn` / `.ws-card` / 抽屉等一律受益。 */
   import "@/assets/styles/worldsim.css";
+  /* 🏙 2026-10-03 · **楼房档位开关**（机主：「严格限制…但是要求用户可在选择是否启用多楼房模式（不推荐）」）。
+     · **上限是多少** → 共享真源 `wsBldBudget`（`bldMaxDrawnOf(mode)`：严格档 100 / 多楼房 4000）；
+     · **用户选了哪一档** → `wsBldMode`（`localStorage["wsm:v1:bldmode"]`，默认严格档）；
+     · 本页只做**第三件事**：把两个真源读出来渲染成一颗 chip，点击转交 `toggleMode()`
+       —— 一个数字、一条规则都不在这里重写（PR 门禁 C1）。
+     点了**立刻生效**：地图组件 `watch(bldMode)` → `bldFlush("bldmode")` 当场重挑 + 重绘。 */
+  import { bldMaxDrawnOf } from "./wsBldBudget";
+  import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
 
   const router = useRouter();
   /* `te` = 词条在不在（`actionLabel` 要用：缺词条就退回 action 原样，不编词） */
@@ -256,6 +283,23 @@
   const sceneKey = ref(0);
 
   const installedCount = computed(() => installed.value.length);
+
+  /* ══ 🏙 2026-10-03 · 楼房档位（顶栏那颗 chip）══════════════════════════════════════════
+     机主要的是**"默认就严格限制、想要多自己开"**，所以这一屏只需要三行接线：
+       · 档位（`mode`）与切换（`toggleMode()`）来自 `wsBldMode`（模块级单例 ⇒ 地图那边同一份）；
+       · chip 上的**数字**来自真源 `bldMaxDrawnOf()`（本页不写 100 / 4000）；
+       · 文案来自 i18n（`worldsim.bld.*`）—— `title` 必须把"更卡、不推荐"讲出来。 */
+  const { mode: bldMode, toggleMode: toggleBldMode } = useWsBldMode();
+  /** chip 上的字：严格档「楼房 100 栋」/ 多楼房「楼房 多（不推荐）」 */
+  const bldChipText = computed(() =>
+    bldMode.value === WS_BLD_MODE_MANY ? t("worldsim.bld.many") : t("worldsim.bld.lean", { n: bldMaxDrawnOf("lean") })
+  );
+  /** 悬停/长按的说明：**点一下会发生什么 + 代价**（"多 ≠ 更好"要说在明面上） */
+  const bldChipTitle = computed(() =>
+    bldMode.value === WS_BLD_MODE_MANY
+      ? t("worldsim.bld.manyTitle", { m: bldMaxDrawnOf(WS_BLD_MODE_MANY) })
+      : t("worldsim.bld.leanTitle", { n: bldMaxDrawnOf("lean") })
+  );
 
   /* ── 🧑‍🤝‍🧑 角色（M1-1）────────────────────────────────────────────────────────
      🔴 **列表驱动 + 数量可变**：一个 id、一个名字都不写死。
@@ -802,9 +846,18 @@
   );
   const panelNeedsNote = computed(() => {
     if (!currentActor.value) return "";
-    if (currentActor.value.name !== currentRoleName.value) {
-      // ⚠️ 这行会经 `{{ needsNote }}` **原样上屏**（不是 Markdown 渲染器）⇒ 不许写 `**` 之类的记号
-      return "数不出来：心情/体力只对当前对话角色有真实输入，别人的没有来源";
+    const shown = currentActor.value.name;
+    const who = currentRoleName.value;
+    if (shown !== who) {
+      /* ⚠️ 这行会经 `{{ needsNote }}` **原样上屏**（不是 Markdown 渲染器）⇒ 不许写 `**` 之类的记号。
+         🔴 2026-10-03 机主真机验收时撞在这里：他看到"别人的没有来源"以为坏了。文案按他要求改成
+         **说清"这是谁的数、为什么没有"**，并且把"浏览器预览根本没有角色数据"这条也直说 ——
+         预览里 `init_game`/`get_game_info` 都被 web-mock 挡成空值，`gameRoles` 没人填
+         ⇒ `currentRoleName` 恒为空串，这一格在预览里**永远出不了数**（真机才有）。 */
+      if (!who) {
+        return "数不出来：这一格算的是「正在跟你对话的那个人」的心情/体力，而现在没有这个角色 —— 浏览器预览没有角色数据（真机上才有数）。";
+      }
+      return `数不出来：这一格算的是「${who}」的心情/体力，不是「${shown}」的 —— 要让它有数，先在聊天里选 ta，再点开这一格。`;
     }
     return needsResult.value.why;
   });
@@ -976,5 +1029,18 @@
     color: #ffcf8a;
     font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
     cursor: pointer;
+  }
+  /* 🏙 2026-10-03 · 顶栏第三颗（楼房档位开关）。
+     它是**常驻**的第三件，窄屏上必须先让位：`flex: 0 1 auto` + `min-width: 0` + 省略号，
+     否则「🏏 世界模拟 重庆」那一串会被挤到换行/溢出（顶栏只有一行，绝不换行）。
+     ⚠️ 只放宽**宽度**：高度仍由 `.wsce__btn` 的 `min-height: 44px` 撑着（触控目标不许缩水）。 */
+  .wsce__btn--bld {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-color: rgba(255, 207, 138, 0.42);
+    color: #ffcf8a;
   }
 </style>

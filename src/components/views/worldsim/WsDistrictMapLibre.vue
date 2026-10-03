@@ -19,7 +19,7 @@
   · 无头环境 WebGL 会在首帧后丢上下文（已知），所以"截图空白但指标正常"要如实写，不当作 bug。
 -->
 <template>
-  <div ref="host" class="ws-dml">
+  <div ref="host" class="ws-dml" :style="joyVars">
     <!-- 🔴 2026-09-21 定案：这块模板画布**只在真的走 2D 自绘降级路时才存在**。
          病根：它无条件渲染 ⇒ 在 WebGL 路下是一块**默认 300×150、透明、display:block** 的空壳，
          CSS 又把它拉满整屏 ⇒ **盖住 MapLibre 那块 3759×1287 的真地图**（机主看到的"浅色矩形"就是它）。
@@ -142,6 +142,12 @@
       </span>
     </div>
 
+    <!-- 🕹 **摇杆**（左下拇指区）—— 它是**控件**，不是信息块：常驻浮块那笔账（≤3）不被它改变，
+         也**不许**顺带加任何读数（PLAN §2.2 的验收口径）。
+         渲染判据只有一处 `joyGate`：`?joy=0` 或 2D 降级路 ⇒ 这里根本不在 DOM 里（判据 9 / 10）。
+         `@drive` 每帧**至多一次**（唯一驱动点），`@halt` 松手**恰好一次**。 -->
+    <WsJoystick v-if="joyGate.show" @drive="onJoyDrive" @halt="onJoyHalt" />
+
     <!-- 🪪 **信息卡**：点楼体 / 点名字 / 点区名 ⇒ **同一张卡**（`wsBuildingCard.buildingCardData`）。
          动效令牌全部来自 `CARD_MOTION`（一处定义）；组件里**没有** `backdrop-filter`
          （全局 `.ws-card` 类自带 `blur(var(--ws-blur))`，玻璃主题下是 10px ⇒ 一用就掉帧，所以不套它）。 -->
@@ -151,7 +157,10 @@
          `ref="hudEl"`：样式自检 JSON 里要带上 **HUD 原话**（机主看到的就是这一行，逐字带回，
          不转述 —— 转述过一次就把"地图库 8 秒内没画出第一帧"写成了"加载失败"）。 -->
     <div ref="hudEl" class="ws-dml__hud">
-      <span>{{ stats.mode }}</span>
+      <!-- 🕹 第一格是**视角那一句**：摇杆开着时在原文后面补「漫游视角（不是步行模拟）」，
+           2D 降级路补「没有相机，摇杆不适用」—— 两种情况都**必须看得见**（不许静默）。
+           ⚠️ 拼法只有一处（`joyGateOf` 给的那句），这里不许再写第二版文案。 -->
+      <span>{{ hudMode }}</span>
       <span>🏢 {{ stats.count }}</span>
       <span
         :title="`真高 ${stats.height}=OSM 真的写了 height / 层数 ${stats.levels}=levels×3 / 按类型估 ${stats.default}=**我们按 building=* 类型猜的，不是真数据**（中国 OSM 楼高覆盖率只有一两成）`"
@@ -426,6 +435,24 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* 🪪 **信息卡**（点楼体 / 点名字 / 点区名 ⇒ **同一张卡**；数据部分在纯逻辑 `wsBuildingCard` 里）。 */
   import { buildingCardData, type CardData } from "./wsBuildingCard";
   import WsBuildingCard from "./WsBuildingCard.vue";
+  /* 🕹 **摇杆 + 近景（角色第一视角）**（2026-10-03 机主裁决：「街景不要了喵，直接给我们的地图做一个近景」）。
+     🔴 事实口径（不许含糊）：MapLibre **做不出眼睛高度的实景**，这里是「**倾斜俯视的跟随**」——
+     镜头中心 = 「我」的漫游位置、`pitch` = 64、`bearing` = 朝向（我们不转它，只如实记录）；
+     地面是平面贴图、楼是挤出体 ⇒ 观感是"游戏里的俯视跟随"，**不是街景照片**。
+     规则/纯函数/驱动/位置真源全在 `wsJoystick.ts`（本组件只接线，PR 门禁 C1）：
+       ① 每帧把屏幕位移交给 `panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing ⇒ **不写第二份投影数学**）；
+       ② 相机中心**反写**进漫游位置真源（位置只有这一个来源；它**不进** `wsRuntimePush`、不当 gameplay 距离）；
+       ③ `joyActive` 期间按红线降级（见下面四个 handler 的早退）+ 松手后**恰好 1 次**重算。 */
+  import WsJoystick from "./WsJoystick.vue";
+  import {
+    JOY_BASE_PX,
+    JOY_HUD_LIFT_PX,
+    JOY_INSET_PX,
+    JOY_PITCH_DEG,
+    JOY_THUMB_PX,
+    joyGateOf,
+    roamStore,
+  } from "./wsJoystick";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -557,6 +584,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       locSource?: string;
       /** 世界时间（如 `23:41`）—— 验证面板要"世界时间 + 夜色档"一起看，**透传**即可，别在这里算第二份 */
       worldTime?: string;
+      /**
+       * 🕹 要不要挂**摇杆 + 近景（角色第一视角）**。
+       *
+       * **默认 `false`**（刻意的）：只有 `/worldsim` 这一屏（`WsCityEntry.vue`）显式打开，
+       * 别的宿主（孤儿页那条引导主线）**一个字都不用改**、行为逐字不变。
+       * 开关本身（`?joy=0`）由入口解析（`wsJoystick.joyOnFromLocation()` —— 唯一定义处），
+       * 这里只收结果：**本组件不读 URL**（免得同一件事有第二份判据）。
+       * ⚠️ 2D 降级路（无 WebGL ⇒ 没有相机）⇒ 摇杆**不渲染**并写一行原因（`joyGateOf`）。
+       */
+      joy?: boolean;
     }>(),
     /* 🎨 2026-09-20 机主：「**2.5D 倾斜范围扩大至可看见天空（蔚蓝档案基沃托斯的天空）**」。
        55° 是"俯视看楼"的角度 —— 相机压得太低，天际线以上全在屏幕外，**根本看不到天空**。
@@ -575,8 +612,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       snapPins: false,
       locSource: "",
       worldTime: "",
+      joy: false,
     }
   );
+
 
   /**
    * 🎬 **场景就绪**（2026-09-24）：地图实例 + **已经画上去的那批真楼栋** 一起交给外层。
@@ -619,6 +658,27 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    * display:block** 的空壳，CSS 拉满整屏 ⇒ **盖住真地图**（机主的"浅色矩形"就是它）。
    */
   const show2d = ref(false);
+
+  /* ══ 🕹 **近景那一套**（摇杆 → 漫游位置 → 相机跟随；2026-10-03 机主裁决）══════════════
+     事实口径先写清楚（免得后面有人当街景用）：这是**倾斜俯视的跟随** ——
+     镜头中心 = 「我」的漫游位置、`pitch` = 64°、`bearing` = 朝向；**不是**眼睛高度的实景
+     （MapLibre 给不出那种东西：地面是平面贴图、楼是挤出体）。
+
+     分流只在一处（判据 9 / 10）：`joyGateOf()` 同时决定「DOM 里有没有摇杆」与「HUD 多写哪一句」：
+       · `props.joy=false`（`?joy=0`）⇒ 不渲染 + **0 次相机更新**（组件都不在，没人建驱动）；
+       · 2D 降级路 ⇒ 不渲染 + HUD 写「2D 降级路没有相机，摇杆不适用」（不静默消失）。
+     ⚠️ 声明位置必须在 `show2d` 之后（上面那一行）：本文件对 TDZ 有过前科，不靠"computed 是惰性的"兜。 */
+  const joyGate = computed(() => joyGateOf({ joy: !!props.joy, fallback2d: !!show2d.value }));
+  /** 初始倾角：摇杆这一路要 60~70°（机主裁决）；其余路径逐字不变（`props.pitch` 默认 38） */
+  const initPitch = computed(() => (props.joy ? JOY_PITCH_DEG : props.pitch || cameraDefaults().pitch));
+  /** 摇杆几何 → CSS 变量（**唯一真源**是 `wsJoystick.ts` 的常量；组件与 HUD 都从这里继承） */
+  const joyVars = computed<Record<string, string>>(() => ({
+    "--ws-joy-base": `${JOY_BASE_PX}px`,
+    "--ws-joy-thumb": `${JOY_THUMB_PX}px`,
+    "--ws-joy-inset": `${JOY_INSET_PX}px`,
+    /* 让位高度：**无摇杆路 = 0px** ⇒ HUD 的 `calc(8px + var(--ws-joy-h))` 逐字回到 `bottom:8px` */
+    "--ws-joy-h": joyGate.value.show ? `${JOY_HUD_LIFT_PX}px` : "0px",
+  }));
   /* 📊 样式自检要带上 **HUD 原话**（机主看到的那一行）—— 只读，不参与任何渲染逻辑 */
   const hudEl = ref<HTMLElement | null>(null);
   /**
@@ -1078,6 +1138,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   });
   /* 🏢 形体档写进 stats：探针/HUD 要能读出"这一屏是默认档还是拆件档"（回证） */
   stats.bldMode = WS_BLD_MODE;
+
+  /**
+   * HUD **第一格的原话**：`stats.mode` + 近景那一句（文案由 `joyGateOf` 给，**唯一拼法**）。
+   *
+   * 为什么必须在屏幕上说出来：这一屏现在多了一层"角色第一视角"的观感，不说清楚，
+   * 机主与探针都会把它当成"地图改坏了 / 变成街景了" —— 而它是**倾斜俯视的跟随**（不是实景）。
+   * 2D 降级路写「2D 降级路没有相机，摇杆不适用」：摇杆不在 DOM 里，但**原因必须看得见**。
+   */
+  const hudMode = computed(() => `${stats.mode}${joyGate.value.hudNote ? " · " + joyGate.value.hudNote : ""}`);
 
   /* ── 长等待可视化：三段**真实**阶段 + 已等秒数（机主 2026-09-19）────────────
      · `fetch` 是唯一的长尾（Overpass 现取，十秒到一分半都见过）；
@@ -4013,6 +4082,109 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (el) el.style.transform = "translate3d(0, 0, 0)";   // 节点自身已经是新位置 ⇒ 容器归零
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════════
+   * 🕹 摇杆 → 相机（近景：**倾斜俯视的跟随**；机主裁决 2026-10-03）
+   * ══════════════════════════════════════════════════════════════════════════════
+   * 每帧只做四件事（顺序不能动）：
+   *   ① `panBy([dx,dy],{duration:0})` —— 屏幕像素位移，库内已处理 pitch/bearing，
+   *      **我们一行投影数学都不写**（PLAN §2.3 红线）；
+   *   ② 名字层跟手：**只写 1 个容器**的 `translate3d`，且位移就是 `-累计位移`
+   *      （相机平移是刚体平移 ⇒ 这个值与 `map.project(锚点)` 逐位相同，但**0 次 project**）；
+   *   ③ 把 `getCenter()` 反写进**漫游位置真源**（位置只有这一个来源 ⇒ 不会跟相机漂移）；
+   *   ④ 别的什么都不做：不 reproject、不重排标签、不重挑楼、不启动 600ms 去抖。
+   *
+   * 🔴 `joyActive` 是**自持标志**（不是问地图"你在动吗"）：`panBy({duration:0})` 每帧都是一次
+   *    完整 ease ⇒ 每帧都会同步发 `movestart`/`move`/`moveend`（vendored `_ease()` 里
+   *    `duration===0` 直接 `easeFunc(1); finish()`，`_afterEase` 又把 `_moving` 清掉 ⇒ 下一帧重来）。
+   *    不早退的话就是"每帧重投影 + 每帧起一条 600ms 去抖 + 每帧重排标签"——
+   *    机主报过的「名字滑动刷新、错位严重 / 松手卡一下」的放大版。
+   *
+   * ⚠️ 符号口径（**从 vendored 源码逐字核出来的**，别凭手感改）：
+   *    `camera.panBy(offset)` = `panTo(center, {offset: offset.mult(-1)})`；
+   *    `handleEaseTo` 把**请求的中心**放到屏幕点 `centerPoint + offset` 上
+   *    ⇒ `panBy([dx,dy])` 的结果是"相机朝屏幕 (dx,dy) 方向走了 dx,dy 像素"（内容反向平移）。
+   *    所以：**推杆方向 = 相机前进方向**，直接用 `[d.dx, d.dy]`，**不取负**；
+   *    而内容/标签层的位移是 `-累计位移`（与既有 `onMove()` 算出来的那个值同号同值）。
+   *
+   * ⚠️ `zoomend` **不需要**早退：本图没有 `maxBounds` ⇒ `handleEaseTo` 的
+   *    `isZooming = (约束后的 zoom !== 原 zoom)` 恒为 false ⇒ `panBy` 一次 zoom 事件都发不出来
+   *    （vendored 源码逐字核过；判据 1 的"zoom 逐字节不变"由此成立）。
+   *    另一只手同时捏合缩放属于**用户明确的视角操作**，那一轮照旧重算 —— 不归摇杆管。 */
+  let joyActive = false;
+  /** 本次按压累计的屏幕位移（px）——名字层容器跟手用；自己算 ⇒ 一次 `map.project()` 都不需要 */
+  let joyAccX = 0;
+  let joyAccY = 0;
+
+  /** 名字层跟手：**只写 1 个容器**（O(1)），节点一个字都不写 */
+  function joyNamesFollow(): void {
+    const el = labRootEl.value;
+    if (!el) return;
+    el.style.transform = `translate3d(${(-joyAccX).toFixed(2)}px, ${(-joyAccY).toFixed(2)}px, 0)`;
+  }
+
+  /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF） */
+  function onJoyDrive(d: { dx: number; dy: number }): void {
+    const m = map as unknown as {
+      panBy?: (o: [number, number], opt?: { duration: number }) => void;
+      getCenter?: () => { lng: number; lat: number };
+      getBearing?: () => number;
+    } | null;
+    if (!alive || !m || typeof m.panBy !== "function") return;
+    if (!joyActive) {
+      /* 进入：**一次 class**（与既有 `movestart` 同一套 `is-camera-moving`，整层淡到 0.25）+
+         累计位移归零。`panAnchor` 保持 null ⇒ 后面那几个 handler 早退也不会有人误用旧锚点。 */
+      joyActive = true;
+      joyAccX = 0;
+      joyAccY = 0;
+      cameraMoving.value = true;
+    }
+    m.panBy([d.dx, d.dy], { duration: 0 });
+    joyAccX += d.dx;
+    joyAccY += d.dy;
+    joyNamesFollow();
+    /* 漫游位置真源：**只从相机结果反写**（不猜、不累加、不做换算）——「我」就在镜头中心 */
+    try {
+      const c = typeof m.getCenter === "function" ? m.getCenter() : null;
+      if (c) roamStore.write(c.lng, c.lat, typeof m.getBearing === "function" ? m.getBearing() : 0);
+    } catch {
+      /* 读不到中心就不写（宁可位置旧一点，也不写一个编出来的坐标） */
+    }
+  }
+
+  /**
+   * 松手 —— **恰好一次**重算（判据 6：不是 0 次，也不是每帧 1 次）。
+   *
+   * 顺序照抄既有 `moveend`（同一个理由，见那里 2026-10-01 那段注释）：
+   *   清标志 → 容器归零 → **就地重投影**（把这次位移烘进节点坐标）→ 一次取包 + 一次重排。
+   * 🔴 那 600ms 去抖**不启动**（推送期间它一直没起过；松手就直接跑一次，不再等）。
+   */
+  function onJoyHalt(): void {
+    if (!joyActive) return;            // 没推过 ⇒ 不是"松手"，一次重算都不该有
+    joyActive = false;
+    const moved = joyAccX !== 0 || joyAccY !== 0;
+    joyAccX = 0;
+    joyAccY = 0;
+    if (!alive) return;
+    if (moved) {
+      onMoveEndNames();                // 容器归零（`cameraMoving=false` + 一次 transform 写）
+      reprojectNow();                  // 重投影**只重投影、不重排**（O(N)，N ≤ 26）
+    }
+    if (bldTimer) window.clearTimeout(bldTimer);
+    bldTimer = 0;
+    void refreshBundles("joyhalt").then(() => (alive ? refreshNames("joyhalt") : undefined));
+  }
+
+  /* 🔴 摇杆**被卸载**时（`?joy=0` 热改、或 WebGL 掉了走 2D 降级路）组件那边只 `cancel()` ——
+     它**不**发 `halt`（"控件没了" ≠ "松手"）。但地图这边的 `joyActive` 必须清掉，否则四个 handler
+     会**永远**早退（表现是"地图从此不再刷新名字/不再取包"，而且一声不响）。
+     这里补一次 `onJoyHalt()`：推过就照常做那一次重算，没推过它自己会早退。 */
+  watch(
+    () => joyGate.value.show,
+    (on) => {
+      if (!on) onJoyHalt();
+    }
+  );
+
   /** HUD/面板那一行（**可数口径只有一份**：`wsOfflineFeed.bundleCountsLine`）
    *  · `stats.bldBundle/roadsBundle` = 机主看的**可数一行**（已取/包外/失败 + 仓库数）；
    *  · `stats.bldVerdict/roadsVerdict` = **真源判词**（三态：包外 / 取数失败 / 正常；数不出来照实写）。 */
@@ -4575,7 +4747,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       center: [106.569, 29.558],
       /* 🎬 相机默认值取自 `wsScene.cameraDefaults()`（唯一真源；数值与换源前**逐字相同** 16.4/38） */
       zoom: cameraDefaults().zoom,
-      pitch: props.pitch || cameraDefaults().pitch,
+      pitch: initPitch.value,
       /* 🎬 2026-09-24 机主拍板「相机全统一」⇒ bearing/maxPitch 也取自 `wsScene`（-18 / 70）。
          顺带修掉「侧视角一划就没」：原来 85° 太贴近地平线，同样的手指位移对应巨大的地面距离。 */
       bearing: cameraDefaults().bearing,
@@ -4730,7 +4902,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
             };
             walk(g.coordinates);
           }
-          m.fitBounds(b as never, { padding: 24, pitch: props.pitch, duration: 0 });
+          m.fitBounds(b as never, { padding: 24, pitch: initPitch.value, duration: 0 });
         } catch {
           /* 收不了相机就用默认视野，不影响可用性 */
         }
@@ -4752,7 +4924,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
              一栋 20m 的楼只有 5~6 个像素 —— 这不是"小区级"，是"城区全景"，
              而且取楼半径按视野算会落到 1.4km 上限，Overpass 更容易拖挂。
              16.4 ≈ 1.6m/px：同样的楼有 12~13 像素，成片的街区才真的"成片"。 */
-          m.jumpTo({ center: c, zoom: 16.4, pitch: props.pitch, bearing: 0 } as never);
+          m.jumpTo({ center: c, zoom: 16.4, pitch: initPitch.value, bearing: 0 } as never);
           stats.mode = "街区视野（街道级）";
           stats.view = "街区视野";
           /* 🆕 建图这一刻就**主动取一次楼**（以前只靠 `moveend` 触发）。
@@ -4847,14 +5019,27 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        · `move`（每帧）：**只写 1 个容器**的 `translate3d`（跟手），N 个节点一个字都不写；
        · `moveend`：容器归零 + 节点位置**批量重排一次**（在 `refreshNames` 里）；
        · `click`：点楼体 ⇒ 与点名字**同一张卡**（`queryRenderedFeatures` 拿不到时走"最近已画楼"降级）。 */
-    m.on("movestart", () => { onMoveStart(); });
-    m.on("move", () => { onMove(); });
-    m.on("click", (e: unknown) => { onMapClick(e as { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number } }); });
+    /* 🕹 **摇杆期间四个 handler 一律早退**（`joyActive` = 自持标志，见 `onJoyDrive` 那段）：
+       `panBy({duration:0})` 每帧都会发一轮 movestart/move/moveend，不早退就是"每帧重投影 +
+       每帧起一条 600ms 去抖 + 每帧重排标签"。跟手由 `joyNamesFollow()` 自己写**一个容器**，
+       松手由 `onJoyHalt()` **恰好一次**重算 —— 判据 3/4/5/6 都钉在这里。 */
+    m.on("movestart", () => { if (joyActive) return; onMoveStart(); });
+    m.on("move", () => { if (joyActive) return; onMove(); });
+    /* 移动中点击**丢弃**（不排队、不 `queryRenderedFeatures`）：相机在动，射线命中的楼已经移走，
+       "点中"本身没意义；排队又会在松手时弹卡（判据 5）。 */
+    m.on("click", (e: unknown) => {
+      if (joyActive) return;
+      onMapClick(e as { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number } });
+    });
 
     /* 视野变化 → 按需补数据（去抖 600ms，避免拖动时把后端/磁盘打爆）。
        · **默认**：只补**离线格**（静态文件 ⇒ 不打 Overpass；换视野要素数**不减**：并进累积仓库）；
        · `?live=1`：另外走现场取数（楼/路各一条），失败照旧**可见**。 */
     m.on("moveend", () => {
+      /* 🕹 摇杆推着的时候这一发是**每帧都有**的（`panBy({duration:0})` 每次都走完一轮 ease）
+         ⇒ 必须早退：不早退就会"每帧重投影 + 每帧起一条 600ms 去抖 + 每帧重取离线包"。
+         松手那一次重算归 `onJoyHalt()`（**恰好一次**）。 */
+      if (joyActive) return;
       /* 🔴 容器位移**必须**在这里归零：节点自身马上要被写成新位置，容器再留着旧位移就是"错位"
          （机主真机报过的「名字显示是滑动刷新一次，不能跟随，**错位严重**」就是这一层没对齐）。 */
       onMoveEndNames();
@@ -4891,6 +5076,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
 
   onBeforeUnmount(() => {
     alive = false;
+    /* 🕹 摇杆会话**就地作废**（不重算 —— 这一屏马上就没了）：`alive=false` 之后 `onJoyHalt()`
+       本来也会早退，但这里显式清一次，免得"标志留在 true 上"这种事再被后来的人踩。 */
+    joyActive = false;
+    joyAccX = 0;
+    joyAccY = 0;
     unguard?.();
     unguard = null;
     unlockPageGestures();
@@ -5049,7 +5239,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   .ws-dml__hud {
     position: absolute;
     left: 8px;
-    bottom: 8px;
+    /* 🕹 **给摇杆让位**（2026-10-03）：摇杆也占左下（`left:8 bottom:8`，112×112）⇒ 不让位就会
+       正好压住 HUD 最左一格（"街区视野…"那句）。
+       `--ws-joy-h` 由模板按 `joyGate` 给（**唯一真源** = `wsJoystick.ts` 的几何常量）；
+       **无摇杆路 = 0px** ⇒ 这行逐字回到原来的 `bottom: 8px`（`?joy=0` 与代拍页一字不差）。 */
+    bottom: calc(8px + var(--ws-joy-h, 0px));
     display: flex;
     /* 🆕 2026-09-26（机主真机/浏览器截图报「HUD 挤成一团、文字互相压」）：
        原来这里**没有 `flex-wrap`、也没给子项 `flex-shrink: 0`** ——

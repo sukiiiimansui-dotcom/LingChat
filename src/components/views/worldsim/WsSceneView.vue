@@ -37,6 +37,7 @@
       :night="night"
       :loc-source="locSource"
       :world-time="worldTime"
+      :joy="joy"
       @scene-ready="onSceneReady"
       @pick-actor="emit('pick-actor', $event)"
     />
@@ -163,8 +164,18 @@
        * 全在那边 —— 这里**不写第二份**（PR 门禁 C1）。
        */
       phone?: boolean;
+      /**
+       * 🕹 摇杆 + 近景（角色第一视角）开关（**默认 false**，2026-10-03 机主裁决）。
+       *
+       * 为什么默认 **false**：近景是一套**新的操作与观感**（镜头中心 = 「我」的漫游位置、`pitch` 64），
+       * 只有新入口 `/worldsim` 显式打开；老调用点（`WorldSim.vue` 的引导主线）与代拍页
+       * **一个字都不用改**、行为逐字不变。
+       * ⚠️ 开关的解析（`?joy=0`）在入口那一层（`wsJoystick.joyOnFromLocation()`，唯一定义处），
+       * 本组件只**原样透传** —— 薄壳不许有第二份判据（PR 门禁 C1）。
+       */
+      joy?: boolean;
     }>(),
-    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, phone: false }
+    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, phone: false, joy: false }
   );
 
   /**

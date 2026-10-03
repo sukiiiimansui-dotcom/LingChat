@@ -1,7 +1,7 @@
-// 🕹 **摇杆输入 + 漫游位置真源 + 近景（角色第一视角）常量**（2026-10-03 机主裁决：
+// 🕹 **摇杆输入 + 漫游位置真源 + 近景（角色第一视角）常量与开关**（2026-10-03 机主裁决：
 // 「街景不要了喵，直接给我们的地图做一个近景（角色第一视角）」，见 `world_map/PROJECT-STATE.md` 轮 51）。
 //
-// ## 这个文件里有什么（三块，其余一律不做）
+// ## 这个文件里有什么（四块，其余一律不做）
 //   ① **一个向量**：把指针位置变成推杆向量（死区 / 归一化 / 夹紧 / 松手归零），全是纯函数
 //      ⇒ 能在 Node 里钉字面量断言（`world_map/ws_joystick_selftest.mjs`），不用开浏览器；
 //   ② **唯一驱动点**：`createJoyDriver()` —— 指针事件**只写 `setVector()` 这一个向量**，
@@ -11,6 +11,8 @@
 //      · **不写进 `wsRuntimePush`**（推给 Rust 的 me 只允许是真定位，否则模型会真以为玩家在那儿）；
 //      · 也**不当** gameplay 的距离依据（期 3「走近说话」12/20 米那条判词的口径是"真坐标"，
 //        拿演示位置去算会得出"你离他 8 米"这种编出来的结论 ⇒ 要接必须先给判词加第四态，见 `ROAM_NOTE`）。
+//   ④ **开关与持久化**：**默认关** + 玩家面板里的开关 + `wsm:v1:joy` 记忆 + `?joy=1/0` 逃生口（见第 五 节）。
+//      ⚠️ 机主 2026-10-03 改过一次口径：不再默认开、也不做常驻摇杆 ⇒ **改开关先读第 五 节**。
 //
 // ## 两条红线（写在这里，因为最容易在"顺手优化"时破掉）
 //   · **不写第二份米/像素换算**：满推速度按「**屏宽/秒**」给 —— 真实步行 1.4 m/s（`move.rs` Walk）
@@ -18,7 +20,9 @@
 //     横穿一屏要 **7.5 分钟**，那种摇杆没法用（PLAN §2.1 实测口径）。
 //     相机的实际位移只交给 `map.panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing），
 //     位置再由 `map.getCenter()` **反写**回来 ⇒ 全程一行投影数学都没有，也不碰 zoom。
-//   · **不 import vue / 不碰 DOM / 不 import 地图库**：本文件必须能在 node 里直接跑。
+//   · **不 import vue / 不 import 地图库 / 不碰 `document`/`window`**：本文件必须能在 node 里直接跑。
+//     唯一的浏览器 IO 是 `localStorage`（`readJoyStored`/`writeJoyStored` 两个函数、全程 try/catch，
+//     与 `wsBldMode.ts` 同款）—— 在 node 里 `typeof localStorage === "undefined"` ⇒ 退回默认（关）。
 
 /* ══════════════════════════════════════════════════════════════════
  * 一、几何与手感常量（**唯一真源**：组件 CSS 从 CSS 变量取、HUD 让位也从这里算）
@@ -285,28 +289,78 @@ export function createRoamStore(): RoamStore {
 export const roamStore = createRoamStore();
 
 /* ══════════════════════════════════════════════════════════════════
- * 五、开关与分流（纯函数：`?joy=0` / 2D 降级 —— 两条都要"可数"）
- * ══════════════════════════════════════════════════════════════════ */
+ * 五、开关：**默认关** + 面板开关 + 本地记忆 + URL 逃生口
+ * （机主 2026-10-03 改的口径：「摇杆改成点击玩家头像，在面板里选择开启喵！」）
+ * ══════════════════════════════════════════════════════════════════
+ * 四层，优先级从高到低：
+ *   ① `?joy=1` / `?joy=0`：**URL 显式给了就覆盖**存储值（逃生口，排查与 A/B 用）；
+ *   ② 本地记忆 `localStorage["wsm:v1:joy"]`（值 `"1"` / `"0"`）—— 玩家面板里点的那一下；
+ *   ③ 默认 **关**：不写 URL、也没存过 ⇒ **连摇杆 DOM 都没有**，而且初始俯角/中心与改造前**逐字一致**
+ *      （"默认关不许有副作用"是机主的硬要求 —— 所以 `pitch 64` 只允许出现在 `joy === true` 那一路）；
+ *   ④ 读不出来 / 坏数据（`"{}"`/`"true"`/`null`/隐私模式抛错）⇒ **关**：与 `wsBldMode`/`wsRelation`
+ *      同款口径 —— **绝不抛、绝不猜**（坏数据不该让整屏白掉，也不该替他打开一个功能）。 */
+
+/** 本地记忆的键（**唯一一处定义**；`wsm:v1:` 前缀与本项目其它世界模拟存储一致） */
+export const JOY_STORE_KEY = "wsm:v1:joy";
 
 /**
- * `?joy=0` ⇒ **关**；不写（或 `?joy=1`）⇒ **开**（PLAN §2.4「默认开」）。
- * ⚠️ `\b` 边界：`?joy=01` 不算关（与仓里 `?names=0` / `?wsfallback=1` 同一套写法）。
+ * URL 那一位：`?joy=1` ⇒ `true`、`?joy=0` ⇒ `false`、**没写 ⇒ `null`**（= 没表态，交给下一层）。
+ * ⚠️ `\b` 边界：`?joy=01` / `?joy=0x` **不算表态**（与仓里 `?names=0` / `?wsfallback=1` 同一套写法）。
  */
-export function joyOnOf(query: string): boolean {
-  return !/[?&]joy=0\b/.test(String(query || ""));
+export function joyUrlChoiceOf(query: string): boolean | null {
+  const s = String(query || "");
+  if (/[?&]joy=1\b/.test(s)) return true;
+  if (/[?&]joy=0\b/.test(s)) return false;
+  return null;
 }
 
 /**
- * 从**当前地址**读开关。
- * ⚠️ App 是 hash 路由（`#/worldsim?joy=0`）⇒ 查询串可能在 hash 里，两处都要看
- * （与 `WsDistrictMapLibre.wsQuery()` 同一口径；代拍页那种 `?joy=0` 也照样认）。
+ * 从**当前地址**读 URL 那一位。
+ * ⚠️ App 是 hash 路由（`#/worldsim?joy=1`）⇒ 查询串可能在 hash 里，两处都要看
+ * （与 `WsDistrictMapLibre.wsQuery()` 同一口径；`?joy=1` 那种也照样认）。
+ * 读不到地址（无 location）⇒ `null`（不表态），**不是** true —— 默认关这条不许被这里绕过去。
  */
-export function joyOnFromLocation(): boolean {
+export function joyUrlChoiceFromLocation(): boolean | null {
   try {
-    return joyOnOf(String(location.search || "") + "&" + String(location.hash || ""));
+    return joyUrlChoiceOf(String(location.search || "") + "&" + String(location.hash || ""));
   } catch {
-    return true; // 读不到地址 ⇒ 按默认（开）；绝不因此把功能弄没
+    return null;
   }
+}
+
+/** 本地存的那一位：**只有 `"1"` 算开**，其余（没存过 / `"0"` / 坏数据）一律 **关** */
+export function joyStoredOf(raw: unknown): boolean {
+  return raw === "1";
+}
+
+/** 落在哪一边：**URL 显式 > 本地记忆 > 默认（关）** */
+export function joyResolveOf(input: { url: boolean | null; stored: boolean }): boolean {
+  return input.url === null ? !!input.stored : !!input.url;
+}
+
+/** 读盘：坏了/没有/读不动 ⇒ **关**，绝不抛（隐私模式下 `localStorage` 本身就会抛） */
+export function readJoyStored(): boolean {
+  try {
+    if (typeof localStorage === "undefined") return false;
+    return joyStoredOf(localStorage.getItem(JOY_STORE_KEY));
+  } catch {
+    return false;
+  }
+}
+
+/** 落盘：写不进去不影响本次会话（与 `wsBldMode.writeBldMode()` 同一口径） */
+export function writeJoyStored(on: boolean): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(JOY_STORE_KEY, on ? "1" : "0");
+  } catch {
+    /* 写不进去就只活这一次会话 */
+  }
+}
+
+/** 进这一屏时该不该开（`WsCityEntry` **只调这一个**）：URL 显式 > 存储 > 关 */
+export function joyInitialOn(): boolean {
+  return joyResolveOf({ url: joyUrlChoiceFromLocation(), stored: readJoyStored() });
 }
 
 /**
@@ -320,4 +374,54 @@ export function joyGateOf(input: { joy: boolean; fallback2d: boolean }): { show:
   if (!input.joy) return { show: false, hudNote: "" };
   if (input.fallback2d) return { show: false, hudNote: JOY_2D_NOTE };
   return { show: true, hudNote: JOY_MODE_NOTE };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 六、相机快照 / 还原（"关掉 ⇒ 逐字还原"的那一半，纯函数）
+ * ══════════════════════════════════════════════════════════════════
+ * 机主的要求：关闭 ⇒ 相机/俯角**还原到接管之前的值**，不许留残留状态。
+ * 于是有两件事必须离线可判（自检钉着）：
+ *   ① 快照里**四个值一个都不能少**（缺一个 ⇒ `null`：宁可**不动相机**，也不写一个编出来的中心/俯角）；
+ *   ② 没有快照 ⇒ `joyCamRestoreArgs()` 返回 `null` ⇒ 宿主**一次 `jumpTo` 都不许发**。 */
+
+/** 接管前的相机（中心/缩放/俯角/朝向 —— 四个都要，缺一不可） */
+export interface JoyCamSnapshot {
+  center: [number, number];
+  zoom: number;
+  pitch: number;
+  bearing: number;
+}
+
+/** 从"读相机"的结果里取一份快照；任何一项缺失/非有限 ⇒ `null`（= 没有可信的还原点） */
+export function joyCamSnapshotOf(
+  read:
+    | {
+        center?: { lng?: unknown; lat?: unknown } | [unknown, unknown] | null;
+        zoom?: unknown;
+        pitch?: unknown;
+        bearing?: unknown;
+      }
+    | null
+    | undefined
+): JoyCamSnapshot | null {
+  if (!read) return null;
+  const c = read.center;
+  const lng = Array.isArray(c) ? Number(c[0]) : Number((c as { lng?: unknown } | null | undefined)?.lng);
+  const lat = Array.isArray(c) ? Number(c[1]) : Number((c as { lat?: unknown } | null | undefined)?.lat);
+  const zoom = Number(read.zoom);
+  const pitch = Number(read.pitch);
+  const bearing = Number(read.bearing);
+  if (![lng, lat, zoom, pitch, bearing].every((n) => Number.isFinite(n))) return null;
+  return { center: [lng, lat], zoom, pitch, bearing };
+}
+
+/**
+ * 关闭时要喂给 `map.jumpTo` 的参数（**无快照 ⇒ `null`** ⇒ 宿主不许动相机）。
+ * `duration: 0` 是刻意的：还原是"回到原处"，不是一段动画（有过渡反而像"被弹回去"）。
+ */
+export function joyCamRestoreArgs(prev: JoyCamSnapshot | null): (JoyCamSnapshot & { duration: number }) | null {
+  if (!prev) return null;
+  const ok = [...prev.center, prev.zoom, prev.pitch, prev.bearing].every((n) => Number.isFinite(n));
+  if (!ok) return null;
+  return { center: [prev.center[0], prev.center[1]], zoom: prev.zoom, pitch: prev.pitch, bearing: prev.bearing, duration: 0 };
 }

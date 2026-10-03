@@ -118,6 +118,29 @@
           </div>
         </section>
 
+        <!-- 🕹 摇杆 · 近景漫游（2026-10-03 机主改的口径：「摇杆改成点击玩家头像，在面板里选择开启喵！」）
+             · **只在自己那一格出现**（点地图上「我」的钉子进来 ⇒ `actor.isMe`）——
+               给别的角色看"要不要摇杆"没有意义，只会让那一格多一行看不懂的东西；
+             · 面板**只 emit**，落盘与生效在页面（`WsCityEntry` → `wsJoystick.writeJoyStored`）：
+               本组件一个 invoke / 一行 localStorage 都没有（与"谁的数据谁去取"同一条口径）；
+             · **默认关** ⇒ 不打开时这一屏与改造前逐字相同（没有摇杆 DOM、俯角也还是原来的 38°）；
+             · 展开态与面板里另外两个带开关的小节一致（`default-open`）—— 机主要找得到它；
+             DOM 契约：`data-ws-joy="1|0"`（探针读这个；App 里不塞 `window.__*` 出口）。 -->
+        <WsCollapse
+          v-if="actor?.isMe"
+          :title="t('worldsim.joy.title')"
+          icon="🕹"
+          :default-open="true"
+        >
+          <label class="ws-switch" :data-ws-joy="joy ? '1' : '0'">
+            <input type="checkbox" :checked="joy" @change="onJoyChange" />
+            <span>{{ joy ? t("worldsim.joy.on") : t("worldsim.joy.off") }}</span>
+          </label>
+          <div class="ws-panel__hint">
+            {{ joy ? t("worldsim.joy.onHint") : t("worldsim.joy.offHint") }}
+          </div>
+        </WsCollapse>
+
         <!-- ② 日程 -->
         <WsCollapse :title="t('worldsim.panel.schedule')" icon="🗓" :count="timeline.length">
           <div v-if="roleSchedule?.now" class="ws-line">
@@ -334,8 +357,14 @@
       needs?: { mood: number; energy: number } | null;
       /** 数值口径判词（页面用 `wsNeeds.compute()` 的 `why` 原样传进来；面板不重复实现判据） */
       needsNote?: string;
+      /**
+       * 🕹 摇杆 · 近景漫游**现在开着没有**（默认 false = 关）。
+       * 真源是 `wsJoystick`（存储 `wsm:v1:joy` + `?joy=1/0` 逃生口），页面解析后传进来；
+       * 面板只显示与上报，**不自己读存储、不自己判默认**（PR 门禁 C1：判据只有一处）。
+       */
+      joy?: boolean;
     }>(),
-    { areaText: "", narrow: false, open: false, portraitOpen: false, currentRoleId: 0, needs: null, needsNote: "" }
+    { areaText: "", narrow: false, open: false, portraitOpen: false, currentRoleId: 0, needs: null, needsNote: "", joy: false }
   );
 
   const emit = defineEmits<{
@@ -349,6 +378,11 @@
     // 说明：prop 声明在下方 defineProps 里，这里只是事件表的注释锚点
     /** P4-4：下一条「让他去某地」的指令（目的地是地名或设施名） */
     (e: "direct", to: string, a: PlacedActor): void;
+    /**
+     * 🕹 摇杆 · 近景漫游的开关（**只有 `actor.isMe` 那一格会发**）。
+     * 页面收到后：写存储（`wsm:v1:joy`）+ 改 `:joy` ⇒ 地图那边挂/卸摇杆、进/出近景。
+     */
+    (e: "toggle-joy", on: boolean): void;
   }>();
 
   const { t, te } = useI18n();
@@ -492,6 +526,15 @@
 
   function onInterveneChange(e: Event) {
     setIntervene(!!(e.target as HTMLInputElement).checked);
+  }
+
+  /**
+   * 🕹 摇杆开关那一下（**只上报，不落盘**）。
+   * 为什么不在面板里写 `localStorage`：落盘口径（键名/格式/坏数据怎么办）是 `wsJoystick` 的**唯一真源**，
+   * 页面已经拿着它了；面板再写一遍就等于第二份判据（PR 门禁 C1），而且"写了但没生效"最难查。
+   */
+  function onJoyChange(e: Event) {
+    emit("toggle-joy", !!(e.target as HTMLInputElement).checked);
   }
 
   function sendCommand() {

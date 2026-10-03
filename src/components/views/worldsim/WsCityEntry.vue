@@ -232,12 +232,14 @@
       :affinity-rank="currentAffinityRank"
       :needs="panelNeeds"
       :needs-note="panelNeedsNote"
+      :joy="joyOn"
       @close="closePanel"
       @portrait="togglePortrait"
       @goto-chat="onGotoChat"
       @quick="onQuick"
       @gift="onGift"
       @direct="onDirect"
+      @toggle-joy="onToggleJoy"
     />
   </div>
 </template>
@@ -313,9 +315,10 @@
   /* 🔌 **把场景推给 Rust**（`scene` 在不在 = `world_sim_enabled()` 的判据）：契约与"退出必须推 null"
      都在 `wsRuntimePush.ts` 头部注释里（唯一真源），这里只调。 */
   import { clearRuntime, pushRuntime } from "./wsRuntimePush";
-  /* 🕹 **摇杆 + 近景**（2026-10-03 机主裁决：街景不做，改做「近景（角色第一视角）」）
-     只有一个开关要在这里解析 —— 判定真源是 `wsJoystick.joyOnOf()`（见下面 `joyOn` 那段注释）。 */
-  import { joyOnFromLocation } from "./wsJoystick";
+  /* 🕹 **摇杆 + 近景**（2026-10-03 机主两次定调：先「街景不做，改做近景」，再「摇杆改成点击玩家头像，
+     在面板里选择开启」）—— 本页只解析开关与落盘；摇杆本体/相机跟随全在 `wsJoystick.ts` + `WsJoystick.vue`
+     + `WsDistrictMapLibre.vue`（见下面 `joyOn` 那段注释）。 */
+  import { joyInitialOn, writeJoyStored } from "./wsJoystick";
   /* 🎨 **世界模拟的皮肤**（令牌表 + `.ws-*` 组件的公共样式）。
      ⚠️ 它原来**只有旧入口 `WorldSim.vue` import** ⇒ 换成这一屏之后一直没加载，
      结果 `--ws-panel` 这类令牌全空、抽屉看起来就是"一堆字铺在地图上"（机主 2026-10-01 报的）。
@@ -336,15 +339,21 @@
   const { t, te } = useI18n();
   const store = cityStore();
 
-  /* 🕹 **摇杆 + 近景**的开关（2026-10-03 机主裁决：街景不做，改做「近景（角色第一视角）」）。
-     🔴 本页只负责**这一件事**，别的全在两处共享实现里（PR 门禁 C1 的红线）：
-       · 摇杆本体 / 纯函数 / 那个唯一 rAF / 漫游位置真源 → `wsJoystick.ts` + `WsJoystick.vue`；
-       · 相机跟随（中心 = 漫游位置、`panBy([dx,dy],{duration:0})`、`joyActive` 降级、松手一次重算）
-         → `WsDistrictMapLibre.vue`（地图实例在它手上，本页一行地图逻辑都没有，见文件头）。
+  /* 🕹 **摇杆 + 近景**的开关（2026-10-03 机主两次定调：先"街景不做，改做近景"，
+     再"**摇杆改成点击玩家头像，在面板里选择开启**"⇒ **默认关**）。
+     🔴 本页只做**两件小事**，别的全在共享实现里（PR 门禁 C1 的红线）：
+       · 解析"这一屏要不要开"并**落盘**（判定真源 = `wsJoystick`：URL 显式 > 存储 > 默认关）；
+       · 把开关递给两个组件：地图（`:joy` → 挂/卸摇杆、进/出近景）与玩家面板（开关那一格）。
      为什么开关放在入口这一层：它是"这一屏怎么进"的事（与 `?names=0` 那种"地图怎么画"的调试口不同层），
-     而且判定**只许有一处** —— 就是 `joyOnOf()`：`?joy=0` 关、不写（或 `?joy=1`）开，默认开（PLAN §2.4）。
-     ⚠️ App 是 hash 路由（`#/worldsim?joy=0`）⇒ 解析器 search 与 hash 两处都读。 */
-  const joyOn = joyOnFromLocation();
+     而且判定**只许有一处** —— `joyInitialOn()` / `joyResolveOf()` 就是那一处。
+     ⚠️ App 是 hash 路由（`#/worldsim?joy=1`）⇒ 解析器 search 与 hash 两处都读。 */
+  const joyOn = ref(joyInitialOn());
+
+  /** 面板里点了开关：**先落盘再改状态**（写不进去也照常生效，只是下次开页回到默认） */
+  function onToggleJoy(on: boolean): void {
+    joyOn.value = !!on;
+    writeJoyStored(joyOn.value);
+  }
 
   /** 已经装好的城市（`[]` = 确实一个都没装 —— 这是"已量"，不是"读不到"） */
   const installed = ref<InstalledCity[]>([]);

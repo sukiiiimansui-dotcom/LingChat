@@ -450,6 +450,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     JOY_INSET_PX,
     JOY_PITCH_DEG,
     JOY_THUMB_PX,
+    type JoyCamSnapshot,
+    joyCamRestoreArgs,
+    joyCamSnapshotOf,
     joyGateOf,
     roamStore,
   } from "./wsJoystick";
@@ -669,8 +672,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        · 2D 降级路 ⇒ 不渲染 + HUD 写「2D 降级路没有相机，摇杆不适用」（不静默消失）。
      ⚠️ 声明位置必须在 `show2d` 之后（上面那一行）：本文件对 TDZ 有过前科，不靠"computed 是惰性的"兜。 */
   const joyGate = computed(() => joyGateOf({ joy: !!props.joy, fallback2d: !!show2d.value }));
-  /** 初始倾角：摇杆这一路要 60~70°（机主裁决）；其余路径逐字不变（`props.pitch` 默认 38） */
-  const initPitch = computed(() => (props.joy ? JOY_PITCH_DEG : props.pitch || cameraDefaults().pitch));
+  /** **没有摇杆时**这一屏的俯角（= 改造前那个值；`props.pitch` 默认 38）—— 近景与"还原"都对着它 */
+  const basePitch = computed(() => props.pitch || cameraDefaults().pitch);
+  /** 初始倾角：**只有 `joy === true` 才 64**（机主 2026-10-03：默认关**不许**有副作用 ⇒ 关着时逐字 38） */
+  const initPitch = computed(() => (props.joy ? JOY_PITCH_DEG : basePitch.value));
   /** 摇杆几何 → CSS 变量（**唯一真源**是 `wsJoystick.ts` 的常量；组件与 HUD 都从这里继承） */
   const joyVars = computed<Record<string, string>>(() => ({
     "--ws-joy-base": `${JOY_BASE_PX}px`,
@@ -4114,6 +4119,80 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 本次按压累计的屏幕位移（px）——名字层容器跟手用；自己算 ⇒ 一次 `map.project()` 都不需要 */
   let joyAccX = 0;
   let joyAccY = 0;
+  /**
+   * **接管前的相机**（关闭时要逐字还原到这一份；机主的硬要求："不许留残留状态"）。
+   * 两个来源，都只在这里写：
+   *   · 启动时存储值/URL 就是开 ⇒ 由建图那段填「**没有摇杆时**这一屏会落到的机位」；
+   *   · 运行时在面板里打开 ⇒ 现读相机（`getCenter/getZoom/getPitch/getBearing`）。
+   * 读不齐（任一项非有限）⇒ `joyCamSnapshotOf()` 给 `null` ⇒ **关闭时一次相机都不动**（宁可不还原，也不编）。
+   */
+  let joyPrevCam: JoyCamSnapshot | null = null;
+
+  /** 读当前相机 → 快照（缺值给 null；宿主不许在没快照时动相机） */
+  function joyReadCam(): JoyCamSnapshot | null {
+    const m = map as unknown as {
+      getCenter?: () => { lng: number; lat: number };
+      getZoom?: () => number;
+      getPitch?: () => number;
+      getBearing?: () => number;
+    } | null;
+    if (!m) return null;
+    try {
+      return joyCamSnapshotOf({
+        center: typeof m.getCenter === "function" ? m.getCenter() : null,
+        zoom: typeof m.getZoom === "function" ? m.getZoom() : NaN,
+        pitch: typeof m.getPitch === "function" ? m.getPitch() : NaN,
+        bearing: typeof m.getBearing === "function" ? m.getBearing() : NaN,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /** 打开（面板开关 / 启动时就是开）：记下接管前的相机 → 进近景（只改俯角）→ 位置真源落到现在这个中心 */
+  function joyEnter(): void {
+    const m = map as unknown as { jumpTo?: (o: unknown) => void } | null;
+    if (joyPrevCam || !m) return; // 幂等：已经在近景里就什么都不做
+    joyPrevCam = joyReadCam();
+    try {
+      /* **只改俯角**（中心/zoom/bearing 一个字不动）——"进近景"= 抬头看这座城市，不是把镜头搬走 */
+      if (typeof m.jumpTo === "function") m.jumpTo({ pitch: JOY_PITCH_DEG, duration: 0 });
+    } catch {
+      /* 相机收不了就当没进近景；摇杆照常能推（推的还是 panBy，不依赖俯角） */
+    }
+    const cam = joyReadCam();
+    if (cam) roamStore.write(cam.center[0], cam.center[1], cam.bearing);
+  }
+
+  /**
+   * 关闭（面板开关关掉 / 2D 降级把摇杆收走）：先收尾 → **相机逐字还原** → 位置真源清空。幂等。
+   * ⚠️ 顺序不能反：先 `onJoyHalt()`（把这次按压的容器位移烘进节点坐标、并做那**一次**重算），
+   *    再 `jumpTo` 还原 —— 否则还原那一跳会作用在一层还没对齐的标签上（就是机主报过的"错位"）。
+   */
+  function joyExit(): void {
+    if (joyActive) onJoyHalt();
+    const args = joyCamRestoreArgs(joyPrevCam);
+    joyPrevCam = null;
+    roamStore.clear();
+    if (!args) return; // 没快照 ⇒ **一次相机都不动**（绝不编一个"原来的机位"）
+    try {
+      (map as unknown as { jumpTo?: (o: unknown) => void } | null)?.jumpTo?.(args);
+    } catch {
+      /* 还原失败也不抛：位置真源已经清掉，功能上等于"回到默认路" */
+    }
+  }
+
+  /* 面板里的开关（`WsCharPanel` → `WsCityEntry` → `:joy`）在运行时会变 ⇒ 这两件事跟着它走：
+     打开 = 进近景（记快照 + 抬头），关闭 = **逐字还原**（相机回快照、DOM 卸载、位置真源清空）。
+     ⚠️ 启动时就是开的那条路不由这里触发（地图还没建）—— 建图那段直接填 `joyPrevCam`（见那里注释）。 */
+  watch(
+    () => !!props.joy,
+    (on) => {
+      if (!alive) return;
+      if (on) joyEnter();
+      else joyExit();
+    }
+  );
 
   /** 名字层跟手：**只写 1 个容器**（O(1)），节点一个字都不写 */
   function joyNamesFollow(): void {
@@ -4174,14 +4253,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     void refreshBundles("joyhalt").then(() => (alive ? refreshNames("joyhalt") : undefined));
   }
 
-  /* 🔴 摇杆**被卸载**时（`?joy=0` 热改、或 WebGL 掉了走 2D 降级路）组件那边只 `cancel()` ——
-     它**不**发 `halt`（"控件没了" ≠ "松手"）。但地图这边的 `joyActive` 必须清掉，否则四个 handler
-     会**永远**早退（表现是"地图从此不再刷新名字/不再取包"，而且一声不响）。
-     这里补一次 `onJoyHalt()`：推过就照常做那一次重算，没推过它自己会早退。 */
+  /* 🔴 摇杆**被卸载**时（面板把开关关掉、或 WebGL 掉了走 2D 降级路）组件那边只 `cancel()` ——
+     它**不**发 `halt`（"控件没了" ≠ "松手"）。但这边的收尾一件都不能少，否则会留下两种残留：
+       · `joyActive` 留在 true ⇒ 四个 handler **永远**早退（"地图从此不再刷新名字/不再取包"，一声不响）；
+       · 相机停在近景的 64° ⇒ 与"关掉 = 逐字还原"矛盾。
+     所以这里调**同一个** `joyExit()`（幂等：推着才做那一次重算，没快照就不动相机）。 */
   watch(
     () => joyGate.value.show,
     (on) => {
-      if (!on) onJoyHalt();
+      if (!on) joyExit();
     }
   );
 
@@ -4925,6 +5005,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
              而且取楼半径按视野算会落到 1.4km 上限，Overpass 更容易拖挂。
              16.4 ≈ 1.6m/px：同样的楼有 12~13 像素，成片的街区才真的"成片"。 */
           m.jumpTo({ center: c, zoom: 16.4, pitch: initPitch.value, bearing: 0 } as never);
+          /* 🕹 **启动时摇杆就是开**（存储值/URL 显式打开）⇒ 把"没有摇杆时的机位"记下来：
+             关了开关要**逐字还原**到这一份（俯角 = `basePitch`，不是 64）。
+             ⚠️ 只有这一处能在建图期填快照：此刻相机已经是 64 了，现读只会读到"接管后"的值。 */
+          if (props.joy) {
+            joyPrevCam = { center: [c[0], c[1]], zoom: 16.4, pitch: basePitch.value, bearing: 0 };
+          }
           stats.mode = "街区视野（街道级）";
           stats.view = "街区视野";
           /* 🆕 建图这一刻就**主动取一次楼**（以前只靠 `moveend` 触发）。
@@ -4945,6 +5031,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
            用户与探针都会把「初始化…」读成"还没就绪" —— 那是一句**会骗人的读数**。
            这里如实换一句：默认机位、没有指定区县。**不改任何行为**（只是给读数赋值）。 */
         stats.mode = "默认机位（未指定区县）";
+      }
+      /* 🕹 **启动时摇杆就是开**（存储值/`?joy=1`）⇒ 记下"没有摇杆时的机位"，关了开关要逐字还原。
+         上面那条分支（有驻地/区界 bbox）已经在 `jumpTo` 那行旁边填过快照了；这里是**兜底**：
+         没有 bbox 时相机停在建图默认值上，center/zoom/bearing 现读即可（近景只改过俯角），
+         `pitch` 用 `basePitch`（= 关着时该有的那个 38）。
+         ⚠️ 读不齐就**不填**（`joyPrevCam` 留 null）⇒ 关闭时一次相机都不动 —— 宁可不动，也不编一个机位。 */
+      if (props.joy && !joyPrevCam) {
+        const cam0 = joyReadCam();
+        if (cam0) joyPrevCam = { ...cam0, pitch: basePitch.value };
       }
       /* 🗄 2026-09-24 已移除：区县边界（`dist-fill` / `dist-line`，"整区铺满"的可读性）。
          代拍页那一屏没有它；机主要"只留代拍页代码"⇒ 这一层不挂。

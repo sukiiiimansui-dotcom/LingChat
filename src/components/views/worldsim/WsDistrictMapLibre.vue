@@ -437,11 +437,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   import WsBuildingCard from "./WsBuildingCard.vue";
   /* 🕹 **摇杆 + 近景（角色第一视角）**（2026-10-03 机主裁决：「街景不要了喵，直接给我们的地图做一个近景」）。
      🔴 事实口径（不许含糊）：MapLibre **做不出眼睛高度的实景**，这里是「**倾斜俯视的跟随**」——
-     镜头中心 = 「我」的漫游位置、`pitch` = 64、`bearing` = 朝向（我们不转它，只如实记录）；
-     地面是平面贴图、楼是挤出体 ⇒ 观感是"游戏里的俯视跟随"，**不是街景照片**。
-     规则/纯函数/驱动/位置真源全在 `wsJoystick.ts`（本组件只接线，PR 门禁 C1）：
-       ① 每帧把屏幕位移交给 `panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing ⇒ **不写第二份投影数学**）；
-       ② 相机中心**反写**进漫游位置真源（位置只有这一个来源；它**不进** `wsRuntimePush`、不当 gameplay 距离）；
+     镜头盯着「我」的漫游位置（带阻尼与前瞻，**不再与角色重合**）、`pitch` = 64、`bearing` = 朝向
+     （我们只记录移动方向、**不转相机**）；地面是平面贴图、楼是挤出体 ⇒ 观感是"游戏里的俯视跟随"，
+     **不是街景照片**。
+     规则/纯函数/驱动/位置真源/运动模型全在 `wsJoystick.ts`（本组件只接线，PR 门禁 C1）：
+       ① 每帧把**相机**的屏幕位移交给 `panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing ⇒ **不写第二份投影数学**）；
+       ② 🆕 **角色**走自己的世界坐标（运动模型积分 → `roamStore` → 「我」那颗钉子 `setLngLat`）——
+          位置真源只有这一个（它**不进** `wsRuntimePush`、不当 gameplay 距离）；
        ③ `joyActive` 期间按红线降级（见下面四个 handler 的早退）+ 松手后**恰好 1 次**重算。 */
   import WsJoystick from "./WsJoystick.vue";
   import {
@@ -449,11 +451,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     JOY_HUD_LIFT_PX,
     JOY_INSET_PX,
     JOY_PITCH_DEG,
+    JOY_STEP_PX,
     JOY_THUMB_PX,
+    ROAM_PIN_ID,
     type JoyCamSnapshot,
+    type JoyMotion,
+    type JoyPxScale,
+    createJoyMotion,
     joyCamRestoreArgs,
     joyCamSnapshotOf,
     joyGateOf,
+    joyLngLatOf,
+    joyPxScaleOf,
+    joyWalkAnimOn,
     roamStore,
   } from "./wsJoystick";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
@@ -1038,7 +1048,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 真的把地图库跑起来了？（2D 降级时为 false ⇒ 走 DOM 钉子） */
   const mapAvailable = ref(false);
   /** 已经画在地图上的"人"（id → { el, marker }） */
-  let pins: Array<{ id: string; el: HTMLElement; mk: { setLngLat(c: [number, number]): unknown; remove(): void } }> = [];
+  let pins: Array<{
+    id: string;
+    el: HTMLElement;
+    mk: { setLngLat(c: [number, number]): unknown; remove(): void };
+    /** 🕹 只有「我」那颗钉子有：朝向箭头 / 身体（建钉子时抓一次，**不在帧里 `querySelector`**） */
+    face: HTMLElement | null;
+    body: HTMLElement | null;
+  }> = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mlMod: any = null;
   /** 上一次取楼的"中心+半径"缓存键（相同就不重复请求） */
@@ -2439,6 +2456,37 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       el.textContent = (a.name || "我").slice(0, 1);
     }
     hit.appendChild(el);
+    /* 🕹 漫游（近景）时才写的两个子节点 —— **只有「我」有**，别人一颗都不多花：
+       · `data-ws-roam-face`：朝向箭头（§4「朝向跟随移动方向」）—— 挂在 `hit` 上而**不是** `el` 里，
+         因为 `el` 有 `overflow:hidden` 会把伸出去的箭头剪掉；
+       · `data-ws-roam-body`：身体（就是那个圆），踏步动画只写它的 `transform`（§4「就地行走」）。
+       ⚠️ 两个都**只在 transform 上动**（位置由 `Marker` 管、布局属性一个字不写）；
+       具体每帧写不写由 `joyWalkAnimOn()` 判（`low` 档 / `prefers-reduced-motion` ⇒ 不写）。 */
+    if (a.id === ROAM_PIN_ID) {
+      el.dataset.wsRoamBody = "";
+      const face = document.createElement("i");
+      face.dataset.wsRoamFace = "";
+      /* 朝向箭头 = 盖满整个 44×44 命中区的一层**透明** overlay，靠 `clip-path` 在正中上方
+         画一个小矢头。为什么用"整层 + 裁剪"而不是"一个小三角"：`rotate` 的旋转中心必须是
+         **身体中心**（= 这层 overlay 的中心），否则推杆时箭头会绕着身体乱甩；overlay 铺满 hit
+         就天然是中心对齐，不用去算 `transform-origin` 的像素偏移。
+         `clip-path` 是**绘制属性**（不参与布局），与"每帧只写 transform/opacity"同一条红线。 */
+      face.style.cssText = [
+        "position:absolute",
+        "left:0",
+        "top:0",
+        "width:100%",
+        "height:100%",
+        "background:rgba(233,244,255,.95)",
+        "clip-path:polygon(50% 2%, 62% 22%, 50% 15%, 38% 22%)",
+        /* 朝向箭头**不吃事件**（命中区还是那个 44×44 的 hit） */
+        "pointer-events:none",
+        /* 提升为独立图层 ⇒ 每帧那次 `rotate` 只走合成器，不重新栅格化（`filter`/`box-shadow`
+           一概不加：浮在地图上、每帧都在转的东西，画得越简单越稳） */
+        "will-change:transform",
+      ].join(";");
+      hit.appendChild(face);
+    }
     /* 标题里如实带出"位置是怎么来的"：吸附到路上（`road`）和网格示意位置，
        精度完全不是一回事 —— 以后排查"怎么站到江里了"就靠这一行。
        （挂在 `hit` 上 = 挂钩子的那个元素上，`syncPins` 更新 title 时也是它。） */
@@ -2668,10 +2716,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
     const list = props.markers || [];
     const alive = new Set<string>();
+    /* 🕹 漫游期间「我」的位置真源是 `roamStore`（不是网格坐标）：**这期间谁来同步都不许把它挪走**。
+       不特判的话，松手那一次重算（`refreshBundles` 换了 `markers` 数组）就会走到这里，
+       把刚走了几步的「我」一把打回格心 —— 机主看到的就是"走了两步又弹回去"。 */
+    const roam = roamStore.get();
     for (const a of list) {
-      const raw = gridToLngLat(a.gx, a.gy);
-      if (!raw) continue;
-      const { pos, snapped } = snapPin(raw);
+      let pos: [number, number];
+      if (a.id === ROAM_PIN_ID && roam) {
+        pos = [roam.lng, roam.lat];
+      } else {
+        const raw = gridToLngLat(a.gx, a.gy);
+        if (!raw) continue;
+        pos = snapPin(raw).pos;
+      }
 
       alive.add(a.id);
       const hit = pins.find((x) => x.id === a.id);
@@ -2681,7 +2738,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       } else {
         const el = pinEl(a);
         const mk = new mlMod.Marker({ element: el, anchor: "center" }).setLngLat(pos).addTo(m);
-        pins.push({ id: a.id, el, mk });
+        pins.push({
+          id: a.id,
+          el,
+          mk,
+          face: el.querySelector<HTMLElement>("[data-ws-roam-face]"),
+          body: el.querySelector<HTMLElement>("[data-ws-roam-body]"),
+        });
       }
     }
     for (const p of pins) {
@@ -4090,13 +4153,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* ══════════════════════════════════════════════════════════════════════════════
    * 🕹 摇杆 → 相机（近景：**倾斜俯视的跟随**；机主裁决 2026-10-03）
    * ══════════════════════════════════════════════════════════════════════════════
-   * 每帧只做四件事（顺序不能动）：
+   * 每帧只做这几件事（顺序不能动）：
    *   ① `panBy([dx,dy],{duration:0})` —— 屏幕像素位移，库内已处理 pitch/bearing，
    *      **我们一行投影数学都不写**（PLAN §2.3 红线）；
    *   ② 名字层跟手：**只写 1 个容器**的 `translate3d`，且位移就是 `-累计位移`
    *      （相机平移是刚体平移 ⇒ 这个值与 `map.project(锚点)` 逐位相同，但**0 次 project**）；
-   *   ③ 把 `getCenter()` 反写进**漫游位置真源**（位置只有这一个来源 ⇒ 不会跟相机漂移）；
-   *   ④ 别的什么都不做：不 reproject、不重排标签、不重挑楼、不启动 600ms 去抖。
+   *   ③ 🆕 **角色真的动**：运动模型给的**世界坐标**写进漫游真源 → 「我」那颗钉子 `setLngLat`
+   *      （§3：角色与相机是**两件事**，不再互相反写）；同一帧顺带写 ④⑤ 两个 transform；
+   *   ④ 🆕 朝向：钉子上的箭头 `rotate(headingDeg)`（§4：朝向跟随移动方向）；
+   *   ⑤ 🆕 踏步：身体 `translate3d`，幅度 ∝ 速度（§4：就地行走动画，停下自动回正）；
+   *   ⑥ 别的什么都不做：不 reproject、不重排标签、不重挑楼、不启动 600ms 去抖。
    *
    * 🔴 `joyActive` 是**自持标志**（不是问地图"你在动吗"）：`panBy({duration:0})` 每帧都是一次
    *    完整 ease ⇒ 每帧都会同步发 `movestart`/`move`/`moveend`（vendored `_ease()` 里
@@ -4128,6 +4194,102 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   let joyPrevCam: JoyCamSnapshot | null = null;
 
+  /* 🕹🆕 2026-10-03 **运动模型落地**（机主验收原话：「这个移动不能真正像游戏那样移动！甚至角色都没有动，
+     太杂鱼了！能去学游戏引擎吗」）—— 下面这三个值就是"角色真的在动"的全部新增状态，各一处：
+       · `joyOrigin`：漫游**原点**（= 进近景那一刻的相机中心，世界坐标的锚）；
+       · `joyScale` ：屏幕 px → 经纬度的**局部标尺**（`joyCalibrate()` 用**地图库自己的** unproject 量一次）；
+       · `joyMove`  ：运动状态（速度 / 角色位移 / 相机位移 / 朝向 / 踏步相位），由
+                      `wsJoystick.joyMotionStep()` 每帧推进；**跨按压保留** ⇒ 松手再推不会把人瞬移回原点。 */
+  let joyOrigin: { lng: number; lat: number } | null = null;
+  let joyScale: JoyPxScale | null = null;
+  let joyMove: JoyMotion = createJoyMotion();
+  /** ♿ 系统"减弱动效"：**只关踏步**（摇杆是输入，任何档位都不许关；见 `joyWalkAnimOn`） */
+  const joyReducedMotion = (() => {
+    try {
+      return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch {
+      return false;
+    }
+  })();
+
+  /**
+   * 量「屏幕 px → 经纬度」那把**局部标尺**（整条链路只有这一处换算，共 3 次投影调用）。
+   * 🔴 四个数**全部**来自地图库自己的 `project`/`unproject` —— 我们一行投影数学都不写（既有红线）。
+   * 🔴 **移动中 0 次**：本函数只在"进近景"（`joyEnter`）与建图那一刻被调，**帧里一次都不调**。
+   * 为什么量一次就够：量的是**相机中心**处的雅可比，而纯平移下中心处的地面深度不变
+   * （俯角/朝向/缩放都不动）⇒ 这个雅可比整段漫游不变（研究 §5）。
+   * 量不齐（库没这俩方法 / 抛错 / 非有限 / 全 0）⇒ `null`：**角色不动、只有相机走**
+   * （宁可退回旧行为，也不写一个编出来的经纬度）。
+   */
+  function joyCalibrate(): void {
+    joyScale = null;
+    const m = map as unknown as {
+      project?: (c: [number, number]) => { x: number; y: number };
+      unproject?: (p: [number, number]) => { lng: number; lat: number };
+      getCenter?: () => { lng: number; lat: number };
+    } | null;
+    if (!m || typeof m.project !== "function" || typeof m.unproject !== "function" || typeof m.getCenter !== "function") return;
+    try {
+      const c = m.getCenter();
+      const p0 = m.project([c.lng, c.lat]);
+      const px = m.unproject([p0.x + 1, p0.y]);
+      const py = m.unproject([p0.x, p0.y + 1]);
+      const s = joyPxScaleOf({
+        dxLng: px.lng - c.lng,
+        dxLat: px.lat - c.lat,
+        dyLng: py.lng - c.lng,
+        dyLat: py.lat - c.lat,
+      });
+      if (!s) return;
+      joyOrigin = { lng: c.lng, lat: c.lat };
+      joyScale = s;
+      joyMove = createJoyMotion();
+    } catch {
+      joyScale = null;
+    }
+  }
+
+  /**
+   * 🕹 每帧**至多一次**：把运动模型算出来的**世界坐标**写进漫游真源，并驱动「我」那颗钉子。
+   * 写点一共 3 个，**全是 `setLngLat` / `transform`，没有一个布局属性**：
+   *   ① `Marker.setLngLat` —— "角色真的在动"就是这一行（§3：角色走世界坐标，相机另算，两者不再重合）；
+   *   ② 朝向箭头 `rotate`（§4：朝向跟随移动方向，`headingDeg` 由**速度方向**算出）；
+   *   ③ 身体踏步 `translate3d`（§4：就地行走动画 —— 位移归世界坐标、摆动归 transform；
+   *      幅度 ∝ 速度 ⇒ 停下时 `speedRatio = 0` ⇒ 恒等变换 ⇒ **自动回正**，不用再补一帧）。
+   * ⚠️ 诚实记一笔：`Marker.setLngLat()` 内部会自己 `project` 一次（**引擎自己的**，不是我们写的投影数学，
+   *    而且只涉及这一个 marker）。既有红线"移动中 0 次 `map.project()`"指的是**我们的代码**不许调 ——
+   *    这条仍然成立（自检 ⑩k3 钉着）。
+   */
+  function joyApplyRoam(mv: JoyMotion): void {
+    if (!joyOrigin || !joyScale) return;
+    const w = joyLngLatOf(joyOrigin, joyScale, mv.px, mv.py);
+    roamStore.write(w.lng, w.lat, mv.headingDeg);
+    const pin = pins.find((p) => p.id === ROAM_PIN_ID);
+    if (!pin) return; // 名单里还没有「我」⇒ 位置已经在真源里了，钉子出来时 `syncPins` 会照它摆
+    try {
+      pin.mk.setLngLat([w.lng, w.lat]);
+    } catch {
+      /* 地图拆了就算了（这一帧白写，不抛） */
+    }
+    if (pin.face) pin.face.style.transform = `rotate(${mv.headingDeg.toFixed(1)}deg)`;
+    /* 踏步：`low` 档 / `prefers-reduced-motion` 直接不写（§4：装饰性动效可以被关掉） */
+    if (pin.body && joyWalkAnimOn({ low: !!perf.low.value, reduced: joyReducedMotion })) {
+      const a = mv.speedRatio * JOY_STEP_PX;
+      pin.body.style.transform = a > 0 ? `translate3d(0, ${(-Math.abs(Math.sin(mv.stepPhase * Math.PI * 2)) * a).toFixed(2)}px, 0)` : "";
+    }
+  }
+
+  /**
+   * 「我」钉子上那两处漫游写点回**恒等**。
+   * `clearHeading = false`（松手）：只收踏步 —— 人是停下了，不是转回正北；
+   * `clearHeading = true`（关掉摇杆）：朝向也回正 —— 一切还原，与"相机逐字还原"同一条纪律。
+   */
+  function joyPinReset(clearHeading: boolean): void {
+    const pin = pins.find((p) => p.id === ROAM_PIN_ID);
+    if (pin?.body) pin.body.style.transform = "";
+    if (clearHeading && pin?.face) pin.face.style.transform = "";
+  }
+
   /** 读当前相机 → 快照（缺值给 null；宿主不许在没快照时动相机） */
   function joyReadCam(): JoyCamSnapshot | null {
     const m = map as unknown as {
@@ -4149,7 +4311,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
   }
 
-  /** 打开（面板开关 / 启动时就是开）：记下接管前的相机 → 进近景（只改俯角）→ 位置真源落到现在这个中心 */
+  /**
+   * 打开（面板开关 / 启动时就是开）：记下接管前的相机 → 进近景（只改俯角）→ 量标尺 →
+   * 位置真源与「我」一起落到现在这个中心。
+   * 🔴 `joyCalibrate()` 必须排在**改完俯角之后**：俯角不同，同一个屏幕 px 对应的地面距离差好几倍
+   *    （38° 与 64° 量的标尺不是一回事）。
+   */
   function joyEnter(): void {
     const m = map as unknown as { jumpTo?: (o: unknown) => void } | null;
     if (joyPrevCam || !m) return; // 幂等：已经在近景里就什么都不做
@@ -4160,8 +4327,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     } catch {
       /* 相机收不了就当没进近景；摇杆照常能推（推的还是 panBy，不依赖俯角） */
     }
-    const cam = joyReadCam();
-    if (cam) roamStore.write(cam.center[0], cam.center[1], cam.bearing);
+    joyCalibrate();
+    /* 位置真源 = 原点（相机中心）；`joyApplyRoam(joyMove)` 用的是刚归零的运动状态 ⇒
+       「我」**立刻**站到画面中心 —— 进近景就看得见自己，不是推一下才冒出来。 */
+    if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
+    joyApplyRoam(joyMove);
   }
 
   /**
@@ -4174,6 +4344,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     const args = joyCamRestoreArgs(joyPrevCam);
     joyPrevCam = null;
     roamStore.clear();
+    /* 🕹 会话状态**清干净**（2026-10-03 新增的三个值 + 钉子上的朝向/踏步）：
+       不清 `joyOrigin`/`joyScale` 的话，下一次打开会拿着**上一台相机**的标尺算世界坐标
+       （俯角/缩放早变了）—— 那正是"编出来的坐标"；不清朝向的话，箭头会停在最后一次的方向上。 */
+    joyOrigin = null;
+    joyScale = null;
+    joyMove = createJoyMotion();
+    joyAccX = 0;
+    joyAccY = 0;
+    joyPinReset(true);
+    /* 「我」回到名单里的网格位置：真源已清空 ⇒ `syncPins` 走的是常规那一路（含吸附） */
+    syncPins();
     if (!args) return; // 没快照 ⇒ **一次相机都不动**（绝不编一个"原来的机位"）
     try {
       (map as unknown as { jumpTo?: (o: unknown) => void } | null)?.jumpTo?.(args);
@@ -4201,17 +4382,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     el.style.transform = `translate3d(${(-joyAccX).toFixed(2)}px, ${(-joyAccY).toFixed(2)}px, 0)`;
   }
 
-  /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF） */
-  function onJoyDrive(d: { dx: number; dy: number }): void {
+  /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF）；`mv` = 这一步的运动状态（角色那一半） */
+  function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion): void {
     const m = map as unknown as {
       panBy?: (o: [number, number], opt?: { duration: number }) => void;
-      getCenter?: () => { lng: number; lat: number };
-      getBearing?: () => number;
     } | null;
     if (!alive || !m || typeof m.panBy !== "function") return;
     if (!joyActive) {
       /* 进入：**一次 class**（与既有 `movestart` 同一套 `is-camera-moving`，整层淡到 0.25）+
-         累计位移归零。`panAnchor` 保持 null ⇒ 后面那几个 handler 早退也不会有人误用旧锚点。 */
+         累计位移归零。`panAnchor` 保持 null ⇒ 后面那几个 handler 早退也不会有人误用旧锚点。
+         ⚠️ 归零是**必须**的：上一次松手时 `onMoveEndNames()` 已经把位移烘进节点坐标了，
+         这里不归零就是把同一段位移**再叠一次**（名字层越推越偏）。 */
       joyActive = true;
       joyAccX = 0;
       joyAccY = 0;
@@ -4221,12 +4402,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyAccX += d.dx;
     joyAccY += d.dy;
     joyNamesFollow();
-    /* 漫游位置真源：**只从相机结果反写**（不猜、不累加、不做换算）——「我」就在镜头中心 */
-    try {
-      const c = typeof m.getCenter === "function" ? m.getCenter() : null;
-      if (c) roamStore.write(c.lng, c.lat, typeof m.getBearing === "function" ? m.getBearing() : 0);
-    } catch {
-      /* 读不到中心就不写（宁可位置旧一点，也不写一个编出来的坐标） */
+    /* 🆕 角色那一路（与相机**分成两件事**，§3）：世界坐标写进真源 + 钉子 `setLngLat` + 朝向 + 踏步。
+       🔴 位置**不再**从 `getCenter()` 反写 —— 反写就等于"我 = 相机"，屏幕上的钉子永远不动
+       （上一版"角色都没有动"的病根就在这一处）。 */
+    if (mv) {
+      joyMove = mv; // 留一份最新状态（这一份**不是**驱动的那份；只给"进来时先站到原点"用）
+      joyApplyRoam(mv);
     }
   }
 
@@ -4243,6 +4424,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     const moved = joyAccX !== 0 || joyAccY !== 0;
     joyAccX = 0;
     joyAccY = 0;
+    /* 🆕 停下即回正（§4）：踏步是 transform，不补这一下就会**停在"半抬腿"那一帧**上。
+       朝向**不清**（人是停下了，不是转回正北）—— 关掉摇杆时才由 `joyExit()` 一并还原。
+       角色位置也**不动**：速度在 `release()` 那一刻已经归零，松手后又不再跑帧 ⇒ 位置自然冻结。 */
+    joyPinReset(false);
     if (!alive) return;
     if (moved) {
       onMoveEndNames();                // 容器归零（`cameraMoving=false` + 一次 transform 写）
@@ -5041,6 +5226,18 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         const cam0 = joyReadCam();
         if (cam0) joyPrevCam = { ...cam0, pitch: basePitch.value };
       }
+      /* 🕹 启动时摇杆就是开（存储值/`?joy=1`）⇒ 在这里把**漫游会话**也建起来，与运行期打开走同一条语义：
+         ① `joyCalibrate()` 量「屏幕 px → 经纬度」（此刻俯角已经是 64 ⇒ 量的是近景那把尺子）；
+         ② 位置真源 +「我」那颗钉子一起落到画面中心 —— 不这么做的话，"启动就开摇杆"这条路上
+            `joyEnter()` 不会被调用（`watch` 只在**变化**时触发），标尺是空的 ⇒ 人推杆只有相机动、
+            角色还是不动（同一句"太杂鱼"再犯一次）。
+         ⚠️ 判据用 `joyGate.show`（= 摇杆到底在不在）而不是 `props.joy`：2D 降级路 DOM 里没有摇杆，
+            那条路一个字都不许动（判据 9/10）。 */
+      if (joyGate.value.show) {
+        joyCalibrate();
+        if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
+        joyApplyRoam(joyMove);
+      }
       /* 🗄 2026-09-24 已移除：区县边界（`dist-fill` / `dist-line`，"整区铺满"的可读性）。
          代拍页那一屏没有它；机主要"只留代拍页代码"⇒ 这一层不挂。
          `districtFeat` 仍然照旧取（相机中心/驻地/取楼半径都靠它），只是不再画边界。
@@ -5107,6 +5304,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       if (selfShotArmed()) void runSelfShot(m as unknown as Parameters<typeof runSelfShot>[0]);
       /* 🧪 App 自拍（`?selfshot=1`）：这是 **WebGL 路**的触发点（降级路的在 `fallback2d` 末尾） */
       maybeAppSelfShot("webgl");
+      /* 🕹 标尺的**兜底量法**：极少数情况下建图那一刻容器还没排版（0×0 ⇒ `project`/`unproject`
+         会给出非有限值），`joyCalibrate()` 会如实退回 `null`（⇒ 只有相机走、角色不动）。
+         `load` 时版面已经有了 ⇒ 在这里补量一次。**只在还没量到时**才调（正常路径 0 次调用），
+         而且同样**不在帧里** —— "移动中 0 次投影"那条红线不受影响。 */
+      if (joyGate.value.show && !joyScale) {
+        joyCalibrate();
+        if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
+        joyApplyRoam(joyMove);
+      }
     });
 
     /* 🏷🗺 **名字层的相机联动**（`DESIGN-MG-MOTION.md` §4.0/§4.2 —— 这一段的每一条都是红线）

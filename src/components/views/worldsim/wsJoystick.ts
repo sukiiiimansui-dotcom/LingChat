@@ -1,18 +1,23 @@
 // 🕹 **摇杆输入 + 漫游位置真源 + 近景（角色第一视角）常量与开关**（2026-10-03 机主裁决：
 // 「街景不要了喵，直接给我们的地图做一个近景（角色第一视角）」，见 `world_map/PROJECT-STATE.md` 轮 51）。
 //
-// ## 这个文件里有什么（四块，其余一律不做）
+// ## 这个文件里有什么（五块，其余一律不做）
 //   ① **一个向量**：把指针位置变成推杆向量（死区 / 归一化 / 夹紧 / 松手归零），全是纯函数
 //      ⇒ 能在 Node 里钉字面量断言（`world_map/ws_joystick_selftest.mjs`），不用开浏览器；
 //   ② **唯一驱动点**：`createJoyDriver()` —— 指针事件**只写 `setVector()` 这一个向量**，
 //      真正的相机更新只发生在**一个 rAF** 里（pointermove 1000 次/秒 ⇒ 相机最多 60 次/秒）。
 //      rAF/时钟/屏宽全部可注入 ⇒ 离线也能数帧数。
-//   ③ **「我」的漫游位置真源**：`roamStore`。🔴 语义是**漫游（演示）**，**不是 GPS**：
+//   ③ **运动模型**：输入 →（加速/摩擦）→ 速度 →（积分）→ 角色位移；相机**阻尼跟随 + 前瞻 + 死区**。
+//      🔴 2026-10-03 机主验收原话：「这个移动**不能真正像游戏那样移动**！甚至**角色都没有动**，
+//      太杂鱼了！**能去学游戏引擎吗**」——病根就是缺这一块：上一版把**输入直接当速度**、
+//      而且**只推相机**，相机又正好锁在角色身上 ⇒ 屏幕上那颗钉子一动不动。
+//      依据逐条落在 `world_map/RESEARCH-GAME-MOVEMENT.md`（引擎官方文档；本文件每条都注明 §几）。
+//   ④ **「我」的漫游位置真源**：`roamStore`。🔴 语义是**漫游（演示）**，**不是 GPS**：
 //      · **不写进 `wsRuntimePush`**（推给 Rust 的 me 只允许是真定位，否则模型会真以为玩家在那儿）；
 //      · 也**不当** gameplay 的距离依据（期 3「走近说话」12/20 米那条判词的口径是"真坐标"，
 //        拿演示位置去算会得出"你离他 8 米"这种编出来的结论 ⇒ 要接必须先给判词加第四态，见 `ROAM_NOTE`）。
-//   ④ **开关与持久化**：**默认关** + 玩家面板里的开关 + `wsm:v1:joy` 记忆 + `?joy=1/0` 逃生口（见第 五 节）。
-//      ⚠️ 机主 2026-10-03 改过一次口径：不再默认开、也不做常驻摇杆 ⇒ **改开关先读第 五 节**。
+//   ⑤ **开关与持久化**：**默认关** + 玩家面板里的开关 + `wsm:v1:joy` 记忆 + `?joy=1/0` 逃生口（见第 六 节）。
+//      ⚠️ 机主 2026-10-03 改过一次口径：不再默认开、也不做常驻摇杆 ⇒ **改开关先读第 六 节**。
 //
 // ## 两条红线（写在这里，因为最容易在"顺手优化"时破掉）
 //   · **不写第二份米/像素换算**：满推速度按「**屏宽/秒**」给 —— 真实步行 1.4 m/s（`move.rs` Walk）
@@ -116,21 +121,228 @@ export function joyThumbOffset(dx: number, dy: number, radius: number): { x: num
 }
 
 /**
- * 一帧的屏幕位移（px，**右/下为正**，直接喂 `map.panBy`）。
+ * 一帧的屏幕位移（px，**右/下为正**）—— 这是**满速下的稳态位移**，不是"这一帧真实走了多远"：
+ * 真实位移见 `joyMotionStep()`（要先加速/摩擦）。这里同时充当"向量 → 速度"的**唯一换算**：
+ * `joyScreenDelta(v, W, 1000)` = 满推 px/s，`joyMotionStep` 直接拿它当速度目标（不再写第二份系数）。
  *
  * 🔴 为什么是"屏宽/秒"而不是米/秒：见文件头红线（真实步行在这一档只有 0.89 px/s）。
  * ⚠️ `dtMs` 在这里**夹到 `JOY_MAX_DT_MS`**（只此一处夹 —— 掉帧时不许跳变）。
  */
 export function joyScreenDelta(v: JoyVector, screenW: number, dtMs: number): { dx: number; dy: number } {
+  const t = joyTargetVelocity(v, screenW);
+  const f = clampDt(dtMs) / 1000;
+  if (!f) return { dx: 0, dy: 0 };
+  return { dx: t.dx * f, dy: t.dy * f };
+}
+
+/**
+ * 满速向量（px/s）——"屏宽/秒"那条换算的**唯一一处**。
+ * ⚠️ 与 `joyScreenDelta` 的分工：那个是"一帧走多远"（`dt` 要**夹到 64ms**，掉帧不跳变）；
+ *    这个是"一秒走多远"（**不夹** —— 它就是速度目标，被 `joyMotionStep` 的积分用）。
+ */
+export function joyTargetVelocity(v: JoyVector, screenW: number): { dx: number; dy: number } {
   const w = Number.isFinite(screenW) && screenW > 0 ? screenW : 0;
-  const dt = Number.isFinite(dtMs) ? Math.min(JOY_MAX_DT_MS, Math.max(0, dtMs)) : 0;
-  if (!w || !dt || !v || !v.mag) return { dx: 0, dy: 0 };
-  const k = (w * JOY_SCREEN_PER_SEC * dt) / 1000;
+  if (!w || !v || !v.mag) return { dx: 0, dy: 0 };
+  const k = w * JOY_SCREEN_PER_SEC;
   return { dx: v.x * k, dy: v.y * k };
 }
 
+/** 单帧 dt 的**唯一夹法**（`joyScreenDelta` 与 `joyMotionStep` 共用；掉帧时不许跳变） */
+export function clampDt(dtMs: number): number {
+  return Number.isFinite(dtMs) ? Math.min(JOY_MAX_DT_MS, Math.max(0, dtMs)) : 0;
+}
+
 /* ══════════════════════════════════════════════════════════════════
- * 三、唯一驱动点：一个 rAF（可注入 ⇒ 离线能数帧数）
+ * 三、运动模型：输入 →（加速/摩擦）→ 速度 →（积分）→ 角色位移；相机阻尼跟随 + 前瞻 + 死区
+ * ══════════════════════════════════════════════════════════════════
+ * 依据 `world_map/RESEARCH-GAME-MOVEMENT.md`（游戏引擎官方文档/公认工程实践；每条后面的 §n 指那份文件）。
+ * 四件事全在 `joyMotionStep()` 这一个纯函数里，**一帧调一次**：
+ *   ① **输入不是速度**（§1）：先按时间常数 τ 把输入**指数逼近**成速度。
+ *      `v += (vT - v) × (1 - e^(-dt/τ))` —— 这个写法**与帧率无关**（60fps 与 30fps 手感一致），
+ *      也**不会瞬间满速**（那是"杂鱼"的第二个来源）。推杆用 `JOY_ACCEL_TAU_S`、回中用 `JOY_FRICTION_TAU_S`，
+ *      同一个公式两个常数；指数衰减永远到不了 0 ⇒ 低于 `JOY_REST_PX_S` 直接**写 0**（判据：停稳可判）。
+ *   ② **按 dt 积分**（§2）：位移 = **新**速度 × dt（半隐式欧拉：先更新速度再积分位置 —— 比显式欧拉稳）。
+ *      dt 只有 `clampDt()` 一处夹（≤64ms）⇒ 掉帧/后台回来不会一次跳出去。
+ *   ③ **角色与相机分开**（§3）：角色按自己的速度在世界里走；相机的目标是「角色 + **前瞻**
+ *      `JOY_LEAD_S` 秒的行程」，再按 `JOY_CAM_TAU_S` 阻尼追。🔴 两条**缺一不可**：
+ *        · 只有阻尼、没有前瞻 ⇒ 稳态时相机落在角色身后 `v×τ`，可读性差、方向感弱；
+ *        · 只有前瞻、没有阻尼 ⇒ 相机瞬移，角色永远钉在同一个屏幕位置（**又回到"看不出在动"**）。
+ *      稳态"角色离屏幕中心" = `(JOY_LEAD_S − JOY_CAM_TAU_S) × v − JOY_CAM_DEADZONE_PX`
+ *      ⇒ 满推（0.6 屏宽/秒）时约 **0.17 屏宽**，方向朝**运动的背面**（相机看前方）——
+ *      这正是"角色明明在动"的可数证据（自检判据 13/14 钉的就是它）。
+ *   ④ **死区**（§3）：偏差 ≤ `JOY_CAM_DEADZONE_PX` 相机就**不追**（轻推时相机不动、角色自己挪，
+ *      于是很小的走动也看得出来）。取"偏差减死区"而不是迟滞开关 ⇒ 不会在边界上抖。
+ */
+
+/** 加速时间常数 τ（秒）——输入 → 速度的指数逼近速度（§1；Unity `SmoothDamp`/Unreal `FInterpTo` 同一族） */
+export const JOY_ACCEL_TAU_S = 0.26;
+/** 摩擦/阻尼时间常数 τ（秒）——输入回中后速度按它衰减（§1 的"摩擦"，同一个公式、目标换成 0） */
+export const JOY_FRICTION_TAU_S = 0.16;
+/** 相机跟随时间常数 τ（秒）——相机不瞬移，按它追「角色 + 前瞻」（§3 的阻尼跟随） */
+export const JOY_CAM_TAU_S = 0.18;
+/** 前瞻时长（秒）——相机对准"角色 `JOY_LEAD_S` 秒之后会到的地方"（§3 的 look-ahead） */
+export const JOY_LEAD_S = 0.5;
+/** 相机死区（px）——偏差小于它就不追（§3 的 dead zone） */
+export const JOY_CAM_DEADZONE_PX = 20;
+/** 相机单帧位移下限（px）——比它小的位移**不写**（浮点尾巴会让 rAF 链永不收尾；见 `joyMotionStep`） */
+export const JOY_CAM_EPS_PX = 0.01;
+/** 速度归零阈值（px/s）——指数衰减永远到不了 0，低于它就**写 0**（否则 rAF 链永不收尾） */
+export const JOY_REST_PX_S = 3;
+/** 踏步动画：每秒几步（§4「速度决定动画状态」—— 幅度、相位都由**速度**推出来，不另设开关） */
+export const JOY_STEP_HZ = 2.2;
+/** 踏步动画：幅度（px）——"极轻"：只有 1.5px，且 `low` 档 / `prefers-reduced-motion` 直接不跑 */
+export const JOY_STEP_PX = 1.5;
+
+/**
+ * 角色朝向 / 踏步要不要跑（**唯一判据**，自检钉真值表）。
+ * §4：就地行走动画是**装饰**，不是操作 —— 所以它可以被关；摇杆本身（输入）任何档位都不许关。
+ */
+export function joyWalkAnimOn(input: { low: boolean; reduced: boolean }): boolean {
+  return !input.low && !input.reduced;
+}
+
+/**
+ * 屏幕 px → 经纬度的**局部线性映射**（雅可比；宿主用地图库自己的 `unproject` 量一次）。
+ * 🔴 为什么不是"自己写投影数学"：一整条链路只有这一处换算，而它**不是我们推的**——
+ *    四个数全部由 `map.unproject()` 在同一台相机上量出来（见宿主 `joyCalibrate()`）。
+ *    相机中心在**纯平移**下的这个雅可比是**不变**的 ⇒ 会话期间量一次就够，移动中一次都不用再量。
+ */
+export interface JoyPxScale {
+  /** 屏幕 +1px 向右 ⇒ 经度/纬度增量（度） */
+  dxLng: number;
+  dxLat: number;
+  /** 屏幕 +1px 向下 ⇒ 经度/纬度增量（度） */
+  dyLng: number;
+  dyLat: number;
+}
+
+/** 量出来的四个数**必须全有限且不全为 0**，否则给 `null`（⇒ 宁可不走，也不写一个编出来的坐标） */
+export function joyPxScaleOf(s: Partial<JoyPxScale> | null | undefined): JoyPxScale | null {
+  if (!s) return null;
+  const v = [Number(s.dxLng), Number(s.dxLat), Number(s.dyLng), Number(s.dyLat)];
+  if (!v.every((n) => Number.isFinite(n))) return null;
+  if (v.every((n) => n === 0)) return null;
+  return { dxLng: v[0], dxLat: v[1], dyLng: v[2], dyLat: v[3] };
+}
+
+/** 会话原点 + 屏幕位移（px）→ 经纬度（**唯一的 px→经纬度换算**；角色与相机共用同一把标尺） */
+export function joyLngLatOf(
+  origin: { lng: number; lat: number },
+  s: JoyPxScale,
+  x: number,
+  y: number
+): { lng: number; lat: number } {
+  return { lng: origin.lng + x * s.dxLng + y * s.dyLng, lat: origin.lat + x * s.dxLat + y * s.dyLat };
+}
+
+/** 运动状态（**可注入、可离线跑**；宿主每帧拿到的是**新对象**，不改这一份） */
+export interface JoyMotion {
+  /** 角色速度（px/s，屏幕坐标：右/下为正） */
+  vx: number;
+  vy: number;
+  /** 角色相对**会话原点**的累计屏幕位移（px）——世界坐标 = `joyLngLatOf(原点, 标尺, px, py)` */
+  px: number;
+  py: number;
+  /** 相机相对会话原点的累计屏幕位移（px）——`panBy` 的累计值就是它（名字层跟手也用它） */
+  cx: number;
+  cy: number;
+  /** 朝向（度，正北 0、顺时针）——由**速度方向**定（§4）；停下保持上一次，不乱转 */
+  headingDeg: number;
+  /** 速度 ÷ 满速（0..1）——踏步幅度用它（停下 ⇒ 0 ⇒ 动画自己回正） */
+  speedRatio: number;
+  /** 踏步相位（圈，累计）——停下来就不再涨 */
+  stepPhase: number;
+}
+
+/** 会话开始的零状态（每进一次近景 `createJoyMotion()` 一份新的） */
+export function createJoyMotion(): JoyMotion {
+  return { vx: 0, vy: 0, px: 0, py: 0, cx: 0, cy: 0, headingDeg: 0, speedRatio: 0, stepPhase: 0 };
+}
+
+/** 一步的结果：相机该走多少（喂 `panBy`）+ 新状态 + 还没停稳吗（驱动要不要续 rAF） */
+export interface JoyStepResult {
+  /** 相机这一帧的屏幕位移（px，右/下为正）——**与旧版同口径**，直接喂 `map.panBy` */
+  d: JoyFrameDelta;
+  /** 这一步之后的状态（新对象） */
+  move: JoyMotion;
+  /** 速度没归零 **或** 相机还没追上 ⇒ 驱动要继续跑（都停了就断链，不空转） */
+  moving: boolean;
+}
+
+/**
+ * 运动模型的一步（纯函数；`dtMs` ≤ 64）。
+ * 不变量（自检钉着）：
+ *   ① 任何一项非有限（NaN/∞）⇒ **整份归零**并判停稳（宁可停住，也不把 NaN 写进 `setLngLat`）；
+ *   ② `dt = 0` ⇒ 状态逐字节不变、`d = 0`（不许凭空走出位移）；
+ *   ③ 停稳（`moving === false`）⇒ `d = {0,0}` 且速度恰好 0（"没推就不更新相机"的旧不变量）；
+ *   ④ 朝向只在**真的有速度**（> 满速的 1%）时更新。
+ */
+export function joyMotionStep(m: JoyMotion, v: JoyVector, screenW: number, dtMs: number): JoyStepResult {
+  const dt = clampDt(dtMs);
+  const s = dt / 1000;
+  const w = Number.isFinite(screenW) && screenW > 0 ? screenW : 0;
+  /* 目标速度（px/s）——满速向量；与 `joyScreenDelta` 同一把尺子（都出自 `joyTargetVelocity`） */
+  const t = joyTargetVelocity(v, w);
+  const bad = !Number.isFinite(m.vx + m.vy + m.px + m.py + m.cx + m.cy);
+  if (bad) return { d: { dx: 0, dy: 0 }, move: createJoyMotion(), moving: false };
+  /* dt=0（注入的时钟没走 / 同一毫秒内两次）⇒ 状态逐字节不变；只有"还在推或还在滑"才续帧 */
+  if (!dt) return { d: { dx: 0, dy: 0 }, move: { ...m }, moving: !!(v && v.mag > 0) || m.vx !== 0 || m.vy !== 0 };
+
+  /* ① 输入 → 速度（指数逼近；推杆用加速 τ、回中用摩擦 τ） */
+  const k = 1 - Math.exp(-s / (v && v.mag > 0 ? JOY_ACCEL_TAU_S : JOY_FRICTION_TAU_S));
+  let vx = m.vx + (t.dx - m.vx) * k;
+  let vy = m.vy + (t.dy - m.vy) * k;
+  let speed = Math.hypot(vx, vy);
+  if ((!v || v.mag <= 0) && speed < JOY_REST_PX_S) {
+    vx = 0;
+    vy = 0;
+    speed = 0;
+  }
+  /* ② 半隐式欧拉：用**新**速度积分位置 */
+  const px = m.px + vx * s;
+  const py = m.py + vy * s;
+  /* ③④ 相机：目标 = 角色 + 前瞻；偏差减掉死区再阻尼逼近 */
+  const tx = px + vx * JOY_LEAD_S;
+  const ty = py + vy * JOY_LEAD_S;
+  const shrink = (e: number): number =>
+    Math.abs(e) <= JOY_CAM_DEADZONE_PX ? 0 : e > 0 ? e - JOY_CAM_DEADZONE_PX : e + JOY_CAM_DEADZONE_PX;
+  const ex = shrink(tx - m.cx);
+  const ey = shrink(ty - m.cy);
+  const ck = 1 - Math.exp(-s / JOY_CAM_TAU_S);
+  let cx = m.cx + ex * ck;
+  let cy = m.cy + ey * ck;
+  /* 🔴 亚像素尾巴**不许写**：`shrink()` 在死区边界上会给出 1e-15 这种量级的偏差 ⇒ 相机每帧
+     挪 1e-16px ⇒ `d` 非 0 ⇒ rAF 链**永不收尾**、每帧白发一次 `panBy`（实测栽过：滑停后
+     `moving` 一直为 true、跑满 400 帧上限）。小于百分之一像素就当"这一步没动"。 */
+  if (Math.abs(cx - m.cx) < JOY_CAM_EPS_PX && Math.abs(cy - m.cy) < JOY_CAM_EPS_PX) {
+    cx = m.cx;
+    cy = m.cy;
+  }
+  /* 停稳 = 速度恰好 0 **且** 相机这一帧一步都没走（⇒ `d` 恰好 {0,0}，链可以断）。
+     🔴 不能拿"离目标 < 0.05px"来判：有死区时相机本来就会停在离目标最多
+     `JOY_CAM_DEADZONE_PX` 的地方，那个判据永远不为真。 */
+  const settled = speed === 0 && cx === m.cx && cy === m.cy;
+  /* ④ 朝向：只在真的有速度时更新（§4 朝向跟随移动方向） */
+  const vmax = w * JOY_SCREEN_PER_SEC;
+  const speedRatio = vmax > 0 ? Math.min(1, speed / vmax) : 0;
+  const headingDeg = speed > vmax * 0.01 ? (Math.atan2(vx, -vy) * 180) / Math.PI : m.headingDeg;
+  const stepPhase = m.stepPhase + (speedRatio > 0 ? (dt / 1000) * JOY_STEP_HZ * speedRatio : 0);
+  const move: JoyMotion = {
+    vx,
+    vy,
+    px,
+    py,
+    cx,
+    cy,
+    headingDeg: headingDeg < 0 ? headingDeg + 360 : headingDeg,
+    speedRatio,
+    stepPhase,
+  };
+  return { d: { dx: cx - m.cx, dy: cy - m.cy }, move, moving: !settled };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 四、唯一驱动点：一个 rAF（可注入 ⇒ 离线能数帧数）
  * ══════════════════════════════════════════════════════════════════ */
 
 export interface JoyFrameDelta {
@@ -138,8 +350,12 @@ export interface JoyFrameDelta {
   dy: number;
 }
 export interface JoyDriverDeps {
-  /** 每帧**最多一次**（向量为 0 的帧根本不回调）——相机更新只许挂在这里 */
-  onFrame: (d: JoyFrameDelta, v: JoyVector) => void;
+  /**
+   * 每帧**最多一次**（**停稳**的帧根本不回调）——相机/角色/名字层的写点只许挂在这里。
+   * 第三个参数是**这一步之后的运动状态**：宿主用它写角色世界坐标（`px/py`）、朝向与踏步
+   * （§3/§4；相机那一路只认 `d`）。
+   */
+  onFrame: (d: JoyFrameDelta, v: JoyVector, move: JoyMotion) => void;
   /** 松手：**恰好一次**（清 `joyActive` + 一次重算都挂这里；没按下过就不会回调） */
   onHalt: () => void;
   /** 屏宽（px）——"屏宽/秒"那把尺子；组件在**按下那一刻**量一次后缓存（每帧读 clientWidth = 每帧强制布局） */
@@ -161,6 +377,8 @@ export interface JoyDriver {
   readonly active: boolean;
   /** 跑过多少帧（自检读数；生产留着是 0 成本） */
   readonly frames: number;
+  /** 当前运动状态（自检读数；生产里宿主用 `onFrame` 那一份，不读这里） */
+  readonly move: JoyMotion;
 }
 
 /**
@@ -168,8 +386,10 @@ export interface JoyDriver {
  * 生命周期：`begin()` → N × `setVector()` → `release()`；`cancel()` 用于组件卸载。
  * 不变量（自检钉着）：
  *   ① `setVector()` 一次都不触发相机回调 —— 它只写向量 + 确保 rAF 在跑；
- *   ② 一帧内 `onFrame` **至多 1 次**，且只在该帧向量非零时；
- *   ③ 向量归零 ⇒ rAF 链**自己停**（不空转）；`release()` ⇒ `onHalt` 恰好 1 次、之后一帧都不再回调。
+ *   ② 一帧内 `onFrame` **至多 1 次**，且只在**还没停稳**（速度非 0 或相机没追上）时；
+ *   ③ 停稳 ⇒ rAF 链**自己停**（不空转）；`release()` ⇒ 速度**立刻**归零、`onHalt` 恰好 1 次、
+ *      之后一帧都不再回调（"松手恰好一次重算"那条红线就钉在这）；
+ *   ④ 运动状态**跨按压保留**（松手不清位置/朝向）⇒ 再推一下不会把人瞬移回原点。
  */
 export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
   const now = deps.now || (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
@@ -181,6 +401,7 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
     deps.caf || ((id: number) => (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame(id) : clearTimeout(id as never)));
 
   let v: JoyVector = { ...JOY_ZERO };
+  let move: JoyMotion = createJoyMotion();
   let active = false;
   let frameId = 0;
   let last = 0;
@@ -197,11 +418,16 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
     const dt = t - last;
     last = t;
     frames += 1;
-    const d = joyScreenDelta(v, deps.screenW(), dt);
-    /* 死区内/位移为 0 ⇒ **不回调**（"没推就不更新相机"，判据 1 的前提） */
-    if (d.dx || d.dy) deps.onFrame(d, v);
-    /* 还推着才续帧：松手/回中 ⇒ 链自己断（不空转、不残留定时器） */
-    if (active && v.mag > 0) frameId = raf(frame);
+    const r = joyMotionStep(move, v, deps.screenW(), dt);
+    move = r.move;
+    /* 停稳/位移为 0 ⇒ **不回调**（"没推就不更新相机"的旧不变量，见 `joyMotionStep` 不变量③） */
+    if (r.d.dx || r.d.dy) deps.onFrame(r.d, v, move);
+    /* 还推着 / 还在滑行 / 相机还没追上 ⇒ 续帧；都停了就断链（不空转、不残留定时器） */
+    if (active && r.moving) frameId = raf(frame);
+  }
+  /** 松手/卸载：速度**立刻**归零（位置/朝向/相机留在原地 —— 下次推杆从这儿接着走） */
+  function haltMove(): void {
+    move = { ...move, vx: 0, vy: 0, speedRatio: 0 };
   }
 
   return {
@@ -210,6 +436,9 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
     },
     get frames() {
       return frames;
+    },
+    get move() {
+      return move;
     },
     begin() {
       active = true;
@@ -226,6 +455,7 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
       if (!active) return; // 没按下过 ⇒ 不是"松手"，一次重算都不该有
       active = false;
       v = { ...JOY_ZERO };
+      haltMove();
       if (frameId) {
         caf(frameId);
         frameId = 0;
@@ -235,6 +465,7 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
     cancel() {
       active = false;
       v = { ...JOY_ZERO };
+      haltMove();
       if (frameId) {
         caf(frameId);
         frameId = 0;
@@ -244,13 +475,19 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * 四、「我」的漫游位置真源（**不是 GPS**；见文件头 🔴）
+ * 五、「我」的漫游位置真源（**不是 GPS**；见文件头 🔴）
  * ══════════════════════════════════════════════════════════════════ */
 
 /** 位置的**来源标注**：只有一个合法值 —— 免得将来有人顺手写成 `"gps"` */
 export const ROAM_SOURCE = "roam" as const;
 /** 给人和 UI 的那句实话（HUD / 判词要引用就引这一份，不许各写一版） */
 export const ROAM_NOTE = "漫游位置（演示，不是 GPS）";
+/**
+ * 「我」那颗钉子的 id（= 漫游时被驱动的那一个）。
+ * 🔴 这个 id **不是我们的**：它由 `composables/useWsActors.ts` 造玩家那条时写死（`id: "me"`），
+ *    这里只是**引用**它的唯一一处（自检里钉着"两处必须一致"，改那边忘了这边会红）。
+ */
+export const ROAM_PIN_ID = "me";
 /** 近景那一句（HUD 上要看得见：这是**倾斜俯视的跟随**，不是眼睛高度的实景） */
 export const JOY_MODE_NOTE = "漫游视角（不是步行模拟）";
 /** 2D 降级路的实话（没有相机 ⇒ 摇杆不出现，但要**写出原因**，不静默消失） */
@@ -259,7 +496,11 @@ export const JOY_2D_NOTE = "2D 降级路没有相机，摇杆不适用";
 export interface RoamPos {
   lng: number;
   lat: number;
-  /** 朝向（度，正北为 0）—— 真源就是**相机 bearing**（我们从不改它，只如实记录） */
+  /**
+   * 朝向（度，正北为 0、顺时针）—— 语义 2026-10-03 变了，**认准这一条**：
+   * 现在是**角色脸朝哪**（= 移动方向，`joyMotionStep` 从速度算出来，§4），
+   * 不再是"相机 bearing 的副本"（那是老版本，相机与角色本来就重合，两者没区别）。
+   */
   headingDeg: number;
   /** 永远 `"roam"`：这一份位置**不许**冒充定位（类型上就写死） */
   source: typeof ROAM_SOURCE;
@@ -268,7 +509,13 @@ export interface RoamPos {
 }
 export interface RoamStore {
   get(): RoamPos | null;
-  /** **唯一写入点**（地图组件每帧从 `map.getCenter()` 反写；这里不做任何换算） */
+  /**
+   * **唯一写入点**。
+   * 🔴 2026-10-03：写法变了 —— 以前是"每帧读 `map.getCenter()` **反写**回来"（于是位置永远等于相机，
+   * 角色自然一动不动）；现在是**运动模型算出来的世界坐标**（`joyLngLatOf(原点, 标尺, px, py)`）
+   * 写进来。相机反过来从它派生 ⇒ "角色"与"相机"从数据上就是两件事（§3）。
+   * 这里仍然**不做任何换算**（换算只在 `joyLngLatOf` 一处）。
+   */
   write(lng: number, lat: number, headingDeg: number, t?: number): RoamPos;
   clear(): void;
 }
@@ -289,7 +536,7 @@ export function createRoamStore(): RoamStore {
 export const roamStore = createRoamStore();
 
 /* ══════════════════════════════════════════════════════════════════
- * 五、开关：**默认关** + 面板开关 + 本地记忆 + URL 逃生口
+ * 六、开关：**默认关** + 面板开关 + 本地记忆 + URL 逃生口
  * （机主 2026-10-03 改的口径：「摇杆改成点击玩家头像，在面板里选择开启喵！」）
  * ══════════════════════════════════════════════════════════════════
  * 四层，优先级从高到低：
@@ -377,7 +624,7 @@ export function joyGateOf(input: { joy: boolean; fallback2d: boolean }): { show:
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * 六、相机快照 / 还原（"关掉 ⇒ 逐字还原"的那一半，纯函数）
+ * 七、相机快照 / 还原（"关掉 ⇒ 逐字还原"的那一半，纯函数）
  * ══════════════════════════════════════════════════════════════════
  * 机主的要求：关闭 ⇒ 相机/俯角**还原到接管之前的值**，不许留残留状态。
  * 于是有两件事必须离线可判（自检钉着）：

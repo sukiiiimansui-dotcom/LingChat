@@ -41,11 +41,25 @@
  *   · 为什么要有第二个预算：像素预算**管不住顶点**（z12 时一栋楼在屏上只有 1~2px，
  *     12000 栋的 px² 也就 2 万出头，但顶点是 24 万）—— 那是 JS/上传/内存的账，不是填充率的账。
  *
+ * ## 🆕 2026-10-03（机主真机验收后的加档）· **默认严格档 + 用户开关**
+ * 机主真机报的问题（原话）：「楼一会少一会多，一会直接不见」。真因就是上面那两个**代价**预算
+ * 在两端都不合适：低 zoom 时每栋只有几 px² ⇒ 40 万 px² 能塞下**成千上万**个小盒子（太多）；
+ * 高 zoom 时几栋大楼就吃满（太少）。
+ * 机主的决定（原话）：「我想要一开始直接**固定可显示的楼房数据，严格限制**，但是要求用户
+ * **可在选择是否启用多楼房模式（不推荐）**」⇒ 本模块加第三个上限：**栋数**。
+ *   · `maxDrawn` = **栋数硬上限**，与两个代价预算**同时**生效、谁也替不了谁；
+ *   · 默认档 `WS_BLD_MAX_DRAWN = 100`（严格档）；用户自己开"多楼房模式"才用
+ *     `WS_BLD_MAX_DRAWN_MANY = 4000`（不推荐，更卡）；
+ *   · 档位是**用户的选择**（存 `localStorage`，见 `wsBldMode.ts`），**不是**按帧率/设备自动缩
+ *     （机主红线：不许自动降级）。
+ *
  * ## 确定性（项目纪律）
- * 同一输入（视野 + 楼数据 + 两个常量）⇒ **挑出来的批次逐字节可复现**：
+ * 同一输入（视野 + 楼数据 + 三个常量）⇒ **挑出来的批次逐字节可复现**：
  *   · 没有任何 `Math.random()` / `Date.now()` / 帧率 / 设备能力输入；
  *   · 排序是**全序**：`单位顶点换到的像素`降序 → 像素降序 → `id` 升序（第三键保证不存在"等值不定序"）；
- *   · 输入顺序不影响结果（全序 + 稳定 `Array.sort`），但**同序输入必然同序输出**。
+ *   · 输入顺序不影响结果（全序 + 稳定 `Array.sort`），但**同序输入必然同序输出**；
+ *   · 🔴 **不达 `maxDrawn` 时行为与"没有这个上限"逐字节相同**（连 `why` 都一字不差）——
+ *     新增的第三个上限**只在它真的咬住时**才出现在判词里，别让它变成"到处都多一句"。
  */
 
 /** Σ投影面积预算（CSS 像素²）—— 见文件头"为什么是这个数" */
@@ -53,6 +67,38 @@ export const WS_BLD_BUDGET_PX2 = 400_000;
 
 /** Σ顶点预算 —— 见文件头"为什么是这个数" */
 export const WS_BLD_BUDGET_VERTS = 40_000;
+
+/**
+ * 🏙 **默认严格档**：一屏**最多画 100 栋**（机主 2026-10-03 拍板："一开始直接固定可显示的楼房数据，
+ * 严格限制"）。
+ *
+ * 为什么是 100：它是**"看得清"**的量，不是性能推出来的数 —— 屏幕上 100 栋楼已经能铺满近景、
+ * 一眼能数清"这几栋就是这几栋"，而"一会儿多一会儿少"正是机主否掉的那种观感。
+ * 量级上也与旧口径自洽：老的"每格 ≤100 栋"（`bldCapForCellDeg`）就是 100，这里把它从"每格"
+ * 提到"整屏"，仍然是同一个数 ⇒ 机主认过的那个密度没有被偷偷改掉。
+ */
+export const WS_BLD_MAX_DRAWN = 100;
+
+/**
+ * 🚨 **多楼房模式（不推荐）**的上限：4000 栋。
+ *
+ * 为什么是 4000：它是外部取经那份调研里**实测过**的量级（渝中半岛 2492 栋全画 ≈ 5 万顶点、
+ * draw call 数不变、GPU 顶点侧是零头）再往上留一点余量 ⇒ "想要多就给到真能多、但不会把
+ * 手机直接打死"的那一档。
+ * ⚠️ **不推荐**不是客套话：这个档位下框选/填充率/JS 侧上传都回到"几千个盒子"的量级，
+ * 低 zoom 时尤其卡 —— UI 的 `title` 必须把这句话写出来（见 `WsCityEntry.vue`）。
+ */
+export const WS_BLD_MAX_DRAWN_MANY = 4000;
+
+/**
+ * 档位 → 栋数上限（**唯一映射处**，页面/App/自检都调它，不许各写一套 `mode === "many" ? … : …`）。
+ *
+ * @param mode 档位；**认不出来的值（含 `undefined`/`null`/对象/数字）一律按默认严格档** ——
+ *             坏数据退回默认与 `wsRelation.ts`/`wsDailyStore.ts` 同一口径（绝不抛）。
+ */
+export function bldMaxDrawnOf(mode: unknown): number {
+  return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
 
 /** 每段墙固定 4 个顶点（MapLibre `fill_extrusion_bucket` 的 `prepareSegment(4, …)` + 4×`addVertex`） */
 export const WS_BLD_VERTS_PER_SEGMENT = 4;
@@ -209,6 +255,11 @@ export interface BldBudgetInput<T> {
   budgetPx2?: number;
   /** 顶点预算（默认 `WS_BLD_BUDGET_VERTS`） */
   budgetVerts?: number;
+  /**
+   * 🔴 **栋数硬上限**（默认 `WS_BLD_MAX_DRAWN` = 100，严格档）——第三个上限，与两个代价预算**同时**生效。
+   * 档位由用户选（`bldMaxDrawnOf(mode)`），宿主把它的结果传进来；不传 = 严格档。
+   */
+  maxDrawn?: number;
   /** 视野内**至少**几栋（机主 2026-09-26：「视野内最少有十栋房」）；0 = 不启用 */
   minInView?: number;
 }
@@ -237,6 +288,14 @@ export interface BldBudgetStats {
   px2Bound: boolean;
   /** 真是被**顶点**预算拦住的 */
   vertsBound: boolean;
+  /**
+   * 🆕 真是被**栋数上限**拦住的（否则 false —— 不谎报"上限起作用了"）。
+   * 口径：挑选循环**到上限即停**时，后面还有没看过的候选 ⇒ true。
+   * 若上限正好在最后一个候选上凑满（后面没货了），不算被拦住 —— 那个数照样画得出来。
+   */
+  countBound: boolean;
+  /** 🆕 本轮的**栋数硬上限**（回证用：HUD 要能读出"这一屏是按 100 栋还是 4000 栋挑的"） */
+  maxDrawn: number;
   /** 视野下限（`minInView`） */
   minInView: number;
   /** 为了让视野内够 `minInView` 栋而**破例**补进来的栋数（0 = 没破例） */
@@ -245,6 +304,7 @@ export interface BldBudgetStats {
    * 有没有**超出预算**。正常恒 false；只有一种情况会 true：
    * 视野内候选本身不足 `minInView` 栋之后的**兜底破例**（见 `floorAdded`）。
    * ⚠️ 如实报，不许把它藏进"应该是不会发生的"里。
+   * ⚠️ 栋数上限**不在此列**：它任何时候都不破（`minInView` 的补齐也越不过它）。
    */
   overBudget: boolean;
   /** 人话判词（**只由本模块产出**，宿主不许再拼第二份） */
@@ -260,17 +320,22 @@ export interface BldBudgetOutcome<T> {
 /**
  * 🏙 **双预算挑楼**（纯函数、无状态、确定性）。
  *
- * 规则（三条，缺一条就不是机主批的那个方案）：
+ * 规则（四条，缺一条就不是机主批的那个方案）：
  *  ① **候选 = 视野内全部楼**（不再有"每格 N 栋"）；
  *  ② 按「**单位顶点换到的像素**」降序取（`px/verts`；同值比 `px`，再同比 `id`）——
  *     这是外部取经里那句"按投影面积/顶点成本降序取"的落地：同样一个顶点预算，
  *     先保住**看起来最大**的那批；
  *  ③ 两个预算**都是固定常量**，任一超了就换下一个候选（不是停手：继续找还塞得下的小楼）。
  *     **绝不**按帧率/设备自动缩（机主红线）。
+ *  ④ 🆕 **栋数硬上限 `maxDrawn`**（默认 100）：**到上限即停**（不是"跳过继续找"——
+ *     个数上限的语义是"就画这么多"）。它与③的两个代价预算**同时**生效，谁也替不了谁。
  *
  * 视野下限（`minInView`）：预算扫完之后若不足，按同一顺序**破例补**到下限，并把
  * `floorAdded` / `overBudget` 如实写进统计 —— 机主 2026-09-26 的要求优先于预算，
  * 但**不许**因此谎报"预算成立"。
+ * 🔴 **补齐也越不过 `maxDrawn`**（`minInView` 与 `maxDrawn` 打架时，以**先到**的那个为准）：
+ *    栋数上限是"严格限制"这条命令本身，任何兜底都不许把它顶掉；
+ *    因此真实结果可能是 `chosen < minInView` —— 那是**如实**的（`why` 里两个数都写着）。
  */
 export function pickBuildingsByBudget<T extends { id?: unknown }>(
   input: BldBudgetInput<T>
@@ -278,13 +343,19 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
   const feats = input.features || [];
   const budgetPx2 = Number.isFinite(input.budgetPx2 as number) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
   const budgetVerts = Number.isFinite(input.budgetVerts as number) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
+  /* 栋数上限：**非有限数一律退回严格档**（不猜、不当作"无上限"——"没给"的语义是默认档，不是放开）。
+     负数/0 照收：0 = 一栋不画（与 `?bldn=0` 同语义），负数等价 0（下面的循环自己会立刻停）。 */
+  const maxDrawn = Number.isFinite(input.maxDrawn as number)
+    ? Math.max(0, Math.floor(Number(input.maxDrawn)))
+    : WS_BLD_MAX_DRAWN;
   const minInView = Number.isFinite(input.minInView as number) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
 
   const stats: BldBudgetStats = {
     total: feats.length, considered: 0, outOfView: 0, noRing: 0, chosen: 0,
     px2: 0, verts: 0, px2Budget: budgetPx2, vertsBudget: budgetVerts,
-    px2Bound: false, vertsBound: false, minInView, floorAdded: 0, overBudget: false, why: "",
+    px2Bound: false, vertsBound: false, countBound: false, maxDrawn,
+    minInView, floorAdded: 0, overBudget: false, why: "",
   };
 
   if (!b) {
@@ -333,6 +404,14 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
   const taken = new Array<boolean>(cands.length).fill(false);
   let sumPx = 0, sumV = 0;
   for (let i = 0; i < cands.length; i++) {
+    /* ④ **栋数上限：到量即停**（放在循环最前面 ⇒ 一个候选都不多看，代价最小、也最容易看懂）。
+       走到这一步就说明**手上还有没看过的候选**（`cands[i]` 自己就没看）⇒ 它是因为栋数上限
+       才没被画的，如实记 `countBound`。反过来，若正好在最后一个候选上凑满，循环自然结束、
+       不会走到这行 ⇒ 不算被拦住（那个数照样画得出来）。 */
+    if (chosen.length >= maxDrawn) {
+      stats.countBound = true;
+      break;
+    }
     const c = cands[i]!;
     const overPx = sumPx + c.c.px > budgetPx2;
     const overV = sumV + c.c.verts > budgetVerts;
@@ -347,9 +426,11 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     sumV += c.c.verts;
   }
 
-  /* ④ 视野下限：不足 `minInView` ⇒ 按同一顺序破例补，并**如实记破例** */
+  /* ⑤ 视野下限：不足 `minInView` ⇒ 按同一顺序破例补，并**如实记破例**
+     🔴 **越不过 `maxDrawn`**（两个条件同时成立才补）：栋数上限是"严格限制"本身，
+        视野下限这条兜底不许把它顶掉；真补不满就如实少画（`why` 里两个数都写着）。 */
   if (chosen.length < minInView) {
-    for (let i = 0; i < cands.length && chosen.length < minInView; i++) {
+    for (let i = 0; i < cands.length && chosen.length < minInView && chosen.length < maxDrawn; i++) {
       if (taken[i]) continue;
       const c = cands[i]!;
       taken[i] = true;
@@ -368,10 +449,17 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
   const bd: string[] = [];
   if (stats.px2Bound) bd.push("像素");
   if (stats.vertsBound) bd.push("顶点");
+  /* 🆕「栋数」也进这一串：被个数上限拦住与被代价预算拦住**必须分得开**（机主要能一眼看出
+     "这一屏是因为我设了 100 栋才只有 100 栋"，而不是"楼就这么少"）。 */
+  if (stats.countBound) bd.push("栋数");
   stats.why =
     "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen +
     " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts +
     (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") +
+    /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
+       "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）
+       由宿主加在最前面 —— 档位是**用户的选择**，不是挑楼规则的一部分。 */
+    (stats.countBound ? " · 栋数上限 " + maxDrawn + " 栋" : "") +
     (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") +
     (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") +
     (stats.outOfView ? " · 视野外 " + stats.outOfView : "") +

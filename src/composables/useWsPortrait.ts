@@ -12,6 +12,8 @@
 
 import { ref, watch, type Ref } from "vue";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "@/api/services/worldMap";
+import { previewCharAssetUrl } from "@/components/views/worldsim/wsPreviewAssets";
 
 export interface UseWsPortraitOptions {
   /** 角色目录名（取立绘的 key） */
@@ -52,6 +54,18 @@ export function useWsPortrait(opts: UseWsPortraitOptions) {
     missingClothes.value = false;
     const clothesName = String(opts.clothes.value || "default") || "default";
     const emotion = opts.mapEmotion(opts.emotion.value);
+    /* 🖼 2026-10-03：**纯 web 预览**不走 Tauri（预览里 `get_avatar_file` 恒失败 ⇒ 面板永远空着）。
+       改走预览直通 `/char/<目录>/avatar/[<服装>/]<情绪>.webp`（`webdev-preview-server.py` 只读直通官方素材，
+       原型页一直用的就是这条）。认不出目录 ⇒ 空串 ⇒ 面板画空态（**不报错、不猜路径**）。
+       ⚠️ 真机的解析规则仍只有 Rust 一份（`src-tauri/src/api/character.rs`），这里不重写它。 */
+    if (!isTauriRuntime()) {
+      const u = previewCharAssetUrl(folder, emotion, clothesName);
+      if (my !== seq || !opts.open.value) return;
+      url.value = u;
+      loading.value = false;
+      error.value = "";
+      return;
+    }
     try {
       const p = await invoke<string>("get_avatar_file", {
         characterFolder: folder,

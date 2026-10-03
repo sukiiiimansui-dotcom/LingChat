@@ -2022,17 +2022,187 @@ function windowPatternSpec(wall, pane, size = WIN_PATTERN_SIZE, cols = 4, rows =
   return { size, wall, pane, cols, rows, data };
 }
 
+// src/components/views/worldsim/wsFeatureStore.ts
+function metersBetween(a, b) {
+  const kx = 111320 * Math.cos((a[1] + b[1]) / 2 * Math.PI / 180);
+  const ky = 110540;
+  return Math.hypot((a[0] - b[0]) * kx, (a[1] - b[1]) * ky);
+}
+function createFeatureStore(opts) {
+  const cap = Math.max(1, Math.floor(opts.cap));
+  const byId = /* @__PURE__ */ new Map();
+  let noIdList = [];
+  let added = 0, dupes = 0, dropped = 0, merges = 0, lastMergeMs = null;
+  const sources = /* @__PURE__ */ new Set();
+  let sourcesDropped = 0;
+  const srcOf = /* @__PURE__ */ new WeakMap();
+  function all() {
+    return noIdList.length ? [...byId.values(), ...noIdList] : [...byId.values()];
+  }
+  return {
+    merge(features, sourceKey) {
+      const t0 = Date.now();
+      let a = 0, d = 0, nid = 0;
+      for (const f of features) {
+        const id = opts.idOf(f);
+        if (!id) {
+          noIdList.push(f);
+          nid++;
+          a++;
+          if (sourceKey && f && typeof f === "object") srcOf.set(f, sourceKey);
+          continue;
+        }
+        if (byId.has(id)) {
+          dupes++;
+          d++;
+          continue;
+        }
+        byId.set(id, f);
+        a++;
+        if (sourceKey && f && typeof f === "object") srcOf.set(f, sourceKey);
+      }
+      added += a;
+      merges++;
+      if (sourceKey) sources.add(sourceKey);
+      lastMergeMs = Date.now() - t0;
+      return { added: a, dupes: d, noId: nid, total: byId.size + noIdList.length, ms: lastMergeMs };
+    },
+    retainNear(center, keepRadiusM) {
+      const droppedSourcesBefore = sourcesDropped;
+      let droppedFar = 0, droppedOverCap = 0;
+      const keep = [];
+      const far = [];
+      for (const f of all()) {
+        const pt = opts.pointOf(f);
+        if (!pt) {
+          keep.push([0, f]);
+          continue;
+        }
+        const dist2 = metersBetween(pt, center);
+        (dist2 <= keepRadiusM ? keep : far).push([dist2, f]);
+      }
+      droppedFar = far.length;
+      let over = [];
+      if (keep.length > cap) {
+        const sorted = [...keep].sort((x, y) => x[0] - y[0]);
+        over = sorted.slice(cap);
+        keep.length = 0;
+        keep.push(...sorted.slice(0, cap));
+        droppedOverCap = over.length;
+      }
+      if (droppedFar + droppedOverCap > 0) {
+        const alive = /* @__PURE__ */ new Set();
+        for (const [, f] of keep) {
+          if (f && typeof f === "object") {
+            const k = srcOf.get(f);
+            if (k) alive.add(k);
+          }
+        }
+        for (const k of [...sources]) {
+          if (alive.has(k)) continue;
+          sources.delete(k);
+          sourcesDropped += 1;
+        }
+      }
+      const keepSet = new Set(keep.map(([, f]) => f));
+      const nextById = /* @__PURE__ */ new Map();
+      const nextNoId = [];
+      for (const [id, f] of byId) if (keepSet.has(f)) nextById.set(id, f);
+      for (const f of noIdList) if (keepSet.has(f)) nextNoId.push(f);
+      byId.clear();
+      for (const [id, f] of nextById) byId.set(id, f);
+      noIdList = nextNoId;
+      dropped += droppedFar + droppedOverCap;
+      const droppedSourcesNow = droppedSourcesBefore === sourcesDropped ? 0 : sourcesDropped - droppedSourcesBefore;
+      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: droppedSourcesNow };
+    },
+    features: all,
+    has: (k) => sources.has(k),
+    stats() {
+      return {
+        n: byId.size + noIdList.length,
+        noId: noIdList.length,
+        added,
+        dupes,
+        dropped,
+        merges,
+        sources: sources.size,
+        sourcesDropped,
+        lastMergeMs,
+        cap
+      };
+    },
+    /* ⚠️ `clear()` 必须**连来源键一起清**：`has()` 的语义现在是"仓库里确实还有这一格的要素"
+       （见 `retainNear` 的 `dirtySources`）—— 只清要素不清来源键，就会又变回"说已经取过、其实没有"。 */
+    clear() {
+      byId.clear();
+      noIdList = [];
+      sources.clear();
+    }
+  };
+}
+var ROADS_BUNDLE_CELL_DEG = 0.05;
+var BLD_BUNDLE_CELL_DEG = 0.05;
+var PLACES_BUNDLE_CELL_DEG = 0.05;
+function bundleCellOf(lng, lat, size) {
+  const w = Math.floor(lng / size) * size;
+  const s = Math.floor(lat / size) * size;
+  return { w: +w.toFixed(5), s: +s.toFixed(5) };
+}
+function bundleCellKey(w, s, size) {
+  return `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
+}
+function roadsBundleCellOf(lng, lat, size = ROADS_BUNDLE_CELL_DEG) {
+  return bundleCellOf(lng, lat, size);
+}
+function roadsBundleCellKey(w, s, size = ROADS_BUNDLE_CELL_DEG) {
+  return bundleCellKey(w, s, size);
+}
+function bldBundleCellOf(lng, lat, size = BLD_BUNDLE_CELL_DEG) {
+  return bundleCellOf(lng, lat, size);
+}
+function bldBundleCellKey(w, s, size = BLD_BUNDLE_CELL_DEG) {
+  return bundleCellKey(w, s, size);
+}
+function bundleCellsForView(bounds, center, maxCells, size) {
+  if (!bounds || !center) return null;
+  const w0 = bounds.getWest(), e0 = bounds.getEast(), s0 = bounds.getSouth(), n0 = bounds.getNorth();
+  if (![w0, e0, s0, n0, center.lng, center.lat].every((v) => Number.isFinite(v))) return null;
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const i0 = Math.floor(w0 / size), i1 = Math.floor(e0 / size);
+  const j0 = Math.floor(s0 / size), j1 = Math.floor(n0 / size);
+  const steps = i1 - i0 + 1, stepn = j1 - j0 + 1;
+  if (steps * stepn > 4096) return null;
+  for (let i = 0; i < steps; i++) {
+    for (let j = 0; j < stepn; j++) {
+      const w = +((i0 + i) * size).toFixed(5), s = +((j0 + j) * size).toFixed(5);
+      const key = bundleCellKey(w, s, size);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, w, s, d: metersBetween([w + size / 2, s + size / 2], [center.lng, center.lat]) });
+    }
+  }
+  out.sort((a, b) => a.d - b.d);
+  const capped = out.length > maxCells;
+  return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
+}
+function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUNDLE_CELL_DEG) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
+function placesBundleCellsForView(bounds, center, maxCells = 6, size = PLACES_BUNDLE_CELL_DEG) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
+function bldBundleCellsForView(bounds, center, maxCells = 6, size = BLD_BUNDLE_CELL_DEG) {
+  return bundleCellsForView(bounds, center, maxCells, size);
+}
+
 // src/components/views/worldsim/wsBldBudget.ts
 var WS_BLD_BUDGET_PX2 = 4e5;
 var WS_BLD_BUDGET_VERTS = 4e4;
-var WS_BLD_MAX_DRAWN = 100;
+var WS_BLD_MAX_DRAWN = 3;
 var WS_BLD_MAX_DRAWN_MANY = 4e3;
 var WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
-var WS_BLD_STATIC_TOP_K = 200;
-var WS_BLD_STATIC_TOP_K_MAX = 400;
-function bldStaticTopK() {
-  return Math.min(WS_BLD_STATIC_TOP_K_MAX, Math.max(0, Math.floor(WS_BLD_STATIC_TOP_K)));
-}
 var WS_BLD_TIER_HYSTERESIS = 0.25;
 function bldTierOfZoom(zoom, prevTier) {
   const v = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
@@ -2044,12 +2214,6 @@ function bldTierOfZoom(zoom, prevTier) {
 }
 function bldMaxDrawnOf(mode) {
   return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
-}
-function bldMaxDrawnFor(mode, zoom, prevTier) {
-  if (bldMaxDrawnOf(mode) === WS_BLD_MAX_DRAWN_MANY) return WS_BLD_MAX_DRAWN_MANY;
-  const tier = bldTierOfZoom(zoom, prevTier);
-  if (tier === null) return WS_BLD_MAX_DRAWN;
-  return tier === 0 ? bldStaticTopK() : WS_BLD_MAX_DRAWN;
 }
 var WS_BLD_VERTS_PER_SEGMENT = 4;
 function bldRingVertices(ringPoints) {
@@ -2149,7 +2313,7 @@ function bldStaticMeasureOf(f) {
     const hit = staticMemo.get(key);
     if (hit) return hit;
   }
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, latSum = 0, n = 0;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, latSum = 0, lngSum = 0, n = 0;
   for (const pt of ring) {
     const lng = Number(pt[0]), lat = Number(pt[1]);
     if (!isFinite(lng) || !isFinite(lat)) continue;
@@ -2158,6 +2322,7 @@ function bldStaticMeasureOf(f) {
     if (lat < y0) y0 = lat;
     if (lat > y1) y1 = lat;
     latSum += lat;
+    lngSum += lng;
     n += 1;
   }
   if (!(x1 >= x0) || !(y1 >= y0) || n === 0) return null;
@@ -2165,7 +2330,15 @@ function bldStaticMeasureOf(f) {
   const wM = (x1 - x0) * kx;
   const hM = (y1 - y0) * WS_BLD_M_PER_DEG_LAT;
   const h3d = bldDrawHeightOf(f);
-  const m = { score: h3d * (wM * hM), wM, hM, h3d, ringPoints: ring.length };
+  const m = {
+    score: h3d * (wM * hM),
+    wM,
+    hM,
+    h3d,
+    ringPoints: ring.length,
+    cLng: lngSum / n,
+    cLat: latSum / n
+  };
   if (key && typeof key === "object") staticMemo.set(key, m);
   return m;
 }
@@ -2195,15 +2368,20 @@ function pickBuildingsByBudget(input) {
   const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
   const budgetVerts = Number.isFinite(input.budgetVerts) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
   const maxDrawn = Number.isFinite(input.maxDrawn) ? Math.max(0, Math.floor(Number(input.maxDrawn))) : WS_BLD_MAX_DRAWN;
+  const cellDegIn = Number(input.cellDeg);
+  const cellDeg = Number.isFinite(cellDegIn) && cellDegIn > 0 ? cellDegIn : BLD_BUNDLE_CELL_DEG;
   const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
-  const staticPick = input.shapeTier === 0;
-  const mpp = staticPick && Number.isFinite(input.screen?.metersPerPixel) ? Number(input.screen.metersPerPixel) : 0;
-  const ppm = staticPick && Number.isFinite(input.screen?.pxPerMeter) && input.screen.pxPerMeter > 0 ? Number(input.screen.pxPerMeter) : 0;
+  const mpp = Number.isFinite(input.screen?.metersPerPixel) && input.screen.metersPerPixel > 0 ? Number(input.screen.metersPerPixel) : 0;
+  const ppm = Number.isFinite(input.screen?.pxPerMeter) && input.screen.pxPerMeter > 0 ? Number(input.screen.pxPerMeter) : 0;
   const stats = {
     total: feats.length,
+    cells: 0,
+    cellsChosen: 0,
+    cellKeys: [],
     considered: 0,
     outOfView: 0,
+    viewCounted: false,
     noRing: 0,
     chosen: 0,
     px2: 0,
@@ -2213,41 +2391,36 @@ function pickBuildingsByBudget(input) {
     px2Bound: false,
     vertsBound: false,
     countBound: false,
+    cellsCapped: 0,
     maxDrawn,
-    staticPick,
-    staticMpp: mpp > 0 ? mpp : 0,
+    cellDeg,
+    gateDropped: 0,
+    staticMpp: mpp,
     minInView,
     floorAdded: 0,
     overBudget: false,
     why: ""
   };
-  if (!b) {
-    stats.why = "数不出来：没给视野（bounds），挑不出楼";
-    return { features: [], stats };
+  let w = 0, s = 0, e = 0, n = 0;
+  if (b) {
+    try {
+      w = Number(b.getWest());
+      s = Number(b.getSouth());
+      e = Number(b.getEast());
+      n = Number(b.getNorth());
+      stats.viewCounted = [w, s, e, n].every((v) => isFinite(v));
+    } catch {
+      stats.viewCounted = false;
+    }
   }
-  let w, s, e, n;
-  try {
-    w = Number(b.getWest());
-    s = Number(b.getSouth());
-    e = Number(b.getEast());
-    n = Number(b.getNorth());
-  } catch {
-    stats.why = "数不出来：读视野失败（getBounds 抛错）";
-    return { features: [], stats };
-  }
-  if (![w, s, e, n].every((v) => isFinite(v))) {
-    stats.why = "数不出来：视野不是四个有限数";
-    return { features: [], stats };
-  }
-  const cands = [];
+  const byCell = /* @__PURE__ */ new Map();
   const zeroCap = maxDrawn === 0;
   for (const f of feats) {
     const ring = outerRingOf(f);
     const p0 = ring ? ring[0] : readFirstPoint(f);
-    const inView = !!p0 && p0[0] >= w && p0[0] <= e && p0[1] >= s && p0[1] <= n;
-    if (!inView) {
-      stats.outOfView += 1;
-      continue;
+    if (stats.viewCounted) {
+      const inView = !!p0 && p0[0] >= w && p0[0] <= e && p0[1] >= s && p0[1] <= n;
+      if (!inView) stats.outOfView += 1;
     }
     if (!ring) {
       stats.noRing += 1;
@@ -2257,46 +2430,51 @@ function pickBuildingsByBudget(input) {
       stats.considered += 1;
       continue;
     }
-    if (staticPick) {
-      const m = bldStaticMeasureOf(f);
-      if (!m) {
-        stats.noRing += 1;
-        continue;
-      }
-      stats.considered += 1;
-      const c2 = bldStaticScreenCost(m, String(f.id ?? ""), mpp, ppm);
-      cands.push({ f, c: c2, ratio: m.score });
-      continue;
-    }
-    const c = bldScreenCost(f, input.screen);
-    if (!c) {
+    const m = bldStaticMeasureOf(f);
+    if (!m) {
       stats.noRing += 1;
       continue;
     }
     stats.considered += 1;
-    const denom = c.verts > 0 ? c.verts : 1;
-    cands.push({ f, c, ratio: c.px / denom });
+    const id = String(f.id ?? "");
+    const cell = bundleCellOf(m.cLng, m.cLat, cellDeg);
+    const key = bundleCellKey(cell.w, cell.s, cellDeg);
+    const cand = { f, c: bldStaticScreenCost(m, id, mpp, ppm), score: m.score, key };
+    const arr = byCell.get(key);
+    if (arr) arr.push(cand);
+    else byCell.set(key, [cand]);
   }
   if (zeroCap && stats.considered > 0) stats.countBound = true;
-  cands.sort((A, B) => {
-    if (B.ratio !== A.ratio) return B.ratio - A.ratio;
-    if (!staticPick && B.c.px !== A.c.px) return B.c.px - A.c.px;
-    return A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0;
-  });
-  const chosen = [];
-  const taken = new Array(cands.length).fill(false);
-  let sumPx = 0, sumV = 0;
-  for (let i = 0; i < cands.length; i++) {
-    if (chosen.length >= maxDrawn) {
+  const cellKeys = [];
+  for (const k of byCell.keys()) cellKeys.push(k);
+  cellKeys.sort();
+  const pool = [];
+  const inK = [];
+  for (const k of cellKeys) {
+    const arr = byCell.get(k);
+    arr.sort((A, B) => B.score !== A.score ? B.score - A.score : A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0);
+    if (arr.length > maxDrawn) {
       stats.countBound = true;
-      break;
+      stats.cellsCapped += 1;
     }
-    const c = cands[i];
+    for (let i = 0; i < arr.length; i++) {
+      pool.push(arr[i]);
+      inK.push(i < maxDrawn);
+    }
+  }
+  stats.cells = byCell.size;
+  const chosen = [];
+  const taken = new Array(pool.length).fill(false);
+  let sumPx = 0, sumV = 0;
+  for (let i = 0; i < pool.length; i++) {
+    if (!inK[i]) continue;
+    const c = pool[i];
     const overPx = sumPx + c.c.px > budgetPx2;
     const overV = sumV + c.c.verts > budgetVerts;
     if (overPx || overV) {
       if (overPx) stats.px2Bound = true;
       if (overV) stats.vertsBound = true;
+      stats.gateDropped += 1;
       continue;
     }
     taken[i] = true;
@@ -2305,9 +2483,9 @@ function pickBuildingsByBudget(input) {
     sumV += c.c.verts;
   }
   if (chosen.length < minInView) {
-    for (let i = 0; i < cands.length && chosen.length < minInView && chosen.length < maxDrawn; i++) {
+    for (let i = 0; i < pool.length && chosen.length < minInView; i++) {
       if (taken[i]) continue;
-      const c = cands[i];
+      const c = pool[i];
       taken[i] = true;
       chosen.push(c);
       sumPx += c.c.px;
@@ -2319,16 +2497,21 @@ function pickBuildingsByBudget(input) {
   stats.px2 = Math.round(sumPx);
   stats.verts = Math.round(sumV);
   stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+  {
+    const seen = /* @__PURE__ */ new Set();
+    for (const c of chosen) if (!seen.has(c.key)) {
+      seen.add(c.key);
+      stats.cellKeys.push(c.key);
+    }
+    stats.cellsChosen = stats.cellKeys.length;
+  }
   const bd = [];
   if (stats.px2Bound) bd.push("像素");
   if (stats.vertsBound) bd.push("顶点");
-  if (stats.countBound) bd.push("栋数");
-  stats.why = "视野内 " + stats.considered + " 栋（下限 " + minInView + "）⇒ 画 " + stats.chosen + " 栋 · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + /* 🌆 静态路（z<14 足迹档）：**判词本体也由真源给**（页面直接把 `why` 显示出来，
-     宿主不许再拼第二份）—— 写明"这一屏是按静态重要度取前 N 挑的、全程没投影"。 */
-  (staticPick ? " · 静态重要度取前 " + maxDrawn + "（足迹档 z<14 · 与相机无关 · 0 次投影）" : "") + (staticPick && !(mpp > 0) ? " · ⚠️ 没给 metersPerPixel：px² 数不出来（只剩顶点预算在管）" : "") + (bd.length ? " · 预算拦住过：" + bd.join("+") : " · 两个预算都没咬住") + /* 🔴 人读口径的「上限 N 栋」**只在真被栋数拦住时**出现：不达上限时这一整条判词与
-     "没有第三个上限"时**一字不差**（上面那条确定性纪律）。档位名（严格档/多楼房模式）
-     由宿主加在最前面 —— 档位是**用户的选择**，不是挑楼规则的一部分。 */
-  (stats.countBound ? " · 栋数上限 " + maxDrawn + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑视野下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + (stats.outOfView ? " · 视野外 " + stats.outOfView : "") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
+  stats.why = "格 " + stats.cells + " 个" + (stats.cellKeys.length > 1 ? "（" + stats.cellKeys[0] + " … " + stats.cellKeys[stats.cellKeys.length - 1] + "）" : stats.cellKeys.length === 1 ? "（" + stats.cellKeys[0] + "）" : "") + " ⇒ 画 " + stats.chosen + " 栋（" + stats.cellsChosen + " 格出楼） · 每格取前 " + maxDrawn + "（静态重要度 · 与相机/缩放无关 · 0 次投影）" + /* 被 K 截过的格数如实报（"上限起作用了"要与"楼就这么少"分得开） */
+  (stats.countBound ? " · 每格上限截过 " + stats.cellsCapped + " 格" : "") + " · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + /* 安全闸：拦下来的**个数**也念出来（不许静默丢） */
+  (bd.length ? " · 安全闸拦住过：" + bd.join("+") + "（跳过 " + stats.gateDropped + " 栋）" : " · 两个预算都没咬住") + (!(mpp > 0) ? " · ⚠️ 没给 metersPerPixel：px² 数不出来（只剩顶点预算在管）" : "") + (minInView ? " · 下限 " + minInView + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + /* 视野：**只报不改**（数不出来时不写 0 冒充"视野外没有"） */
+  (stats.viewCounted ? stats.outOfView ? " · 视野外 " + stats.outOfView + "（不影响挑选）" : "" : " · 视野计数：数不出来（没给视野）") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
   return { features: chosen.map((c) => c.f), stats };
 }
 
@@ -2567,181 +2750,6 @@ function flushRoadsStore(opts, why = "flush") {
     for (const l of opts.specs()) if (!m.getLayer(l.id)) m.addLayer(l, before);
   }
   opts.afterDraw?.(why, data);
-}
-
-// src/components/views/worldsim/wsFeatureStore.ts
-function metersBetween(a, b) {
-  const kx = 111320 * Math.cos((a[1] + b[1]) / 2 * Math.PI / 180);
-  const ky = 110540;
-  return Math.hypot((a[0] - b[0]) * kx, (a[1] - b[1]) * ky);
-}
-function createFeatureStore(opts) {
-  const cap = Math.max(1, Math.floor(opts.cap));
-  const byId = /* @__PURE__ */ new Map();
-  let noIdList = [];
-  let added = 0, dupes = 0, dropped = 0, merges = 0, lastMergeMs = null;
-  const sources = /* @__PURE__ */ new Set();
-  let sourcesDropped = 0;
-  const srcOf = /* @__PURE__ */ new WeakMap();
-  function all() {
-    return noIdList.length ? [...byId.values(), ...noIdList] : [...byId.values()];
-  }
-  return {
-    merge(features, sourceKey) {
-      const t0 = Date.now();
-      let a = 0, d = 0, nid = 0;
-      for (const f of features) {
-        const id = opts.idOf(f);
-        if (!id) {
-          noIdList.push(f);
-          nid++;
-          a++;
-          if (sourceKey && f && typeof f === "object") srcOf.set(f, sourceKey);
-          continue;
-        }
-        if (byId.has(id)) {
-          dupes++;
-          d++;
-          continue;
-        }
-        byId.set(id, f);
-        a++;
-        if (sourceKey && f && typeof f === "object") srcOf.set(f, sourceKey);
-      }
-      added += a;
-      merges++;
-      if (sourceKey) sources.add(sourceKey);
-      lastMergeMs = Date.now() - t0;
-      return { added: a, dupes: d, noId: nid, total: byId.size + noIdList.length, ms: lastMergeMs };
-    },
-    retainNear(center, keepRadiusM) {
-      const droppedSourcesBefore = sourcesDropped;
-      let droppedFar = 0, droppedOverCap = 0;
-      const keep = [];
-      const far = [];
-      for (const f of all()) {
-        const pt = opts.pointOf(f);
-        if (!pt) {
-          keep.push([0, f]);
-          continue;
-        }
-        const dist2 = metersBetween(pt, center);
-        (dist2 <= keepRadiusM ? keep : far).push([dist2, f]);
-      }
-      droppedFar = far.length;
-      let over = [];
-      if (keep.length > cap) {
-        const sorted = [...keep].sort((x, y) => x[0] - y[0]);
-        over = sorted.slice(cap);
-        keep.length = 0;
-        keep.push(...sorted.slice(0, cap));
-        droppedOverCap = over.length;
-      }
-      if (droppedFar + droppedOverCap > 0) {
-        const alive = /* @__PURE__ */ new Set();
-        for (const [, f] of keep) {
-          if (f && typeof f === "object") {
-            const k = srcOf.get(f);
-            if (k) alive.add(k);
-          }
-        }
-        for (const k of [...sources]) {
-          if (alive.has(k)) continue;
-          sources.delete(k);
-          sourcesDropped += 1;
-        }
-      }
-      const keepSet = new Set(keep.map(([, f]) => f));
-      const nextById = /* @__PURE__ */ new Map();
-      const nextNoId = [];
-      for (const [id, f] of byId) if (keepSet.has(f)) nextById.set(id, f);
-      for (const f of noIdList) if (keepSet.has(f)) nextNoId.push(f);
-      byId.clear();
-      for (const [id, f] of nextById) byId.set(id, f);
-      noIdList = nextNoId;
-      dropped += droppedFar + droppedOverCap;
-      const droppedSourcesNow = droppedSourcesBefore === sourcesDropped ? 0 : sourcesDropped - droppedSourcesBefore;
-      return { droppedFar, droppedOverCap, n: byId.size + noIdList.length, droppedSources: droppedSourcesNow };
-    },
-    features: all,
-    has: (k) => sources.has(k),
-    stats() {
-      return {
-        n: byId.size + noIdList.length,
-        noId: noIdList.length,
-        added,
-        dupes,
-        dropped,
-        merges,
-        sources: sources.size,
-        sourcesDropped,
-        lastMergeMs,
-        cap
-      };
-    },
-    /* ⚠️ `clear()` 必须**连来源键一起清**：`has()` 的语义现在是"仓库里确实还有这一格的要素"
-       （见 `retainNear` 的 `dirtySources`）—— 只清要素不清来源键，就会又变回"说已经取过、其实没有"。 */
-    clear() {
-      byId.clear();
-      noIdList = [];
-      sources.clear();
-    }
-  };
-}
-var ROADS_BUNDLE_CELL_DEG = 0.05;
-var BLD_BUNDLE_CELL_DEG = 0.05;
-var PLACES_BUNDLE_CELL_DEG = 0.05;
-function bundleCellOf(lng, lat, size) {
-  const w = Math.floor(lng / size) * size;
-  const s = Math.floor(lat / size) * size;
-  return { w: +w.toFixed(5), s: +s.toFixed(5) };
-}
-function bundleCellKey(w, s, size) {
-  return `${w.toFixed(5)}_${s.toFixed(5)}_${size}`;
-}
-function roadsBundleCellOf(lng, lat, size = ROADS_BUNDLE_CELL_DEG) {
-  return bundleCellOf(lng, lat, size);
-}
-function roadsBundleCellKey(w, s, size = ROADS_BUNDLE_CELL_DEG) {
-  return bundleCellKey(w, s, size);
-}
-function bldBundleCellOf(lng, lat, size = BLD_BUNDLE_CELL_DEG) {
-  return bundleCellOf(lng, lat, size);
-}
-function bldBundleCellKey(w, s, size = BLD_BUNDLE_CELL_DEG) {
-  return bundleCellKey(w, s, size);
-}
-function bundleCellsForView(bounds, center, maxCells, size) {
-  if (!bounds || !center) return null;
-  const w0 = bounds.getWest(), e0 = bounds.getEast(), s0 = bounds.getSouth(), n0 = bounds.getNorth();
-  if (![w0, e0, s0, n0, center.lng, center.lat].every((v) => Number.isFinite(v))) return null;
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  const i0 = Math.floor(w0 / size), i1 = Math.floor(e0 / size);
-  const j0 = Math.floor(s0 / size), j1 = Math.floor(n0 / size);
-  const steps = i1 - i0 + 1, stepn = j1 - j0 + 1;
-  if (steps * stepn > 4096) return null;
-  for (let i = 0; i < steps; i++) {
-    for (let j = 0; j < stepn; j++) {
-      const w = +((i0 + i) * size).toFixed(5), s = +((j0 + j) * size).toFixed(5);
-      const key = bundleCellKey(w, s, size);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ key, w, s, d: metersBetween([w + size / 2, s + size / 2], [center.lng, center.lat]) });
-    }
-  }
-  out.sort((a, b) => a.d - b.d);
-  const capped = out.length > maxCells;
-  return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
-}
-function roadsBundleCellsForView(bounds, center, maxCells = 6, size = ROADS_BUNDLE_CELL_DEG) {
-  return bundleCellsForView(bounds, center, maxCells, size);
-}
-function placesBundleCellsForView(bounds, center, maxCells = 6, size = PLACES_BUNDLE_CELL_DEG) {
-  return bundleCellsForView(bounds, center, maxCells, size);
-}
-function bldBundleCellsForView(bounds, center, maxCells = 6, size = BLD_BUNDLE_CELL_DEG) {
-  return bundleCellsForView(bounds, center, maxCells, size);
 }
 
 // src/components/views/worldsim/wsPerfMeter.ts
@@ -4864,13 +4872,13 @@ function createBldPickStore(opts) {
         screen: input.screen,
         budgetPx2: input.budgetPx2,
         budgetVerts: input.budgetVerts,
-        /* 栋数上限**原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
+        /* 🔴 每格上限 K **原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
-        minInView: input.minInView,
-        /* 🌆 形体档同样**原样透传**（`0` ⇒ 静态路）：算档位的是宿主 + `bldTierOfZoom`，
-           本模块既不判 `z < 14`、也不存滞回状态。 */
-        shapeTier: input.shapeTier
+        /* 🧮 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
+           ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）。 */
+        cellDeg: input.cellDeg,
+        minInView: input.minInView
       });
     },
     frozenObject() {
@@ -6946,8 +6954,6 @@ export {
   WS_BLD_OUTLINE_FULL_ZOOM,
   WS_BLD_OUTLINE_STOPS,
   WS_BLD_SMALL_M2,
-  WS_BLD_STATIC_TOP_K,
-  WS_BLD_STATIC_TOP_K_MAX,
   WS_BLD_TIER_HYSTERESIS,
   WS_BLD_VECTOR_MINZOOM,
   WS_BLD_VERTS_PER_SEGMENT,
@@ -6996,7 +7002,6 @@ export {
   bldLayerSpecsFor,
   bldLayerVisibilityAt,
   bldLiveDecision,
-  bldMaxDrawnFor,
   bldMaxDrawnOf,
   bldMetersPerCssPixel,
   bldPartsVisibleAt,
@@ -7008,7 +7013,6 @@ export {
   bldScreenCost,
   bldStaticMeasureOf,
   bldStaticScoreOf,
-  bldStaticTopK,
   bldTierOfPart,
   bldTierOfZoom,
   bldVerdictState,

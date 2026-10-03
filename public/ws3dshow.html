@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-10-03-v96";
+      const BUILD = "ws3dshow-2026-10-03-v97";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -1158,16 +1158,20 @@
         } catch (e) { /* 落兜底 */ }
         return BLD_FOOT_OPACITY_FALLBACK;
       }
-      /** 🏙🌆 **档位 × zoom → 栋数上限**（共享真源 `wsBldBudget.bldMaxDrawnFor`，经 vendor 到手）。
-       *  页面**没有档位 UI** ⇒ 恒严格档（`"lean"`，与 App 的默认档同一个值），按 zoom 分档交给真源
-       *  （`z<14` 足迹档 = **静态重要度取前 K**（2026-10-03 第四条，不再是宽档 4000）/
-       *   `z≥14` 立体档严格 100）—— 页面**不写** 100/4000/K、也不写 14。
-       *  第三个参数 = **上一次落图的档**（`bldTierAt` 的返回值）⇒ 与 App 侧同一个入口、同一份 0.25 滞回。
-       *  符号读不到（旧产物）⇒ `undefined` ⇒ 规则模块退回严格档 100（= 改造前的行为，**不是**放开）。 */
+      /** 🏙 **每格取前几栋（K）**（共享真源 `wsBldBudget.bldMaxDrawnOf`，经 vendor 到手）。
+       *  页面**没有档位 UI** ⇒ 恒严格档（`"lean"`，与 App 的默认档同一个值）。
+       *  🔴 2026-10-03 第五条起 **K 与 zoom 无关**（候选池 = 按离线包格已加载的楼，每格取前 K）——
+       *  页面**不写** 3/4000、也不写 14、更不传任何相机参数给挑楼规则。
+       *  ⚠️ **先试 v96 那个入口 `bldMaxDrawnFor`**：vendor 是**产物**（`public/vendor/wsScene.mjs`），
+       *  页面拿到的可能是**还没重建**的那一版 —— 那一版的口径是"档位 × zoom"，行为要原样保留
+       *  （不然"改了源码还没重建产物"这段时间里，页面画的楼会莫名其妙变少）。
+       *  新产物里没有 `bldMaxDrawnFor` ⇒ 落到 `bldMaxDrawnOf`（新口径：每格 K）。
+       *  两个都读不到（极旧的产物）⇒ `undefined` ⇒ 规则模块按默认严格档（= 改造前的行为）。 */
       function bldMaxDrawnAt(z, prevTier) {
         try {
           const T = window.__TF__ || {};
           if (typeof T.bldMaxDrawnFor === "function") return T.bldMaxDrawnFor("lean", z, prevTier);
+          if (typeof T.bldMaxDrawnOf === "function") return T.bldMaxDrawnOf("lean");
         } catch (e) { /* 落 undefined */ }
         return undefined;
       }
@@ -1346,8 +1350,13 @@
            · `bldPxPerMeter` —— "1 米楼高 = 多少屏幕像素"（`sin(pitch)/metersPerPixel`），
              双预算的成本模型要用它，两页**必须同一把尺子**。
            ⚠️ 那两个阈值本身是**常量**，所以只查上面这两个函数在不在（常量不进这张表）。
-         🏙🌆 2026-10-03「按 zoom 分层」本页又新增依赖一个**函数**：`bldMaxDrawnFor`（档位 × zoom → 栋数上限）。
-            它是**函数** ⇒ 可以进这张表（常量那两个走下面的 `BLD_CONSTS`）。
+         🏙🌆 2026-10-03「按 zoom 分层」本页新增依赖一个**函数**：栋数上限的**唯一口**。
+             ⚠️ 它原来叫 `bldMaxDrawnFor(mode, zoom)`（档位 × zoom），2026-10-03 第四条
+             （PLAN-BLD-LOWZOOM「显示哪些楼定下来」）之后**改名成 `bldMaxDrawnOf(mode)`** ——
+             集合改由**数据**（按离线包格 top-K）决定，不再吃相机/缩放 ⇒ 旧名字在新产物里**已不存在**。
+             表里必须跟着改：还写旧名字 ⇒ `tfMissing()` 永远非空 ⇒ 每轮白打三趟 vendor，且"自愈成功"那类闸永远红
+             （本轮 `ws_bld_page_selftest` 就这么被judged红过 5 条）。
+             它是**函数** ⇒ 可以进这张表（常量那两个走下面的 `BLD_CONSTS`）。
          🌆 2026-10-03 第四条（PLAN-BLD-LOWZOOM）本页又依赖两个**函数**：`bldTierOfZoom`（分界线 +
             0.25 滞回）与 `bldMetersPerCssPixel`（静态路的尺子）。
             🔴 **它们故意不进这张表**（与上面那条惯例的一次**有记录**的例外）：本页是**先接线、
@@ -1357,7 +1366,7 @@
             传播机制本来就不靠它：`VENDOR_VER` 是**产物内容哈希**，重建后 URL 必换 ⇒ 一定拿到新的。
             ⚠️ 读不到时页面各自退回**改造前的行为**（`bldTierAt` / `bldMetersPerPixelAt` 里的兜底），
             不静默画错、也不往 `errs` 堆噪声；vendor 重建之后可以把这两行加进表里（等价，只是更严）。 */
-        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget", "bldMaxDrawnFor"];
+        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget", "bldMaxDrawnOf"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
         "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",
@@ -3482,17 +3491,19 @@
                     /* 🌆 静态路的尺子（1 px = 多少米）—— 旧产物读不到 ⇒ undefined ⇒ 那一栏如实报"数不出来" */
                     metersPerPixel: bldMetersPerPixelAt(z, centerLat),
                   },
-                  /* 🏙🌆 **栋数上限 = 档位 × zoom**（2026-10-03 按 zoom 分层：`z<14` 足迹档 =
-                     **静态重要度取前 K**（第四条，不再是宽档 4000）/ `z≥14` 立体档严格 100）。
-                     页面**没有档位 UI** ⇒ 恒严格档；换算与滞回都是**共享真源** `bldMaxDrawnFor`
-                     （页面不写 100/4000/K、也不写 14、更不写 0.25，与 App 侧同一个入口）。
-                     符号读不到（旧产物）⇒ `undefined` ⇒ 规则模块退回严格档 100（改造前的行为）。 */
+                  /* 🏙 **每格取前几栋（K）**（2026-10-03 第五条：机主要"显示哪些楼直接定下来"）：
+                     K **只看档位**（页面没有档位 UI ⇒ 恒严格档），**与 zoom / 与相机无关**。
+                     能读到的是共享真源 `bldMaxDrawnOf`（老产物里是 `bldMaxDrawnFor`，见那个 helper）；
+                     两个符号都没有（极旧产物）⇒ `undefined` ⇒ 规则模块按默认严格档。 */
                   maxDrawn: bldMaxDrawnAt(z, BLD_TIER_PREV),
-                  /* 🌆 `0` = 足迹档 ⇒ **静态路**；`1`/`null` ⇒ 原样投影路（旧产物会忽略这个字段） */
-                  shapeTier: tierNow,
-                  minInView: INVIEW_N,              /* 视野内至少 N 栋（默认 10；`?inview=` A/B） */
+                  /* 🧮 **分格的那张网格 = 离线包自己的格**（`index.json.cellSize`，`bldCellDeg()` 读的
+                     就是它）——与取数管道、导出脚本同一份格数学；写死 0.01/0.05 都会让"格"与包错位。
+                     老产物不认这个字段（忽略掉）⇒ 它仍按自己那套口径挑，不影响。 */
+                  cellDeg: bldCellDeg(),
+                  minInView: INVIEW_N,              /* 总量至少 N 栋（默认 10；`?inview=` A/B） */
                 });
-                /* 落图用的档记成下一次的 prev（滞回判据；与 App 侧"落图后写 `bldFlushedTier`"同一个角色） */
+                /* 落图用的档记成下一次的 prev（滞回判据；与 App 侧"落图后写 `bldFlushedTier`"同一个角色）。
+                   ⚠️ 第五条起档位**只管画法**（挑选不读它）——记它仍然有用：HUD 要报"这一轮用的哪一档"。 */
                 BLD_TIER_PREV = tierNow;
                 return out;
               }, function (rr) { return rr && rr.stats ? rr.stats.considered : null; });

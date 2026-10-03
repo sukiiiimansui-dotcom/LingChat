@@ -357,7 +357,17 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
   const outlineLayers = tier.outlineWidth !== null
     ? [{
         id: "bld-line", type: "line", source: "bld",
-        minzoom: WS_BLD_VECTOR_MINZOOM,
+        /* 🌆 2026-10-03（PLAN-BLD-LOWZOOM §4 表那一笔）：**低缩放不再给同一批要素画第二遍**。
+           足迹档（z<14）已经有一层 `fill`（`bld-foot`）在画同一批要素，再叠一层描边就是方案 §1②
+           里那片"深色小面/灯芯绒"（每栋 1~2px，描边把填充整个盖掉）。
+           🔴 **闸开在 `minzoom` 这一侧**（= 描边只在立体档 `z ≥ WS_BLD_FOOTPRINT_MAXZOOM` 画）。
+              方案 §4 表把这一步写成"加 `maxzoom`"，但按 MapLibre 语义（`minzoom ≤ z < maxzoom`，
+              见上面 `bld-foot` 那段注释）`maxzoom: 14` 是**把 z≥14 的描边整层关掉** —— 那既治不了
+              低缩放（z<14 照样两层），又违反同一个方案 §验收 6「**`bld-line` 行为与 v95 同
+              （近景是机主认过的，不许动）**」。⇒ 取**能满足两边意图**的那一侧：低缩放不画、
+              z≥14 与 v95 逐字节同（`?bldn=`/`?bld=2`/低端档那几条路都不受影响）。
+           ⚠️ 代拍页 `bldLineLayer()` 必须同一份规格（`ws_pages_consistency.mjs` ④b 盯着 minzoom）。 */
+        minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
         /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
            `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。 */
         paint: {
@@ -431,20 +441,48 @@ export function planBeforeOf(m: DistrictMapLike, group: "roads" | "buildings"): 
 }
 
 /**
+ * 🌆 **上一次真正写进 `bld` 源的要素 id 签名**（按**地图实例**分表，`WeakMap` ⇒ 换图/换主题重载不留残渣）。
+ *
+ * 为什么要它（PLAN-BLD-LOWZOOM §4 表 / §验收 4）：同一机位连续落图时，低缩放挑出来的往往
+ * **就是同一批**（静态分排序 + 集合不变）—— 那时再 `setData` 一次是纯白工：MapLibre 要重解析
+ * GeoJSON、重建索引、重上传，这一帧就是机主看到的"整层换一批/闪"。
+ * 判据只有一条：**id 序列（含条数）逐字节相同 ⇒ 不重传**。
+ * ⚠️ id 序列取自**上妆后的数据**（`dress()` 的产物）⇒ 挑楼集合与拆件结果**任一**变了都会重传
+ * （不是"只看挑楼"，也不看别的 —— 上妆是纯函数，同输入必同产物）。
+ */
+const bldDataSig = new WeakMap<object, string>();
+
+/** 一份落图数据的 id 签名；拿不到 features 数组 ⇒ `null`（**数不出来就不省**，照旧 setData） */
+function bldDataSigOf(data: FeatureCollectionLike): string | null {
+  const feats = (data as { features?: unknown } | null)?.features;
+  if (!Array.isArray(feats)) return null;
+  let sig = feats.length + "|";
+  for (const f of feats) sig += String((f as { id?: unknown } | null)?.id ?? "") + ",";
+  return sig;
+}
+
+/**
  * 把一份**已上妆**的楼栋数据落到图层上：首次建源 + 建层，之后只 `setData`。
  * （落图通路**只有这一条**：离线包与 `?live=1` 两条来源都先把要素并进仓库，再由 `flushBldStore` 调它
  *   —— 写两遍迟早漂移，而"两条来源各画一套"正是"新的一来旧的没了"的成因。）
+ *
+ * 🌆 2026-10-03（PLAN-BLD-LOWZOOM）：源已存在且**这一批的 id 序列与上次逐字节相同** ⇒
+ *    **直接返回，不 `setData`**（方案 §验收 4：同相机 3 次 flush ⇒ `setData` ≤ 1 次）。
  */
 export function applyBuildingsTo(
   m: DistrictMapLike,
   data: FeatureCollectionLike,
   specs: Array<Record<string, unknown>>
 ): void {
+  const sig = bldDataSigOf(data);
   if (m.getSource("bld")) {
+    if (sig !== null && bldDataSig.get(m) === sig) return;   // 同一批 ⇒ 不重传
+    if (sig !== null) bldDataSig.set(m, sig);
     m.getSource("bld")!.setData(data);
     return;
   }
   m.addSource("bld", { type: "geojson", data });
+  if (sig !== null) bldDataSig.set(m, sig);
   /* 🎬 层序：`before=` 取自**计划**（`wsScene.sceneLayerPlan()`）—— 计划里 buildings 的
      `beforeId` 就是这里的取值，**逐字相同**；取不到才退回本地判断（`ref` 注记层 ⇒ 街名压在楼上面）。 */
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);

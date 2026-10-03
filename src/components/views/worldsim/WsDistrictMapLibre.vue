@@ -343,12 +343,15 @@ import {
   type BldPickStats,
 } from "./wsBldPickStore";
 /* 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2）：成本模型/两个固定常量/确定性排序全在那一份里；
-   这里只取"1 米楼高 = 多少屏幕像素"这把尺子（**两页必须同一把**，所以公式也只有那一份）。
-   🆕 2026-10-03 起取的是 **`bldMaxDrawnFor(档位, zoom)`**（机主真机验收后的「按 zoom 分层」）：
-   `z < 14` 画**足迹**（宽档 4000）· `z ≥ 14` 画**立体**（严格档 100）· `zoom` 读不出来 ⇒ 严格档。
-   档位存在 `wsBldMode`，**上限是多少**只有 `wsBldBudget` 那一份（宿主不写任何数字）。
-   `WS_BLD_FOOTPRINT_MAXZOOM` = 那条分界线（与 `wsDistrictScene` 里足迹层的上界是同一份）。 */
-import { bldMaxDrawnFor, bldPxPerMeter, WS_BLD_FOOTPRINT_MAXZOOM, type BldBudgetBounds } from "./wsBldBudget";
+   这里只取两把尺子（"1 米楼高 = 多少屏幕像素" + "1 像素 = 多少米"，**两页必须同一把**，所以公式也只有那一份）。
+   🆕 2026-10-03 起取的是 **`bldMaxDrawnFor(档位, zoom, 上一次的档)`**（机主真机验收后的「按 zoom 分层」）：
+   `z < 14` 画**足迹**（2026-10-03 第四条起 = **静态重要度取前 K**，不再是宽档 4000）·
+   `z ≥ 14` 画**立体**（严格档 100）· `zoom` 读不出来 ⇒ 严格档。
+   档位存在 `wsBldMode`，**上限/分界线/滞回宽度**都只有 `wsBldBudget` 那一份（宿主不写任何数字）。
+   🆕 `bldTierOfZoom` = **足迹/立体那条分界线的唯一判据**（带 0.25 滞回）——宿主不再自己写一份
+   `z < WS_BLD_FOOTPRINT_MAXZOOM`，也**不再直接引用那条分界线的常量**（它的两个用处都收进了
+   `bldTierOfZoom` / `bldMaxDrawnFor`；点选那条路也只是调 `bldTierOfZoom`）。 */
+import { bldMaxDrawnFor, bldMetersPerCssPixel, bldPxPerMeter, bldTierOfZoom, type BldBudgetBounds } from "./wsBldBudget";
 /* 🏙 **楼栋档位的存储**（`localStorage["wsm:v1:bldmode"]`；默认严格档）——
    顶栏那颗 chip（`WsCityEntry.vue`）与本组件读的是**同一个模块级单例 ref** ⇒ 点一下这里就收到。 */
 import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
@@ -3297,14 +3300,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    *    （足迹 / 立体）—— 两件都是"选择/相机"的事实，不属于挑楼规则，所以它们不该写进 `why`
    *    （写进去会让页面与 App 的判词对不上）。
    *
-   * ⚠️ 形体档读的是**上一次挑楼那一刻**的 zoom（`bldPickZoom`，在挑楼闭包里现读现存），
-   *    不是"现在读一次地图" —— 否则去抖窗口里那一行会与**真正画出去的那批**对不上（判词撒谎）。
+   * ⚠️ 形体档读的是**这一轮落图用的那个档**（`bldPickTier`，在 `bldFlush` 里用共享真源
+   *    `bldTierOfZoom(zoom, 上一次的档)` 现算现存）——**不是**"现在读一次地图的 zoom 再比 14"：
+   *    跨 14 有 0.25 滞回 ⇒ 14.1 时画的仍是足迹档那一批，按 `zoom < 14` 报就会说成"立体 严格档"
+   *    （判词撒谎）。也不是"现在读一次地图"，否则去抖窗口里那一行会与真正画出去的那批对不上。
    */
   function bldShapeTierName(): string {
     /* 多楼房模式：全 zoom 一致（用户明确要"多"）⇒ 不报"足迹/立体"，只报那一档本身 */
     if (bldDrawMode.value === WS_BLD_MODE_MANY) return "🏙 楼房 多（不推荐）";
-    if (bldPickZoom !== null && bldPickZoom < WS_BLD_FOOTPRINT_MAXZOOM) return "🏙 足迹档（z<14 · 平面）";
-    if (bldPickZoom !== null) return "🏙 楼房 严格档（z≥14 · 立体）";
+    if (bldPickTier === 0) return "🏙 足迹档（z<14 · 平面）";
+    if (bldPickTier === 1) return "🏙 楼房 严格档（z≥14 · 立体）";
     return "🏙 楼房 严格档";
   }
   function bldPickLine(s: BldPickAnyStats): string {
@@ -3337,9 +3342,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   function bldFlush(why: string): void {
     if (!alive) return;
     bldFlushedOnce = true;
-    /* 🌆 记下**这一轮落图**所在的形体档（足迹/立体）：跨过 `WS_BLD_FOOTPRINT_MAXZOOM` 那条线时，
-       `zoomend` 拿它比对 ⇒ 只重挑那一次（见下面的 zoomend 处理）。写点只有这一处。 */
-    bldFlushedTier = bldTierOfZoom(map && typeof map.getZoom === "function" ? map.getZoom() : null);
+    /* 🌆 **这一轮按哪一档落图**（0 = 足迹 z<14 / 1 = 立体 z≥14 / null = zoom 读不出来）。
+       🔴 prev = **上一次落图**的档（`bldFlushedTier`）⇒ 判据带 0.25 滞回（共享真源 `bldTierOfZoom`）：
+          13.9↔14.1 来回缩放**不会**反复重挑（改造前是每跨一次就重挑一次）。
+       🔴 顺序不能动：**读 prev → 算这一轮的档 → 落图 → 再把这一轮的档写回去**。
+          先写等于把滞回关掉（每次都按裸阈值判），这也是本组件唯一写 `bldFlushedTier` 的地方。
+       ⚠️ 闭包（下面的 `pick`）与这里用的是**同一次**算出来的档 ⇒ HUD 报的档与画出去的那批必然一致。 */
+    const bldTierPrev = bldFlushedTier;
+    const bldTierNow = bldTierOfZoom(map && typeof map.getZoom === "function" ? map.getZoom() : null, bldTierPrev);
+    bldPickTier = bldTierNow;   /* HUD 那一行读它（与这一批同一档，见 `bldShapeTierName`） */
     flushBldStore<BundleBuildingFeature>(
       {
         features: () => bldStore.features(),
@@ -3380,7 +3391,6 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                  足迹/立体的分界线必须按**真实 zoom** 判，读不到就退回严格档（宁可少画，不许乱画）。 */
               const zNow = map && typeof map.getZoom === "function" ? Number(map.getZoom()) : NaN;
               const z = isFinite(zNow) ? zNow : WS_BLD_VECTOR_MINZOOM;
-              bldPickZoom = isFinite(zNow) ? zNow : null;   /* HUD 那一行读它（与这一批同一机位） */
               const bounds = map ? (map.getBounds() as unknown as BldBudgetBounds) : null;
               if (legacyCell) {
                 /* 一轮只读一次格尺寸（与代拍页 `BLDCELL`/`BLDN` 同一口径）：冻结键/挑选/分组三者同值 */
@@ -3401,18 +3411,28 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                 bounds,
                 screen: {
                   /* 屏幕投影：直接用地图库那把尺子（`map.project` 是**地面**投影，不带高度 —— 墙面的
-                     屏幕高度由共享的 `bldPxPerMeter` 补，两页同一把尺子） */
+                     屏幕高度由共享的 `bldPxPerMeter` 补，两页同一把尺子）。
+                     🆕 足迹档（`shapeTier === 0`）走**静态路**：这条 `project` **一次都不会被调**，
+                     屏幕量由下面的 `metersPerPixel` 换算（PLAN-BLD-LOWZOOM §验收 1）。 */
                   project: (lng: number, lat: number): [number, number] => {
                     const p = map ? map.project([lng, lat]) : null;
                     return [p ? Number(p.x) : NaN, p ? Number(p.y) : NaN];
                   },
                   pxPerMeter: bldPxPerMeter(z, centerLat, pitch),
+                  /* 🌆 静态路的尺子（1 px = 多少米）：同一个 `z`/中心纬度算出来的，
+                     与 `bldPxPerMeter` **同一族公式**（都在共享真源里），页面侧同样只接线。 */
+                  metersPerPixel: bldMetersPerCssPixel(z, centerLat),
                 },
                 /* 🏙🌆 **栋数硬上限 = 档位 × zoom**（机主 2026-10-03 真机验收后的「按 zoom 分层」：
-                   `z<14` 足迹档走宽档 4000 / `z≥14` 立体档严格 100 / zoom 读不出来 ⇒ 严格档）。
+                   `z<14` 足迹档 = **静态重要度取前 K**（2026-10-03 第四条，不再是宽档 4000）/
+                   `z≥14` 立体档严格 100 / zoom 读不出来 ⇒ 严格档）。
                    与上面几件相机参数同一个道理 —— 在**调用这一刻**现读档位与 zoom，
-                   否则用户在顶栏切了档、或刚缩放跨过分界线，闭包还拿着旧值（"点了没反应"那一类）。 */
-                maxDrawn: bldMaxDrawnFor(bldDrawMode.value, zNow),
+                   否则用户在顶栏切了档、或刚缩放跨过分界线，闭包还拿着旧值（"点了没反应"那一类）。
+                   🔴 第三个参数 = **这一轮算出来的档**的 prev（`bldTierPrev`）⇒ 与 `bldTierNow`
+                   同源同值（同一个纯函数、同一组入参），所以"上限"与"挑法（`shapeTier`）"必然同档。 */
+                maxDrawn: bldMaxDrawnFor(bldDrawMode.value, zNow, bldTierPrev),
+                /* 🌆 `0` = 足迹档 ⇒ 规则模块走**静态重要度**那条路（0 次投影）；`1`/`null` ⇒ 原样投影路 */
+                shapeTier: bldTierNow,
                 minInView: WS_BLD_INVIEW,
               });
             };
@@ -3431,32 +3451,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       },
       why
     );
+    /* 🔴 **落图之后**才把"这一轮是哪一档"记成下一次的 prev（滞回的写回点，全局只有这一处）——
+       顺序反过来（先写后落图）等于把滞回关掉，见上面那段注释。 */
+    bldFlushedTier = bldTierNow;
   }
   /** 上一次 flush 的原因（面板回证：是离线包来的还是 live 来的） */
   let bldFlushWhy = "";
   /** 🏙 上一次"近景挑楼"的口径（机主要 100 栋/视野）——面板回证用，没挑过就是空串 */
   let bldPickWhy = "";
-  /** 🌆 **上一次挑楼那一刻的 zoom**（HUD 要能读出"现在画的是足迹档还是立体档"）——
-   *  挑楼闭包里现读现存；**不是**每帧去问地图（否则 HUD 会与真正画出去的那批对不上）。 */
-  let bldPickZoom: number | null = null;
+  /** 🌆 **这一轮落图用的形体档**（0 = 足迹 z<14 / 1 = 立体 z≥14 / null = zoom 读不出来）——
+   *  HUD 那一行（`bldShapeTierName`）读它，**不是**每帧去问地图（否则判词会与真正画出去的那批对不上）；
+   *  它同时是"跨 14 要不要重挑"与"挑楼走哪条路（静态/投影）"的**同一个**判据来源。 */
+  let bldPickTier: number | null = null;
   /** 这一屏**至少落过一次楼图**了（档位开关只在它之后才补一次重挑重绘，见下面的 `watch`） */
   let bldFlushedOnce = false;
-  /** 🌆 上一次落楼图所在的形体档（0 = 足迹 z<14 / 1 = 立体 z≥14 / null = zoom 读不出来）——
-   *  **只在 `bldFlush` 里写一次**（所有落图路径共用这一个写点，不会漏、也不会各算一份）。 */
+  /** 🌆 **上一次落图**所在的形体档（滞回判据的 prev；0 = 足迹 / 1 = 立体 / null = 读不出来）——
+   *  **只在 `bldFlush` 里写一次**（读 prev → 算新档 → 落图 → 写回，所有落图路径共用这一个写点）。 */
   let bldFlushedTier: number | null = null;
-
-  /**
-   * 🌆 **足迹档 / 立体档** 的档位号（`z < WS_BLD_FOOTPRINT_MAXZOOM` ⇒ 0，否则 1）。
-   * **数不出来 ⇒ `null`**（三态判词纪律：不把"没测出来"写成 0 —— 0 是"确定在足迹档"）。
-   * ⚠️ 判据与共享真源 `bldMaxDrawnFor` **逐字同式**（`typeof === "number"` 且有限）：
-   *    `null`/`undefined`/字符串都算读不出来 —— 不能只写 `Number(z)`（`Number(null) === 0`
-   *    会被当成"确定在足迹档"，那是**猜**）。
-   */
-  function bldTierOfZoom(z: unknown): number | null {
-    const v = typeof z === "number" && isFinite(z) ? z : NaN;
-    if (!isFinite(v)) return null;
-    return v < WS_BLD_FOOTPRINT_MAXZOOM ? 0 : 1;
-  }
 
   /**
    * 🏙 **档位一变 ⇒ 立刻重挑一次 + 重绘**（机主 2026-10-03：「用户可选择是否启用多楼房模式」，
@@ -3488,13 +3499,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    *   `bldFlush("bldtier")` → 真源 `flushBldStore()` → 里面的 `pick` 闭包**再跑一次**
    *   （`maxDrawn` 在那里按**当前** zoom × 档位现算）→ `pickBuildingsByBudget` 重挑 → `setData` 重绘
    *   → `onPicked` 回填 HUD（`bldPickLine` 会带上新的形体档）。
-   * ⚠️ **只在真的跨线时**才补（`bldFlushedTier` 是上一次落图的档位，在 `bldFlush` 里现读）——
-   *    档内每一次缩放都重挑一遍是白工（挑楼规则对同档的 zoom 变化已经由 `moveend` 那轮覆盖）。
+   * ⚠️ **只在真的跨线时**才补：档位判据是共享真源 `bldTierOfZoom(zoom, bldFlushedTier)`
+   *    （**带 0.25 滞回**）——`bldFlushedTier` 是上一次落图的档，所以 13.9↔14.1 来回 10 次
+   *    也**一次都不重挑**（改造前是 10 次；PLAN-BLD-LOWZOOM §验收 5）。
+   * ⚠️ 档内每一次缩放都重挑一遍是白工（挑楼规则对同档的 zoom 变化已经由 `moveend` 那轮覆盖）。
    * ⚠️ `zoom` 读不出来（`null`）⇒ **不重挑**：拿不准就不动，宁可等下一次正常的落图。
    */
   function bldTierCrossedFlush(): void {
     if (!alive || !bldFlushedOnce) return;
-    const tier = bldTierOfZoom(map && typeof map.getZoom === "function" ? map.getZoom() : null);
+    /* prev = 上一次落图的档 ⇒ 与 `bldFlush` 里算的是**同一个判据**（含滞回），不存在第二份阈值 */
+    const tier = bldTierOfZoom(map && typeof map.getZoom === "function" ? map.getZoom() : null, bldFlushedTier);
     if (tier === null || tier === bldFlushedTier) return;
     bldFlush("bldtier");
   }

@@ -146,7 +146,7 @@
          也**不许**顺带加任何读数（PLAN §2.2 的验收口径）。
          渲染判据只有一处 `joyGate`：`?joy=0` 或 2D 降级路 ⇒ 这里根本不在 DOM 里（判据 9 / 10）。
          `@drive` 每帧**至多一次**（唯一驱动点），`@halt` 松手**恰好一次**。 -->
-    <WsJoystick v-if="joyGate.show" @drive="onJoyDrive" @halt="onJoyHalt" />
+    <WsJoystick v-if="joyGate.show" :mpp="joyMpp" :speed-mps="joySpeedMps" @drive="onJoyDrive" @halt="onJoyHalt" />
 
     <!-- 🪪 **信息卡**：点楼体 / 点名字 / 点区名 ⇒ **同一张卡**（`wsBuildingCard.buildingCardData`）。
          动效令牌全部来自 `CARD_MOTION`（一处定义）；组件里**没有** `backdrop-filter`
@@ -444,17 +444,21 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        ① 每帧把**相机**的屏幕位移交给 `panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing ⇒ **不写第二份投影数学**）；
        ② 🆕 **角色**走自己的世界坐标（运动模型积分 → `roamStore` → 「我」那颗钉子 `setLngLat`）——
           位置真源只有这一个（它**不进** `wsRuntimePush`、不当 gameplay 距离）；
-       ③ `joyActive` 期间按红线降级（见下面四个 handler 的早退）+ 松手后**恰好 1 次**重算。 */
+       ③ `joyActive` 期间按红线降级（见下面四个 handler 的早退）+ 松手→**回中跑完**后**恰好 1 次**重算；
+       ④ 🆕 **世界尺度**（米/像素 + 速度档）由本组件在 `joyCalibrate()` 里量一次再往下传
+          （`wsJoystick.ts` 里一行米/像素换算都不写）—— 速度是**米/秒**，屏幕像素只是结果。 */
   import WsJoystick from "./WsJoystick.vue";
   import {
     JOY_BASE_PX,
     JOY_HUD_LIFT_PX,
     JOY_INSET_PX,
     JOY_PITCH_DEG,
+    JOY_SPEED_MPS,
     JOY_STEP_PX,
     JOY_THUMB_PX,
     ROAM_PIN_ID,
     type JoyCamSnapshot,
+    type JoyFramePhase,
     type JoyMotion,
     type JoyPxScale,
     createJoyMotion,
@@ -463,6 +467,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyGateOf,
     joyLngLatOf,
     joyPxScaleOf,
+    joySpeedMpsOf,
     joyWalkAnimOn,
     roamStore,
   } from "./wsJoystick";
@@ -4203,6 +4208,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let joyOrigin: { lng: number; lat: number } | null = null;
   let joyScale: JoyPxScale | null = null;
   let joyMove: JoyMotion = createJoyMotion();
+  /* 🕹🆕 2026-10-03 第二轮（机主：「视角无法锁定角色，**位移很大**喵！！！」）—— **世界尺度**两个数，
+     各只有一处来源，都由 `joyCalibrate()` 量一次后传给摇杆组件（它自己一行换算都不写）：
+       · `joyMpp`      ：米/像素 —— 用本组件**既有那把唯一的尺子** `bldMetersPerCssPixel(zoom, lat)`
+                        （与挑楼/楼高同一把，见本文件 `metersPerPixel` 那处调用）；**不新增第二份换算**。
+                        ⚠️ 它不带俯角压缩（64° 时竖直方向的地面尺度差约 1/sin64° ≈ 11%）——
+                          与世界速度的口径误差就这么多，写在这里免得下一个人以为是 bug。
+       · `joySpeedMps` ：满推速度（**米/秒**）—— `joySpeedMpsOf(zoom)` 选档（步行/载具）。
+                        🔴 上一版速度按"屏宽/秒"给 ⇒ 这一档的 1024px 屏上等于 **967 m/s**（瞬移）。
+     量不到（没有 getZoom/getCenter）⇒ 两个数留 0 ⇒ 推杆无效：**宁可不走，也不编一个世界速度**。 */
+  const joyMpp = ref(0);
+  const joySpeedMps = ref(JOY_SPEED_MPS);
   /** ♿ 系统"减弱动效"：**只关踏步**（摇杆是输入，任何档位都不许关；见 `joyWalkAnimOn`） */
   const joyReducedMotion = (() => {
     try {
@@ -4213,13 +4229,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   })();
 
   /**
-   * 量「屏幕 px → 经纬度」那把**局部标尺**（整条链路只有这一处换算，共 3 次投影调用）。
-   * 🔴 四个数**全部**来自地图库自己的 `project`/`unproject` —— 我们一行投影数学都不写（既有红线）。
+   * 量**两把尺子**（整条链路只有这一处换算，共 3 次投影调用 + 1 次 `bldMetersPerCssPixel`）：
+   *   ① **屏幕 px → 经纬度**（局部雅可比）：四个数**全部**来自地图库自己的 `project`/`unproject`
+   *      —— 我们一行投影数学都不写（既有红线）。量的是**相机中心**处的雅可比，纯平移下不变。
+   *   ② 🆕 **米/像素 + 速度档**（世界尺度，交给摇杆组件）：`bldMetersPerCssPixel(zoom, lat)` +
+   *      `joySpeedMpsOf(zoom)` —— 只读 `getCenter`/`getZoom`，与 ① 相互独立（① 失败也能量出 ②）。
    * 🔴 **移动中 0 次**：本函数只在"进近景"（`joyEnter`）与建图那一刻被调，**帧里一次都不调**。
-   * 为什么量一次就够：量的是**相机中心**处的雅可比，而纯平移下中心处的地面深度不变
-   * （俯角/朝向/缩放都不动）⇒ 这个雅可比整段漫游不变（研究 §5）。
-   * 量不齐（库没这俩方法 / 抛错 / 非有限 / 全 0）⇒ `null`：**角色不动、只有相机走**
-   * （宁可退回旧行为，也不写一个编出来的经纬度）。
+   * 量不齐 ①（库没这俩方法 / 抛错 / 非有限 / 全 0）⇒ `null`：**角色不动、只有相机走**
+   * （宁可退回旧行为，也不写一个编出来的经纬度）；量不齐 ② ⇒ 推杆无效（不编世界速度）。
    */
   function joyCalibrate(): void {
     joyScale = null;
@@ -4227,8 +4244,21 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       project?: (c: [number, number]) => { x: number; y: number };
       unproject?: (p: [number, number]) => { lng: number; lat: number };
       getCenter?: () => { lng: number; lat: number };
+      getZoom?: () => number;
     } | null;
-    if (!m || typeof m.project !== "function" || typeof m.unproject !== "function" || typeof m.getCenter !== "function") return;
+    if (!m || typeof m.getCenter !== "function") return;
+    /* 🕹 **世界尺度**先量（只用到 getCenter/getZoom，**不依赖** project/unproject）：
+       量得到 ⇒ 即使下面那把 px→经纬度的标尺量不出来（角色不动），**相机照样按真实米/秒走**
+       （"宁可退回旧行为"那条降级路仍然成立）。 */
+    try {
+      const c0 = m.getCenter();
+      const z0 = typeof m.getZoom === "function" ? m.getZoom() : NaN;
+      joyMpp.value = bldMetersPerCssPixel(z0, c0.lat);
+      joySpeedMps.value = joySpeedMpsOf(z0);
+    } catch {
+      joyMpp.value = 0;
+    }
+    if (typeof m.project !== "function" || typeof m.unproject !== "function") return;
     try {
       const c = m.getCenter();
       const p0 = m.project([c.lng, c.lat]);
@@ -4382,41 +4412,63 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     el.style.transform = `translate3d(${(-joyAccX).toFixed(2)}px, ${(-joyAccY).toFixed(2)}px, 0)`;
   }
 
-  /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF）；`mv` = 这一步的运动状态（角色那一半） */
-  function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion): void {
+  /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF）；`mv` = 这一步的运动状态（角色那一半），
+   *  `phase` = `"push"`（推着/滑行）或 `"center"`（**松手后的回中段**：角色已停稳，只有相机在贴回角色）。 */
+  function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion, phase?: JoyFramePhase): void {
     const m = map as unknown as {
       panBy?: (o: [number, number], opt?: { duration: number }) => void;
     } | null;
     if (!alive || !m || typeof m.panBy !== "function") return;
-    if (!joyActive) {
+    /* 🔴 两条路**分开判**（2026-10-03 第二轮）：世界速度下相机头 ~2 秒会被死区按在原地
+       （满推 8.8 px/s），那几帧 `d = {0,0}` 但**角色已经在走** ⇒ 相机那一半要跳过、
+       角色那一半照写。老代码把两者绑在"相机位移非 0"上，于是那 2 秒里钉子一动不动。 */
+    const camMoved = !!(d.dx || d.dy);
+    if (camMoved && !joyActive) {
       /* 进入：**一次 class**（与既有 `movestart` 同一套 `is-camera-moving`，整层淡到 0.25）+
          累计位移归零。`panAnchor` 保持 null ⇒ 后面那几个 handler 早退也不会有人误用旧锚点。
-         ⚠️ 归零是**必须**的：上一次松手时 `onMoveEndNames()` 已经把位移烘进节点坐标了，
-         这里不归零就是把同一段位移**再叠一次**（名字层越推越偏）。 */
+         ⚠️ 归零是**必须**的：上一次收尾时 `onMoveEndNames()` 已经把位移烘进节点坐标了，
+         这里不归零就是把同一段位移**再叠一次**（名字层越推越偏）。
+         ⚠️ 只在**相机真的动**这一刻置位：相机没动的那些帧不置位 ⇒ 收尾也不必白跑一次取包
+         （那一次重算是给"画面位移"擦屁股的，画面没位移就没有屁股要擦）。
+         🕹 回中段也会走到这里（`joyActive` 那时仍为 true —— `onHalt` 要等相机停稳才发）⇒
+         名字层照旧跟手，回中那点位移（~17px）也一并被烘进去，不会留一条错位的缝。 */
       joyActive = true;
       joyAccX = 0;
       joyAccY = 0;
       cameraMoving.value = true;
     }
-    m.panBy([d.dx, d.dy], { duration: 0 });
-    joyAccX += d.dx;
-    joyAccY += d.dy;
-    joyNamesFollow();
+    if (camMoved) {
+      m.panBy([d.dx, d.dy], { duration: 0 });
+      joyAccX += d.dx;
+      joyAccY += d.dy;
+      joyNamesFollow();
+    }
     /* 🆕 角色那一路（与相机**分成两件事**，§3）：世界坐标写进真源 + 钉子 `setLngLat` + 朝向 + 踏步。
        🔴 位置**不再**从 `getCenter()` 反写 —— 反写就等于"我 = 相机"，屏幕上的钉子永远不动
-       （上一版"角色都没有动"的病根就在这一处）。 */
-    if (mv) {
+       （上一版"角色都没有动"的病根就在这一处）。
+       🔴 **回中段一个角色写点都不发**（判据：`phase === "center"` ⇒ 0 次 `setLngLat` / 0 次
+       `roamStore.write` / 0 次 `Marker.setLngLat` 内部那次 project）：那时角色已经停稳
+       （`joyMotionStep` 的 `centering` 只在"没输入且速度恰好 0"时为真），发出去也只是把同一个
+       坐标重写一遍 —— 而那正是"回中只许动相机"这句要求的可数形式。 */
+    if (mv && phase !== "center") {
       joyMove = mv; // 留一份最新状态（这一份**不是**驱动的那份；只给"进来时先站到原点"用）
       joyApplyRoam(mv);
     }
   }
 
   /**
-   * 松手 —— **恰好一次**重算（判据 6：不是 0 次，也不是每帧 1 次）。
+   * 收尾 —— **恰好一次**重算（判据 6：不是 0 次，也不是每帧 1 次）。
+   *
+   * 🔴 2026-10-03 第二轮**时点变了**：不再在手指抬起那一刻发，而是**相机回中跑完之后**才发
+   * （`release()` → 回中段 → 相机贴回角色 → `onHalt`）。这样做有两个好处，都是一个原因：
+   *   · 回中段里 `joyActive` **仍然为 true** ⇒ `panBy` 每帧引发的 `movestart/move/moveend`
+   *     全部照旧早退，**回中期间 0 次重投影 / 0 次取包 / 0 次重排标签**（判据 ⑩e3 钉着）；
+   *   · 那一次重算因此落在**画面已经停稳之后**，烘进节点坐标的位移是最终值 —— 不会留一条
+   *     "重投影完了相机还在挪"的错位缝（机主报过的"名字错位/松手卡一下"就是这么来的）。
    *
    * 顺序照抄既有 `moveend`（同一个理由，见那里 2026-10-01 那段注释）：
    *   清标志 → 容器归零 → **就地重投影**（把这次位移烘进节点坐标）→ 一次取包 + 一次重排。
-   * 🔴 那 600ms 去抖**不启动**（推送期间它一直没起过；松手就直接跑一次，不再等）。
+   * 🔴 那 600ms 去抖**不启动**（推送期间它一直没起过；收尾就直接跑一次，不再等）。
    */
   function onJoyHalt(): void {
     if (!joyActive) return;            // 没推过 ⇒ 不是"松手"，一次重算都不该有

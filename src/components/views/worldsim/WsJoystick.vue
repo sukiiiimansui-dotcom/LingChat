@@ -49,6 +49,7 @@
     joyThumbOffset,
     joyVectorFromPointer,
     type JoyFrameDelta,
+    type JoyFramePhase,
     type JoyMotion,
     type JoyVector,
   } from "./wsJoystick";
@@ -58,12 +59,22 @@
   const emit = defineEmits<{
     /**
      * 每帧**至多一次**（**停稳**的帧根本不发）——地图组件唯一允许驱动相机/角色/名字层的地方。
-     * 第三个参数是运动状态（角色位移 / 朝向 / 踏步相位），宿主照它写「我」那颗钉子（§3/§4）。
+     * 第 3 个参数是运动状态（角色位移 / 朝向 / 踏步相位），宿主照它写「我」那颗钉子（§3/§4）；
+     * 第 4 个参数是**相位**：`"center"` = 松手后的回中段（角色已停稳）⇒ 宿主**只许动相机**。
      */
-    drive: [d: JoyFrameDelta, v: JoyVector, m: JoyMotion];
-    /** 松手：**恰好一次**（地图组件在这里清 `joyActive` + 做那一次重算） */
+    drive: [d: JoyFrameDelta, v: JoyVector, m: JoyMotion, phase: JoyFramePhase];
+    /** 收尾：**恰好一次**（回中段跑完才发；地图组件在这里清 `joyActive` + 做那一次重算） */
     halt: [];
   }>();
+
+  /**
+   * 世界尺度（宿主量好传进来）——本组件**一个换算都不做**（红线）：
+   *   · `mpp`      ：米/像素（宿主的 `bldMetersPerCssPixel(zoom, lat)`）；
+   *   · `speedMps` ：满推速度（**米/秒**，宿主的 `joySpeedMpsOf(zoom)` 选出来的档）。
+   * 缺一个（宿主还没量到）⇒ `joyCtxOf` 归一化成 0 ⇒ 推杆无效 —— 那才是诚实的降级，
+   * 总比按屏幕像素编一个世界速度快。
+   */
+  const props = defineProps<{ mpp: number; speedMps: number }>();
 
   const baseEl = ref<HTMLElement | null>(null);
   const thumbEl = ref<HTMLElement | null>(null);
@@ -80,17 +91,19 @@
   let box = { cx: 0, cy: 0, radius: 0 };
   /** 这一次按压属于哪根手指（多指：第二根手指碰到摇杆不许把第一根的状态顶掉） */
   let pid = -1;
-  /** 屏宽（px）——"满推 0.6 屏宽/秒"那把尺子；同样在按下那一刻量一次并缓存 */
+  /**
+   * 屏宽（px）——**只**用于"前瞻上限 = 屏宽 × 1/8"这一处（速度**不再**由屏宽决定，见 `JoyCtx`）。
+   * 同样在按下那一刻量一次并缓存（每帧读 `clientWidth` = 每帧强制布局）。
+   */
   let screenW = 0;
 
   const driver = createJoyDriver({
-    screenW: () => screenW,
-    onFrame: (d, v, m) => emit("drive", d, v, m),
-    onHalt: () => {
-      active.value = false;
-      writeThumb(0, 0);
-      emit("halt");
-    },
+    ctx: () => ({ screenW, mpp: props.mpp, speedMps: props.speedMps }),
+    onFrame: (d, v, m, phase) => emit("drive", d, v, m, phase),
+    /* 🔴 `halt` **不再**在手指抬起那一刻发：那一刻相机可能还偏着 ~17px，先让它平滑贴回角色
+       （`release()` 进入回中段，同一个 rAF 只动相机），贴回来了才发这一次 —— 宿主那一次重算
+       因此**天然只发生一次、且发生在画面稳定之后**。手指的视觉复位（`active`/杆头）仍在 `onUp` 里当场做。 */
+    onHalt: () => emit("halt"),
   });
 
   /** 杆头跟手（**一次 transform 写**，只动这一个节点；不做布局、不读布局） */
@@ -108,7 +121,8 @@
     const r = el.getBoundingClientRect();
     if (!(r.width > 0)) return;                   // 还没排版（0 尺寸）⇒ 这一次不接，别算出 NaN
     /* 屏宽取**地图容器**（`.ws-dml`）的宽 —— 地图不一定铺满窗口（将来嵌进卡片时也对）；
-       取不到就退回窗口宽，绝不返回 0（0 会让"屏宽/秒"变成不动） */
+       取不到就退回窗口宽。⚠️ 口径变了（2026-10-03 第二轮）：屏宽**不再是速度尺子**，
+       它只决定"前瞻上限 = 屏宽 × 1/8"；真的是 0 也只是前瞻为 0（相机仍按米/秒跟），不会"推不动"。 */
     const hostEl = el.closest(".ws-dml") as HTMLElement | null;
     screenW = hostEl?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 0) || 0;
     box = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, radius: r.width / 2 };
@@ -146,7 +160,10 @@
         /* 已经释放过就忽略 */
       }
     }
-    /* 松手 = 归零 + **恰好一次** halt（`release()` 自己保证幂等；没按下过不会回调） */
+    /* 手指抬起：**当场**做视觉复位（按下态的淡入要立刻结束、杆头立刻回中）+ 归零 + `release()`。
+       `release()` 之后相机还在回中段跑（那几个 rAF 与手指无关），收尾那一次 `halt` 由它自己发。 */
+    active.value = false;
+    writeThumb(0, 0);
     driver.release();
   }
 

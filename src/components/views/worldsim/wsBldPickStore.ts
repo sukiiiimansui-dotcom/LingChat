@@ -89,25 +89,22 @@ export interface BldBudgetInputLite<T> {
   budgetPx2?: number;
   budgetVerts?: number;
   /**
-   * 🔴 **栋数硬上限**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"；
-   * 同日第二条：**按 zoom 分层** —— `z<14` 画足迹（宽档 4000）/ `z≥14` 画立体（严格档 100））。
-   * 与 `budgetPx2`/`budgetVerts` 同一路透传：**算上限不在这里**（`bldMaxDrawnFor(档位, zoom)` 在
+   * 🔴 **每格取前几栋（K）**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"；
+   * 同日第五条：候选池改成"按离线包格已加载的楼" ⇒ 这个数变成**每格**上限，不再是整屏上限）。
+   * 与 `budgetPx2`/`budgetVerts` 同一路透传：**算 K 不在这里**（`bldMaxDrawnOf(档位)` 在
    * `wsBldBudget`、档位存储在 `wsBldMode`），本模块只把宿主算好的数原样交给规则模块。
    *
-   * ⚠️ **zoom 由宿主现读**（`map.getZoom()`）：本模块**故意不碰地图对象**（见文件头"本模块不读
-   * `window`/`location`/全局主题"），所以"档位 × zoom ⇒ 上限"这一步只能发生在宿主那一侧，
-   * 而**换算规则一份都不许复制**（宿主只调 `bldMaxDrawnFor`，不写 100 / 4000、也不写 14）。
+   * ⚠️ **K 与 zoom 无关**（第五条）：宿主只用**用户选的档位**算它；本模块**不碰地图对象**
+   * （见文件头"本模块不读 `window`/`location`/全局主题"）⇒ 也没法在别处偷偷乘一个 zoom 因子。
    */
   maxDrawn?: number;
-  minInView?: number;
   /**
-   * 🌆 **形体档**（`wsBldBudget.bldTierOfZoom()` 的返回值；2026-10-03 第四条）。
-   * `0` = 足迹档（z<14）⇒ 规则模块走**静态重要度**那条路（0 次投影）；
-   * `1`/`null`/不给 ⇒ 投影路（与改造前逐字节相同）。
-   * ⚠️ 与 `maxDrawn` 同一条纪律：**档位由宿主用共享真源算**，本模块只原样透传 ——
-   * 这里不写 `z < 14`、也不写滞回宽度（那两样都只有 `wsBldBudget` 一份）。
+   * 🧮 **离线包格边长（度）** —— "按格取前 K"的那张网格（2026-10-03 第五条）。
+   * 宿主给**包自报**的 `feed.facts().cellDeg`（页面/App 同一份）；不给 ⇒ 规则模块退回
+   * `BLD_BUNDLE_CELL_DEG`（0.05）。**取格/算格键/分格三处必须是同一份格数学**，本模块只透传。
    */
-  shapeTier?: number | null;
+  cellDeg?: number;
+  minInView?: number;
 }
 
 /* ══ 🏙 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
@@ -307,13 +304,13 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         screen: input.screen,
         budgetPx2: input.budgetPx2,
         budgetVerts: input.budgetVerts,
-        /* 栋数上限**原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
+        /* 🔴 每格上限 K **原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
+        /* 🧮 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
+           ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）。 */
+        cellDeg: input.cellDeg,
         minInView: input.minInView,
-        /* 🌆 形体档同样**原样透传**（`0` ⇒ 静态路）：算档位的是宿主 + `bldTierOfZoom`，
-           本模块既不判 `z < 14`、也不存滞回状态。 */
-        shapeTier: input.shapeTier,
       });
     },
 

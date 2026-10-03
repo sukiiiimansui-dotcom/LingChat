@@ -35,6 +35,15 @@ export interface LayerOp {
 export const TF_LAYER_ID_LIST = ["tf-cross", "tf-drive", "tf-park", "tf-bus", "tf-signal"] as const;
 /** 楼体图层 id（路网必须在其下） */
 export const BUILDING_LAYER_ID = "bld-ext";
+/**
+ * 🌆 **足迹层 id**（2026-10-03「按 zoom 分层」：`z < 14` 时屏上的"楼"就是这一层，`fill` 贴地平面）。
+ *
+ * 为什么路网的自愈要知道它：足迹是**地面上的肌理**，被它盖住 = 一层半透明脏膜（机主原话：
+ * 足迹不许压住路网）。而"路网先插、楼体后插"的顺序下（页面实测到过），`bld-foot` 会落在路网
+ * **之上**，此时老判据（只看 `bld-ext` / tf）认为"已经是对的"⇒ **不会自愈** ⇒ 真机上是脏的。
+ * ⇒ 它和 `BUILDING_LAYER_ID` 一起构成路网的层序约束：**足迹 < 路网 < 设施 < 楼体**。
+ */
+export const FOOTPRINT_LAYER_ID = "bld-foot";
 /** 路网图层 id 前缀（`wsRoads.roadLayerSpecs()` 生成） */
 export const ROAD_LAYER_PREFIXES = ["road-casing-", "road-line-"] as const;
 
@@ -62,16 +71,25 @@ export function planEnsureRoadOrder(m: LayerOrderMapLike): LayerOp[] {
   /* 目标：路网必须在**所有**交通设施之前（更靠下）——按绘制顺序 = 索引更小 */
   const tfIdx = TF_LAYER_ID_LIST.map(idx).filter((i) => i >= 0);
   const bldIdx = idx(BUILDING_LAYER_ID);
+  const footIdx = idx(FOOTPRINT_LAYER_ID);
   const blockers: string[] = [];
   const lowestTf = tfIdx.length ? Math.min(...tfIdx) : -1;
   if (lowestTf >= 0 && firstRoad > lowestTf) blockers.push("交通设施");
   if (bldIdx >= 0 && firstRoad > bldIdx) blockers.push("楼体");
+  /* 🌆 2026-10-03：路网还必须**压在足迹层之上**（`bld-foot` 是贴地平面 ⇒ 盖住路网就是脏膜）。
+     判据与上面两条同式（索引更小 = 更靠下）；只有足迹层在挡时也走下面同一套 `before` 计算。 */
+  if (footIdx >= 0 && firstRoad < footIdx) blockers.push("足迹层");
   if (!blockers.length) return ops; // 已经是对的 ⇒ **不动**（避免无谓的 moveLayer 抖动）
   /* 显式移动：移到"最下面那个阻挡者"之前 */
   let before = "";
   if (lowestTf >= 0 && bldIdx >= 0) before = lowestTf < bldIdx ? ids[lowestTf]! : ids[bldIdx]!;
   else if (lowestTf >= 0) before = ids[lowestTf]!;
-  else before = ids[bldIdx]!;
+  else if (bldIdx >= 0) before = ids[bldIdx]!;
+  /* 只有足迹层在挡（没有楼体层、也没有设施）⇒ 锚点取**足迹层之上最近的那一条**。
+     🔴 取不到就**不动**：老代码那一支会算出 `undefined`，而 `before: undefined` 的语义是
+     "移到最上"—— 那比"留在原地"更糟（路网跑到所有东西上面）。 */
+  else if (footIdx >= 0) before = ids[footIdx + 1] || "";
+  if (!before) return ops;
   for (const id of roads) ops.push({ op: "move", id, before, why: `路网被「${blockers.join("+")}」压在上面 ⇒ 显式移到它之下` });
   return ops;
 }

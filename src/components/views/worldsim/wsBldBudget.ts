@@ -53,14 +53,42 @@
  *   · 档位是**用户的选择**（存 `localStorage`，见 `wsBldMode.ts`），**不是**按帧率/设备自动缩
  *     （机主红线：不许自动降级）。
  *
+ * ## 🆕 2026-10-03（第三条）· **按 zoom 分层：远了画足迹 / 近了画立体**
+ * 上一条（固定 100 栋）真机验收又是错的，机主原话：「**什么都没有**」—— 真因是**固定栋数跟 zoom 无关**，
+ * 而"一栋楼在屏幕上多大"**只跟 zoom 有关**（本项目实测像素表，1280px 视口 / 纬度 29.56°）：
+ *
+ * | zoom | 30m 楼在屏上的宽 | 那一档该画什么 |
+ * |---|---|---|
+ * | z12 | **0.9px** | 足迹（平面）—— 100 个 1px 的点 = 一片空白 |
+ * | z13 | **1.8px** | 足迹（平面） |
+ * | z14 | **3.6px** | 立体（这一档起楼体分得开） |
+ * | z15 | **7.2px** | 立体 |
+ * | z16 | **14.4px** | 立体 |
+ *
+ * 机主的决定（原话意思）：「**z<14 画"足迹"（平面，看得见城市肌理）；z≥14 画立体（严格档 100 栋）**」
+ * ⇒ 本模块把"栋数上限"从**只看档位**改成 **档位 × zoom**（`bldMaxDrawnFor`）：
+ *   · `z < WS_BLD_FOOTPRINT_MAXZOOM`（= 14，**与 `WS_BLD_DETAIL_ROOF_ZOOM` 同一条分界线**）
+ *     ⇒ 走**宽档** `WS_BLD_MAX_DRAWN_MANY`（4000）：足迹要的是"看得见肌理"，1px 的点越多越像城市；
+ *   · `z ≥ 14` ⇒ 严格档 `WS_BLD_MAX_DRAWN`（100）：立体楼一栋占几百 px²，100 栋就是"一眼数得清"；
+ *   · **多楼房模式**（用户自己开的那个不推荐档）⇒ **全 zoom 一致** 4000（用户明确要"多"，不替他分档）；
+ *   · `zoom` **读不出来**（NaN / undefined / 非数）⇒ 按**严格档** 100：宁可少画，不许拿猜的数乱画。
+ * ⚠️ 宽档 ≠ 没有上限：两个**代价**预算（Σ投影 px² / Σ顶点）照样同时生效 —— 低 zoom 时真正先咬住的
+ *    是**顶点**预算（40k ÷ 20 顶点/栋 ≈ **2000 栋**，见下面那条"如实"注释），栋数上限只是防呆线。
+ * ⚠️ 这一层分档**只跟 zoom 走**：不读帧率、不读设备、不看候选多少（机主红线：不许自动降级）。
+ *
  * ## 确定性（项目纪律）
- * 同一输入（视野 + 楼数据 + 三个常量）⇒ **挑出来的批次逐字节可复现**：
+ * 同一输入（视野 + 楼数据 + 三个常量 + **zoom**）⇒ **挑出来的批次逐字节可复现**：
  *   · 没有任何 `Math.random()` / `Date.now()` / 帧率 / 设备能力输入；
  *   · 排序是**全序**：`单位顶点换到的像素`降序 → 像素降序 → `id` 升序（第三键保证不存在"等值不定序"）；
  *   · 输入顺序不影响结果（全序 + 稳定 `Array.sort`），但**同序输入必然同序输出**；
  *   · 🔴 **不达 `maxDrawn` 时行为与"没有这个上限"逐字节相同**（连 `why` 都一字不差）——
  *     新增的第三个上限**只在它真的咬住时**才出现在判词里，别让它变成"到处都多一句"。
  */
+
+/* 🏢 **拆件分档的真源**（`wsBldDetailTiers`，2026-10-02 B1）—— 本模块只借它那**一个**阈值：
+   足迹/立体的分界线 = 女儿墙那一档的分界线（机主点名的那条 `<14` / `≥14`）。
+   ⚠️ 单向依赖（本文件 → 它），它不 import 任何东西 ⇒ 不成环。 */
+import { WS_BLD_DETAIL_ROOF_ZOOM } from "./wsBldDetailTiers";
 
 /** Σ投影面积预算（CSS 像素²）—— 见文件头"为什么是这个数" */
 export const WS_BLD_BUDGET_PX2 = 400_000;
@@ -91,6 +119,17 @@ export const WS_BLD_MAX_DRAWN = 100;
 export const WS_BLD_MAX_DRAWN_MANY = 4000;
 
 /**
+ * 🌆 **足迹档 / 立体档的分界线**（2026-10-03 机主真机验收后拍板）。
+ *
+ * `z < 14` ⇒ 画**足迹**（平面 `fill`，看得见城市肌理）· `z ≥ 14` ⇒ 画**立体**（挤出楼体，严格档 100 栋）。
+ * 为什么是 14：**它不是新定的数** —— 与既有的 `WS_BLD_DETAIL_ROOF_ZOOM`（女儿墙那一档）是
+ * **同一条分界线**（机主 2026-10-02 点名 `<14` 平顶 / `14–16` 女儿墙）⇒ 这里**不再写第二个 14**，
+ * 直接引用那一份（两边各写一份，改一处漏一处 —— 本项目栽过）。实测依据见文件头那张像素表：
+ * z13 时一栋 30m 楼只有 1.8px（画立体=看不见），z14 有 3.6px（画立体=分得开）。
+ */
+export const WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
+
+/**
  * 档位 → 栋数上限（**唯一映射处**，页面/App/自检都调它，不许各写一套 `mode === "many" ? … : …`）。
  *
  * @param mode 档位；**认不出来的值（含 `undefined`/`null`/对象/数字）一律按默认严格档** ——
@@ -98,6 +137,32 @@ export const WS_BLD_MAX_DRAWN_MANY = 4000;
  */
 export function bldMaxDrawnOf(mode: unknown): number {
   return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
+
+/**
+ * 🏙🌆 **档位 × zoom → 栋数上限**（2026-10-03「按 zoom 分层」的**新入口**；`bldMaxDrawnOf` 是老入口，保留）。
+ *
+ * | 输入 | 结果 | 为什么 |
+ * |---|---|---|
+ * | `mode === "many"`（任意 zoom） | `WS_BLD_MAX_DRAWN_MANY`（4000） | 用户明确开了"多楼房模式" ⇒ **全 zoom 一致**，不替他分档 |
+ * | 其它档 + `zoom < 14` | `WS_BLD_MAX_DRAWN_MANY`（4000） | **足迹档**：1~2px 的点要够多才"看得见城市肌理" |
+ * | 其它档 + `zoom ≥ 14` | `WS_BLD_MAX_DRAWN`（100） | **立体严格档**：一栋几百 px²，100 栋一眼数得清 |
+ * | 其它档 + `zoom` 读不出来 | `WS_BLD_MAX_DRAWN`（100） | **宁可少画，不许乱画**（缺省=严格档，与 `maxDrawn` 的默认同一口径） |
+ *
+ * ⚠️ 它是**纯函数**：不读地图/`window`/`localStorage` —— zoom 由宿主在**挑楼那一刻**现读
+ * （`map.getZoom()`）传进来，否则用户在缩放后切档会用到旧 zoom（"点了没反应"那一类）。
+ * ⚠️ 宽档**不是"没有上限"**：两个代价预算（Σ投影 px² / Σ顶点）与它同时生效（见文件头）。
+ *
+ * @param mode 用户档位（`"many"` / 其它；归一规则与 `bldMaxDrawnOf` 完全相同，只有一份）
+ * @param zoom 当前 zoom（**非有限数/非数** ⇒ 按严格档 —— `null`/`undefined`/`NaN` 都算读不出来，
+ *             注意 `null < 14` 在 JS 里是 `true`，所以**必须**先判有限性，不能直接比大小）
+ */
+export function bldMaxDrawnFor(mode: unknown, zoom: unknown): number {
+  /* 多楼房模式：全 zoom 一致（复用 `bldMaxDrawnOf` ⇒ `mode === "many"` 这个判据只有一份） */
+  if (bldMaxDrawnOf(mode) === WS_BLD_MAX_DRAWN_MANY) return WS_BLD_MAX_DRAWN_MANY;
+  const z = typeof zoom === "number" && isFinite(zoom) ? zoom : NaN;
+  if (!isFinite(z)) return WS_BLD_MAX_DRAWN;
+  return z < WS_BLD_FOOTPRINT_MAXZOOM ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
 }
 
 /** 每段墙固定 4 个顶点（MapLibre `fill_extrusion_bucket` 的 `prepareSegment(4, …)` + 4×`addVertex`） */

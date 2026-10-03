@@ -46,18 +46,30 @@ export function cameraDefaults(): SceneCamera {
 
 /** 图层**顺序**（自下而上；`group` 只是给人和自检看的名字） */
 export interface SceneLayerPlanEntry {
-  group: "roads" | "transport" | "buildings" | "prerender" | "labels";
+  group: "footprint" | "roads" | "transport" | "buildings" | "prerender" | "labels";
   /** 该组里图层的 id 前缀（用于自检断言"实际图层属于哪一组"） */
   idPrefixes: readonly string[];
+  /**
+   * 额外**排除**的 id 前缀（在 `idPrefixes` 命中之后再剔掉）。
+   * 🌆 2026-10-03「按 zoom 分层」加这一项的唯一原因：足迹层 `bld-foot` 与楼体共用 `bld-` 前缀，
+   * 但它是**贴在地面上的平面**（层序在路网**之下**），混进 `buildings`（"楼体在最上"）会让
+   * `sceneOrderViolations()` 把正确的层序误报成"路网被楼体压住"。
+   */
+  excludePrefixes?: readonly string[];
   /** 插到哪个图层**之前**（`null` = 追加到最上） */
   beforeId: string | null;
   why: string;
 }
 
 export const SCENE_LAYER_ORDER: readonly SceneLayerPlanEntry[] = [
+  /* 🌆 **足迹层**（`bld-foot`，2026-10-03「按 zoom 分层」）：`z<14` 时屏上的"楼"就是这一层。
+     它是**贴在地面上的平面**（`fill`），与路网/水绿同一档 —— 也就是**在它们之下**。
+     单列一组（而不是塞进 `buildings`）：混进去会让下面那条"路网被楼体压住"的判据**误报**
+     （2026-10-03 加这一层时实测到：`firstOf("buildings")` 取到的是最下面那条 `bld-foot`）。 */
+  { group: "footprint", idPrefixes: ["bld-foot"], beforeId: "bld-ext", why: "足迹是地面上的平面（在路网/水绿之下、楼体之下）" },
   { group: "roads", idPrefixes: ["road-casing-", "road-line-"], beforeId: "bld-ext", why: "路是地面上的东西，压在楼上会像从楼顶穿过" },
   { group: "transport", idPrefixes: ["tf-"], beforeId: "bld-ext", why: "交通设施**贴在路之上**（先插路网、后插设施 ⇒ 设施在上）" },
-  { group: "buildings", idPrefixes: ["bld-"], beforeId: null, why: "楼体在最上（数据层，交互载体）" },
+  { group: "buildings", idPrefixes: ["bld-"], excludePrefixes: ["bld-foot"], beforeId: null, why: "楼体在最上（数据层，交互载体）" },
   /* 🛰 LOD 第 1 步（2026-09-24）：预渲染瓦片层。**它在矢量层之上**是刻意的 ——
      远景（z≤12）要让瓦片**盖住**实时层，中间靠 `raster-opacity` 随 zoom 淡到 0 把画面交还矢量层；
      反过来放（瓦片在下）就得给 12 条路网 + 楼体各写一份"淡入"，那才是新造一套机制。
@@ -70,10 +82,18 @@ export function sceneLayerPlan(): SceneLayerPlanEntry[] {
   return SCENE_LAYER_ORDER.map((e) => ({ ...e }));
 }
 
+/** 🌆 某个图层 id 是否属于这一组（前缀命中 **且** 不在 `excludePrefixes` 里）。
+ *  **判据只有这一处**：`sceneGroupOf()` 与 `sceneOrderViolations()` 都调它
+ *  （各写一份就会漂 —— 2026-10-03 加足迹层时正是这里让"路网在楼体之上"被误报）。 */
+function planEntryHas(e: SceneLayerPlanEntry, id: string): boolean {
+  if (!e.idPrefixes.some((p) => id.startsWith(p))) return false;
+  return !(e.excludePrefixes || []).some((p) => id.startsWith(p));
+}
+
 /** 按 id 判断某个图层属于计划里的哪一组（`null` = 不在计划内，如底图/色罩/天空） */
 export function sceneGroupOf(layerId: string): SceneLayerPlanEntry["group"] | null {
   const id = String(layerId || "");
-  for (const e of SCENE_LAYER_ORDER) if (e.idPrefixes.some((p) => id.startsWith(p))) return e.group;
+  for (const e of SCENE_LAYER_ORDER) if (planEntryHas(e, id)) return e.group;
   return null;
 }
 
@@ -98,14 +118,20 @@ export function sceneOrderViolations(layerIds: readonly string[]): string[] {
   const firstOf = (g: SceneLayerPlanEntry["group"]): number => {
     const e = SCENE_LAYER_ORDER.find((x) => x.group === g)!;
     const positions = layerIds
-      .map((id, i) => (e.idPrefixes.some((p) => id.startsWith(p)) ? i : -1))
+      .map((id, i) => (planEntryHas(e, id) ? i : -1))
       .filter((i) => i >= 0);
     return positions.length ? Math.min(...positions) : -1;
   };
+  const foot = firstOf("footprint");
   const roads = firstOf("roads");
   const tf = firstOf("transport");
   const bld = firstOf("buildings");
   const pre = firstOf("prerender");
+  /* 🌆 足迹层（地面肌理）必须在路网/交通设施/楼体**之下**：
+     它跑到上面去就是"一层半透明脏膜"（2026-10-03 机主原话：足迹是肌理，不许压住路网/水绿）。 */
+  if (foot >= 0 && roads >= 0 && foot > roads) out.push("足迹层被路网压在上面（它是地面肌理，应在路网之下）");
+  if (foot >= 0 && tf >= 0 && foot > tf) out.push("足迹层被交通设施压在上面（应在下方）");
+  if (foot >= 0 && bld >= 0 && foot > bld) out.push("足迹层被楼体压在上面（应在下方）");
   if (roads >= 0 && tf >= 0 && roads > tf) out.push("路网被交通设施压在上面（应在下方）");
   if (roads >= 0 && bld >= 0 && roads > bld) out.push("路网被楼体压在上面（应在下方）");
   if (tf >= 0 && bld >= 0 && tf > bld) out.push("交通设施被楼体压在上面（应在下方）");

@@ -34,7 +34,16 @@
 //     米每像素**不在本文件里算**（不写第二份换算 —— 这条红线照旧）：宿主用既有那把唯一的尺子
 //     `bldMetersPerCssPixel(zoom, lat)` 量好、当作 `JoyCtx.mpp` 传进来；尺子的用法只是从
 //     "定速度"变成"换算结果"。
-//     相机的实际位移只交给 `map.panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing），也不碰 zoom。
+//     相机的实际位移只交给 `map.panBy([dx,dy],{duration:0})`（库内已处理 pitch/bearing）。
+//   · 🕹 **相机距离（zoom）是"看得见在动"的第三根杠杆**（2026-10-03 第三轮，机主拍板走"拉近"）：
+//     世界速度有硬上限、档位又不能突变 ⇒ 剩下唯一能调的就是**相机离多远**。方向**只能是拉近**：
+//     `px/s = (m/s) ÷ 米每像素`，而米每像素每级恰好翻倍（研究 §9.4）⇒ 拉远只会让屏幕位移**减半**
+//     （8.8276 → 4.4138 px/s），拉近才让它翻倍（`JOY_ZOOM_PUSH_LEVELS = 1.18` ⇒ 2^1.18 ≈ 2.266 倍）。
+//     🔴 三件事一起守住：① 世界速度一个字不改（变的只是同一段位移占多少屏幕像素）；
+//     ② 相机距离的变化**走既有相机通路**（宿主用 `easeTo({zoom,duration:0})`，本文件一行投影数学都不写）；
+//     ③ 松手后的回程**复用** `JOY_RECENTER_TAU_S`（与"相机贴回角色"同一套，不新造第二套回程）。
+//     ⚠️ 拉近期间**名字层必须整层隐藏**（判据在 `joyNamesHiddenOf`，理由见研究 §9.6）：标签坐标是按
+//     进近景那一刻的 zoom 投影好写进 DOM 的，容器只补 translate；zoom 一变就系统性错位。
 //   · **不 import vue / 不 import 地图库 / 不碰 `document`/`window`**：本文件必须能在 node 里直接跑。
 //     唯一的浏览器 IO 是 `localStorage`（`readJoyStored`/`writeJoyStored` 两个函数、全程 try/catch，
 //     与 `wsBldMode.ts` 同款）—— 在 node 里 `typeof localStorage === "undefined"` ⇒ 退回默认（关）。
@@ -82,6 +91,42 @@ export const JOY_SPEED_ROAM_MPS = 13.9;
 export const JOY_SPEED_MAX_MPS = 13.9;
 /** 速度档的缩放分界：`z ≥ 17`（一屏 ≲ 300m，步行尺度）⇒ 步行档；否则 ⇒ 载具档 */
 export const JOY_SPEED_ZOOM_WALK = 17;
+
+/* ──────────────────────────────────────────────────────────────────
+ * 🕹 **相机距离（拉近）**——四个常量全在这里，唯一的真源（2026-10-03 第三轮，机主拍板 Ⓐ）
+ * 为什么需要它（研究 §9.5 的可数证据）：世界速度有硬上限（13.9 m/s）、档位不许突变，
+ * 于是"屏幕上几乎不动"这件事只剩**相机离多远**可调：本屏 z16.4 上 8.8276 px/s，
+ * 起推后相机要 **2266ms** 才动（死区 20px ÷ 速度），手机一屏（420px）要 **47.6 秒**。
+ * 🔴 方向只有拉近一条：米/像素每级翻倍 ⇒ 拉远 = 屏幕位移**减半**（§9.4）。
+ * ────────────────────────────────────────────────────────────────── */
+/**
+ * **推杆期间相机拉近多少级**（zoom 级数，**正 = 拉近**；0 = 关掉这条通路）。
+ * 取 **1.18** 的算法（不是拍脑袋）：要让"起推后相机 ≤1 秒就开始动"（= 死区 20px ÷ 屏幕速度）
+ * 需要 20 px/s，而现在是 8.8276 px/s ⇒ 需要 20/8.8276 = 2.2658 倍 ⇒ `log2(2.2658) = 1.1799` 级。
+ * 拉近后：**20.0058 px/s**（一屏 21.0 秒，起推 1000ms 内相机就动），且世界速度一个字没改。
+ */
+export const JOY_ZOOM_PUSH_LEVELS = 1.18;
+/**
+ * 🔴 **拉近的上限**（级数）——`joyCtxOf()` 拿它夹 `zoomLevels`，坏输入（Infinity / 999）也顶不破。
+ * 依据（研究 §9.2）：导航 SDK 也把这件事夹住 —— Mapbox `FollowingFrameOptions.maxZoom = 16.35` /
+ * `minZoom = 10.5`，而且 zoom/pitch/padding/bearing 各有 `*UpdatesAllowed` 开关。
+ * 数量级取 2.5 级（2^2.5 ≈ 5.66 倍 ⇒ 50 px/s 那一档）：再近就只剩几十米，
+ * 反而看不出"我在城市的哪儿"，也就失去了近景的意义。
+ */
+export const JOY_ZOOM_MAX_LEVELS = 2.5;
+/**
+ * 拉近的时间常数 τ（秒）——推杆期间相机距离按它**指数逼近**（与速度那条同构，研究 §1）。
+ * 0.5s ⇒ 1 秒走完 `1 − e^(−2) = 86.47%`（1.0203044 级），1.5 秒 95.02%（1.1212512 级）。
+ * 取 0.5 而不是瞬移：相机距离突变 = 画面整体缩放一下，比走得慢更难受（§3 的阻尼跟随同理）。
+ */
+export const JOY_ZOOM_TAU_S = 0.5;
+/**
+ * 拉近量的**归零阈值**（级数）——指数衰减永远到不了 0 ⇒ 低于它就**写恰好 0**。
+ * 🔴 这条是"松手后 zoom 回到出发值"的**结构保证**（容差 0，不是"差一点点"）：
+ * `joyZoom0 + 0 === joyZoom0` 逐位相等，相机距离也随之**逐位**回到进近景那一刻，
+ * 名字层才敢在同一帧恢复显示（`joyNamesHiddenOf` 用同一个阈值）。
+ */
+export const JOY_ZOOM_EPS_LEVELS = 0.001;
 /** 单帧最大步长（ms）：掉帧/后台回来时**不许**一次跳出去（64 ≈ 15.6fps 的一帧） */
 export const JOY_MAX_DT_MS = 64;
 /** 近景倾角（度）：机主裁决 **60~70**；`maxPitch` = 70（`wsScene.CAMERA_DEFAULTS`）⇒ 取 64 留余量 */
@@ -152,6 +197,8 @@ export function joyThumbOffset(dx: number, dy: number, radius: number): { x: num
  * `mpp` = `bldMetersPerCssPixel(zoom, lat)`（宿主在 `joyCalibrate` 里量一次）、
  * `speedMps` = `joySpeedMpsOf(zoom)`（同一处选档）。
  * ⚠️ `screenW` **只**用于"前瞻上限 = 屏宽 × 比例"这一处 —— 速度**不再**由屏宽决定。
+ * 🕹 `zoomLevels` 是第四个数：**推杆期间相机拉近多少级**，由宿主在 `joyCalibrate()` 里"量到了出发 zoom"
+ * 才给 `JOY_ZOOM_PUSH_LEVELS`，量不到就给 **0**（⇒ 这条通路整条关闭，宁可不拉，也不把相机移到 zoom 0）。
  */
 export interface JoyCtx {
   /** 地图容器宽度（px） */
@@ -160,18 +207,29 @@ export interface JoyCtx {
   mpp: number;
   /** 满推速度（米/秒，**世界单位**）：`joySpeedMpsOf(zoom)` 选出来的那一档 */
   speedMps: number;
+  /** 🕹 推杆期间相机**拉近**多少级（0 = 不拉；正 = 拉近）——由 `JOY_ZOOM_PUSH_LEVELS` 供，这里夹到上限 */
+  zoomLevels: number;
 }
 
 /**
  * ctx 归一化：非有限 / ≤0 一律**归 0** ⇒ 这一步什么都不走
  * （"量不到尺子就站住"，与 `joyPxScaleOf` 的"宁可不动，也不写编出来的坐标"同一条纪律）。
+ * ⚠️ `zoomLevels` 例外：它**可以是 0**（= 不拉近），所以不能用上面那条"≤0 归 0"；
+ *    非有限一律 0，其余夹进 `[0, JOY_ZOOM_MAX_LEVELS]`（坏输入顶不破上限 —— §9.2 的"上限"纪律）。
  */
 export function joyCtxOf(x: Partial<JoyCtx> | null | undefined): JoyCtx {
   const n = (v: unknown): number => {
     const f = Number(v);
     return Number.isFinite(f) && f > 0 ? f : 0;
   };
-  return x ? { screenW: n(x.screenW), mpp: n(x.mpp), speedMps: n(x.speedMps) } : { screenW: 0, mpp: 0, speedMps: 0 };
+  const zl = (v: unknown): number => {
+    const f = Number(v);
+    if (!Number.isFinite(f) || f <= 0) return 0;
+    return Math.min(JOY_ZOOM_MAX_LEVELS, f);
+  };
+  return x
+    ? { screenW: n(x.screenW), mpp: n(x.mpp), speedMps: n(x.speedMps), zoomLevels: zl(x.zoomLevels) }
+    : { screenW: 0, mpp: 0, speedMps: 0, zoomLevels: 0 };
 }
 
 /**
@@ -341,11 +399,18 @@ export interface JoyMotion {
   speedRatio: number;
   /** 踏步相位（圈，累计）——停下来就不再涨 */
   stepPhase: number;
+  /**
+   * 🕹 **相机当前拉近了多少级**（0..`JOY_ZOOM_MAX_LEVELS`；0 = 相机就在进近景那一刻的距离上）。
+   * ⚠️ 它**不是**"屏幕位移"也不是"速度"：世界速度一个字不改，变的是同一段位移占多少像素
+   * （屏幕上的一秒位移 = `|v| × 2^zo`，见 `joyPanScaleOf`）。
+   * 🔴 松手后它会**恰好**回到 0（`JOY_ZOOM_EPS_LEVELS` 那一跳），相机距离因此逐位回到出发值。
+   */
+  zo: number;
 }
 
 /** 会话开始的零状态（每进一次近景 `createJoyMotion()` 一份新的） */
 export function createJoyMotion(): JoyMotion {
-  return { vx: 0, vy: 0, px: 0, py: 0, cx: 0, cy: 0, headingDeg: 0, speedRatio: 0, stepPhase: 0 };
+  return { vx: 0, vy: 0, px: 0, py: 0, cx: 0, cy: 0, headingDeg: 0, speedRatio: 0, stepPhase: 0, zo: 0 };
 }
 
 /** 一步的结果：相机该走多少（喂 `panBy`）+ 新状态 + 还没停稳吗（驱动要不要续 rAF） */
@@ -368,7 +433,9 @@ export interface JoyStepResult {
  *   ③ 停稳（`moving === false`）⇒ `d = {0,0}` 且速度恰好 0（"没推就不更新相机"的旧不变量）；
  *   ④ 朝向只在**真的有速度**（> 满速的 1%）时更新；
  *   ⑤ **相机与角色的屏幕偏移永远 ≤**（前瞻上限 + 死区）—— 硬夹出来的结构保证（"视角锁定角色"）；
- *   ⑥ 无输入且速度恰好 0 ⇒ `centering = true`（前瞻/死区都归 0，相机贴着角色收敛）。
+ *   ⑥ 无输入且速度恰好 0 ⇒ `centering = true`（前瞻/死区都归 0，相机贴着角色收敛）；
+ *   ⑦ 🕹 **相机距离**：推杆期朝 `ctx.zoomLevels` 逼近、松手后朝 0 收敛，且**松手后必定写恰好 0**
+ *      （`zo === 0` ⇒ 相机逐位回到出发值）；`zoomLevels = 0` ⇒ `zo` 恒 0（这条通路是**可选**的）。
  */
 export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: number): JoyStepResult {
   const dt = clampDt(dtMs);
@@ -377,13 +444,18 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
   /* 目标速度（px/s）——由**世界速度档** ÷ 米每像素 得来（`joyTargetVelocity` 是唯一换算处） */
   const t = joyTargetVelocity(v, c);
   const pushing = !!(v && v.mag > 0);
-  const bad = !Number.isFinite(m.vx + m.vy + m.px + m.py + m.cx + m.cy);
+  const bad = !Number.isFinite(m.vx + m.vy + m.px + m.py + m.cx + m.cy + m.zo);
   if (bad) return { d: { dx: 0, dy: 0 }, move: createJoyMotion(), moving: false, centering: false };
-  /* dt=0（注入的时钟没走 / 同一毫秒内两次）⇒ 状态逐字节不变；只有"还在推 / 还在滑 / 相机还没贴住角色"才续帧 */
+  /* dt=0（注入的时钟没走 / 同一毫秒内两次）⇒ 状态逐字节不变；只有"还在推 / 还在滑 / 相机还没贴住角色 / 相机距离还没归位"才续帧 */
   if (!dt) {
     const off = m.px !== m.cx || m.py !== m.cy;
     const stopped = !pushing && m.vx === 0 && m.vy === 0;
-    return { d: { dx: 0, dy: 0 }, move: { ...m }, moving: pushing || m.vx !== 0 || m.vy !== 0 || off, centering: stopped };
+    return {
+      d: { dx: 0, dy: 0 },
+      move: { ...m },
+      moving: pushing || m.vx !== 0 || m.vy !== 0 || off || m.zo !== 0,
+      centering: stopped,
+    };
   }
 
   /* ① 输入 → 速度（指数逼近；推杆用加速 τ、回中用摩擦 τ） */
@@ -401,6 +473,17 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
   /* ② 半隐式欧拉：用**新**速度积分位置 */
   const px = m.px + vx * s;
   const py = m.py + vy * s;
+  /* 🕹 ②b **相机距离**（研究 §9；机主拍板 Ⓐ 拉近）——推杆期间朝 `ctx.zoomLevels` 逼近，
+     松手后朝 0 回归。两条**与速度那条同构**（§1 的指数逼近）：
+       · 推杆期用 `JOY_ZOOM_TAU_S`（0.5s，相机距离不要瞬移）；
+       · **回程复用 `JOY_RECENTER_TAU_S`**（0.1s）——与"相机贴回角色"是**同一套**，不新造第二套回程。
+     🔴 归零是**恰好** 0（不是"很小"）：`joyZoom0 + 0` 逐位相等 ⇒ 相机距离逐位回到出发值，
+     名字层才敢在同一帧恢复（`joyNamesHiddenOf` 用同一个阈值）。指数衰减永远到不了 0，所以必须跳。 */
+  const zoT = pushing ? c.zoomLevels : 0;
+  const zk = 1 - Math.exp(-s / (pushing ? JOY_ZOOM_TAU_S : JOY_RECENTER_TAU_S));
+  let zo = m.zo + (zoT - m.zo) * zk;
+  if (!pushing && Math.abs(zo) < JOY_ZOOM_EPS_LEVELS) zo = 0;
+  if (!Number.isFinite(zo)) zo = 0;
   /* ③④⑤ 相机：目标 = 角色 + **有界**前瞻；回中段（角色停稳）前瞻/死区都归 0 */
   const centering = !pushing && speed === 0;
   const leadMax = c.screenW * JOY_LEAD_MAX_RATIO;
@@ -426,10 +509,12 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
     cx = m.cx;
     cy = m.cy;
   }
-  /* 停稳 = 速度恰好 0 **且** 相机这一帧一步都没走（⇒ `d` 恰好 {0,0}，链可以断）。
+  /* 停稳 = 速度恰好 0 **且** 相机这一帧一步都没走 **且** 相机距离不再变（⇒ `d` 恰好 {0,0}、`zo` 恰好 0，链可以断）。
      🔴 不能拿"离目标 < 0.05px"来判：推着走时相机本来就会停在离目标最多
-     `JOY_CAM_DEADZONE_PX` 的地方，那个判据永远不为真。 */
-  const settled = speed === 0 && cx === m.cx && cy === m.cy;
+     `JOY_CAM_DEADZONE_PX` 的地方，那个判据永远不为真。
+     🔴 `zo` 也必须进这一条：回程尾段相机可能已经贴住角色（`d = {0,0}`）而相机距离还在收敛，
+     那时断链就会把相机**永久停在拉近后的距离**上（名字层也跟着一直藏着）。 */
+  const settled = speed === 0 && cx === m.cx && cy === m.cy && zo === m.zo;
   /* ④ 朝向 + 踏步：满速 = 世界速度 ÷ 米每像素（没有尺子 ⇒ 比例恒 0，不动画） */
   const vmax = c.mpp > 0 ? Math.min(c.speedMps, JOY_SPEED_MAX_MPS) / c.mpp : 0;
   const speedRatio = vmax > 0 ? Math.min(1, speed / vmax) : 0;
@@ -445,8 +530,37 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
     headingDeg: headingDeg < 0 ? headingDeg + 360 : headingDeg,
     speedRatio,
     stepPhase,
+    zo,
   };
   return { d: { dx: cx - m.cx, dy: cy - m.cy }, move, moving: !settled, centering };
+}
+
+/**
+ * 🕹 **相机位移的像素换算**：拉近 `zo` 级 ⇒ 同一段世界位移要多占 `2^zo` 倍像素。
+ * 为什么必须有这一步：角色的位移积分在**进近景那一帧**的像素里（`ctx.mpp` 与那把标尺都冻结在那一档 ——
+ * 世界尺度不许漂，研究 §6 的红线），而 `panBy` 走的像素属于**当前**这一档（拉近后的）。
+ * 少了它，相机会按 `2^zo` 的倍率追不上角色 ⇒ 角色被甩到硬夹带边缘（前瞻上限 + 死区），
+ * 也就是 2026-10-03 第二轮机主报过的「**视角无法锁定角色**」。
+ * 🔴 这不是"第二份投影数学"（红线）：它就是 zoom 的定义本身 —— 每级尺度翻倍（研究 §9.4），
+ *    没有经纬度、没有三角函数、也不碰地图库。
+ */
+export function joyPanScaleOf(zo: number): number {
+  const z = Number(zo);
+  return Number.isFinite(z) ? Math.pow(2, z) : 1;
+}
+
+/**
+ * 🕹 推杆拉近期间**名字层要不要整层隐藏**（研究 §9.6，宿主每帧问一次，翻转时才写一次 class）。
+ * 为什么必须藏：名字层每个节点的坐标是**进近景那一刻**用地图库的 `project()` 算好写进 DOM 的，
+ * 拖动期间只靠**容器一次 `translate3d`** 跟手 —— 那条跟手是**纯平移补偿**。zoom 一变，
+ * 投影坐标整体按 `2^Δz` 缩放、补偿量对不上（离屏幕中心 200px 的标签在 Δz=1.2 时差约 260px，
+ * 比机主报过的"名字错位"大一个量级）⇒ 与其显示错位的名字，不如整层藏起来。
+ * 阈值与"zo 写恰好 0"用**同一个** `JOY_ZOOM_EPS_LEVELS`：不会出现"相机已经回位、名字还藏着"
+ * （或反过来）的缝。`zo = 0`（关掉这条通路时的常态）⇒ 恒 `false` ⇒ 一个字节都不动。
+ */
+export function joyNamesHiddenOf(zo: number): boolean {
+  const z = Number(zo);
+  return Number.isFinite(z) && Math.abs(z) > JOY_ZOOM_EPS_LEVELS;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -516,9 +630,9 @@ export interface JoyDriver {
  * 生命周期：`begin()` → N × `setVector()` → `release()`（→ 回中段 → `onHalt`）；`cancel()` 用于组件卸载。
  * 不变量（自检钉着）：
  *   ① `setVector()` 一次都不触发相机回调 —— 它只写向量 + 确保 rAF 在跑；
- *   ② 一帧内 `onFrame` **至多 1 次**，且只在**还没停稳**（速度非 0 或相机没追上）时；
+ *   ② 一帧内 `onFrame` **至多 1 次**，且只在**还没停稳**（速度非 0、相机没追上，**或相机距离还在变**）时；
  *   ③ 停稳 ⇒ rAF 链**自己停**（不空转）；`release()` ⇒ 速度**立刻**归零、位置冻住，
- *      回中段跑完（相机贴回角色）后 `onHalt` **恰好 1 次**，之后一帧都不再回调
+ *      回中段跑完（相机贴回角色**且相机距离回到出发值**）后 `onHalt` **恰好 1 次**，之后一帧都不再回调
  *      （"松手恰好一次重算"那条红线仍钉着，只是时点从"松手那一刻"挪到"相机停稳那一刻"）；
  *   ④ 运动状态**跨按压保留**（松手不清位置/朝向）⇒ 再推一下不会把人瞬移回原点；
  *   ⑤ 回中段被打断（又按下 / 卸载）也**不会**漏发或多发 `onHalt`：`begin()` 先把它结清，`cancel()` 不发。
@@ -575,7 +689,12 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
        ⚠️ 角色那一路要**同时**满足 `r.moving`：`joyMotionStep` 判停稳（NaN 闸那一支）时会把状态整份归零，
        那种"归零"不是角色在走 —— 不许借它把钉子写回原点。 */
     const charMoved = r.move.px !== before.px || r.move.py !== before.py;
-    if (r.d.dx || r.d.dy || (r.moving && charMoved)) {
+    /* 🕹 相机距离也算"这一帧有事"（2026-10-03 第三轮）：回程尾段相机可能已经贴住角色（`d = {0,0}`）、
+       角色也停着，但 `zo` 还在朝 0 收敛 —— 不把 `zo` 的变化算进来，那几帧就**送不到宿主**，
+       相机距离会停在半路、名字层也恢复不了；尤其 `zo` 恰好写 0 的**最后一帧**会被吞掉。
+       ⚠️ 断链那条不变量照旧：停稳（`settled`，含 `zo === m.zo`）⇒ 三个判据全假 ⇒ 一帧都不发。 */
+    const zoomMoved = r.move.zo !== before.zo;
+    if (r.d.dx || r.d.dy || (r.moving && charMoved) || zoomMoved) {
       deps.onFrame(r.d, v, move, r.centering ? "center" : "push");
     }
     if (active) {

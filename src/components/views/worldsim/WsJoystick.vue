@@ -70,11 +70,12 @@
   /**
    * 世界尺度（宿主量好传进来）——本组件**一个换算都不做**（红线）：
    *   · `mpp`      ：米/像素（宿主的 `bldMetersPerCssPixel(zoom, lat)`）；
-   *   · `speedMps` ：满推速度（**米/秒**，宿主的 `joySpeedMpsOf(zoom)` 选出来的档）。
+   *   · `speedMps` ：满推速度（**米/秒**，宿主的 `joySpeedMpsOf(zoom)` 选出来的档）；
+   *   · `zoomLevels`：🕹 推杆期间相机**拉近**多少级（宿主的 `JOY_ZOOM_PUSH_LEVELS`，量不到出发 zoom 时给 0）。
    * 缺一个（宿主还没量到）⇒ `joyCtxOf` 归一化成 0 ⇒ 推杆无效 —— 那才是诚实的降级，
-   * 总比按屏幕像素编一个世界速度快。
+   * 总比按屏幕像素编一个世界速度快。`zoomLevels = 0` 则是"这条通路关掉"，摇杆照旧能用。
    */
-  const props = defineProps<{ mpp: number; speedMps: number }>();
+  const props = defineProps<{ mpp: number; speedMps: number; zoomLevels: number }>();
 
   const baseEl = ref<HTMLElement | null>(null);
   const thumbEl = ref<HTMLElement | null>(null);
@@ -98,7 +99,7 @@
   let screenW = 0;
 
   const driver = createJoyDriver({
-    ctx: () => ({ screenW, mpp: props.mpp, speedMps: props.speedMps }),
+    ctx: () => ({ screenW, mpp: props.mpp, speedMps: props.speedMps, zoomLevels: props.zoomLevels }),
     onFrame: (d, v, m, phase) => emit("drive", d, v, m, phase),
     /* 🔴 `halt` **不再**在手指抬起那一刻发：那一刻相机可能还偏着 ~17px，先让它平滑贴回角色
        （`release()` 进入回中段，同一个 rAF 只动相机），贴回来了才发这一次 —— 宿主那一次重算

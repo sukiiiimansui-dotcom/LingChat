@@ -61,6 +61,8 @@ import type { BundleBuildingFeature, BundleFeed, BundlePlaceFeature, BundleRoadF
 import type { GwLayer } from "./wsGwLayer";
 import type { joyGateOf } from "./wsJoystick";
 import type { NameRenderNode } from "./wsNameLayer";
+/* S4（M2）的注入面要用到的形状 —— 同样是**只 import type**（编译后不留运行时痕迹） */
+import type { FeatureStore } from "./wsFeatureStore";
 
 /** 宿主 `stats`（`reactive({…})`）里 M6 读写的那些字段 —— **只列用到的**。
  *  口径：M6 写 `count/height/levels/default/parts/contour/mode/perf/pins/note`，读 `note`。 */
@@ -236,4 +238,46 @@ export interface BundleHudCtx {
   scheduleBundleHud(): void;
   /** 🔴 宿主那个 `let map` 的取值器（同 `MapCameraCtx.mapNow`） */
   mapNow(): unknown;
+}
+
+/* ══ S4（M2 `wsViewFetch`）的注入面 ═════════════════════════════════════════════════════
+ * 与 S2/S3 同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体一个字都不用动），
+ * 只有一处例外：**`alive` 是一个布尔**，JS 里没法按引用共享 ⇒ 它在 M2 里走 `aliveNow()` 现读
+ * （逐处理由与"为什么不用形参默认值"写在 `wsViewFetch.ts` 的文件头）。
+ * ⚠️ 同样是"形状的说明书，不是第二份实现"：`bldStore` / `roadsStore` / `bldFlush` / `roadsFlush`
+ *    的真源都在宿主（M3 `wsBldLanding` 那一片，S6 才搬）⇒ 这里只声明 M2 真正用到的那几个成员。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
+ */
+
+/** M2（取数/落地）要用的宿主状态/函数 —— 全部**只读**（宿主仍是它们唯一的拥有者）。 */
+export interface ViewFetchCtx {
+  /** HUD 计数（`note` / `view` / `roadNote` / `facilities` / `facNote` 五格是 M2 写的） */
+  stats: StageStats;
+  /** 只用到 `area`（设施的稳定种子 `hash32(area)` 与后端参数） */
+  props: { area?: string };
+  /** 取楼/取路各自的 zoom 闸门（阈值只有一份，仍留在宿主） */
+  BLD_MIN_ZOOM: number;
+  ROAD_MIN_ZOOM: number;
+  /** 「真楼够不够」的阈值（第二数据源补缺的开关；原样留在宿主，不复制第二份数） */
+  BLD_SPARSE: number;
+  /** offline-first 的**结论**（决策在真源 `wsScene.bldLiveDecision`，宿主握结论） */
+  bldLive: { live: boolean };
+  roadsLive: { live: boolean };
+  /** 半径适配器（规则全在真源 `wsScene.fetchRadiusForView`；M2 只转调，不重写） */
+  liveRadiusFor(m: BldMapLike): {
+    radius: number;
+    decidedBy: string;
+    want: number;
+    limitWhy: string | null;
+    halfM: number | null;
+  };
+  /** 累积仓库（合并/淘汰规则的真源是 `wsFeatureStore`；这里只用到 `merge`） */
+  bldStore: FeatureStore<BundleBuildingFeature>;
+  roadsStore: FeatureStore<BundleRoadFeature>;
+  /** 落图通路（真源在 `wsDistrictScene`；M2 只管"什么时候喊一声"） */
+  bldFlush(why: string): void;
+  roadsFlush(why: string): void;
+  /** 🔴 宿主那面 `alive` 旗的**取值器**（`let`，卸载时置 false）——
+   *  解构会拿到快照；这里每次调用现读，与原实现在**同一时刻**读同一个值。 */
+  aliveNow(): boolean;
 }

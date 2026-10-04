@@ -480,6 +480,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyCamRestoreArgs,
     joyCamSnapshotOf,
     joyDepthGainOf,
+    /* 🕹🧱 走路期间补刷新的**唯一闸门**（纯函数；2026-10-04 第八轮"楼会不见"那条） */
+    joyFlushDue,
     joyGateOf,
     joyHomeBoxesOf,
     joyLngLatOf,
@@ -4508,6 +4510,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 本次按压累计的屏幕位移（px）——名字层容器跟手用；自己算 ⇒ 一次 `map.project()` 都不需要 */
   let joyAccX = 0;
   let joyAccY = 0;
+  /* 🕹🧱 **摇杆走路期间"边走边补"的三个数**（2026-10-04 第八轮；机主原话「在将屏幕**斜过来**时
+     移动角色**楼会不见**，**反复放大缩小就好了**，在正常直接**竖直向下看时就不会**喵」）。
+     机制与闸门见 `wsJoystick.joyFlushDue` 那段；这里是它要的四个数（写点**全在摇杆驱动那条路**上：
+     按下起算 / 每帧累加 / 刷完归零 / 松手与退出复位）：
+       · `joyFlushMovedM`  ：**这一次按下以来角色走过的世界米数** —— 按 `joyMpp`（米/标定档像素，
+                             本组件那把唯一的尺子，与挑楼/速度档同一把）把角色位移积分换算成米。
+                             累计的是**路程**（每一帧的位移长度相加），不是直线距离：绕圈也在挪视野；
+       · `joyFlushElapsedMs`：距上一次补刷新的**累计时间** —— 用驱动每帧给的 `dtMs` 累加
+                             （本仓"唯一时钟 / 唯一 rAF"纪律：**不在这里另读一个时钟源**）；
+       · `joyFlushPx/Py`   ：上一帧角色在**标定档像素**里的位置（本帧的世界位移 = 它与 `mv.px/py` 之差）。
+     🔴 三个数都只在**摇杆驱动**那条路上读写：`joyActive === false` 时一个字节都不动
+        （那条老路由 `moveend` 自己刷，见下面 `joyFlushNow()` 的说明）。 */
+  let joyFlushMovedM = 0;
+  let joyFlushElapsedMs = 0;
+  let joyFlushPx = 0;
+  let joyFlushPy = 0;
   /**
    * **接管前的相机**（关闭时要逐字还原到这一份；机主的硬要求："不许留残留状态"）。
    * 两个来源，都只在这里写：
@@ -4926,6 +4944,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyMove = createJoyMotion();
     joyAccX = 0;
     joyAccY = 0;
+    /* 🕹🧱 走路补刷新的那两个计数（米数 / 时间）也一并清掉（与 `joyAccX/joyAccY` 同一类残留：
+       留着一个"走了一半"的米数，下一次打开时按下的那一帧会被它接走 —— 虽然按下那一刻还会重置，
+       但这里清干净更省心）。 */
+    joyFlushMovedM = 0;
+    joyFlushElapsedMs = 0;
     /* 🕹 相机距离这四个值一个都不能留：留 `joyZoom0` 会拿着**上一台相机**的出发 zoom 去还原
        （与"不清标尺"同一类错误），留 `joyZoomPulling` 会让名字层一直藏着。
        `joyZoomLevels` 交给下一次 `joyCalibrate()` 重新武装（它开头就把四个值全归零）。 */
@@ -5002,6 +5025,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       joyActive = true;
       joyAccX = 0;
       joyAccY = 0;
+      /* 🕹🧱 补刷新的那四个数也从**这一刻**起算（与 `joyAccX/joyAccY` 同一次按下的口径）：
+         "上一次刷新" = 按下那一刻 ⇒ 第一次补刷新最早也在 600ms 之后、而且必须走够 100m。
+         `mv` 在相机真的动了的这一帧一定有（驱动每帧都传）；量不到就按 0 起算 —— 只用差值，不影响。 */
+      joyFlushMovedM = 0;
+      joyFlushElapsedMs = 0;
+      joyFlushPx = mv ? mv.px : 0;
+      joyFlushPy = mv ? mv.py : 0;
       /* 整层淡化只跟**真的平移**走：拉近期间名字层本来就整层隐藏（§9.6），没必要再叠一层淡化 */
       if (camMoved) cameraMoving.value = true;
     }
@@ -5052,6 +5082,26 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (mv && phase !== "center") {
       joyMove = mv; // 留一份最新状态（这一份**不是**驱动的那份；只给"进来时先站到原点"用）
       joyApplyRoam(mv);
+      /* 🕹🧱 **这一次按下以来角色走了多少米**（世界位移 → `joyMpp` 那把唯一的尺子 → 米）。
+         `mv.px/py` 是角色在**标定档像素**里的位置（世界尺度冻结在那一档），`joyMpp` 正是
+         "1 个标定档像素 = 多少米" ⇒ 两者相乘就是世界米数，**一次投影、一次 DOM 写都没有**。
+         代价：每帧 3 个乘/加 + 1 个 `Math.sqrt`（见自检 ⑰ 的"每帧代价"那一组）。 */
+      const fdx = mv.px - joyFlushPx;
+      const fdy = mv.py - joyFlushPy;
+      if (joyMpp.value > 0) joyFlushMovedM += Math.sqrt(fdx * fdx + fdy * fdy) * joyMpp.value;
+      joyFlushPx = mv.px;
+      joyFlushPy = mv.py;
+      joyFlushElapsedMs += dtMs;
+    }
+    /* 🕹🧱 **受节流约束的那一次补刷新**（机主「走路时楼会不见」的正解；机制见 `joyFlushNow()`）：
+       `joyFlushDue` 是**唯一**判定点 —— ≥100m **且** ≥600ms 才放行 ⇒ 常态每帧只做
+       "读两个数 + 比大小"（0 次 `setData`、0 次重挑、0 次 DOM 写）。
+       🔴 `joyActive === false` 时这一支不进：那条老路（`moveend`/`zoomend` 那几个 handler）
+       一个字都没改 —— 相机没被摇杆接管时，刷新照旧归它们管。 */
+    if (joyActive && joyFlushDue({ movedM: joyFlushMovedM, elapsedMs: joyFlushElapsedMs })) {
+      joyFlushMovedM = 0;
+      joyFlushElapsedMs = 0;
+      joyFlushNow();
     }
     /* 🎯 预走线（**两个写点，两条路都要走**）：push 段跟着速度长出来；`center` 段只做一件事 ——
        **把线收回去**（`speedRatio` 在 `release()` 里当场归零，收敛只能由 `joyAimStep` 按 τ 走完）。
@@ -5059,6 +5109,51 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        （`setLngLat` / 真源 / 投影），而这里只写钉子内部两个**装饰性 transform**。
        判据在自检 ⑩e3（那三条仍是 0）+ ⑩e4（回中段的预走线写点 ≤ 2/帧，且结尾必须收到 0）。 */
     joyAimWrite(pins.find((p) => p.id === ROAM_PIN_ID), mv, dtMs);
+  }
+
+  /**
+   * 🕹🧱 **摇杆期间的"边走边补"**（2026-10-04 第八轮；唯一入口 —— 每帧那个闸门在 `onJoyDrive` 末尾）。
+   *
+   * 为什么必须有它（机主原话：「在将屏幕**斜过来**时移动角色**楼会不见**，**反复放大缩小就好了**，
+   * 在正常直接**竖直向下看时就不会**喵」）：摇杆驱动期间 `move`/`moveend` 整条"刷新包 + 落楼 + 名字"
+   * 的路都被早退（`m.on("move", …)` 与 `m.on("moveend", …)` 那两句 `if (joyActive) return;`，
+   * 理由见那两处注释），俯角 64° 下看得见的地面只有**一条窄带**
+   * ⇒ 走几十米那批楼就滚出屏幕、而没有新的补进来；`zoomend` 仍会重挑一次（`bldTierCrossedFlush`）
+   * ⇒ 所以"反复放大缩小就好了"。判据与常量在 `wsJoystick.joyFlushDue`（≥100m 且 ≥600ms）。
+   *
+   * 三件事，顺序不能反：
+   *   ① **先把容器那份位移烘进节点坐标**（`onMoveEndNames()` 容器归零 + `reprojectNow()` 就地重投影）：
+   *      名字层的节点坐标是**相对容器**的，而容器上正挂着这一段走过的位移；不先烘就重排名字，
+   *      新算出来的坐标会与旧位移**叠加**一次 ⇒ 整层标签偏掉（机主报过的"名字错位"那一族）。
+   *      烘完把累计位移归零，跟手从新基准接着累（`joyNamesFollow()` 每帧写的就是它）。
+   *      ⚠️ `onMoveEndNames()` 会顺手清 `cameraMoving`（= 摘掉"相机在动"那层淡化）——摇杆还推着，
+   *         所以同一个 tick 里立刻置回来：Vue 的 patch 在微任务里，**只落一次 DOM 结果、不闪**。
+   *   ② **落楼**（`bldFlush("joy")` → 真源 `flushBldStore` → 按**当前**视野重挑一次）：这一发才是
+   *      "楼会不见"的正解。`refreshBundles` **替代不了它**：格都取过时它在 `wsOfflineFeed` 里整轮早退
+   *      （`if (!batch.length) return`）⇒ 光靠取包**不重挑楼**，屏上就一直是走路前那一批。
+   *   ③ **取新格 + 重排名字**（与 `moveend` / `onJoyHalt` **同一条路**，不新写第二条）：
+   *      `refreshBundles("joy")` → 完成后 `refreshNames("joy")`（新数据落地时 feed 自己会再落一次图）。
+   *
+   * 🔴 节流由调用方那一处判据保证（≥100m **且** ≥600ms）——本函数**不是**每帧调用的。
+   * 🔴 冻结集 / 锚点一个都不清：走的是同一份 `wsBldPickStore`（`bldFlush` 里那套"只增不减"）。
+   * 🔴 刷新函数名与 `moveend` 完全同一批三个，**没有**第二条刷新路（自检 ⑰ 钉着）。
+   */
+  function joyFlushNow(): void {
+    if (!alive) return;
+    /* ① 烘位移（口径与 `onJoyHalt` 的收尾逐字相同：容器归零 → 就地重投影） */
+    const moved = joyAccX !== 0 || joyAccY !== 0;
+    joyAccX = 0;
+    joyAccY = 0;
+    if (moved) {
+      onMoveEndNames();
+      reprojectNow();
+      /* 摇杆还在推着 ⇒ "相机在动"这个状态照旧（同一个 tick，不产生一次闪烁） */
+      cameraMoving.value = true;
+    }
+    /* ② 落楼：按当前视野重挑一次（仓库并集、冻结集、锚点一个都不动） */
+    bldFlush("joy");
+    /* ③ 取新格 → 重排名字（既有通路；新格落地时 feed 会自己再落一次图） */
+    void refreshBundles("joy").then(() => (alive ? refreshNames("joy") : undefined));
   }
 
   /**
@@ -5104,6 +5199,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     const moved = joyAccX !== 0 || joyAccY !== 0;
     joyAccX = 0;
     joyAccY = 0;
+    /* 🕹🧱 **补刷新的两个计数在这里复位**（"松手 = 上一次刷新翻篇"；下一次按下时 `onJoyDrive`
+       还会再置一次 —— 这里复位是防"留在半路的值被下一次按下接走"）。
+       ⚠️ 只动这两个计数：`joyMove`（跨按压保留的位置/朝向）一个字都不碰。 */
+    joyFlushMovedM = 0;
+    joyFlushElapsedMs = 0;
+    /* 🕹🧱 **松手再刷一次**（"与既有松手补一次同口径"）：下面那条 `refreshBundles("joyhalt")`
+       只会在**有新格**时落图（`wsOfflineFeed` 的 `if (!batch.length) return`）⇒ 停下来的这一屏
+       可能一直停在走路中间那一批楼上。补一发 `bldFlush` 按**最终**视野重挑一次（同一条通路）。 */
+    bldFlush("joyhalt");
     /* 🆕 停下即回正（§4）：踏步是 transform，不补这一下就会**停在"半抬腿"那一帧**上。
        朝向**不清**（人是停下了，不是转回正北）—— 关掉摇杆时才由 `joyExit()` 一并还原。
        角色位置也**不动**：速度在 `release()` 那一刻已经归零，松手后又不再跑帧 ⇒ 位置自然冻结。 */

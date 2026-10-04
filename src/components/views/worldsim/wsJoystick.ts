@@ -924,6 +924,43 @@ export function joyNamesHiddenOf(zo: number): boolean {
   return Number.isFinite(z) && Math.abs(z) > JOY_ZOOM_EPS_LEVELS;
 }
 
+/* 🕹🧱 **摇杆走路期间的"边走边补"节流**（2026-10-04 第八轮）。
+ *
+ * 机主原话：「在将屏幕**斜过来**时移动角色**楼会不见**，**反复放大缩小就好了**，
+ *           在正常直接**竖直向下看时就不会**喵」。
+ * 🔴 机制（代码级，不是猜）：宿主 `WsDistrictMapLibre.vue` 在摇杆驱动期间（`joyActive === true`）
+ *    把 `move` / `moveend` 整条"刷新包 + 落楼 + 名字"的路**早退**掉了（`m.on("move", () => {
+ *    if (joyActive) return; … })` 与 `m.on("moveend", () => { if (joyActive) return; … })`）
+ *    ⇒ 画出去的楼**一直是上一次停下来的那批**；俯角 64° 时看得见的地面只有**一条窄带**，
+ *    走几十米那批楼就滚出屏幕、**没有新的补进来** ⇒「楼不见」；
+ *    `zoomend` 仍会重挑一次（`bldTierCrossedFlush`）⇒ 所以「**反复放大缩小就好了**」；
+ *    俯角 0（竖直向下）视野宽得多 ⇒ 那批楼久留在屏内 ⇒「**竖直向下看就不会**」。
+ *
+ * 这条纯函数就是那次补刷新的**唯一闸门**：两个条件都满足才允许再刷一次 ——
+ * 既不饿死（走远了屏上没楼），也不变成每帧刷（每帧一次重挑 + `setData` = 掉帧与发热）。
+ * 🔴 它**只做算术**：不读地图、不碰 DOM、不认时间源（`movedM` / `elapsedMs` 都由宿主喂进来
+ *    ⇒ node 里能逐个钉字面量，也能被"变异"后重跑）。
+ */
+
+/** 走过这么多米才允许再补刷一次（走路 1.4m/s ⇒ 最少 71s 一次；载具 13.9m/s ⇒ 约 7.2s 一次） */
+export const JOY_FLUSH_MIN_M = 100;
+/** 距上一次补刷新至少这么久（ms）——"不许变成每帧刷"的那一半闸门 */
+export const JOY_FLUSH_MIN_MS = 600;
+
+/**
+ * 现在**该不该**补刷一次（宿主每帧问一次；`true` 的那一帧才真的去刷）。
+ * 判据：`movedM >= JOY_FLUSH_MIN_M` **且** `elapsedMs >= JOY_FLUSH_MIN_MS`（**两边都含边界**）。
+ * 三态，**不抛**：任一输入不是有限数（NaN/±∞/undefined）⇒ `false`；负数/不足 ⇒ `false`
+ * —— "数不出来"与"还没走够"在调用方看来是同一件事：**这一帧不刷**。
+ */
+export function joyFlushDue(input: { movedM: number; elapsedMs: number }): boolean {
+  if (!input) return false;
+  const moved = Number(input.movedM);
+  const ms = Number(input.elapsedMs);
+  if (!Number.isFinite(moved) || !Number.isFinite(ms)) return false;
+  return moved >= JOY_FLUSH_MIN_M && ms >= JOY_FLUSH_MIN_MS;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * 四、唯一驱动点：一个 rAF（可注入 ⇒ 离线能数帧数）
  * ══════════════════════════════════════════════════════════════════ */

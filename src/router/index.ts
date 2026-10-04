@@ -32,10 +32,9 @@ const WorldDistrictViz = () => import("../components/views/worldmap/DistrictViz.
 const WorldMapLibrary = () => import("../components/views/worldmap/MapLibrary.vue");
 const WorldPhoneOverlay = () => import("../components/views/worldmap/PhoneOverlay.vue");
 const WsCityEntry = () => import("../components/views/worldsim/WsCityEntry.vue");
-/* 🗄 老入口（DataV 全国 SVG 下钻那一套）**文件还在、一行没改**，只是不再被引用。
-   回退 = 把上面那行换成这一行（一行改动）：
-const WorldSim = () => import("../components/views/worldsim/WorldSim.vue");
-*/
+// 🗄 老入口（DataV 全国 SVG 下钻那一套，`WorldSim.vue`）**已退役**（2026-10-04 死代码清理，
+//    2 058 行）：它自 2026-09-26 起就没有任何路由/组件引用（`/worldsim` 走上面这行 WsCityEntry），
+//    全仓只剩注释提到它。要回退请看 git 历史（清理前一版），别在这里留一行指向不存在文件的 import。
 
 // 1. 定义路由表
 const routes = [

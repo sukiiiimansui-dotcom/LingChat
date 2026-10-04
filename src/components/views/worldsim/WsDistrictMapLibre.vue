@@ -482,7 +482,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyPanScaleOf,
     joyPxScaleOf,
     joyScreenHeadingOf,
+    joyScreenOf,
     joySetBearingNow,
+    joySetCam,
     joySetFrame,
     joySpeedMpsOf,
     joyThumbPxOf,
@@ -2543,6 +2545,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          也是"每帧 0 次 opacity 写"的来源。 */
       hit.dataset.wsRoamPin = "";
       const aim = document.createElement("span");
+      /* 🔴 2026-10-04 第六轮（机主：「**预走线的轴心不在角色**」）—— **这一行是那一句的全部真因**：
+         下面那段全局样式挂在 `.ws-aim` 这个**类**上（`position:absolute; left:50%; top:50%`，
+         `transform-origin: 0 0`），而这里原来只写了 `data-ws-roam-aim` 属性、**类名一个字没写**
+         ⇒ 那三条定位一条都没生效 ⇒ 这个 span 退回**普通文档流**，而它的父节点 `hit` 是
+         `display:flex` 的 44×44（`justify-content:center`）⇒ 它成了**第二个 flex 项**，
+         与 30px 的身体圆并排居中 ⇒ 轴心落在 `(44−30)/2 = **15px**` 的**右侧**（= 身体圆的右边缘），
+         而不是身体圆心；`rotate()` 于是绕着"身体右边 15px"那一根轴转（"轴心不在角色"就是这个）。
+         同一个漏写还让 `opacity:0`（静止时不可见）与 `is-aim` 的淡入淡出**整条失效**。
+         ⇒ 补上类名一处即可：轴心回到 `hit` 正中 = **Marker 的锚点** = 角色世界坐标的屏幕投影。 */
+      aim.className = "ws-aim";
       aim.dataset.wsRoamAim = "";
       const dash = document.createElement("span");
       dash.className = "ws-aim__dash";
@@ -4296,6 +4308,54 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   let joyBearing0 = 0;
   let joyDepthGain = 1;
+  /**
+   * 🎥 §16 **视口倍率** `2^(zoomNow − zoom0)` —— 上一次 `joyReportCam()` 量到的那个数。
+   * 用途只有一个：把模型给的**标定档**像素位移换成 `panBy` 要的**当前档**像素（`d × viewScale`）。
+   * 🔴 必须与**模型这一帧用的那个数**是同一个（模型从 ctx 拿到的是上一次报的），否则两者差一档
+   * ⇒ 相机按错的倍率追角色。所以它由同一处（`joyReportCam`）写、同一帧里只读一次。
+   */
+  let joyViewScale = 1;
+  /**
+   * 🎥 §16 **相机真值**（"单一几何真源"的那一根线，2026-10-04 第六轮）——
+   * 把相机在**标尺坐标系**里的位置量出来报给模型（`joySetCam`），模型从此**不再自己积分** `cx/cy`。
+   *
+   * 为什么必须这样（离线读数在 `world_map/ws_camera_lock_probe.mjs`，同一份代码 A/B 对比）：
+   *   · 老写法（开环）：用户拖图 200px 后再推 3 秒 ⇒ 角色离屏幕中心最大 **413.59px**、松手 1 秒后
+   *     仍 **194.35px** —— **永远不回来**（模型的 `d` 只做相对平移，它根本不知道相机被搬走了）；
+   *   · 捏合也一样：真实 zoom 比模型以为的高 1 级 ⇒ `panBy` 的像素换算差 2 倍 ⇒ 3 秒漂 **93.64px**。
+   *
+   * 度量成本：`getCenter()`/`getZoom()` 是**属性读**（与每帧已有的 `getBearing()` 同一类），
+   * **0 次 `project`、0 次布局**；反解是那次标定量到的同一个 2×2 的逆（`joyScreenOf` 纯函数）。
+   * 量不到（没有 getCenter / 标尺还没有）⇒ 报 `NaN` ⇒ 模型回到开环旧行为 —— **宁可不报，也不编坐标**。
+   */
+  function joyReportCam(): void {
+    const m = map as unknown as {
+      getCenter?: () => { lng: number; lat: number };
+      getZoom?: () => number;
+    } | null;
+    if (!m || !joyOrigin || !joyScale || typeof m.getCenter !== "function") {
+      joyViewScale = 1;
+      joySetCam(NaN, NaN, 1);
+      return;
+    }
+    let vs = 1;
+    try {
+      const z = typeof m.getZoom === "function" ? Number(m.getZoom()) : NaN;
+      /* `joyZoom0 > 0` 是"出发 zoom 量到过"的标志（量不到时它恒 0 ⇒ 不敢拿它当基准） */
+      if (Number.isFinite(z) && joyZoom0 > 0) vs = joyPanScaleOf(z - joyZoom0);
+    } catch {
+      vs = 1;
+    }
+    joyViewScale = vs;
+    try {
+      const c = m.getCenter();
+      const p = joyScreenOf(joyOrigin, joyScale, c.lng, c.lat);
+      if (p) joySetCam(p.x, p.y, vs);
+      else joySetCam(NaN, NaN, vs);
+    } catch {
+      joySetCam(NaN, NaN, vs);
+    }
+  }
   /** 当前相机 bearing（**属性读**，不是 `project`、不触发布局）；读不到就沿用标定值 */
   function joyReadBearing(): number {
     const m = map as unknown as { getBearing?: () => number } | null;
@@ -4357,6 +4417,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   function joyCalibrate(): void {
     joyScale = null;
+    /* 🎥 §16 相机真值先作废（报"不知道"）：下面重新量到标尺之前，任何旧读数都是**上一台相机**的。
+       量不到就一直是 `NaN` ⇒ 模型走开环旧行为（与"量不到尺子就站住"同一条纪律）。 */
+    joySetCam(NaN, NaN, 1);
     /* 🕹 相机距离那一路也**从这里归零**：量不到出发 zoom ⇒ `joyZoomLevels = 0` ⇒ 摇杆只平移、不拉近
        （拉近量的真源由此处一处决定；`joyZoomApplied`/隐藏态跟着复位，避免拿上一台相机的状态接着用）。 */
     joyZoomLevels.value = 0;
@@ -4424,6 +4487,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     } catch {
       joyScale = null;
     }
+    /* 🎥 §16 标定完成 ⇒ 立刻报一次**相机真值**：`joyOrigin` 就是这一刻的相机中心 ⇒ 真值是 (0,0)
+       （`vs` 也由这一处一并量出来 = `2^(z0 − z0)` = 1）。此前一律是 `NaN`（"不知道"），
+       模型那时走的是开环旧路 —— 与"量不到尺子就站住"同一条纪律。 */
+    joyReportCam();
   }
 
   /**
@@ -4638,6 +4705,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyZoom0 = 0;
     joyZoomApplied = 0;
     joyZoomPulling.value = false;
+    /* 🎥 §16 相机真值也清掉（报"不知道"）：留着上一台相机的数，下一次开摇杆会拿着它去纠偏
+       —— 与"不清标尺""不清出发 zoom"是同一类错误（宁可回到开环，也不拿旧读数当真值）。 */
+    joyViewScale = 1;
+    joySetCam(NaN, NaN, 1);
     joyPinReset(true);
     /* 「我」回到名单里的网格位置：真源已清空 ⇒ `syncPins` 走的是常规那一路（含吸附） */
     syncPins();
@@ -4729,13 +4800,20 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       /* 🕹 像素换算（研究 §9.4；`joyPanScaleOf` 一个乘方，不碰投影）：角色的位移积分在**进近景那一档**
          的像素里（世界尺度冻结，红线），`panBy` 走的却是**当前**这一档 ⇒ 拉近 zo 级要乘 2^zo，
          否则相机按 2^zo 的倍率追不上角色，角色被甩到硬夹带边缘（= 上一版"视角无法锁定角色"）。
-         累计位移（名字层跟手用）也按**实际写进相机的像素**记，收尾烘进节点坐标的才是真值。 */
-      const k = joyPanScaleOf(zo);
+         累计位移（名字层跟手用）也按**实际写进相机的像素**记，收尾烘进节点坐标的才是真值。
+         🎥 §16：这个倍率现在取自 `joyViewScale`（上一帧 `joyReportCam()` 量的**真实** zoom 差，
+         含用户自己捏合进去的那几级）—— 与模型这一帧用的 `ctx.viewScale` **是同一个数**
+         （模型拿的也是上一次报的）⇒ 两边不可能差一档。没有真值时它恒 1 ⇒ 逐位等于旧行为。 */
+      const k = joyViewScale;
       m.panBy([d.dx * k, d.dy * k], { duration: 0 });
       joyAccX += d.dx * k;
       joyAccY += d.dy * k;
       joyNamesFollow();
     }
+    /* 🎥 §16 **报相机真值**（每帧恰好一次，且在**所有**相机写点之后 —— 下一帧的模型看的就是它）：
+       位置 = `getCenter()` 用标定那把尺子反解出来的标定档坐标；倍率 = 真实 zoom 差。
+       量不到 ⇒ `NaN` ⇒ 模型回开环。这是"相机位置只有一个来源（地图自己）"的落地处。 */
+    joyReportCam();
     /* 🆕 角色那一路（与相机**分成两件事**，§3）：世界坐标写进真源 + 钉子 `setLngLat` + 朝向 + 踏步。
        🔴 位置**不再**从 `getCenter()` 反写 —— 反写就等于"我 = 相机"，屏幕上的钉子永远不动
        （上一版"角色都没有动"的病根就在这一处）。

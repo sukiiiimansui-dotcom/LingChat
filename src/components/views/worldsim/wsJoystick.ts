@@ -251,27 +251,55 @@ export const JOY_AIM_BASE_DEG = 90;
 /** `depthGain` 的上限（= 1/cos(75.5°) ≈ 4）：坏输入顶不破它（§14） */
 export const JOY_DEPTH_GAIN_MAX = 4;
 
-/** 参考系（标定那一刻 vs 现在；**只有这两个数**决定要不要转） */
+/** 参考系（标定那一刻 vs 现在；bearing 那两个数决定要不要转，camX/camY 是**相机真值**） */
 export interface JoyFrame {
   /** 标定那一刻的相机 bearing（度）——标尺坐标系就架在它上面 */
   bearing0: number;
   /** 当前相机 bearing（度）——由宿主在 `rotate` 时更新（不进每帧循环） */
   bearingNow: number;
+  /**
+   * 🎥 **相机在标尺坐标系里的位置**（px，`joyScreenOf` 反解 `getCenter()` 得来）——
+   * 单一几何真源的"源"。**`NaN` = 没量到**（🔴 不能用 0：0 是"相机正好在原点"这个**断言**，
+   * 拿它当缺省会把相机硬拽回原点 —— 缺省必须是"不知道"）。
+   */
+  camX: number;
+  camY: number;
+  /**
+   * **视口倍率** `2^(zoomNow − zoom0)`（px 口径；与 `JoyCtx.viewScale` 同一个数）——
+   * 死区/前瞻上限是**屏幕像素**口径，拉近/捏合之后要除回标定档（§16）。缺省 1。
+   */
+  viewScale: number;
 }
-/** 归一化：非有限一律 0（"量不到就当作正北" —— 与 `joyCtxOf` 同一条纪律） */
+/** 归一化：bearing 非有限一律 0（"量不到就当作正北"）；相机真值非有限一律 **NaN**（"不知道"） */
 export function joyFrameOf(x: Partial<JoyFrame> | null | undefined): JoyFrame {
   const n = (v: unknown): number => {
     const f = Number(v);
     return Number.isFinite(f) ? f : 0;
   };
-  return x ? { bearing0: n(x.bearing0), bearingNow: n(x.bearingNow) } : { bearing0: 0, bearingNow: 0 };
+  const g = (v: unknown): number => {
+    const f = Number(v);
+    return Number.isFinite(f) ? f : NaN;
+  };
+  const vs = (v: unknown): number => {
+    const f = Number(v);
+    return Number.isFinite(f) && f > 0 ? f : 1;
+  };
+  return x
+    ? {
+        bearing0: n(x.bearing0),
+        bearingNow: n(x.bearingNow),
+        camX: g(x.camX),
+        camY: g(x.camY),
+        viewScale: vs(x.viewScale),
+      }
+    : { bearing0: 0, bearingNow: 0, camX: NaN, camY: NaN, viewScale: 1 };
 }
 /* 🧭 **当前参考系**（宿主一处写、驱动一处读）——与 `roamStore` 同款的单例口径：
    为什么不走 props：`WsJoystick.vue` 的 `defineProps`/`ctx` 两行被判据 ⑩k11 **逐字钉着**
    （"组件自己不算世界尺度"那条红线），所以参考系不塞进那个对象字面量，改由宿主写在这里。
    🔴 纯函数（`joyMotionStep`/`joyFrameVectorOf`）**永远用参数**，不读这个单例 ——
    自检才能在同一个进程里逐个 bearing 钉字面量（不互相污染）。 */
-let joyFrameNow: JoyFrame = { bearing0: 0, bearingNow: 0 };
+let joyFrameNow: JoyFrame = { bearing0: 0, bearingNow: 0, camX: NaN, camY: NaN, viewScale: 1 };
 let joyDepthGainNow = 1;
 /** 宿主写：`bearing0` = 标定那一刻的相机 bearing；`bearingNow` = 当前；`depthGain` 由俯角算（§14） */
 export function joySetFrame(f: Partial<JoyFrame> | null | undefined, depthGain?: number): void {
@@ -286,19 +314,38 @@ export function joyFrameGet(): JoyFrame {
 /** 宿主**每帧只更新这一个数**（相机 bearing 变了才有效果；整数之外的分配一个都不做） */
 export function joySetBearingNow(deg: number): void {
   const f = Number(deg);
-  if (Number.isFinite(f)) joyFrameNow = { bearing0: joyFrameNow.bearing0, bearingNow: f };
+  if (Number.isFinite(f)) joyFrameNow = { ...joyFrameNow, bearingNow: f };
+}
+/**
+ * 🎥 宿主**每帧报一次相机真值**：相机在**标尺坐标系**里的位置（px）。
+ * 传 `NaN` = 这一帧量不到（回到开环旧行为，不写假坐标）。这就是"单一几何真源"的那一根线：
+ * 相机位置由**地图自己**（`getCenter()` 反解）说了算，不再是模型自己积分的第二个账本。
+ */
+export function joySetCam(x: number, y: number, viewScale?: number): void {
+  const fx = Number(x);
+  const fy = Number(y);
+  const fv = Number(viewScale);
+  joyFrameNow = {
+    ...joyFrameNow,
+    camX: Number.isFinite(fx) ? fx : NaN,
+    camY: Number.isFinite(fy) ? fy : NaN,
+    viewScale: Number.isFinite(fv) && fv > 0 ? fv : 1,
+  };
 }
 /** 当前 bearing 的**只读**读数（宿主每帧换算屏幕角用；不进任何写点预算） */
 export function joyBearingNowOf(): number {
   return joyFrameNow.bearingNow;
 }
-/** 把**当前参考系**并进宿主给的世界尺度 —— 驱动里**唯一**一处合并（§13/§14） */
+/** 把**当前参考系**并进宿主给的世界尺度 —— 驱动里**唯一**一处合并（§13/§14/§16） */
 export function joyCtxWithFrame(base: Partial<JoyCtx> | null | undefined): JoyCtxFull {
   return joyCtxOf({
     ...(base || {}),
     bearing0: joyFrameNow.bearing0,
     bearingNow: joyFrameNow.bearingNow,
     depthGain: joyDepthGainNow,
+    camX: joyFrameNow.camX,
+    camY: joyFrameNow.camY,
+    viewScale: joyFrameNow.viewScale,
   });
 }
 /**
@@ -406,14 +453,37 @@ export interface JoyCtx {
   bearingNow?: number;
   /** 📐 俯角竖直增益 `1/cos(pitch)`（§14）——不给 ⇒ 1（= 旧行为） */
   depthGain?: number;
+  /**
+   * 🎥 **相机在标尺坐标系里的位置**（px）——宿主每帧用 `joyScreenOf()` 反解 `getCenter()` 得来（§16）。
+   * 给了 = **闭环**：相机位置以**地图自己**为准（单一几何真源），模型只决定"这一帧往角色那边修多少"；
+   * 不给 / `NaN` = **开环**（= 本轮之前的旧行为：相机位置由模型自己积分）。
+   */
+  camX?: number;
+  camY?: number;
+  /**
+   * 🎥 **当前视口相对标定那一刻的像素倍率** `2^(zoomNow − zoom0)`（§16）。
+   * 死区/前瞻上限是**屏幕像素**口径的设计值（"离屏幕中心 20px 内不追"），而模型内部全在**标定档**的
+   * 像素里 ⇒ 拉近/捏合之后不除这个倍率，同一个 20px 在屏幕上就变成 20×2^Δz（满推时 45px，
+   * 手机 400px 宽的屏上是 11% —— 那正是"镜头锁不住"的一个来源）。不给 / 非正 ⇒ 1（= 旧行为）。
+   */
+  viewScale?: number;
 }
 /**
  * `joyCtxOf()` **归一化之后**的 ctx：三个参考系字段从"可选"变成"必填"（中性值已填好）。
  * 为什么要分成两个类型（而不是直接用 `JoyCtx`）：内部纯函数要按 `number` 用它们
  * （`c.bearing0 + …`），`JoyCtx` 里那三个是可选的 ⇒ 在 `strictNullChecks` 下会报"可能是 undefined"
  * —— 这个别名把"调用方可以不给"和"我这里一定拿到数"两件事分开表达（类型系统替我们守住归一化那一步）。
+ * 🎥 §16 的 `camX/camY` 是**例外**：它们的"没量到"是一个**真状态**（不是某个数），如实填 `NaN`;
+ * `viewScale` 的缺省是 `1`（= 不缩放，逐位等于旧行为）。
  */
-export type JoyCtxFull = JoyCtx & { bearing0: number; bearingNow: number; depthGain: number };
+export type JoyCtxFull = JoyCtx & {
+  bearing0: number;
+  bearingNow: number;
+  depthGain: number;
+  camX: number;
+  camY: number;
+  viewScale: number;
+};
 
 /**
  * ctx 归一化：非有限 / ≤0 一律**归 0** ⇒ 这一步什么都不走
@@ -439,6 +509,16 @@ export function joyCtxOf(x: Partial<JoyCtx> | null | undefined): JoyCtxFull {
     if (!Number.isFinite(f) || f <= 0) return 1;
     return Math.min(JOY_DEPTH_GAIN_MAX, Math.max(1, f));
   };
+  /* 🎥 相机真值：**非有限 = 没量到 = NaN**（不是 0 —— 0 是"相机在原点"这个断言，§16） */
+  const g = (v: unknown): number => {
+    const f = Number(v);
+    return Number.isFinite(f) ? f : NaN;
+  };
+  /* 🎥 视口倍率：非有限 / ≤0 一律 1（= 不缩放，逐位等于旧行为，§16） */
+  const vs = (v: unknown): number => {
+    const f = Number(v);
+    return Number.isFinite(f) && f > 0 ? f : 1;
+  };
   return x
     ? {
         screenW: n(x.screenW),
@@ -448,8 +528,11 @@ export function joyCtxOf(x: Partial<JoyCtx> | null | undefined): JoyCtxFull {
         bearing0: bg(x.bearing0),
         bearingNow: bg(x.bearingNow),
         depthGain: dg(x.depthGain),
+        camX: g(x.camX),
+        camY: g(x.camY),
+        viewScale: vs(x.viewScale),
       }
-    : { screenW: 0, mpp: 0, speedMps: 0, zoomLevels: 0, bearing0: 0, bearingNow: 0, depthGain: 1 };
+    : { screenW: 0, mpp: 0, speedMps: 0, zoomLevels: 0, bearing0: 0, bearingNow: 0, depthGain: 1, camX: NaN, camY: NaN, viewScale: 1 };
 }
 
 /**
@@ -606,6 +689,29 @@ export function joyLngLatOf(
   return { lng: origin.lng + x * s.dxLng + y * s.dyLng, lat: origin.lat + x * s.dxLat + y * s.dyLat };
 }
 
+/**
+ * 🎥 `joyLngLatOf` 的**严格逆**（同一个 2×2 雅可比解回来）——"相机在标尺坐标系里的位置"就是它算的。
+ * 为什么必须有这一份：单一几何真源要求**相机的位置从地图自己的 `getCenter()` 反解出来**，
+ * 而不是由模型再积分一个 `cx`（那就是第二份几何：用户拖图/捏合动过的相机它永远看不见）。
+ * 它不是"第二份投影数学"（红线）：没有经纬度换算、没有三角、不碰地图库 —— 只有那次标定量到的
+ * 同一个 2×2 的逆（行列式为零/非有限 ⇒ `null`，宁可不报真值，也不写编出来的坐标）。
+ */
+export function joyScreenOf(
+  origin: { lng: number; lat: number },
+  s: JoyPxScale,
+  lng: number,
+  lat: number
+): { x: number; y: number } | null {
+  if (!origin || !s) return null;
+  const dlng = Number(lng) - Number(origin.lng);
+  const dlat = Number(lat) - Number(origin.lat);
+  const det = s.dxLng * s.dyLat - s.dyLng * s.dxLat;
+  if (!Number.isFinite(dlng) || !Number.isFinite(dlat) || !Number.isFinite(det) || Math.abs(det) < 1e-18) return null;
+  const x = (dlng * s.dyLat - dlat * s.dyLng) / det;
+  const y = (dlat * s.dxLng - dlng * s.dxLat) / det;
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
 /** 运动状态（**可注入、可离线跑**；宿主每帧拿到的是**新对象**，不改这一份） */
 export interface JoyMotion {
   /** 角色速度（px/s，屏幕坐标：右/下为正） */
@@ -677,7 +783,11 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
   if (bad) return { d: { dx: 0, dy: 0 }, move: createJoyMotion(), moving: false, centering: false };
   /* dt=0（注入的时钟没走 / 同一毫秒内两次）⇒ 状态逐字节不变；只有"还在推 / 还在滑 / 相机还没贴住角色 / 相机距离还没归位"才续帧 */
   if (!dt) {
-    const off = m.px !== m.cx || m.py !== m.cy;
+    /* 🎥 §16：报了相机真值就按**真值**判"相机还没贴住角色"（否则外力搬走的相机在这一帧会被判"已贴合"） */
+    const off =
+      Number.isFinite(c.camX) && Number.isFinite(c.camY)
+        ? m.px !== c.camX || m.py !== c.camY
+        : m.px !== m.cx || m.py !== m.cy;
     const stopped = !pushing && m.vx === 0 && m.vy === 0;
     return {
       d: { dx: 0, dy: 0 },
@@ -713,37 +823,57 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
   let zo = m.zo + (zoT - m.zo) * zk;
   if (!pushing && Math.abs(zo) < JOY_ZOOM_EPS_LEVELS) zo = 0;
   if (!Number.isFinite(zo)) zo = 0;
-  /* ③④⑤ 相机：目标 = 角色 + **有界**前瞻；回中段（角色停稳）前瞻/死区都归 0 */
+  /* ③④⑤ 相机：目标 = 角色 + **有界**前瞻；回中段（角色停稳）前瞻/死区都归 0
+     🎥 §16 **单一几何真源**（2026-10-04 第六轮，机主：「镜头无法锁定在角色身上」）——
+     相机的位置**不再由本函数积分**：`ctx.camX/camY`（宿主每帧从 `getCenter()` 反解出来的真值）就是它。
+     这一改治的是**病根**：老写法里 `cx/cy` 是"模型以为相机在哪"的第二本账，与真实相机只靠 `d` 相加
+     维持同步 ⇒ **凡不是摇杆干的相机运动**（用户拖图 / 捏合 / 转地图 / 手动缩放）它一概看不见，
+     偏移永久留在那儿（离线读数：用户拖 200px 后再推 3 秒，角色离屏幕中心最大 **413.59px**、
+     松手 1 秒后仍 **194.35px**；老代码只会把它夹在"前瞻上限 + 死区"的**模型**带里，真实屏幕上没有上界）。
+     `camX/camY` 不给 / `NaN` ⇒ `baseX/baseY = m.cx/m.cy` ⇒ **逐位等于旧行为**（既有判据一条不动）。 */
+  const camMeasured = Number.isFinite(c.camX) && Number.isFinite(c.camY);
+  const baseX = camMeasured ? c.camX : m.cx;
+  const baseY = camMeasured ? c.camY : m.cy;
+  /* 🎥 死区/前瞻上限是**屏幕像素**口径 ⇒ 拉近/捏合后要除回标定档（`viewScale = 2^Δz`，缺省 1）。
+     只在**闭环**时生效：开环路 `vs` 恒 1 ⇒ 下面每一行逐位等于旧代码。 */
+  const vs = camMeasured ? c.viewScale : 1;
   const centering = !pushing && speed === 0;
-  const leadMax = c.screenW * JOY_LEAD_MAX_RATIO;
+  const leadMax = (c.screenW * JOY_LEAD_MAX_RATIO) / vs;
   const clampLead = (x: number): number => (leadMax > 0 ? Math.max(-leadMax, Math.min(leadMax, x)) : 0);
   const leadX = centering ? 0 : clampLead(vx * JOY_LEAD_S);
   const leadY = centering ? 0 : clampLead(vy * JOY_LEAD_S);
-  const dead = centering ? 0 : JOY_CAM_DEADZONE_PX;
+  const dead = centering ? 0 : JOY_CAM_DEADZONE_PX / vs;
   const shrink = (e: number): number => (Math.abs(e) <= dead ? 0 : e > 0 ? e - dead : e + dead);
-  const ex = shrink(px + leadX - m.cx);
-  const ey = shrink(py + leadY - m.cy);
-  const ck = 1 - Math.exp(-s / (centering ? JOY_RECENTER_TAU_S : JOY_CAM_TAU_S));
-  let cx = m.cx + ex * ck;
-  let cy = m.cy + ey * ck;
-  /* 🔴 **硬夹**（研究 §7 的"有界"）：相机与角色的偏移**永不超过**（前瞻上限 + 死区）。
+  /* 🔴 **硬夹的上界**（研究 §7 的"有界"）：相机与角色的偏移**永不超过**（前瞻上限 + 死区）。
      这是"视角锁定角色"的结构保证 —— 即使状态被外部写坏，相机也会被拉回带上（保险丝，不是常用路径）。 */
   const band = leadMax + JOY_CAM_DEADZONE_PX;
-  cx = Math.max(px - band, Math.min(px + band, cx));
-  cy = Math.max(py - band, Math.min(py + band, cy));
+  /* 🎥 闭环时夹的是**误差**（不是位置）：相机被外力搬到 200px 外也不会一帧跳回去，而是以
+     ≤ band×ck 的每帧修正量平滑滑回（离线读数：推 3 秒内回到死区内）。开环那条路一个字不动。 */
+  const clampBand = (e: number): number => (band > 0 ? Math.max(-band, Math.min(band, e)) : 0);
+  const ex = camMeasured ? clampBand(shrink(px + leadX - baseX)) : shrink(px + leadX - baseX);
+  const ey = camMeasured ? clampBand(shrink(py + leadY - baseY)) : shrink(py + leadY - baseY);
+  const ck = 1 - Math.exp(-s / (centering ? JOY_RECENTER_TAU_S : JOY_CAM_TAU_S));
+  let cx = baseX + ex * ck;
+  let cy = baseY + ey * ck;
+  /* ⚠️ 位置硬夹只走**开环**那一支：闭环的当前位置来自地图，拿硬夹去改它等于"把观测值改掉"
+     （假读数 + 一帧跳 152px）；闭环的"有界"由上面 `clampBand` 的**每帧修正量上界**保证。 */
+  if (!camMeasured) {
+    cx = Math.max(px - band, Math.min(px + band, cx));
+    cy = Math.max(py - band, Math.min(py + band, cy));
+  }
   /* 🔴 亚像素尾巴**不许写**：`shrink()` 在死区边界上会给出 1e-15 这种量级的偏差 ⇒ 相机每帧
      挪 1e-16px ⇒ `d` 非 0 ⇒ rAF 链**永不收尾**、每帧白发一次 `panBy`（实测栽过：滑停后
      `moving` 一直为 true、跑满 400 帧上限）。小于百分之一像素就当"这一步没动"。 */
-  if (Math.abs(cx - m.cx) < JOY_CAM_EPS_PX && Math.abs(cy - m.cy) < JOY_CAM_EPS_PX) {
-    cx = m.cx;
-    cy = m.cy;
+  if (Math.abs(cx - baseX) < JOY_CAM_EPS_PX && Math.abs(cy - baseY) < JOY_CAM_EPS_PX) {
+    cx = baseX;
+    cy = baseY;
   }
   /* 停稳 = 速度恰好 0 **且** 相机这一帧一步都没走 **且** 相机距离不再变（⇒ `d` 恰好 {0,0}、`zo` 恰好 0，链可以断）。
      🔴 不能拿"离目标 < 0.05px"来判：推着走时相机本来就会停在离目标最多
      `JOY_CAM_DEADZONE_PX` 的地方，那个判据永远不为真。
      🔴 `zo` 也必须进这一条：回程尾段相机可能已经贴住角色（`d = {0,0}`）而相机距离还在收敛，
      那时断链就会把相机**永久停在拉近后的距离**上（名字层也跟着一直藏着）。 */
-  const settled = speed === 0 && cx === m.cx && cy === m.cy && zo === m.zo;
+  const settled = speed === 0 && cx === baseX && cy === baseY && zo === m.zo;
   /* ④ 朝向 + 踏步：满速 = 世界速度 ÷ 米每像素（没有尺子 ⇒ 比例恒 0，不动画） */
   const vmax = c.mpp > 0 ? Math.min(c.speedMps, JOY_SPEED_MAX_MPS) / c.mpp : 0;
   const speedRatio = vmax > 0 ? Math.min(1, speed / vmax) : 0;
@@ -763,7 +893,7 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
     stepPhase,
     zo,
   };
-  return { d: { dx: cx - m.cx, dy: cy - m.cy }, move, moving: !settled, centering };
+  return { d: { dx: cx - baseX, dy: cy - baseY }, move, moving: !settled, centering };
 }
 
 /**

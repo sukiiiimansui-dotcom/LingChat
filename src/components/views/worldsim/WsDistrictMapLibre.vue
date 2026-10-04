@@ -146,7 +146,14 @@
          也**不许**顺带加任何读数（PLAN §2.2 的验收口径）。
          渲染判据只有一处 `joyGate`：`?joy=0` 或 2D 降级路 ⇒ 这里根本不在 DOM 里（判据 9 / 10）。
          `@drive` 每帧**至多一次**（唯一驱动点），`@halt` 松手**恰好一次**。 -->
-    <WsJoystick v-if="joyGate.show" :mpp="joyMpp" :speed-mps="joySpeedMps" @drive="onJoyDrive" @halt="onJoyHalt" />
+    <WsJoystick
+      v-if="joyGate.show"
+      :mpp="joyMpp"
+      :speed-mps="joySpeedMps"
+      :zoom-levels="joyZoomLevels"
+      @drive="onJoyDrive"
+      @halt="onJoyHalt"
+    />
 
     <!-- 🪪 **信息卡**：点楼体 / 点名字 / 点区名 ⇒ **同一张卡**（`wsBuildingCard.buildingCardData`）。
          动效令牌全部来自 `CARD_MOTION`（一处定义）；组件里**没有** `backdrop-filter`
@@ -461,11 +468,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     type JoyFramePhase,
     type JoyMotion,
     type JoyPxScale,
+    JOY_ZOOM_PUSH_LEVELS,
     createJoyMotion,
     joyCamRestoreArgs,
     joyCamSnapshotOf,
     joyGateOf,
     joyLngLatOf,
+    joyNamesHiddenOf,
+    joyPanScaleOf,
     joyPxScaleOf,
     joySpeedMpsOf,
     joyWalkAnimOn,
@@ -3836,13 +3846,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   function labClassOf(style: NameRenderNode["style"]): string {
     return style === "real" ? "is-real" : style === "derived" ? "is-derived" : "is-generated";
   }
-  /** 容器 class（相机运动 / 换批 / 整层降级 / 传送帧）—— 类名来自真源常量，宿主不写字面量 */
+  /** 容器 class（相机运动 / 换批 / 整层降级 / 传送帧 / 🕹拉近隐藏）—— 类名来自真源常量，宿主不写字面量 */
   const labRootClass = computed(() => ({
     [LABEL_CAMERA_CLASS]: cameraMoving.value,
     "is-switching": switching.value,
     "is-lite": namePlan.value.lite,
     /* 🆕 只在这一帧里掐掉"传送"的过渡（见 `reprojectNow`），**不掐**淡入淡出 */
     "is-snap": snapping.value,
+    /* 🕹 拉近期间**整层隐藏**（研究 §9.6）：标签坐标是按进近景那一档 zoom 投影的，容器只补 translate，
+       zoom 一变就系统性错位 ⇒ 与其显示错位的名字，不如整层藏起来。翻转时才写一次 class。 */
+    "is-zoom-pull": joyZoomPulling.value,
   }));
 
   /**
@@ -4219,6 +4232,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      量不到（没有 getZoom/getCenter）⇒ 两个数留 0 ⇒ 推杆无效：**宁可不走，也不编一个世界速度**。 */
   const joyMpp = ref(0);
   const joySpeedMps = ref(JOY_SPEED_MPS);
+  /* 🕹🆕 2026-10-03 第三轮（机主拍板 Ⓐ「相机拉近」）—— **相机距离**四个值，各只有一处：
+       · `joyZoomLevels`：交给摇杆组件的"推杆期间拉近几级" —— **量到了出发 zoom 才给**，
+                          量不到给 0（这条通路整条关掉：宁可不拉，也不把相机 move 到 zoom 0）；
+       · `joyZoom0`     ：进近景那一刻的出发 zoom（回程的目标值，容差 **0** —— `joyZoom0 + 0` 逐位相等）；
+       · `joyZoomApplied`：上一次**已经写进相机**的拉近量（判据：`zo` 没变 ⇒ 一次相机写点都不发）；
+       · `joyZoomPulling`：名字层是否正在**整层隐藏**（研究 §9.6；状态翻转才写一次 class，不进每帧循环）。 */
+  const joyZoomLevels = ref(0);
+  let joyZoom0 = 0;
+  let joyZoomApplied = 0;
+  const joyZoomPulling = ref(false);
   /** ♿ 系统"减弱动效"：**只关踏步**（摇杆是输入，任何档位都不许关；见 `joyWalkAnimOn`） */
   const joyReducedMotion = (() => {
     try {
@@ -4240,6 +4263,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   function joyCalibrate(): void {
     joyScale = null;
+    /* 🕹 相机距离那一路也**从这里归零**：量不到出发 zoom ⇒ `joyZoomLevels = 0` ⇒ 摇杆只平移、不拉近
+       （拉近量的真源由此处一处决定；`joyZoomApplied`/隐藏态跟着复位，避免拿上一台相机的状态接着用）。 */
+    joyZoomLevels.value = 0;
+    joyZoom0 = 0;
+    joyZoomApplied = 0;
+    joyZoomPulling.value = false;
     const m = map as unknown as {
       project?: (c: [number, number]) => { x: number; y: number };
       unproject?: (p: [number, number]) => { lng: number; lat: number };
@@ -4255,6 +4284,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       const z0 = typeof m.getZoom === "function" ? m.getZoom() : NaN;
       joyMpp.value = bldMetersPerCssPixel(z0, c0.lat);
       joySpeedMps.value = joySpeedMpsOf(z0);
+      /* 🕹 出发 zoom 量到了才**武装**拉近那条路（`JOY_ZOOM_PUSH_LEVELS` 是 policy，数值在 wsJoystick.ts 一处）；
+         `z0` 非有限 ⇒ 两个数都留 0/关 —— 与"不编世界速度"同一条纪律。 */
+      if (Number.isFinite(z0)) {
+        joyZoom0 = z0;
+        joyZoomLevels.value = JOY_ZOOM_PUSH_LEVELS;
+      }
     } catch {
       joyMpp.value = 0;
     }
@@ -4382,6 +4417,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyMove = createJoyMotion();
     joyAccX = 0;
     joyAccY = 0;
+    /* 🕹 相机距离这四个值一个都不能留：留 `joyZoom0` 会拿着**上一台相机**的出发 zoom 去还原
+       （与"不清标尺"同一类错误），留 `joyZoomPulling` 会让名字层一直藏着。
+       `joyZoomLevels` 交给下一次 `joyCalibrate()` 重新武装（它开头就把四个值全归零）。 */
+    joyZoomLevels.value = 0;
+    joyZoom0 = 0;
+    joyZoomApplied = 0;
+    joyZoomPulling.value = false;
     joyPinReset(true);
     /* 「我」回到名单里的网格位置：真源已清空 ⇒ `syncPins` 走的是常规那一路（含吸附） */
     syncPins();
@@ -4417,13 +4459,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion, phase?: JoyFramePhase): void {
     const m = map as unknown as {
       panBy?: (o: [number, number], opt?: { duration: number }) => void;
+      easeTo?: (o: Record<string, unknown>) => void;
     } | null;
     if (!alive || !m || typeof m.panBy !== "function") return;
     /* 🔴 两条路**分开判**（2026-10-03 第二轮）：世界速度下相机头 ~2 秒会被死区按在原地
        （满推 8.8 px/s），那几帧 `d = {0,0}` 但**角色已经在走** ⇒ 相机那一半要跳过、
        角色那一半照写。老代码把两者绑在"相机位移非 0"上，于是那 2 秒里钉子一动不动。 */
     const camMoved = !!(d.dx || d.dy);
-    if (camMoved && !joyActive) {
+    /* 🕹 相机距离（研究 §9；机主拍板 Ⓐ 拉近）：`zo` = 运动模型算出来的"已拉近几级"（松手后回 0）。
+       它跟 `camMoved` **不是一回事**：拉近从第一帧就开始改相机，而死区让 `panBy` 头 ~2.3 秒一动不动
+       ⇒ 接管标志（`joyActive`）必须**两条都算**，否则那 2.3 秒里 `easeTo` 引发的
+       `movestart/move/moveend/zoomend` 全部不会早退，每帧都走一遍常规重投影/取包
+       （判据 3/6 的红线；`zoomend` 那一支是这一轮**必须补**的早退，见它的注释）。 */
+    const zoomArmed = joyZoomLevels.value > 0;
+    const zo = zoomArmed && mv && Number.isFinite(mv.zo) ? mv.zo : 0;
+    const zoomMoved = zo !== joyZoomApplied;
+    if ((camMoved || zoomMoved) && !joyActive) {
       /* 进入：**一次 class**（与既有 `movestart` 同一套 `is-camera-moving`，整层淡到 0.25）+
          累计位移归零。`panAnchor` 保持 null ⇒ 后面那几个 handler 早退也不会有人误用旧锚点。
          ⚠️ 归零是**必须**的：上一次收尾时 `onMoveEndNames()` 已经把位移烘进节点坐标了，
@@ -4435,12 +4486,37 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       joyActive = true;
       joyAccX = 0;
       joyAccY = 0;
-      cameraMoving.value = true;
+      /* 整层淡化只跟**真的平移**走：拉近期间名字层本来就整层隐藏（§9.6），没必要再叠一层淡化 */
+      if (camMoved) cameraMoving.value = true;
     }
+    /* 🕹🆕 **相机距离写点**（唯一一处；`zo` 与上一次相同 ⇒ **一次都不发** —— 常态每帧都是这一支）：
+       走的是**既有相机通路** `easeTo`（与 `panBy` 同一族，库内处理映射），**一行投影数学都不写**。
+       `duration: 0` 与 `panBy({duration:0})` 同口径：平滑已经由 `joyMotionStep` 的指数逼近做完了
+       （研究 §9 的 τ=0.5s 拉近 / 复用 `JOY_RECENTER_TAU_S` 回程），这里只负责"把这一刻的值落到相机上"。
+       🔴 `joyZoom0 + 0` 逐位等于出发 zoom ⇒ 回程结束时相机距离**恰好**回到进近景那一刻。 */
+    if (zoomMoved) {
+      joyZoomApplied = zo;
+      if (typeof m.easeTo === "function") {
+        try {
+          m.easeTo({ zoom: joyZoom0 + zo, duration: 0 });
+        } catch {
+          /* 相机收不了就当这一帧没拉（下一帧还会再试）；平移那一路照旧 */
+        }
+      }
+    }
+    /* 🕹 名字层：拉近期间**整层隐藏**（研究 §9.6 —— 标签坐标是按进近景那一档 zoom 投影的，
+       容器只补 translate，zoom 一变就系统性错位）。🔴 **状态翻转才写一次**（不进每帧循环）。 */
+    const hideNames = joyNamesHiddenOf(zo);
+    if (hideNames !== joyZoomPulling.value) joyZoomPulling.value = hideNames;
     if (camMoved) {
-      m.panBy([d.dx, d.dy], { duration: 0 });
-      joyAccX += d.dx;
-      joyAccY += d.dy;
+      /* 🕹 像素换算（研究 §9.4；`joyPanScaleOf` 一个乘方，不碰投影）：角色的位移积分在**进近景那一档**
+         的像素里（世界尺度冻结，红线），`panBy` 走的却是**当前**这一档 ⇒ 拉近 zo 级要乘 2^zo，
+         否则相机按 2^zo 的倍率追不上角色，角色被甩到硬夹带边缘（= 上一版"视角无法锁定角色"）。
+         累计位移（名字层跟手用）也按**实际写进相机的像素**记，收尾烘进节点坐标的才是真值。 */
+      const k = joyPanScaleOf(zo);
+      m.panBy([d.dx * k, d.dy * k], { duration: 0 });
+      joyAccX += d.dx * k;
+      joyAccY += d.dy * k;
       joyNamesFollow();
     }
     /* 🆕 角色那一路（与相机**分成两件事**，§3）：世界坐标写进真源 + 钉子 `setLngLat` + 朝向 + 踏步。
@@ -4473,6 +4549,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   function onJoyHalt(): void {
     if (!joyActive) return;            // 没推过 ⇒ 不是"松手"，一次重算都不该有
     joyActive = false;
+    /* 🕹🔴 **相机距离的保险丝**（研究 §9.5「松手后 zoom 回到出发值」的结构保证）：
+       正常路走不到这里 —— 回中段的最后一帧会把 `zo` **恰好**写 0（`JOY_ZOOM_EPS_LEVELS` 那一跳），
+       宿主那时就已经把相机 distance 放回 `joyZoom0`、名字层也跟着恢复，所以 `joyZoomApplied === 0`。
+       只有病态路会命中：时钟被冻住 / rAF 反复给同一时间戳 ⇒ 回程被 `JOY_CENTER_MAX_FRAMES` 强收尾，
+       `zo` 还停在半路。那时必须补一发，否则相机会**永久停在拉近后的距离**上、名字层也一直藏着。 */
+    if (joyZoomApplied !== 0) {
+      joyZoomApplied = 0;
+      joyZoomPulling.value = false;
+      const em = map as unknown as { easeTo?: (o: Record<string, unknown>) => void } | null;
+      if (em && typeof em.easeTo === "function") {
+        try {
+          em.easeTo({ zoom: joyZoom0, duration: 0 });
+        } catch {
+          /* 相机收不了也不抛：`joyExit()` 的 `jumpTo(快照)` 兜底 */
+        }
+      }
+    }
     const moved = joyAccX !== 0 || joyAccY !== 0;
     joyAccX = 0;
     joyAccY = 0;
@@ -5411,8 +5504,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         if (roadsLive.live) void loadRoadsForView(m as unknown as BldMapLike);
       }, 600);
     });
-    /* 缩放结束也要重排：zoom 变了 ⇒ 避让网格的候选/撞掉**全变**（区名模式的迟滞信号就是它） */
+    /* 缩放结束也要重排：zoom 变了 ⇒ 避让网格的候选/撞掉**全变**（区名模式的迟滞信号就是它）
+       🔴 2026-10-03 第三轮**必须加这一句早退**：摇杆拉近期间宿主每帧写一次 `easeTo({zoom})`
+       （`onJoyDrive`），而 `duration: 0` 的 ease 会**同步**发一轮 zoomstart/zoom/zoomend
+       （与 `panBy` 同一族，vendored 源码见判据 ⑧）⇒ 不早退的话，拉近的每一帧都会在这里
+       跑一次 `reprojectNow()`（重投影）+ 起一个 160ms 的 `refreshNames("zoom")` + 可能一次
+       `bldTierCrossedFlush()`（重挑楼）—— 正是判据 3/6 的"移动期间 0 次重投影 / 0 次重挑"那条红线。
+       收尾那**一次**重算仍由 `onJoyHalt()` 在画面停稳之后做（那时 zoom 已经回到出发值）。 */
     m.on("zoomend", () => {
+      if (joyActive) return;
       onMoveEndNames();
       /* 🆕 同 `moveend`：先**就地重投影**（缩放不是刚体平移，容器跟手只是近似），
          160ms 后那一轮 `refreshNames("zoom")` 照旧（跨档才重算，档内复用 —— 见 `wsNameLayer`）。 */
@@ -5802,6 +5902,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   .ws-labs.is-switching {
     opacity: 0;                        /* "先隐后改字"：这一帧才允许换 textContent */
     transition: opacity 120ms cubic-bezier(0.3, 0, 1, 1);  /* `nameOutMs` */
+  }
+  /* 🕹 推杆期间相机拉近 ⇒ 名字层**整层隐藏**（研究 §9.6）：标签的 `translate3d` 是进近景那一刻
+     用 `project()` 算好的，容器只补"纯平移"那部分；zoom 一变，坐标整体按 2^Δz 缩放，
+     补偿量对不上（离屏心 200px 的标签在 Δz=1.2 时差约 260px，比报过的"名字错位"大一个量级）。
+     ⇒ 用 `visibility`（不是 opacity）：它不参与过渡、也不进渲染合成，
+       而且**只在 class 翻转的那一帧**写一次（`joyZoomPulling`），不进每帧循环。
+     🔴 恢复的时点由 `zo` **恰好**归零触发（`JOY_ZOOM_EPS_LEVELS` 与相机同一步），
+       所以名字**只在相机距离等于出发值的时候**才可能被看见 —— 不会出现"坐标还没对上就显出来"。 */
+  .ws-labs.is-zoom-pull {
+    visibility: hidden;
   }
   /* >60 个标签 ⇒ 换手段（整层淡出→重排→淡入），**不是**缩时长 */
   .ws-labs.is-lite .ws-lab {

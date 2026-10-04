@@ -470,6 +470,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     type JoyPxScale,
     JOY_ZOOM_PUSH_LEVELS,
     createJoyMotion,
+    joyAimModeOf,
+    joyAimStep,
     joyCamRestoreArgs,
     joyCamSnapshotOf,
     joyGateOf,
@@ -1070,6 +1072,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /** 🕹 只有「我」那颗钉子有：朝向箭头 / 身体（建钉子时抓一次，**不在帧里 `querySelector`**） */
     face: HTMLElement | null;
     body: HTMLElement | null;
+    /** 🎯 同理（预走线三件套：容器 / 虚线 / 箭头）—— 每帧只写它们的 `transform`，一次查询都不做 */
+    aim: HTMLElement | null;
+    dash: HTMLElement | null;
+    tip: HTMLElement | null;
   }> = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mlMod: any = null;
@@ -2501,6 +2507,30 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         "will-change:transform",
       ].join(";");
       hit.appendChild(face);
+      /* 🎯 **预走线**（2026-10-04 第四轮；机主：「能给移动加预走线吗…动画要好看喵！」）——
+         结构三件，**每一件每帧最多写一个 transform**（详见 `wsJoystick.ts` 第九节）：
+           · `data-ws-roam-aim` 容器：只吃 `rotate(朝向)`（**角度真变了才写**，直着走通常 0 次）；
+           · `.ws-aim__dash`    虚线：吃 `scaleX(线长 ÷ 满长)`（每帧 1 次）——里面那层 `.ws-aim__flow`
+                                的"流动"是**纯 CSS 动画**（平移恰好一个周期 ⇒ 无缝循环，研究 §12.4），JS 一次都不写；
+           · `.ws-aim__tip`     箭头：吃 `translate3d(线长, 0, 0)`（每帧 1 次）。
+         ⚠️ 挂在 `hit` 上（与 face 同层）：**位置由 `Marker` 管**，我们一个布局属性都不写；
+         它在**钉子自己的 DOM 里** ⇒ 名字层一个节点都不碰（"不与标签打架"的第一条）。
+         ⚠️ 显隐**不是**每帧写 `opacity`：`hit` 上的 `is-aim` class 只翻转一次，剩下交给 CSS 过渡
+         （入场 140ms / 淡出 320ms ease-out，见文件末尾那段全局样式）—— 这就是"停下优雅淡出"，
+         也是"每帧 0 次 opacity 写"的来源。 */
+      hit.dataset.wsRoamPin = "";
+      const aim = document.createElement("span");
+      aim.dataset.wsRoamAim = "";
+      const dash = document.createElement("span");
+      dash.className = "ws-aim__dash";
+      const flow = document.createElement("span");
+      flow.className = "ws-aim__flow";
+      dash.appendChild(flow);
+      const tip = document.createElement("span");
+      tip.className = "ws-aim__tip";
+      aim.appendChild(dash);
+      aim.appendChild(tip);
+      hit.appendChild(aim);
     }
     /* 标题里如实带出"位置是怎么来的"：吸附到路上（`road`）和网格示意位置，
        精度完全不是一回事 —— 以后排查"怎么站到江里了"就靠这一行。
@@ -2752,13 +2782,25 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         hit.el.title = `${a.name || "我"}${a.posSource === "affinity" ? "（特地来找你）" : ""}`;
       } else {
         const el = pinEl(a);
-        const mk = new mlMod.Marker({ element: el, anchor: "center" }).setLngLat(pos).addTo(m);
+        /* 🔴 `subpixelPositioning: true` **不是调参，是消抖的必需项**（研究 §11.1，2026-10-04 第四轮）：
+           MapLibre 官方源码 `Marker._update()` 逐字 —— "because rounding the coordinates at every `move`
+           event causes stuttered zooming, we only round them when `_update` is called with `moveend`
+           or when its called with **no arguments** (when the Marker is initialized or **`Marker#setLngLat`
+           is invoked**)" ⇒ 默认（`@defaultValue false`）下**我们每帧那次 `setLngLat` 都会把钉子
+           `.round()` 到整数 CSS 像素**：地图以亚像素连续滚动、钉子却一格一格跳。
+           官方为此专门提供了 `subpixelPositioning`，文档原话是"**If true, rounding is disabled for
+           placement of the marker, allowing for subpixel positioning and smoother movement when the
+           marker is translated**"。游标只影响"要不要 `.round()`"，对静止的钉子零代价。 */
+        const mk = new mlMod.Marker({ element: el, anchor: "center", subpixelPositioning: true }).setLngLat(pos).addTo(m);
         pins.push({
           id: a.id,
           el,
           mk,
           face: el.querySelector<HTMLElement>("[data-ws-roam-face]"),
           body: el.querySelector<HTMLElement>("[data-ws-roam-body]"),
+          aim: el.querySelector<HTMLElement>("[data-ws-roam-aim]"),
+          dash: el.querySelector<HTMLElement>(".ws-aim__dash"),
+          tip: el.querySelector<HTMLElement>(".ws-aim__tip"),
         });
       }
     }
@@ -4251,6 +4293,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
   })();
 
+  /* 🎯 2026-10-04 第四轮 **预走线**（机主："能给移动加预走线吗…动画要好看喵！"）—— 三个状态，各一处：
+       · `joyAimOn`  ：这一帧该不该画（= 速度比例 > 0 且不是 low 档）。**翻转时才写一次 class**；
+       · `joyAimK`   ：已经平滑过的线长比例 0..1（`joyAimStep` 按 `JOY_AIM_TAU_S` 收敛）；
+       · `joyFaceDeg`：上一次**真的写进 DOM** 的朝向（0.1° 死区）—— `face` 与预走线容器**共用**这一份
+                      （两者表示同一个朝向，同一帧只会有一个在画）。 */
+  let joyAimOn = false;
+  let joyAimK = 0;
+  let joyFaceDeg = NaN;
+
   /**
    * 量**两把尺子**（整条链路只有这一处换算，共 3 次投影调用 + 1 次 `bldMetersPerCssPixel`）：
    *   ① **屏幕 px → 经纬度**（局部雅可比）：四个数**全部**来自地图库自己的 `project`/`unproject`
@@ -4336,12 +4387,98 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     } catch {
       /* 地图拆了就算了（这一帧白写，不抛） */
     }
-    if (pin.face) pin.face.style.transform = `rotate(${mv.headingDeg.toFixed(1)}deg)`;
-    /* 踏步：`low` 档 / `prefers-reduced-motion` 直接不写（§4：装饰性动效可以被关掉） */
+    /* 朝向：**只在"不在画预走线"时写**（预走线亮着时箭头是藏起来的 —— 写它等于白发一次）。
+       另加 **0.1° 死区**：直着走时 `headingDeg` 只会在浮点尾巴上抖，四舍五入到 0.1° 后大多数帧
+       根本没有变化 ⇒ 这些帧从"每帧 1 个写点"变成 0 个（写点预算里那个"最坏 8 / 稳态 5"就是这么来的）。 */
+    if (pin.face && !joyAimOn) {
+      const deg = Number(mv.headingDeg.toFixed(1));
+      if (deg !== joyFaceDeg) {
+        joyFaceDeg = deg;
+        pin.face.style.transform = `rotate(${mv.headingDeg.toFixed(1)}deg)`;
+      }
+    }
+    /* 踏步（§4：就地行走）：**一步一个起落**，不是一步两个。
+       🔴 2026-10-04 第四轮消抖（机主「移动时很诡异，一直在抖」）—— 旧写法是
+       `-|sin(stepPhase·2π)| × a`：`|sin|` 每个相位周期有**两个**波峰，而 `stepPhase` 的单位是**步**
+       （`JOY_STEP_HZ = 2.2` 步/秒）⇒ 那个"踏步"实际是 **4.4 次/秒的上下振**（研究 §11.2 的反面教材：
+       被相机跟随的角色身上，任何周期性位移都会被看成抖）。
+       现在用 `sin²(π·stepPhase)`：一个相位=**一个**起落（2.2 次/秒，人走路的量级），
+       而且 `sin²` 在触地那一点是 C¹ 连续的（`|sin|` 在那里有个折点，看着像"顿一下"）。
+       幅度仍是 `speedRatio × JOY_STEP_PX`（停下 ⇒ 0 ⇒ 恒等变换 ⇒ 自动回正，一个字没改）。 */
     if (pin.body && joyWalkAnimOn({ low: !!perf.low.value, reduced: joyReducedMotion })) {
       const a = mv.speedRatio * JOY_STEP_PX;
-      pin.body.style.transform = a > 0 ? `translate3d(0, ${(-Math.abs(Math.sin(mv.stepPhase * Math.PI * 2)) * a).toFixed(2)}px, 0)` : "";
+      const bob = Math.sin(mv.stepPhase * Math.PI) ** 2;
+      pin.body.style.transform = a > 0 ? `translate3d(0, ${(-bob * a).toFixed(2)}px, 0)` : "";
     }
+  }
+
+  /**
+   * 🎯 **预走线那一帧的两个写点**（机主："预走线 + 指向移动方向的箭头，动画要好看"）。
+   *
+   * 写点**恰好 2 个**（与 `JOY_AIM_WRITES_MAX` 对齐；都在**钉子自己的 DOM** 里）：
+   *   ① 虚线 `scaleX`（线长 ÷ 满长）——**只动 transform**，不碰 `width`；
+   *   ② 箭头 `translate3d(线长, 0, 0)`——同样只动 transform。
+   * 容器那次 `rotate` 是**第三个**、但带 0.1° 死区（角度没变就一次都不写）；
+   * `opacity` **一次都不写**：显隐是 `is-aim` class 翻转 + CSS 过渡（见文件末尾全局样式）。
+   *
+   * ⚠️ 为什么回中段（`phase === "center"`）也允许写这两个数：**线必须收回去**，
+   *    否则松手那一瞬它会长在半路"僵住"（`speedRatio` 在 `release()` 里当场归零，
+   *    线长的收敛只能靠模型按 `JOY_AIM_TAU_S` 走完）。所以回中段的角色写点**只有这 2 个**：
+   *    `setLngLat` / 真源 `roamStore.write` / `project` 三者仍然是 **0 次**（自检 ⑩e3/⑩e4 分别钉）。
+   */
+  function joyAimWrite(pin: { el: HTMLElement; aim: HTMLElement | null; dash: HTMLElement | null; tip: HTMLElement | null; face: HTMLElement | null } | undefined, mv: JoyMotion | undefined, dtMs: number): void {
+    if (!pin?.aim || !pin.dash || !pin.tip) return;
+    const mode = joyAimModeOf({ low: !!perf.low.value, reduced: joyReducedMotion });
+    /* ① 该不该画：`off`（low 档）⇒ 一次都不画；速度恰好 0（松手/停稳）⇒ 收线不再起新的 */
+    const want = mode !== "off" && !!mv && Number.isFinite(mv.speedRatio) && mv.speedRatio > 0;
+    if (want !== joyAimOn) {
+      joyAimOn = want;
+      /* **一次 class 写**（状态翻转那一帧）：CSS 过渡负责淡入 140ms / 淡出 320ms（ease-out，研究 §12.3）。
+         起新的一段时把平滑量**归零**：上一段末尾可能冻在 20% 上（那一帧之后 rAF 链就断了），
+         不归零的话线会"啪"地从 20% 开始长。 */
+      pin.el.classList.toggle("is-aim", want);
+      if (want) joyAimK = 0;
+      /* 收线那一帧把**朝向箭头补到当前朝向**：预走线亮着的时候箭头是被 CSS 藏起来的
+         （`[data-ws-roam-pin].is-aim [data-ws-roam-face]` 那条），而箭头自己的 `rotate` 在
+         预走线期间**故意不写**（省一个写点）。不补这一下，松手后箭头会停在上一次写进去的旧角度上。 */
+      else joyFaceSync(pin, mv ? mv.headingDeg : NaN);
+    }
+    if (mode === "off") return;
+    if (!joyAimOn && joyAimK <= 0) return; // 收干净了 ⇒ 这一帧 0 个写点（不再空写）
+    const f = joyAimStep(joyAimK, mv ? mv.speedRatio : 0, dtMs);
+    joyAimK = f.k;
+    pin.dash.style.transform = `translate3d(0, 0, 0) scaleX(${f.scaleX.toFixed(4)})`;
+    pin.tip.style.transform = `translate3d(${f.tipPx.toFixed(2)}px, 0, 0)`;
+    /* ③ 容器：只吃 rotate（角度死区 0.1°）。为什么和 `pin.face` 共用 `joyFaceDeg`：
+       两者表示的是**同一个朝向**，同一帧只会有一个在画 —— 共用一份就少一次 `toFixed` 与一次比较。 */
+    if (mode === "full" || mode === "static") {
+      const deg = Number((mv ? mv.headingDeg : 0).toFixed(1));
+      if (deg !== joyFaceDeg) {
+        joyFaceDeg = deg;
+        pin.aim.style.transform = `rotate(${deg}deg)`;
+      }
+    }
+  }
+  /**
+   * 朝向箭头的**补写**（唯一一处）：只在"预走线收线那一帧"与"收尾 `joyAimReset`"两处调。
+   * 为什么需要它：预走线亮着时箭头被 CSS 藏着，而它的 `rotate` 在那一整段里**故意不写**
+   * （省一个每帧写点）—— 收线时若不补，箭头会停在上一次写进 DOM 的**旧角度**上（人是停下了，
+   * 朝向就是他最后走的方向，不该是一个更早的方向）。
+   */
+  function joyFaceSync(pin: { face: HTMLElement | null } | undefined, headingDeg: number): void {
+    if (!pin?.face || !Number.isFinite(headingDeg)) return;
+    joyFaceDeg = Number(headingDeg.toFixed(1));
+    pin.face.style.transform = `rotate(${joyFaceDeg}deg)`;
+  }
+  /** 🎯 把预走线收干净（**幂等**）：class 摘掉 + 平滑量归零 + 朝向补写。`onJoyHalt`/`joyExit` 都会调一次 —— 保证"线不会僵住" */
+  function joyAimReset(): void {
+    const wasAiming = joyAimOn;
+    joyAimOn = false;
+    joyAimK = 0;
+    const pin = pins.find((p) => p.id === ROAM_PIN_ID);
+    pin?.el.classList.remove("is-aim");
+    /* 只有"刚才真的在画"才补写箭头（否则就是一次白写：箭头本来就是那个角度） */
+    if (wasAiming) joyFaceSync(pin, joyMove.headingDeg);
   }
 
   /**
@@ -4352,7 +4489,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   function joyPinReset(clearHeading: boolean): void {
     const pin = pins.find((p) => p.id === ROAM_PIN_ID);
     if (pin?.body) pin.body.style.transform = "";
+    if (pin?.dash) pin.dash.style.transform = "";
+    if (pin?.tip) pin.tip.style.transform = "";
+    joyAimReset(); // 🎯 预走线也一并收（class 摘掉 + 平滑量归零；幂等）
     if (clearHeading && pin?.face) pin.face.style.transform = "";
+    if (clearHeading && pin?.aim) pin.aim.style.transform = "";
   }
 
   /** 读当前相机 → 快照（缺值给 null；宿主不许在没快照时动相机） */
@@ -4456,7 +4597,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
 
   /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF）；`mv` = 这一步的运动状态（角色那一半），
    *  `phase` = `"push"`（推着/滑行）或 `"center"`（**松手后的回中段**：角色已停稳，只有相机在贴回角色）。 */
-  function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion, phase?: JoyFramePhase): void {
+  function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion, phase?: JoyFramePhase, dtMs = 0): void {
     const m = map as unknown as {
       panBy?: (o: [number, number], opt?: { duration: number }) => void;
       easeTo?: (o: Record<string, unknown>) => void;
@@ -4530,6 +4671,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       joyMove = mv; // 留一份最新状态（这一份**不是**驱动的那份；只给"进来时先站到原点"用）
       joyApplyRoam(mv);
     }
+    /* 🎯 预走线（**两个写点，两条路都要走**）：push 段跟着速度长出来；`center` 段只做一件事 ——
+       **把线收回去**（`speedRatio` 在 `release()` 里当场归零，收敛只能由 `joyAimStep` 按 τ 走完）。
+       🔴 它与上面那条"回中段 0 个角色写点"不冲突：那条红线管的是**角色的世界位置**
+       （`setLngLat` / 真源 / 投影），而这里只写钉子内部两个**装饰性 transform**。
+       判据在自检 ⑩e3（那三条仍是 0）+ ⑩e4（回中段的预走线写点 ≤ 2/帧，且结尾必须收到 0）。 */
+    joyAimWrite(pins.find((p) => p.id === ROAM_PIN_ID), mv, dtMs);
   }
 
   /**
@@ -4548,6 +4695,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   function onJoyHalt(): void {
     if (!joyActive) return;            // 没推过 ⇒ 不是"松手"，一次重算都不该有
+    /* 🎯 预走线**紧跟着收干净**（幂等）：`halt` 是"每一次按压恰好一次"的收尾
+       —— 正常路根本轮不到它干活（松手后第一帧 `phase="center"` 就把 class 摘了），
+       它挡的是**病态路**：某一发按压短到松手后一帧都没投递
+       （相机没动过、`zo` 也没动过），那时不在这里收，线就会**僵在半路**。
+       放在守卫之后是**必须**的：这条判据钉着"没推过 ⇒ 一次重算都不做"（自检 ⑦）。 */
+    joyAimReset();
     joyActive = false;
     /* 🕹🔴 **相机距离的保险丝**（研究 §9.5「松手后 zoom 回到出发值」的结构保证）：
        正常路走不到这里 —— 回中段的最后一帧会把 `zo` **恰好**写 0（`JOY_ZOOM_EPS_LEVELS` 那一跳），
@@ -6019,4 +6172,107 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
   }
 
+</style>
+
+<!--
+  🎯 预走线（2026-10-04 第四轮）——**故意不加 `scoped`**，两个原因，都不是疏忽：
+    ① 那几个节点是 `pinEl()` 用 `document.createElement` 造的**动态节点**，身上没有 `data-v-xxx`
+       ⇒ scoped 选择器一个都匹配不上（朝向箭头当年靠**内联 cssText** 绕开了这件事，
+          但预走线需要 `@keyframes` 与 `@media`，内联样式写不了）；
+    ② Vue 的 scoped 会把 `@keyframes` **改名**（`ws-aim-flow` → `ws-aim-flow-<hash>`）并只重写同一块里
+       的 `animation-name`，而"流动"是写在这条链上的 —— 改名那一刻就断了（静默失效，最难查）。
+  ⇒ 用全局块 + `ws-aim` 前缀（全仓唯一）划清边界。这里**只有**预走线，没有别的选择器。
+  动画纪律（与 `.ws-labs` 那一段同一条红线）：
+    · 每帧只有 `transform` 被 JS 写（虚线 `scaleX` / 箭头 `translate3d` / 容器 `rotate`）；
+    · 显隐只走 `opacity` 过渡：入场 140ms、**淡出 320ms `ease-out`**（研究 §12.3：MDN 的 `ease-out`
+      = `cubic-bezier(0, 0, 0.58, 1)`，"starts abruptly and then progressively slows down towards the end"
+      —— 停下时先收得快、尾巴慢，这才是"优雅淡出"而不是硬切）；
+    · "流动"是**纯 CSS**（平移恰好一个周期 ⇒ 无缝循环，§12.4 的 marching-ants 正统做法，
+      但我们不用 `stroke-dashoffset`/`background-position` —— 那两个不是 transform，会掉出合成器）；
+    · `prefers-reduced-motion` ⇒ **只关流动**（线照画：它同时是操作反馈）；`low` 档整条不画（JS 判）。
+-->
+<style>
+  /* 容器：一个 0×0 的锚点，落在钉子（44×44 命中区）的正中；它只吃 `rotate(朝向)` */
+  .ws-aim {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    pointer-events: none;          /* 命中区仍是那个 44×44 的 hit：预走线一个字的事件都不吃 */
+    transform-origin: 0 0;
+    opacity: 0;                    /* 停稳时**不可见**（不是删节点：删了就没有淡出） */
+    transition: opacity 320ms cubic-bezier(0, 0, 0.58, 1);   /* 淡出（ease-out，§12.3） */
+    will-change: transform, opacity;
+  }
+  /* 画着的时候：亮起来（入场 140ms —— 比退场快，符合"响应要快、收起要从容"） */
+  [data-ws-roam-pin].is-aim .ws-aim {
+    opacity: 0.85;
+    transition-duration: 140ms;
+  }
+  /* 预走线亮着时**朝向小箭头让位**（两者是同一个语义；不让位就是两个箭头在同一个半径上打架）。
+     `opacity` 过渡：收线那一帧它淡回来（180ms），不是硬切。
+     ⚠️ 这条与"收线时补写箭头角度"配套：JS 在 class 摘掉那一帧会把角度补到**当前**朝向
+        （见宿主 `joyFaceSync` 的注释），否则箭头会带着旧角度淡回来。 */
+  [data-ws-roam-face] {
+    transition: opacity 180ms linear;
+  }
+  [data-ws-roam-pin].is-aim [data-ws-roam-face] {
+    opacity: 0;
+  }
+  /* 底线之外的一层（`overflow:hidden` 当"只露出这么长"的窗口；窗口宽度 34 = 满推线长） */
+  .ws-aim__dash {
+    position: absolute;
+    left: 17px;                    /* = JOY_AIM_GAP_PX（身体半径 15 + 2px 缝） */
+    top: -1px;
+    width: 34px;                   /* = JOY_AIM_MAX_PX（JS 只写 scaleX，**从不改 width** —— 布局属性） */
+    height: 2px;
+    transform-origin: 0 50%;
+    overflow: hidden;
+  }
+  /* 会在窗口里横向平移的虚线花纹：宽度 = 34 + 9（一个周期）⇒ 平移 9px 后与原图**逐像素重合** ⇒ 无缝 */
+  .ws-aim__flow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 43px;                   /* = JOY_AIM_MAX_PX + JOY_AIM_DASH_PX */
+    height: 2px;
+    background: repeating-linear-gradient(
+      90deg,
+      rgba(233, 244, 255, 0.95) 0 5px,
+      rgba(233, 244, 255, 0) 5px 9px
+    );
+    animation: ws-aim-flow 460ms linear infinite;
+  }
+  @keyframes ws-aim-flow {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(-9px, 0, 0);   /* = JOY_AIM_DASH_PX：**恰好一个周期** */
+    }
+  }
+  /* 箭头：贴着虚线的末端（位置由 JS 的 `translate3d` 给），朝向 = 容器的 rotate 带过来的。
+     🔴 `left: 0`（**不是** 17px）：JS 写进来的位移是 `tipPx = GAP + dashPx`（**含**那 17px 的起点），
+     这里再加一次 17 就会把箭头推到虚线末端之外 17px 去（画出来是"线和箭头中间空一截"）。 */
+  .ws-aim__tip {
+    position: absolute;
+    left: 0;
+    top: -4px;
+    width: 7px;                    /* = JOY_AIM_TIP_PX */
+    height: 8px;
+    background: rgba(233, 244, 255, 0.95);
+    clip-path: polygon(0 0, 100% 50%, 0 100%);   /* 绘制属性（不参与布局），与既有朝向箭头同一手法 */
+    pointer-events: none;
+  }
+  /* ♿ 系统"减弱动效"⇒ **只关流动**（虚线变静止的虚线；线本身照画 —— 它是操作反馈，不是装饰）。
+     `low` 档更狠：整条不画（JS 的 `joyAimModeOf` 给 `"off"` ⇒ 一次都不写、class 都不加）。 */
+  @media (prefers-reduced-motion: reduce) {
+    .ws-aim__flow {
+      animation: none;
+    }
+    .ws-aim {
+      transition-duration: 180ms;
+    }
+  }
 </style>

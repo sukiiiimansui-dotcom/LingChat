@@ -2215,8 +2215,15 @@ function bldTierOfZoom(zoom, prevTier) {
   if (prevTier === 1) return v < line - WS_BLD_TIER_HYSTERESIS ? 0 : 1;
   return v < line ? 0 : 1;
 }
+function bldNearKOf(nearK) {
+  return nearK === void 0 || nearK === null ? WS_BLD_NEAR_K : Number.isFinite(Number(nearK)) ? Math.max(0, Math.floor(Number(nearK))) : WS_BLD_NEAR_K;
+}
 function bldMaxDrawnOf(mode) {
   return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
+function bldResolvedCellDeg(cellDeg) {
+  const v = Number(cellDeg);
+  return Number.isFinite(v) && v > 0 ? v : BLD_BUNDLE_CELL_DEG;
 }
 var WS_BLD_VERTS_PER_SEGMENT = 4;
 function bldRingVertices(ringPoints) {
@@ -2371,8 +2378,7 @@ function pickBuildingsByBudget(input) {
   const budgetPx2 = Number.isFinite(input.budgetPx2) ? Number(input.budgetPx2) : WS_BLD_BUDGET_PX2;
   const budgetVerts = Number.isFinite(input.budgetVerts) ? Number(input.budgetVerts) : WS_BLD_BUDGET_VERTS;
   const maxDrawn = Number.isFinite(input.maxDrawn) ? Math.max(0, Math.floor(Number(input.maxDrawn))) : WS_BLD_MAX_DRAWN;
-  const cellDegIn = Number(input.cellDeg);
-  const cellDeg = Number.isFinite(cellDegIn) && cellDegIn > 0 ? cellDegIn : BLD_BUNDLE_CELL_DEG;
+  const cellDeg = bldResolvedCellDeg(input.cellDeg);
   const minInView = Number.isFinite(input.minInView) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
   const mpp = Number.isFinite(input.screen?.metersPerPixel) && input.screen.metersPerPixel > 0 ? Number(input.screen.metersPerPixel) : 0;
@@ -2401,7 +2407,13 @@ function pickBuildingsByBudget(input) {
     staticMpp: mpp,
     minInView,
     floorAdded: 0,
+    /* 📍 补齐件那几个数**在字面量里就有初值**（第七条起多了 `nearAnchors` / `nearRestored` /
+       `nearAddedPerAnchor`）：① 关掉时逐字节等于改动前；② 影子对拍（把补齐件整段抠掉再编译）
+       两边都带这几个字段 ⇒ 对拍比的仍是"同一份形状"。 */
+    nearAnchors: 0,
     nearAdded: 0,
+    nearRestored: 0,
+    nearAddedPerAnchor: [],
     nearDistM: null,
     overBudget: false,
     why: ""
@@ -2518,58 +2530,115 @@ function pickBuildingsByBudget(input) {
   (bd.length ? " · 安全闸拦住过：" + bd.join("+") + "（跳过 " + stats.gateDropped + " 栋）" : " · 两个预算都没咬住") + (!(mpp > 0) ? " · ⚠️ 没给 metersPerPixel：px² 数不出来（只剩顶点预算在管）" : "") + (minInView ? " · 下限 " + minInView + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + /* 视野：**只报不改**（数不出来时不写 0 冒充"视野外没有"） */
   (stats.viewCounted ? stats.outOfView ? " · 视野外 " + stats.outOfView + "（不影响挑选）" : "" : " · 视野计数：数不出来（没给视野）") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
   {
-    const nearKIn = input.nearK;
-    const nearKOn = nearKIn === void 0 || nearKIn === null ? WS_BLD_NEAR_K : Number.isFinite(Number(nearKIn)) ? Math.max(0, Math.floor(Number(nearKIn))) : WS_BLD_NEAR_K;
+    const nearKOn = bldNearKOf(input.nearK);
+    const listRaw = input.nearAnchors;
+    const listGiven = Array.isArray(listRaw) && listRaw.length > 0;
     const nc = input.nearCenter;
     const ncGiven = !!nc && typeof nc === "object";
-    const ncLng = ncGiven ? Number(nc.lng) : NaN;
-    const ncLat = ncGiven ? Number(nc.lat) : NaN;
-    const ncOk = ncGiven && isFinite(ncLng) && isFinite(ncLat);
-    if (nearKOn > 0 && ncGiven && !ncOk) {
-      stats.why += " · 就近补齐：数不出来（相机中心不是有限数）";
-    } else if (nearKOn > 0 && ncOk) {
-      const cosLat = Math.cos(ncLat * Math.PI / 180);
-      const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
-      const cands = [];
-      for (let i = 0; i < pool.length; i++) {
-        if (taken[i]) continue;
-        const m2 = bldStaticMeasureOf(pool[i].f);
-        if (!m2) continue;
-        const dx = (m2.cLng - ncLng) * kx;
-        const dy = (m2.cLat - ncLat) * WS_BLD_M_PER_DEG_LAT;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (!isFinite(d)) continue;
-        cands.push({ cand: pool[i], i, d });
+    const raw = listGiven ? listRaw.slice() : ncGiven ? [nc] : [];
+    if (nearKOn > 0 && raw.length > 0) {
+      const anchors = [];
+      let badN = 0;
+      for (const a of raw) {
+        const o = a;
+        const ok = !!o && typeof o === "object";
+        const lng = ok ? Number(o.lng) : NaN;
+        const lat = ok ? Number(o.lat) : NaN;
+        if (ok && isFinite(lng) && isFinite(lat)) anchors.push({ lng, lat });
+        else badN += 1;
       }
-      cands.sort((A, B) => A.d !== B.d ? A.d - B.d : A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0);
-      const take = Math.min(nearKOn, cands.length);
-      const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
-      let farM = 0;
-      for (let i = 0; i < take; i++) {
-        const it = cands[i];
-        taken[it.i] = true;
-        chosen.push(it.cand);
-        sumPx += it.cand.c.px;
-        sumV += it.cand.c.verts;
-        if (it.d > farM) farM = it.d;
-      }
-      stats.nearAdded = take;
-      stats.nearDistM = take > 0 ? Math.round(farM) : null;
-      if (take > 0) {
-        stats.chosen = chosen.length;
-        stats.px2 = Math.round(sumPx);
-        stats.verts = Math.round(sumV);
-        stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
-        const seen = /* @__PURE__ */ new Set();
-        const keys = [];
-        for (const c of chosen) if (!seen.has(c.key)) {
-          seen.add(c.key);
-          keys.push(c.key);
+      if (badN > 0) {
+        stats.why += " · 就近补齐：数不出来（" + (listGiven ? "锚点 " + raw.length + " 个里有 " + badN + " 个不是有限坐标" : "相机中心不是有限数") + "）";
+      } else {
+        const frozenList = input.nearFrozen;
+        const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
+        const poolMeasure = pool.map((c) => bldStaticMeasureOf(c.f));
+        const idSeen = /* @__PURE__ */ new Set();
+        for (const c of chosen) if (c.c.id !== "") idSeen.add(c.c.id);
+        const perAnchor = [];
+        let added = 0, restored = 0, farM = 0;
+        for (let ai = 0; ai < anchors.length; ai++) {
+          const a = anchors[ai];
+          const cosLat = Math.cos(a.lat * Math.PI / 180);
+          const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
+          const cands = [];
+          for (let i = 0; i < pool.length; i++) {
+            if (taken[i]) continue;
+            const m2 = poolMeasure[i];
+            if (!m2) continue;
+            const dx = (m2.cLng - a.lng) * kx;
+            const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (!isFinite(d)) continue;
+            cands.push({ cand: pool[i], i, d });
+          }
+          cands.sort((A, B) => A.d !== B.d ? A.d - B.d : A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0);
+          const take = Math.min(nearKOn, cands.length);
+          const batch = [];
+          const seenObj = /* @__PURE__ */ new Set();
+          for (let k = 0; k < take; k++) {
+            const it = cands[k];
+            seenObj.add(it.cand.f);
+            batch.push({ cand: it.cand, f: it.cand.f, i: it.i, d: it.d, frozen: false, c: it.cand.c, id: it.cand.c.id });
+          }
+          const fr = !Array.isArray(frozenList) ? null : frozenList[ai];
+          if (Array.isArray(fr)) {
+            for (const f of fr) {
+              if (!f || typeof f !== "object" || seenObj.has(f)) continue;
+              seenObj.add(f);
+              const m2 = bldStaticMeasureOf(f);
+              if (!m2) continue;
+              const dx = (m2.cLng - a.lng) * kx;
+              const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (!isFinite(d)) continue;
+              const id = String(f.id ?? "");
+              batch.push({ cand: null, f, i: -1, d, frozen: true, c: bldStaticScreenCost(m2, id, mpp, ppm), id });
+            }
+          }
+          batch.sort((A, B) => A.d !== B.d ? A.d - B.d : A.id < B.id ? -1 : A.id > B.id ? 1 : 0);
+          perAnchor.push(0);
+          for (const it of batch) {
+            if (it.i >= 0 && taken[it.i]) continue;
+            if (it.id !== "" && idSeen.has(it.id)) continue;
+            if (it.id !== "") idSeen.add(it.id);
+            if (it.i >= 0) taken[it.i] = true;
+            if (it.cand) {
+              chosen.push(it.cand);
+            } else {
+              const m2 = bldStaticMeasureOf(it.f);
+              const cell = bundleCellOf(m2.cLng, m2.cLat, cellDeg);
+              chosen.push({ f: it.f, c: it.c, score: m2.score, key: bundleCellKey(cell.w, cell.s, cellDeg) });
+            }
+            sumPx += it.c.px;
+            sumV += it.c.verts;
+            if (it.d > farM) farM = it.d;
+            perAnchor[ai] += 1;
+            added += 1;
+            if (it.frozen) restored += 1;
+          }
         }
-        stats.cellKeys = keys;
-        stats.cellsChosen = keys.length;
+        stats.nearAnchors = anchors.length;
+        stats.nearAdded = added;
+        stats.nearRestored = restored;
+        stats.nearAddedPerAnchor = perAnchor;
+        stats.nearDistM = added > 0 ? Math.round(farM) : null;
+        if (added > 0) {
+          stats.chosen = chosen.length;
+          stats.px2 = Math.round(sumPx);
+          stats.verts = Math.round(sumV);
+          stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+          const seen = /* @__PURE__ */ new Set();
+          const keys = [];
+          for (const c of chosen) if (!seen.has(c.key)) {
+            seen.add(c.key);
+            keys.push(c.key);
+          }
+          stats.cellKeys = keys;
+          stats.cellsChosen = keys.length;
+        }
+        stats.why += " · 就近补齐 " + added + " 栋 · 锚点 " + anchors.length + " 个" + (added > 0 ? "（最远 " + stats.nearDistM + " m" + (restored > 0 ? " · 冻结还原 " + restored + " 栋" : "") + "）" : zeroCap ? "（每格上限 0 ⇒ 候选池为空，不复活）" : "（没有未入选的候选）") + (!overBefore && stats.overBudget ? " · ⚠️ 已超预算（就近补齐破例）" : "");
       }
-      stats.why += " · 就近补齐 " + take + " 栋（相机中心" + (take > 0 ? "，最远 " + stats.nearDistM + " m）" : zeroCap ? "·每格上限 0 ⇒ 候选池为空，不复活）" : "·没有未入选的候选）") + (!overBefore && stats.overBudget ? " · ⚠️ 已超预算（就近补齐破例）" : "");
     }
   }
   return { features: chosen.map((c) => c.f), stats };
@@ -4874,6 +4943,8 @@ function pointOfFeature(f) {
 }
 function createBldPickStore(opts) {
   const frozen = opts?.frozen ?? {};
+  const nearAnchors = [];
+  const nearFeat = /* @__PURE__ */ new Map();
   return {
     pick(input) {
       const r = capBuildingsPerCell(input.features, {
@@ -4926,7 +4997,22 @@ function createBldPickStore(opts) {
        本方法之所以存在：页面与 App **都只认 `createBldPickStore()` 这一个口**
        （2026-09-26 抽真源的初衷），新口径不该让宿主去 import 第二个模块。 */
     pickBudget(input) {
-      return pickBuildingsByBudget({
+      const deg = bldResolvedCellDeg(input.cellDeg);
+      const seed = input.nearCenter;
+      const seedGiven = !!seed && typeof seed === "object";
+      const seedLng = seedGiven ? Number(seed.lng) : NaN;
+      const seedLat = seedGiven ? Number(seed.lat) : NaN;
+      if (bldNearKOf(input.nearK) > 0 && seedGiven && isFinite(seedLng) && isFinite(seedLat)) {
+        const cell = bundleCellOf(seedLng, seedLat, deg);
+        const key = bundleCellKey(cell.w, cell.s, deg);
+        if (!nearFeat.has(key)) {
+          nearAnchors.push({ lng: seedLng, lat: seedLat, key });
+          nearFeat.set(key, []);
+        }
+      }
+      const anchorsOut = nearAnchors.map((a) => ({ lng: a.lng, lat: a.lat }));
+      const frozenOut = nearAnchors.map((a) => nearFeat.get(a.key) || []);
+      const out = pickBuildingsByBudget({
         features: input.features,
         bounds: input.bounds,
         screen: input.screen,
@@ -4936,14 +5022,38 @@ function createBldPickStore(opts) {
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
         /* 🧮 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
-           ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）。 */
+           ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）；
+             上面播种用的是 `bldResolvedCellDeg`（**同一个解析口**，不是第二份默认值）。 */
         cellDeg: input.cellDeg,
         minInView: input.minInView,
-        /* 📍 2026-10-04 第六条**就近补齐**：相机中心与栋数**原样透传** —— 规则模块那一处说了算
-           （没给/给坏/`nearK: 0` 三种语义都在 `wsBldBudget.BldBudgetInput` 的注释里，这里一个字都不重复判）。 */
-        nearCenter: input.nearCenter,
+        /* 📍 2026-10-04 第七条：传的是**锚点表 + 各锚点的冻结集**（不再是每轮现读的相机中心）；
+           `nearK`（栋数）与"关掉"的语义仍归规则模块那一处说了算。 */
+        nearAnchors: anchorsOut,
+        nearFrozen: frozenOut,
         nearK: input.nearK
       });
+      const stats = {
+        ...out.stats,
+        nearAnchorTotal: nearAnchors.length,
+        nearFrozenBatches: 0
+      };
+      const per = Array.isArray(out.stats.nearAddedPerAnchor) ? out.stats.nearAddedPerAnchor : [];
+      const addedN = Math.max(0, Number(out.stats.nearAdded) || 0);
+      if (addedN > 0 && out.features.length >= addedN) {
+        const tail = out.features.slice(out.features.length - addedN);
+        let off = 0;
+        for (let i = 0; i < nearAnchors.length && off < tail.length; i++) {
+          const cnt = Math.max(0, Number(per[i]) || 0);
+          if (cnt <= 0) continue;
+          const arr = nearFeat.get(nearAnchors[i].key);
+          for (let j = 0; j < cnt && off < tail.length; j++, off++) {
+            const f = tail[off];
+            if (!arr.includes(f)) arr.push(f);
+          }
+        }
+      }
+      for (const a of nearAnchors) if ((nearFeat.get(a.key) || []).length > 0) stats.nearFrozenBatches += 1;
+      return { features: out.features, stats };
     },
     frozenObject() {
       return frozen;
@@ -7069,11 +7179,13 @@ export {
   bldLiveDecision,
   bldMaxDrawnOf,
   bldMetersPerCssPixel,
+  bldNearKOf,
   bldPartsVisibleAt,
   bldPointOf,
   bldPointOfRaw,
   bldPxPerMeter,
   bldRampColorExpr,
+  bldResolvedCellDeg,
   bldRingVertices,
   bldScreenCost,
   bldStaticMeasureOf,

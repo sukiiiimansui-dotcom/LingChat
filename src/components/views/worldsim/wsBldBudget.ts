@@ -141,6 +141,10 @@
  *   · 每个锚点取"离它最近、还没入选"的 `nearK` 栋，**按锚点顺序**依次追加；同一栋只入列一次（按 id 去重）；
  *   · 另有 `nearFrozen`（各锚点"已经画出去过"的那批**引用**）：它们照样入列 ⇒
  *     **哪怕离线包把那些格淘汰掉，已画的楼也不会消失**（整场单调）。
+ *   · 🔴 **老锚点只并冻结集、不再新挑**（`frozenOnly`）：一个锚点一旦不再是"相机所在格的那一个"，
+ *     它的贡献就已定稿（本来就"不许再变"）⇒ 再花一次全池扫描重算它是白算。
+ *     **这不是新口径，是"冻结"二字的直译**；当前锚点照旧全量重算（冷加载时数据还在陆续到位）。
+ *     于是每轮代价 = **1 次全池扫描 + 并集**，与锚点数无关（锚点只增不删，否则越走越慢）。
  * `nearCenter` **保留** = **单锚点的特例**（老接线、"关掉就回到改动前"与影子对拍那几条逐字节性质都不动）。
  *
  * ## 确定性（项目纪律）
@@ -642,21 +646,40 @@ export interface BldBudgetInput<T> {
    *
    * 由编排层（`wsBldPickStore`）维护：**相机进过的每个离线包格一个锚点**，
    * 坐标 = **首次进入该格时的相机中心**（此后同格内走动不再新增）。语义：
-   *   · **至少一个有限坐标** ⇒ 开启补齐：对**每个锚点**取"离它最近、又还没入选"的 `nearK` 栋，
-   *     **按锚点顺序**依次追加；同一栋只入列一次（按 id 去重，排序键仍是「距离升序 → id 升序」）；
+   *   · **至少一个有限坐标** ⇒ 开启补齐：对**每个"还要新挑"的锚点**取"离它最近、又还没入选"的
+   *     `nearK` 栋，**按锚点顺序**依次追加；同一栋只入列一次（按 id 去重，排序键仍是「距离升序 → id 升序」）；
    *   · **空数组 / 没给 / `null`** ⇒ 老口径（不补、判词一字不加）；
    *   · **里有任何一个不是有限坐标** ⇒ **数不出来**：判词明写原因，**一栋都不补**
    *     （与单锚点那条逐字同判：不许拿 0 冒充"补了 0 栋"，也不许"跳坏的、用好的"偷偷继续）。
    *
+   * 🔴 **老锚点只并冻结集、不再新挑 —— 这不是新口径，是"冻结"二字的直译**（见下面 `frozenOnly`）：
+   *    一个锚点**一旦不再是"相机所在格的那一个"**，它的贡献就已定稿（它本来就是"不许再变"的那批），
+   *    再花一次全池扫描去重算它 = **白算**。于是每轮代价 = **1 次全池扫描 + 并集**，与锚点数无关
+   *    （锚点只增不删 ⇒ 不这么干会"走得越远越慢"：本机真包实测 20 个锚点比 1 个慢 3 倍以上）。
+   *
    * ⚠️ 它**只进补齐件**：base（每格静态前 K / 排序 / 两个代价预算 / 总量下限）一个字节都不读它。
    */
-  nearAnchors?: ReadonlyArray<{ lng: number; lat: number }> | null;
+  nearAnchors?: ReadonlyArray<{
+    lng: number;
+    lat: number;
+    /**
+     * 🔒 **只并冻结集、不再新挑**（编排层给"**老锚点**"打的标：相机已经不在它那一格里了）。
+     *
+     * `true` ⇒ 跳过"离它最近的那几栋"那次**全池扫描**，只把它 `nearFrozen` 那批按引用并入结果。
+     * **口径没变**：老锚点的贡献本来就**冻着不许变**（"已画出去的不许再消失"），重算等于白算；
+     * 而**当前锚点**（相机所在那一格的那一个）照旧**全量重算** —— 冷加载时数据还在陆续到位，
+     * 那一格必须能继续补进来。
+     * 没给这个标（`undefined`）⇒ 当作"还要新挑"（= 第七条原来的行为，老接线/自检不受影响）。
+     */
+    frozenOnly?: boolean;
+  }> | null;
   /**
    * 🔒 **各锚点的补齐件冻结集**（与 `nearAnchors` **一一对应、同序**）——
    * 每个锚点"**已经画出去过、必须保住**"的那批要素**引用**（编排层持有，不拷）。
    *
-   * 规则：它们与该锚点"最近、还没入选"的那批**一起**按「距离升序 → id 升序」入列 ⇒
-   *   **哪怕离线包把那些格淘汰掉（它们已经不在 `features` 里了），也照样画得出来**（整场单调）。
+   * 规则：**还要新挑**的锚点 ⇒ 它们与"最近、还没入选"的那批**一起**按「距离升序 → id 升序」入列；
+   *   **老锚点（`frozenOnly`）** ⇒ **只有它们入列**（那一次全池扫描被跳过）。
+   *   两种情况都保证：**哪怕离线包把那些格淘汰掉（它们已经不在 `features` 里了），也照样画得出来**（整场单调）。
    * ⚠️ 它们**不占** `nearK` 的名额（冻结点是"保命"的，不是"新挑"的）：该锚点的入列数 =
    *   最多 `nearK` 栋新补 + 该锚点冻结集里还没入列的那些。坏值（非数组/空）⇒ 当作没有。
    */
@@ -769,6 +792,14 @@ export interface BldBudgetStats {
    */
   nearRestored: number;
   /**
+   * 🆕 📍 **本轮"真的做了一次全池重挑"的锚点数**（0 或 1；关掉/数不出来 = 0）。
+   *
+   * 为什么要报它：**代价 = 锚点数 × 候选数**，而锚点只增不删（走得越远越慢）。
+   * 老锚点只并冻结集、不再新挑（`frozenOnly`，见 `nearAnchors` 的注释）之后，
+   * 这个数**恒 ≤ 1** ⇒ "代价与锚点数无关"这句话就可数了（自检拿 20 个锚点钉它）。
+   */
+  nearPicked: number;
+  /**
    * 🆕 📍 **每个锚点这一轮补了几栋**（与 `nearAnchors` **一一对应、同序**；关掉/数不出来 = `[]`）。
    * 为什么要有它：编排层（`wsBldPickStore`）要**按锚点把补齐件冻下来**（"锚点 → 那批要素"），
    * 而它是唯一能切开"尾部那一段"的信息（补齐件照口径**追加在结果尾部、按锚点顺序**）。
@@ -853,7 +884,7 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     /* 📍 补齐件那几个数**在字面量里就有初值**（第七条起多了 `nearAnchors` / `nearRestored` /
        `nearAddedPerAnchor`）：① 关掉时逐字节等于改动前；② 影子对拍（把补齐件整段抠掉再编译）
        两边都带这几个字段 ⇒ 对拍比的仍是"同一份形状"。 */
-    nearAnchors: 0, nearAdded: 0, nearRestored: 0, nearAddedPerAnchor: [], nearDistM: null,
+    nearAnchors: 0, nearAdded: 0, nearRestored: 0, nearPicked: 0, nearAddedPerAnchor: [], nearDistM: null,
     overBudget: false, why: "",
   };
 
@@ -1043,14 +1074,19 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
       : (ncGiven ? [nc] : []);
     /* 三态（顺序即口径）：`nearK: 0` = 用户关掉（先说关）；没给锚点 = 老口径；给了但坏 = 数不出来。 */
     if (nearKOn > 0 && raw.length > 0) {
-      const anchors: Array<{ lng: number; lat: number }> = [];
+      /* ⚠️ 这里**要把 `frozenOnly` 一起搬过来**：校验只做"坐标是不是有限数"，
+         而"这个锚点还要不要新挑"是编排层给的语义（丢了它 ⇒ 每个锚点都去重挑一遍，
+         代价又回到"锚点数 × 候选数"，而输出还看不出问题 —— 自检里差点漏过去）。 */
+      const anchors: Array<{ lng: number; lat: number; frozenOnly: boolean }> = [];
       let badN = 0;
       for (const a of raw) {
-        const o = a as { lng?: unknown; lat?: unknown } | null | undefined;
+        const o = a as { lng?: unknown; lat?: unknown; frozenOnly?: unknown } | null | undefined;
         const ok = !!o && typeof o === "object";
         const lng = ok ? Number(o!.lng) : NaN;
         const lat = ok ? Number(o!.lat) : NaN;
-        if (ok && isFinite(lng) && isFinite(lat)) anchors.push({ lng, lat }); else badN += 1;
+        if (ok && isFinite(lng) && isFinite(lat)) {
+          anchors.push({ lng, lat, frozenOnly: (o as { frozenOnly?: unknown }).frozenOnly === true });
+        } else badN += 1;
       }
       if (badN > 0) {
         /* 全有或全无：**只要有一个坏锚点，整条就"数不出来"**（与单锚点那条逐字同判）——
@@ -1061,37 +1097,40 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
         const frozenList = input.nearFrozen;
         const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
         /** 🔴 **每个候选的静态量只取一次**（与 base 同一个记忆表 ⇒ 值一模一样，数值逐字节不变）：
-         *  这一段的代价是**乘法**（锚点数 × 候选数）。本机真包读数（12,741 候选 / 5 次中位数 / node，
-         *  **不是真机、不是 WebGL**）：0 锚点 84ms · 1 个 108ms · 5 个 185ms · 20 个 382ms
-         *  ⇒ 每多一个锚点约 +20~25ms。`bldStaticMeasureOf` 的 WeakMap 查询占其中不小一块
-         *  ⇒ 先按 pool 下标铺一遍，循环里只做算术。A/B（同夹具同机）：20 个锚点时
-         *  +298ms（铺一遍）对 +449ms（循环里现查）。
-         *  ⚠️ **仍是 O(锚点数 × 候选数)，而锚点只增不删** ⇒ 走得越远这一项越大（30k 候选约翻倍）。
-         *     真要再压只有两条路：①把"整池排序"换成"只选前 K 名"（同一把全序键、结果相同，
-         *     常数约 1/4）；②让老锚点不再做"新挑"、只吃冻结集（**改口径，得先问过机主**）。 */
+         *  这条 `pool.map` 属于"**当前锚点**"那一次全池扫描（老锚点不走到这里，见 `frozenOnly`）。
+         *  本机真包读数（12,741 候选 / 5 次中位数 / node，**不是真机、不是 WebGL**）：
+         *  **0 锚点 80ms · 1 个 108ms · 5 个 116ms · 20 个 121ms**（20 个只比 1 个多 **12%**）。
+         *  老锚点"只并冻结集"之前是 84 / 108 / 185 / **382** —— 20 个是 1 个的 3.5 倍，
+         *  而且锚点**只增不删** ⇒ 不改成"老锚点只并冻结集"就会越走越慢。 */
         const poolMeasure: Array<BldStaticMeasure | null> = pool.map((c) => bldStaticMeasureOf(c.f));
         /** 已入列的 id（`""` 不算：没有 id 的要素只靠 `taken` / 对象同一性去重）——"同一栋只入列一次" */
         const idSeen = new Set<string>();
         for (const c of chosen) if (c.c.id !== "") idSeen.add(c.c.id);
         const perAnchor: number[] = [];
-        let added = 0, restored = 0, farM = 0;
+        let added = 0, restored = 0, farM = 0, picked = 0;
         for (let ai = 0; ai < anchors.length; ai++) {
           const a = anchors[ai]!;
           const cosLat = Math.cos((a.lat * Math.PI) / 180);
           const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
-          /* ① 离这个锚点最近、还没入选的候选（距离 = 纯算术米数，**一次投影都不做**） */
+          /* ① **还要新挑**的锚点才做这次全池扫描（距离 = 纯算术米数，**一次投影都不做**）。
+             🔒 `frozenOnly`（老锚点：相机已经不在它那一格里）**跳过扫描**：它的贡献早就定稿，
+                重算等于白算 ⇒ 每轮代价回到"1 次扫描 + 并集"，与锚点数无关。
+                ⚠️ 这**不是新口径** —— 老锚点那一批本来就"不许再变"（见上面 `frozenOnly` 的注释）。 */
           const cands: Array<{ cand: Cand; i: number; d: number }> = [];
-          for (let i = 0; i < pool.length; i++) {
-            if (taken[i]) continue;                     /* 已入选的不再补（判据：补齐件 = 尚未入选的那批） */
-            const m2 = poolMeasure[i];
-            if (!m2) continue;
-            const dx = (m2.cLng - a.lng) * kx;
-            const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            if (!isFinite(d)) continue;
-            cands.push({ cand: pool[i]!, i, d });
+          if (a.frozenOnly !== true) {
+            picked += 1;
+            for (let i = 0; i < pool.length; i++) {
+              if (taken[i]) continue;                   /* 已入选的不再补（判据：补齐件 = 尚未入选的那批） */
+              const m2 = poolMeasure[i];
+              if (!m2) continue;
+              const dx = (m2.cLng - a.lng) * kx;
+              const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (!isFinite(d)) continue;
+              cands.push({ cand: pool[i]!, i, d });
+            }
+            cands.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0)));
           }
-          cands.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0)));
           const take = Math.min(nearKOn, cands.length);
           /* ② 该锚点的**冻结集**（已画出去过的那批**引用**）：与"最近的那批"**一起**按同一把键入列，
                 但**不占** `nearK` 的名额 —— 它们是"保命"的，不是"新挑"的。
@@ -1150,6 +1189,7 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
         stats.nearAnchors = anchors.length;
         stats.nearAdded = added;
         stats.nearRestored = restored;
+        stats.nearPicked = picked;
         stats.nearAddedPerAnchor = perAnchor;
         stats.nearDistM = added > 0 ? Math.round(farM) : null;
         if (added > 0) {

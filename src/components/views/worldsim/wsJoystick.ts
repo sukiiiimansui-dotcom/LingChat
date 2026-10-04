@@ -71,6 +71,41 @@ export const JOY_HUD_LIFT_PX = JOY_BASE_PX + JOY_INSET_PX + JOY_GAP_PX;
 /** 杆头能走的半径（px）——由上面两个常量推出，组件**不再写第二份** */
 export const JOY_THUMB_TRAVEL_PX = (JOY_BASE_PX - JOY_THUMB_PX) / 2;
 
+/* ── §15 **底盘尺寸随视口高度收**（2026-10-04 第五轮；机主：「左下那个大灰圆」）──────────────
+ * 查证（截图像素量的，见 `RESEARCH-GAME-MOVEMENT.md` §15）：那个"大灰圆"= 摇杆底盘本身，
+ * 直径 205 图像 px ÷ 有效 DPR 1.86 = **110 CSS px**（= 112 的设计值，**不是** DPR/CSS 搞错），
+ * 杆头 93 ÷ 1.86 = 50（设计值 52）⇒ 两者比例 2.20 ≈ 112/52 ✓。也就是说**尺寸本身没写错，
+ * 是"112px 不随视口变"这件事错**：那一屏的视口只有 **581 CSS px 高**，112 就占了 19%；
+ * 真机横屏（≈360~430 CSS px 高）上要占 **1/4 屏**。
+ * 规则：底盘直径 = `16vh`，夹在 `[76, 112]`（下界保命中区 ≥44 与杆头行程，上界是原设计值）。
+ * 🔴 只有这一处算尺寸：宿主把结果写进 CSS 变量（`--ws-joy-base/thumb/h`），组件 CSS 一个数字不写死。
+ * ⚠️ `JOY_BASE_PX = 112` 仍是**上界与默认值**（老调用方不给视口高度 ⇒ 逐字回到 112）。
+ */
+export const JOY_BASE_VH_RATIO = 0.16;
+/** 底盘下界（px）——命中区下限 44 的两倍留量，且要装得下 35px 的杆头 */
+export const JOY_BASE_MIN_PX = 76;
+
+/** 视口高度 → 底盘直径（px）：`clamp(16vh, 76, 112)`；量不到 ⇒ 默认 112（§15） */
+export function joyBasePxOf(viewportH: number): number {
+  const h = Number(viewportH);
+  if (!Number.isFinite(h) || h <= 0) return JOY_BASE_PX;
+  return Math.max(JOY_BASE_MIN_PX, Math.min(JOY_BASE_PX, Math.round(h * JOY_BASE_VH_RATIO)));
+}
+/** 底盘 → 杆头直径（px）：按原设计比例 `52/112` 缩，夹到 `[32, 52]`（§15） */
+export function joyThumbPxOf(basePx: number): number {
+  const b = Number(basePx);
+  if (!Number.isFinite(b) || b <= 0) return JOY_THUMB_PX;
+  return Math.max(32, Math.min(JOY_THUMB_PX, Math.round((b * JOY_THUMB_PX) / JOY_BASE_PX)));
+}
+/** 底盘 + 杆头 → 杆头行程半径（px）——`(底盘 - 杆头) / 2`（唯一一处；§15） */
+export function joyThumbTravelPxOf(basePx: number, thumbPx: number): number {
+  const b = Number.isFinite(Number(basePx)) && Number(basePx) > 0 ? Number(basePx) : JOY_BASE_PX;
+  const t = Number.isFinite(Number(thumbPx)) && Number(thumbPx) > 0 ? Number(thumbPx) : JOY_THUMB_PX;
+  return Math.max(0, (b - t) / 2);
+}
+/** 底盘 → 杆头行程（px）——`(底盘 - 杆头) / 2`，两个尺寸各一处来源（§15） */
+
+
 /** 死区（占半径的比例）：手指按住不动时的抖动不该让画面漂 */
 export const JOY_DEADZONE = 0.12;
 /**
@@ -183,12 +218,161 @@ export function joyVectorFromPointer(
  * 而杆头必须**老老实实跟着手指**（死区内也是）—— 否则按住轻推时杆头像卡住了，手感是坏的。
  * 所以这里只做"比例 × 行程 + 夹紧"，与 `joyVectorOf` 的死区无关。
  */
-export function joyThumbOffset(dx: number, dy: number, radius: number): { x: number; y: number } {
+export function joyThumbOffset(dx: number, dy: number, radius: number, travelPx?: number): { x: number; y: number } {
   const r = Number.isFinite(radius) && radius > 0 ? radius : 0;
   const len = Math.hypot(dx, dy);
   if (!r || !Number.isFinite(len) || len <= 0) return { x: 0, y: 0 };
-  const k = (Math.min(1, len / r) / len) * JOY_THUMB_TRAVEL_PX;
+  /* 🕹 §15：行程可随底盘缩（不给 ⇒ 设计值 30，老调用方逐位不变） */
+  const travel = Number.isFinite(Number(travelPx)) && Number(travelPx) >= 0 ? Number(travelPx) : JOY_THUMB_TRAVEL_PX;
+  const k = (Math.min(1, len / r) / len) * travel;
   return { x: dx * k, y: dy * k };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 二·五、**参考系**：屏幕向量 ⇄ 世界方向（唯一换算处；研究 §13）
+ * ══════════════════════════════════════════════════════════════════
+ * 2026-10-04 第五轮机主验收：「**移动时，角色移动方向和屏幕移动方向不一样**」。查下来有两件事，
+ * 都在这一个小节里收口：
+ *   ① 🔴 **预走线/箭头画的角与真实位移差 90°**（真因，可数）：虚线那一条是**沿 `+x`（右）画的**
+ *      （`.ws-aim__dash{left:17px;width:34px;height:2px}`、箭头 `clip-path:polygon(0 0,100% 50%,0 100%)`），
+ *      而 JS 写进去的是 `headingDeg` —— 一个**罗盘**角（0 = 屏幕上方，自检 ⑩h2 钉着"向右推 = 90"）。
+ *      `rotate(θ)` 把 `+x` 转到 θ ⇒ 画出来的是 `90 + heading`：**恒差 +90°**。
+ *      所以基准差只有一处、且必须是常量：`JOY_AIM_BASE_DEG`（朝向箭头是**沿 `-y`（上）画的**
+ *      —— `clip-path:polygon(50% 2%,...)` —— 所以它不减，两个元素本来就该用两个式子）。
+ *   ② **地图一转（bearing ≠ 0）方向就错**：标尺（`joyScale`，宿主用 `project`/`unproject` 量的局部雅可比）
+ *      冻结在**标定那一刻**的相机上，而推杆向量是**当前屏幕**上的。两者之间差一个 `Δbearing`
+ *      —— 不转过来，屏幕上"往上推"就会被当成"标定那一刻的上"。（相机 bearing 由**用户手势**改，
+ *      **不跟角色朝向**：这就是我们选的参考系模型 ①「相机相对输入」，研究 §13.2。）
+ * 🔴 这里**没有一行投影数学**（红线照旧）：世界位移仍然走标尺（库自己的 `project`/`unproject`），
+ *    本小节只做**平面内转一个角**（Δbearing）与**罗盘/屏幕角互换**，三处都不碰经纬度。
+ */
+/** 预走线容器**不转**的时候指向哪（度，屏幕 12 点 = 0、顺时针）：沿 `+x` ⇒ 90（§13.4） */
+export const JOY_AIM_BASE_DEG = 90;
+/** `depthGain` 的上限（= 1/cos(75.5°) ≈ 4）：坏输入顶不破它（§14） */
+export const JOY_DEPTH_GAIN_MAX = 4;
+
+/** 参考系（标定那一刻 vs 现在；**只有这两个数**决定要不要转） */
+export interface JoyFrame {
+  /** 标定那一刻的相机 bearing（度）——标尺坐标系就架在它上面 */
+  bearing0: number;
+  /** 当前相机 bearing（度）——由宿主在 `rotate` 时更新（不进每帧循环） */
+  bearingNow: number;
+}
+/** 归一化：非有限一律 0（"量不到就当作正北" —— 与 `joyCtxOf` 同一条纪律） */
+export function joyFrameOf(x: Partial<JoyFrame> | null | undefined): JoyFrame {
+  const n = (v: unknown): number => {
+    const f = Number(v);
+    return Number.isFinite(f) ? f : 0;
+  };
+  return x ? { bearing0: n(x.bearing0), bearingNow: n(x.bearingNow) } : { bearing0: 0, bearingNow: 0 };
+}
+/* 🧭 **当前参考系**（宿主一处写、驱动一处读）——与 `roamStore` 同款的单例口径：
+   为什么不走 props：`WsJoystick.vue` 的 `defineProps`/`ctx` 两行被判据 ⑩k11 **逐字钉着**
+   （"组件自己不算世界尺度"那条红线），所以参考系不塞进那个对象字面量，改由宿主写在这里。
+   🔴 纯函数（`joyMotionStep`/`joyFrameVectorOf`）**永远用参数**，不读这个单例 ——
+   自检才能在同一个进程里逐个 bearing 钉字面量（不互相污染）。 */
+let joyFrameNow: JoyFrame = { bearing0: 0, bearingNow: 0 };
+let joyDepthGainNow = 1;
+/** 宿主写：`bearing0` = 标定那一刻的相机 bearing；`bearingNow` = 当前；`depthGain` 由俯角算（§14） */
+export function joySetFrame(f: Partial<JoyFrame> | null | undefined, depthGain?: number): void {
+  joyFrameNow = joyFrameOf(f);
+  const g = Number(depthGain);
+  joyDepthGainNow = Number.isFinite(g) && g > 0 ? Math.min(JOY_DEPTH_GAIN_MAX, Math.max(1, g)) : 1;
+}
+/** 读当前参考系（宿主画预走线/箭头时也要它：世界朝向 → 屏幕角） */
+export function joyFrameGet(): JoyFrame {
+  return { ...joyFrameNow };
+}
+/** 宿主**每帧只更新这一个数**（相机 bearing 变了才有效果；整数之外的分配一个都不做） */
+export function joySetBearingNow(deg: number): void {
+  const f = Number(deg);
+  if (Number.isFinite(f)) joyFrameNow = { bearing0: joyFrameNow.bearing0, bearingNow: f };
+}
+/** 当前 bearing 的**只读**读数（宿主每帧换算屏幕角用；不进任何写点预算） */
+export function joyBearingNowOf(): number {
+  return joyFrameNow.bearingNow;
+}
+/** 把**当前参考系**并进宿主给的世界尺度 —— 驱动里**唯一**一处合并（§13/§14） */
+export function joyCtxWithFrame(base: Partial<JoyCtx> | null | undefined): JoyCtxFull {
+  return joyCtxOf({
+    ...(base || {}),
+    bearing0: joyFrameNow.bearing0,
+    bearingNow: joyFrameNow.bearingNow,
+    depthGain: joyDepthGainNow,
+  });
+}
+/**
+ * **屏幕向量 → 标尺坐标系**（唯一一处把 bearing 算进来的地方）。
+ * 推导（§13.3）：bearing = β 时"屏幕正上方"对应罗盘方向 β ⇒ 屏幕上朝向 `h` 的一次推 = 罗盘方向
+ * `β_now + h`；而标尺是在 `β0` 那一刻量的，同一个罗盘方向在标尺里是 `β_now + h - β0`
+ * ⇒ 把当前屏幕向量**顺时针转 `Δβ = β_now - β0`** 即可（屏幕坐标 y 向下 ⇒ 顺时针为正，与 CSS `rotate` 同号）。
+ * ⚠️ `Δβ = 0`（不转地图，或老调用方不给这两个字段）⇒ **逐位返回原向量**（既有 251 条判据一字不变）。
+ */
+export function joyFrameVectorOf(v: JoyVector, f: JoyFrame | null | undefined): JoyVector {
+  const g = joyFrameOf(f);
+  const d = ((g.bearingNow - g.bearing0) * Math.PI) / 180;
+  if (!v || !Number.isFinite(d) || d === 0) return v;
+  const c = Math.cos(d);
+  const s = Math.sin(d);
+  return { x: v.x * c - v.y * s, y: v.x * s + v.y * c, mag: v.mag };
+}
+/** 归一化到 [0, 360)——罗盘角与屏幕角共用这一个口径 */
+export function joyNormDeg(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  const m = deg % 360;
+  return m < 0 ? m + 360 : m;
+}
+/**
+ * 标尺坐标系里的速度 → **世界（罗盘）朝向**（度，正北 0、顺时针）。
+ * 为什么要 `+bearing0`：`atan2(vx,-vy)` 给的是**标尺坐标系**里的角；标尺的"上"在罗盘上是 `β0`
+ * （`bearing = -18` 时，屏幕上推上去其实朝北偏西 18° —— 存进 `roamStore` 的那个朝向必须是**罗盘**角，
+ * 否则"朝向"这件事出了这一屏（小地图/载具/游戏距离）就是错的）。
+ */
+export function joyWorldHeadingOf(vx: number, vy: number, bearing0: number): number {
+  const b = Number.isFinite(Number(bearing0)) ? Number(bearing0) : 0;
+  return joyNormDeg((Math.atan2(vx, -vy) * 180) / Math.PI + b);
+}
+/** **世界朝向 → 当前屏幕上该画的角度**（度，屏幕 12 点 = 0、顺时针）—— 与 `joyWorldHeadingOf` 互为逆 */
+export function joyScreenHeadingOf(worldDeg: number, bearingNow: number): number {
+  const b = Number.isFinite(Number(bearingNow)) ? Number(bearingNow) : 0;
+  return joyNormDeg(Number(worldDeg) - b);
+}
+/**
+ * 🎯 **预走线容器该写的 `rotate`**（唯一一处减掉 `JOY_AIM_BASE_DEG`）。
+ * 为什么是减：`rotate(θ)` 把沿 `+x` 画的那条线转到"屏幕角 θ"；要它指向 `h`，就要 `θ = h - 90`。
+ * 朝向箭头（沿 `-y` 画）**不减** —— 它直接用 `h`。两者共用同一个 `h`（宿主里那个 `joyFaceDeg`），
+ * 所以"线、箭头、真实位移"从此是同一个角。
+ */
+export function joyAimRotateDegOf(screenHeadingDeg: number): number {
+  return joyNormDeg(Number(screenHeadingDeg) - JOY_AIM_BASE_DEG);
+}
+
+/* ── §14 **俯角带来的竖直压缩**（世界速度各向同性的那一半）─────────────────────────
+ * 事实（自证在本仓既有公式里）：`bldPxPerMeter = sin(pitch)/mpp` 是本仓**已验证**的"1 米楼高 = 多少像素"。
+ * 用同一套针孔相机（相机到画面中心距离固定 ⇒ 抬俯角不改变中心尺度）解地面雅可比：
+ *   横向 1px = `mpp` 米；**纵向（朝/背地平线）1px = `mpp / cos(pitch)` 米**。
+ * 64° ⇒ 1/cos64° = **2.2812**（不是 `1/sin64° ≈ 1.11` —— 旧注释那一版把楼高公式的 sin 用错了地方）。
+ * 后果（旧行为）：满推速度是按**各向同性**的 `mpp` 换算成 px/s 的，于是"往屏幕上方推"在世界里
+ * 走的是 13.9 × 2.2812 ≈ **31.7 m/s（114 km/h）**，"往右推"才是 13.9 m/s —— 屏幕上看一样快，
+ * 世界里差 2.28 倍（走出来的距离、`距中心 N m` 的读数全都跟着错）。
+ * 修法：把 px/s 目标按**这次推的方向**除以下面这个增益 ⇒ `|世界速度| ≡ speedMps`，与方向无关。
+ * `depthGain = 1`（不给这个字段 / `pitch = 0`）⇒ 与旧行为**逐位相同**（既有判据不受影响）。
+ */
+/** 俯角 → 纵向增益 `1/cos(pitch)`（夹到 `[1, JOY_DEPTH_GAIN_MAX]`；非有限 ⇒ 1） */
+export function joyDepthGainOf(pitchDeg: number): number {
+  const p = Number(pitchDeg);
+  if (!Number.isFinite(p) || p <= 0) return 1;
+  const c = Math.cos((Math.min(p, 75.5) * Math.PI) / 180);
+  if (!(c > 0)) return JOY_DEPTH_GAIN_MAX;
+  return Math.min(JOY_DEPTH_GAIN_MAX, Math.max(1, 1 / c));
+}
+/** 屏幕**单位**方向 `(ux,uy)` 在这一次推里"1px 顶几倍米"（各向同性世界速度的唯一换算处，§14） */
+export function joyGroundGainOf(ux: number, uy: number, depthGain: number): number {
+  const g = Number.isFinite(Number(depthGain)) && Number(depthGain) > 0 ? Math.min(JOY_DEPTH_GAIN_MAX, Number(depthGain)) : 1;
+  const a = Number.isFinite(ux) ? ux : 0;
+  const b = Number.isFinite(uy) ? uy : 0;
+  const k = Math.hypot(a, b * g);
+  return k > 0 ? k : 1;
 }
 
 /**
@@ -209,7 +393,27 @@ export interface JoyCtx {
   speedMps: number;
   /** 🕹 推杆期间相机**拉近**多少级（0 = 不拉；正 = 拉近）——由 `JOY_ZOOM_PUSH_LEVELS` 供，这里夹到上限 */
   zoomLevels: number;
+  /**
+   * 🧭 标定那一刻的相机 bearing（度）——标尺坐标系（§13）。
+   * 🔴 **可选**（2026-10-04 第五轮，父代理复跑的 `vue-tsc` 报了 TS2739）：前四个数由宿主当 props 传进
+   * `WsJoystick.vue`，而这三个是**驱动侧**注入的（`joyCtxWithFrame()` 读模块里那份参考系）——
+   * 组件那份 `ctx: () => ({ screenW, mpp, speedMps, zoomLevels })` 是**判据 ⑩k11 逐字钉着**的四字段
+   * 字面量，不该为了类型好看往里塞它拿不到的数。所以类型上如实表达：**缺 = 没有参考系信息**，
+   * `joyCtxOf()` 给中性值 `0` ⇒ `Δβ = 0` ⇒ **逐位等于旧行为**（"缺字段"不等于"错字段"）。
+   */
+  bearing0?: number;
+  /** 🧭 当前相机 bearing（度）——宿主每帧报一次（`joySetBearingNow`）；不给 ⇒ 0（= 旧行为） */
+  bearingNow?: number;
+  /** 📐 俯角竖直增益 `1/cos(pitch)`（§14）——不给 ⇒ 1（= 旧行为） */
+  depthGain?: number;
 }
+/**
+ * `joyCtxOf()` **归一化之后**的 ctx：三个参考系字段从"可选"变成"必填"（中性值已填好）。
+ * 为什么要分成两个类型（而不是直接用 `JoyCtx`）：内部纯函数要按 `number` 用它们
+ * （`c.bearing0 + …`），`JoyCtx` 里那三个是可选的 ⇒ 在 `strictNullChecks` 下会报"可能是 undefined"
+ * —— 这个别名把"调用方可以不给"和"我这里一定拿到数"两件事分开表达（类型系统替我们守住归一化那一步）。
+ */
+export type JoyCtxFull = JoyCtx & { bearing0: number; bearingNow: number; depthGain: number };
 
 /**
  * ctx 归一化：非有限 / ≤0 一律**归 0** ⇒ 这一步什么都不走
@@ -217,7 +421,7 @@ export interface JoyCtx {
  * ⚠️ `zoomLevels` 例外：它**可以是 0**（= 不拉近），所以不能用上面那条"≤0 归 0"；
  *    非有限一律 0，其余夹进 `[0, JOY_ZOOM_MAX_LEVELS]`（坏输入顶不破上限 —— §9.2 的"上限"纪律）。
  */
-export function joyCtxOf(x: Partial<JoyCtx> | null | undefined): JoyCtx {
+export function joyCtxOf(x: Partial<JoyCtx> | null | undefined): JoyCtxFull {
   const n = (v: unknown): number => {
     const f = Number(v);
     return Number.isFinite(f) && f > 0 ? f : 0;
@@ -227,9 +431,25 @@ export function joyCtxOf(x: Partial<JoyCtx> | null | undefined): JoyCtx {
     if (!Number.isFinite(f) || f <= 0) return 0;
     return Math.min(JOY_ZOOM_MAX_LEVELS, f);
   };
+  /* 🧭 bearing 是**有符号**的（可以 -180..180）⇒ 不能用上面那条"≤0 归 0"；非有限才归 0（§13） */
+  const bg = (v: unknown): number => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  /* 📐 增益的下界是 **1**（俯角 0 = 不压缩）：坏输入（NaN/∞/负数）一律回到 1（§14） */
+  const dg = (v: unknown): number => {
+    const f = Number(v);
+    if (!Number.isFinite(f) || f <= 0) return 1;
+    return Math.min(JOY_DEPTH_GAIN_MAX, Math.max(1, f));
+  };
   return x
-    ? { screenW: n(x.screenW), mpp: n(x.mpp), speedMps: n(x.speedMps), zoomLevels: zl(x.zoomLevels) }
-    : { screenW: 0, mpp: 0, speedMps: 0, zoomLevels: 0 };
+    ? {
+        screenW: n(x.screenW),
+        mpp: n(x.mpp),
+        speedMps: n(x.speedMps),
+        zoomLevels: zl(x.zoomLevels),
+        bearing0: bg(x.bearing0),
+        bearingNow: bg(x.bearingNow),
+        depthGain: dg(x.depthGain),
+      }
+    : { screenW: 0, mpp: 0, speedMps: 0, zoomLevels: 0, bearing0: 0, bearingNow: 0, depthGain: 1 };
 }
 
 /**
@@ -245,7 +465,11 @@ export function joyTargetVelocity(v: JoyVector, ctx: JoyCtx): { dx: number; dy: 
   if (!(c.mpp > 0) || !(unit > 0) || !(v.mag > 0)) return { dx: 0, dy: 0 };
   /* 世界速度（m/s）：满推速度与上限取小，再乘推出量（夹到 1） */
   const sp = Math.min(c.speedMps, JOY_SPEED_MAX_MPS) * Math.min(1, Math.abs(v.mag));
-  const k = sp / c.mpp / unit; // (m/s) ÷ (m/px) ÷ |方向| ⇒ 每单位分量的 px/s
+  /* 📐 §14：这一推的**方向**决定"1 屏幕 px 顶几倍米"（纵向 1px = 横向 1px 的 `depthGain` 倍）——
+     除它一下，`|世界位移| = speedMps × 时间` 才与方向无关（旧行为里"往上推"快 2.28 倍）。
+     `depthGain = 1` ⇒ `gg ≡ 1` ⇒ 与旧公式逐位相同。 */
+  const gg = joyGroundGainOf(v.x / unit, v.y / unit, c.depthGain);
+  const k = sp / c.mpp / unit / gg; // (m/s) ÷ (m/px) ÷ |方向| ÷ 方向增益 ⇒ 每单位分量的 px/s
   return { dx: v.x * k, dy: v.y * k };
 }
 
@@ -441,8 +665,13 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
   const dt = clampDt(dtMs);
   const s = dt / 1000;
   const c = joyCtxOf(ctx);
-  /* 目标速度（px/s）——由**世界速度档** ÷ 米每像素 得来（`joyTargetVelocity` 是唯一换算处） */
-  const t = joyTargetVelocity(v, c);
+  /* 🧭 §13：**屏幕向量 → 标尺坐标系**（唯一一处）。地图被用户转过（`bearingNow ≠ bearing0`）时，
+     同一个"屏幕上往上推"对应的世界方向就变了 —— 不转这一步，方向就是错的。
+     `Δβ = 0` ⇒ 逐位返回原向量（既有判据一字不变）。 */
+  const fv = joyFrameVectorOf(v, c);
+  /* 目标速度（px/s）——由**世界速度档** ÷ 米每像素 得来（`joyTargetVelocity` 是唯一换算处；
+     它内部再按 §14 的纵向增益把"世界速度各向同性"这一条补齐） */
+  const t = joyTargetVelocity(fv, c);
   const pushing = !!(v && v.mag > 0);
   const bad = !Number.isFinite(m.vx + m.vy + m.px + m.py + m.cx + m.cy + m.zo);
   if (bad) return { d: { dx: 0, dy: 0 }, move: createJoyMotion(), moving: false, centering: false };
@@ -518,7 +747,7 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
   /* ④ 朝向 + 踏步：满速 = 世界速度 ÷ 米每像素（没有尺子 ⇒ 比例恒 0，不动画） */
   const vmax = c.mpp > 0 ? Math.min(c.speedMps, JOY_SPEED_MAX_MPS) / c.mpp : 0;
   const speedRatio = vmax > 0 ? Math.min(1, speed / vmax) : 0;
-  const headingDeg = vmax > 0 && speed > vmax * 0.01 ? (Math.atan2(vx, -vy) * 180) / Math.PI : m.headingDeg;
+  const headingDeg = vmax > 0 && speed > vmax * 0.01 ? joyWorldHeadingOf(vx, vy, c.bearing0) : m.headingDeg;
   const stepPhase = m.stepPhase + (speedRatio > 0 ? s * JOY_STEP_HZ * speedRatio : 0);
   const move: JoyMotion = {
     vx,
@@ -527,7 +756,9 @@ export function joyMotionStep(m: JoyMotion, v: JoyVector, ctx: JoyCtx, dtMs: num
     py,
     cx,
     cy,
-    headingDeg: headingDeg < 0 ? headingDeg + 360 : headingDeg,
+    /* 🧭 §13：存的是**世界（罗盘）朝向**（= 标尺角 + `bearing0`）。宿主要在**当前屏幕**上画它，
+       得再减掉 `bearingNow`（`joyScreenHeadingOf`）—— 一步都不许各自算。 */
+    headingDeg: joyNormDeg(headingDeg),
     speedRatio,
     stepPhase,
     zo,
@@ -681,7 +912,9 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
     last = t;
     frames += 1;
     const before = move;
-    const r = joyMotionStep(move, v, deps.ctx(), dt);
+    /* 🧭 `joyCtxWithFrame` = 宿主那份世界尺度 + **当前参考系**（§13 的 Δbearing / §14 的俯角增益）——
+       驱动里唯一一处合并；不并的话"地图被用户转过之后"方向就是错的 */
+    const r = joyMotionStep(move, v, joyCtxWithFrame(deps.ctx()), dt);
     move = r.move;
     /* 🔴 回调判据 = **相机动了 _或_ 角色动了**（两条缺一不可）。
        2026-10-03 第二轮补的那一半：世界速度小（z16.4 上满推 8.8 px/s），相机头 ~2 秒会被死区按在原地
@@ -1023,7 +1256,7 @@ export interface JoyHome {
   fy: number;
 }
 /** 容器里**碰不得**的三块（HUD 让位带 / 📱 / 🔬）——容器尺寸决定，所以是函数不是常量表 */
-export function joyHomeBoxesOf(w: number, h: number): JoyHomeBox[] {
+export function joyHomeBoxesOf(w: number, h: number, basePx?: number): JoyHomeBox[] {
   const W = Number.isFinite(w) && w > 0 ? w : 0;
   const H = Number.isFinite(h) && h > 0 ? h : 0;
   if (!W || !H) return [];
@@ -1035,11 +1268,11 @@ export function joyHomeBoxesOf(w: number, h: number): JoyHomeBox[] {
   ];
 }
 /** 默认的家（与现行 CSS 逐字一致：左下角、`JOY_INSET_PX` 边距）——`resolve` 放不下时也回这里 */
-export function joyHomeDefaultOf(w: number, h: number): { cx: number; cy: number } | null {
+export function joyHomeDefaultOf(w: number, h: number, basePx?: number): { cx: number; cy: number } | null {
   const W = Number.isFinite(w) && w > 0 ? w : 0;
   const H = Number.isFinite(h) && h > 0 ? h : 0;
   if (!W || !H) return null;
-  const r = JOY_BASE_PX / 2;
+  const r = (Number.isFinite(Number(basePx)) && Number(basePx) > 0 ? Number(basePx) : JOY_BASE_PX) / 2;
   return { cx: JOY_INSET_PX + r, cy: H - JOY_INSET_PX - r };
 }
 /**
@@ -1049,11 +1282,11 @@ export function joyHomeDefaultOf(w: number, h: number): { cx: number; cy: number
  * 为什么是"往上推"而不是"左右推"：三块禁区全部贴在**下缘**（HUD / 📱 / 🔬），往上推一次就走开，
  * 而且"拇指自然落点是下半屏"这件事不需要被破坏 —— 家仍然在够得着的地方。
  */
-export function joyHomeResolve(w: number, h: number, cx: number, cy: number): { cx: number; cy: number } | null {
+export function joyHomeResolve(w: number, h: number, cx: number, cy: number, basePx?: number): { cx: number; cy: number } | null {
   const W = Number.isFinite(w) && w > 0 ? w : 0;
   const H = Number.isFinite(h) && h > 0 ? h : 0;
   if (!W || !H) return null;
-  const r = JOY_BASE_PX / 2;
+  const r = (Number.isFinite(Number(basePx)) && Number(basePx) > 0 ? Number(basePx) : JOY_BASE_PX) / 2;
   const lo = JOY_INSET_PX + r;
   const hiX = W - lo;
   const hiY = H - lo;
@@ -1061,7 +1294,7 @@ export function joyHomeResolve(w: number, h: number, cx: number, cy: number): { 
   const clamp = (v: number, a: number, b: number): number => (Number.isFinite(v) ? Math.max(a, Math.min(b, v)) : a);
   let x = clamp(cx, lo, hiX);
   let y = clamp(cy, lo, hiY);
-  const boxes = joyHomeBoxesOf(W, H);
+  const boxes = joyHomeBoxesOf(W, H, basePx);
   for (let pass = 0; pass < 4; pass++) {
     let hit = false;
     for (const b of boxes) {
@@ -1081,15 +1314,15 @@ export function joyHomeResolve(w: number, h: number, cx: number, cy: number): { 
  * 家的最终裁决（宿主只调这一个）：**有记忆 ⇒ 先用它**（归一化 × 当前容器）、**放不下/没有/坏数据 ⇒ 默认左下**。
  * 返回的一定是"夹过的、不与三块禁区相交的"中心；容器量不出来 ⇒ `null`（宿主动不了它 —— 与"量不到尺子就站住"同一纪律）。
  */
-export function joyHomeOf(w: number, h: number, stored: JoyHome | null): { cx: number; cy: number } | null {
-  const def = joyHomeDefaultOf(w, h);
+export function joyHomeOf(w: number, h: number, stored: JoyHome | null, basePx?: number): { cx: number; cy: number } | null {
+  const def = joyHomeDefaultOf(w, h, basePx);
   if (!def) return null;
-  if (!stored) return joyHomeResolve(w, h, def.cx, def.cy) || def;
-  return joyHomeResolve(w, h, stored.fx * w, stored.fy * h) || joyHomeResolve(w, h, def.cx, def.cy) || def;
+  if (!stored) return joyHomeResolve(w, h, def.cx, def.cy, basePx) || def;
+  return joyHomeResolve(w, h, stored.fx * w, stored.fy * h, basePx) || joyHomeResolve(w, h, def.cx, def.cy, basePx) || def;
 }
 /** 底盘 CSS 锚在**左下角**（`left/bottom: var(--ws-joy-inset)`）⇒ 家到"默认位置"的差就是那**唯一一个** `translate3d` */
-export function joyHomeOffsetOf(w: number, h: number, home: { cx: number; cy: number } | null): { dx: number; dy: number } {
-  const def = joyHomeDefaultOf(w, h);
+export function joyHomeOffsetOf(w: number, h: number, home: { cx: number; cy: number } | null, basePx?: number): { dx: number; dy: number } {
+  const def = joyHomeDefaultOf(w, h, basePx);
   if (!def || !home) return { dx: 0, dy: 0 };
   return { dx: home.cx - def.cx, dy: home.cy - def.cy };
 }

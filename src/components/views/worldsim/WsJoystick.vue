@@ -47,10 +47,13 @@
     JOY_MODE_NOTE,
     ROAM_NOTE,
     createJoyDriver,
+    joyBasePxOf,
     joyHoldDecide,
     joyHomeOf,
     joyHomeOffsetOf,
     joyThumbOffset,
+    joyThumbPxOf,
+    joyThumbTravelPxOf,
     joyVectorFromPointer,
     readJoyHome,
     writeJoyHome,
@@ -102,6 +105,8 @@
    *   转屏/改尺寸的代价：这一次按压的方向手感偏一点，下一次按下自动校准（可接受，且不改整体布局）。
    */
   let box = { cx: 0, cy: 0, radius: 0 };
+  /** 🕹 当前底盘直径（px，§15：按容器高度收；量不到 = 设计值 112）——行程与家都用它 */
+  let basePx = 0;
   /** 这一次按压属于哪根手指（多指：第二根手指碰到摇杆不许把第一根的状态顶掉） */
   let pid = -1;
   /**
@@ -142,9 +147,16 @@
     const w = hostEl?.clientWidth || 0;
     const h = hostEl?.clientHeight || 0;
     if (!w || !h) return;                     // 量不到容器 ⇒ 保持 CSS 默认位置（宁可不动，也不编一个坐标）
-    home = joyHomeOf(w, h, homeStored);
-    const o = joyHomeOffsetOf(w, h, home);
+    /* 🕹 §15：底盘尺寸**随容器高度收**（`16vh`，夹 [76,112]）—— 尺寸的唯一真源在
+       `wsJoystick.ts`，这里只把结果拿去算家与行程（CSS 变量由宿主用同一个函数写）。 */
+    basePx = joyBasePxOf(h);
+    home = joyHomeOf(w, h, homeStored, basePx);
+    const o = joyHomeOffsetOf(w, h, home, basePx);
     el.style.transform = `translate3d(${o.dx.toFixed(2)}px, ${o.dy.toFixed(2)}px, 0)`;
+  }
+  /** 杆头行程（px）——由**当前**底盘/杆头算出（§15；老路径量不到底盘 ⇒ 设计值 30） */
+  function travelNow(): number {
+    return joyThumbTravelPxOf(basePx, joyThumbPxOf(basePx));
   }
 
   /** 长按计时结束（或被移动取消）——判定全在纯函数 `joyHoldDecide()` 里，这里只负责"做" */
@@ -160,7 +172,7 @@
     if (id === -1 || !hostEl) return;
     const r = hostEl.getBoundingClientRect();  // 强制布局：**只在搬家这一下发一次**（不是每帧）
     if (!(r.width > 0 && r.height > 0)) return;
-    const want = joyHomeOf(r.width, r.height, { fx: (holdX - r.left) / r.width, fy: (holdY - r.top) / r.height });
+    const want = joyHomeOf(r.width, r.height, { fx: (holdX - r.left) / r.width, fy: (holdY - r.top) / r.height }, joyBasePxOf(r.height));
     if (!want) return;                         // 放不下 ⇒ 什么都不做（绝不把摇杆搬到屏幕外）
     homeStored = { fx: want.cx / r.width, fy: want.cy / r.height };
     writeJoyHome(homeStored);                  // **记住**：下次进这一屏还在那儿
@@ -231,6 +243,8 @@
     screenW = hostEl?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 0) || 0;
     applyHome();
     box = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, radius: r.width / 2 };
+    /* 🕹 §15：`applyHome()` 刚量过容器高度 ⇒ 顺手把底盘尺寸也定下来（这一次按压本来就要读布局） */
+    basePx = joyBasePxOf(hostEl?.clientHeight || 0);
     pid = e.pointerId;
     active.value = true;
     writeThumb(0, 0);
@@ -249,7 +263,7 @@
     const v = joyVectorFromPointer(e, box);
     /* 🔴 输入路径只做两件事：① 写那**一个向量**；② 写杆头那**一个 transform**。
        相机、地图、投影一个字都不碰（它们只在 rAF 里，由 `drive` 事件带走）。 */
-    const t = joyThumbOffset(e.clientX - box.cx, e.clientY - box.cy, box.radius);
+    const t = joyThumbOffset(e.clientX - box.cx, e.clientY - box.cy, box.radius, travelNow());
     writeThumb(t.x, t.y);
     driver.setVector(v);
   }

@@ -250,7 +250,10 @@
                  切片②（2026-10-01）：给这一格加 `data-ws-affinity`（**DOM 契约**，供探针/自动化
                  读数值；App 里不许塞 `window.__*` 调试出口）—— 只有这一个属性，逻辑一行不动。 -->
             <div class="ws-aff" :title="`好感 ${affinity} / 100`" :data-ws-affinity="affinity ?? 0">
-              <span class="ws-aff__k">好感</span>
+              <!-- i18n 纪律：可见文案不许硬编码（这一格原来直接写「好感」，是 2026-10-03
+                   把自检靶子校准到 fork 之后**当场抓到的**一处真漏 —— 旧靶子打在 9 月的老克隆上，
+                   这条哨兵三周没响过）。渲染出来的字与原来逐字相同。 -->
+              <span class="ws-aff__k">{{ t("worldsim.panel.affinity") }}</span>
               <span class="ws-aff__v">{{ affinity ?? 0 }}</span>
               <span class="ws-aff__r">{{ affinityRank || "陌生" }}</span>
               <!-- 🎬 动画预算·步①「清违禁」（2026-10-02）：好感条**不再动 `width`**（布局属性，

@@ -3847,10 +3847,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                   minInView: WS_BLD_INVIEW,
                 }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
               }
-              /* 📍 2026-10-04 第六条「**就近补齐**」的参照点：**每轮 pick 取一次**（不是每帧）。
+              /* 📍 2026-10-04 第六条「**就近补齐**」的参照点 = **锚点的种子**（第七条改成锚点冻结）。
                  为什么加（机主原话）：「**保证地图上绝对有楼就行**」（他在"楼不见后还缩小了看，还是没有楼"）。
                  根因（真浏览器探针量过）：相机 38°~64° 俯角下"看得见的地面"只是一条窄带，而"每格取前 K"
                  **完全不看相机** ⇒ z16.4 那 12 栋锚点全落在窗口外、z19（放大到最大）直接是**空集**。
+                 🔴 **第七条（机主：「在我移动了角色后，角色周围就出现了楼，很诡异喵」）**：
+                 这里传的仍是**实时相机中心**，但 `store` 不再拿它当参照点 —— 它把这颗种子
+                 **落成锚点格**（与 base 同一个 `cellDeg`），**同一个格只认第一次**那个点
+                 ⇒ 同格内走动输出逐字节不变、跨格才新增、已画出去的绝不消失。
+                 ⚠️ 所以**这一行不用改**（名字与语义都在 `wsBldPickStore.BldBudgetInputLite.nearCenter` 里写清了）；
+                 宿主这边一个字都不许自己判"是不是新格"（那是编排层的状态，两页同一份）。
                  ⚠️ 与原 `centerLat` **共用这一次 `getCenter()`**（一轮一次相机读，不为了补楼多读一遍）。 */
               const centerLL = map && typeof map.getCenter === "function" ? map.getCenter() : null;
               const centerLat = centerLL ? Number(centerLL.lat) : 0;
@@ -3880,9 +3886,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                    包自报优先、读不到才退回 0.05（老包）。写死 0.01 会让换包时"格"与包对不上。 */
                 cellDeg: bldCellDegNow(),
                 minInView: WS_BLD_INVIEW,
-                /* 📍 **就近补齐**（2026-10-04 第六条）：把"离相机中心最近、又还没入选"的 10 栋
-                   追加到这批的**尾部**。它**不进冻结集**、base 一个字节都不受影响；
-                   栋数不在这里写死 —— 默认值只有 `wsBldBudget.WS_BLD_NEAR_K` 那一处。 */
+                /* 📍 **就近补齐**（2026-10-04 第六条引入；**第七条起这是"锚点的种子"**）：
+                    把"离**本格锚点**最近、又还没入选"的那几栋追加到这批的**尾部**（栋数默认
+                    `wsBldBudget.WS_BLD_NEAR_K` = 10，不在这里写死）。锚点表与补齐件冻结集都在
+                    `store` 里（跨帧、跨视野保持）—— 宿主只负责**如实把实时相机中心喂给它**。 */
                 nearCenter: centerLL ? { lng: Number(centerLL.lng), lat: Number(centerLL.lat) } : null,
               });
             };

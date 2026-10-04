@@ -130,6 +130,19 @@
  *   ② **跨 z=14 只换画法、不换集合**（档位**不进**挑选函数 ⇒ 结构上不可能换集合）；
  *   ③ 新格加载只**增加**新格的选中项，已选中的格**不重排**（格键升序 + 每格独立取前 K）。
  *
+ * ## 🆕 2026-10-04（第七条）· **参照点改成「按格冻结的锚点列表」：同格内逐字节不变、整场单调**
+ * 机主真机反馈（第六条上线之后）：「**在我移动了角色后，角色周围就出现了楼，很诡异喵**」，
+ * 并重申老口径：「**将楼的位置固定啊喵（包括名字）**」。
+ * 真因（第六条自己埋的，不是猜）：参照点接的是**每轮现读的相机中心** —— 相机跟着角色 ⇒
+ *   "最近 10 栋"每轮换一批 ⇒ 楼在他脚边凭空出现/消失。
+ * 第七条把它改成**列表**（`nearAnchors`），并把**冻结放在编排层**（`wsBldPickStore`）：
+ *   · 锚点 = 相机进过的**离线包格**（同一个 `cellDeg`）各一个，坐标 = **首次进入该格时的相机中心**；
+ *   · 锚点表**只增不删** ⇒ 同一格内走动时锚点表一个字节不变 ⇒ **输出逐字节不变**；
+ *   · 每个锚点取"离它最近、还没入选"的 `nearK` 栋，**按锚点顺序**依次追加；同一栋只入列一次（按 id 去重）；
+ *   · 另有 `nearFrozen`（各锚点"已经画出去过"的那批**引用**）：它们照样入列 ⇒
+ *     **哪怕离线包把那些格淘汰掉，已画的楼也不会消失**（整场单调）。
+ * `nearCenter` **保留** = **单锚点的特例**（老接线、"关掉就回到改动前"与影子对拍那几条逐字节性质都不动）。
+ *
  * ## 确定性（项目纪律）
  * 同一输入（视野 + 楼数据 + 三个常量 + **zoom**）⇒ **挑出来的批次逐字节可复现**：
  *   · 没有任何 `Math.random()` / `Date.now()` / 帧率 / 设备能力输入；
@@ -200,7 +213,11 @@ export const WS_BLD_MAX_DRAWN_MANY = 4000;
  *   本常量与它**同量级同出处**，只是换成"按**相机中心**算距离"（旧那条下限不读相机 ⇒ 治不了这个病）。
  *   ⚠️ 两个 10 之间**没有 import 关系**（`wsBldPickStore` → 本模块，反向就成环）⇒ 只在这里写清出处。
  *
- * 🔴 **它不进冻结集**（与 `floorAdded` 同款）：冻结/确定性管的是 base，补齐件每轮按相机中心重算。
+ * 🔴 **2026-10-04（第七条）起它进冻结集了** —— 旧口径是"不进、每轮按相机中心重算"（与 `floorAdded` 同款），
+ *   那条被机主的真机反馈推翻：「**在我移动了角色后，角色周围就出现了楼，很诡异喵**」。
+ *   真因：相机跟着角色 ⇒ 参照点每轮都在动 ⇒ "最近 10 栋"换一批 ⇒ 楼在他脚边凭空出现/消失。
+ *   现在参照点 = **按格冻结的锚点列表**（编排层 `wsBldPickStore` 持有）：同一个格**只认第一次**那个点
+ *   ⇒ 同格内走动逐字节不变、整场单调（已画出去的不再消失）。见文件头「第七条」与 `nearAnchors`。
  */
 export const WS_BLD_NEAR_K = 10;
 
@@ -250,6 +267,23 @@ export function bldTierOfZoom(zoom: unknown, prevTier?: number | null): number |
 }
 
 /**
+ * 📍 **就近补齐栋数的唯一解析处**：`undefined` / `null` / 坏值 ⇒ 默认档（`WS_BLD_NEAR_K` = 10）；
+ * 有限数 ⇒ `max(0, floor(v))`（负数 / `0` = **关闭**，与 `?bldn=0` 同款"明确的关"）。
+ *
+ * 为什么导出：编排层（`wsBldPickStore`）**只有补齐真开着的时候才该播种锚点**
+ * （"关掉"必须真的是"什么都不做"：`nearK: 0` 时连锚点表都不许长 ——
+ * 否则下一次打开时，参照点已经不是"你进这一格时的位置"了）。
+ * 而"什么叫关着"这件事**只能有一处口径** ⇒ 两边都调这个函数。
+ *
+ * @param nearK 入参原值（宿主/页面给的那个）
+ */
+export function bldNearKOf(nearK: unknown): number {
+  return nearK === undefined || nearK === null
+    ? WS_BLD_NEAR_K
+    : (Number.isFinite(Number(nearK)) ? Math.max(0, Math.floor(Number(nearK))) : WS_BLD_NEAR_K);
+}
+
+/**
  * 🏙 **K 的唯一取值口**：档位 → **每格取前几栋**。
  *
  * 🔴 2026-10-03 第五条起它是**唯一的**入口 —— 原来那个"档位 × zoom"的第二入口
@@ -269,6 +303,20 @@ export function bldTierOfZoom(zoom: unknown, prevTier?: number | null): number |
  */
 export function bldMaxDrawnOf(mode: unknown): number {
   return mode === "many" ? WS_BLD_MAX_DRAWN_MANY : WS_BLD_MAX_DRAWN;
+}
+
+/**
+ * 🧮 **离线包格边长的唯一解析处**：坏值 / 没给 ⇒ 退回老包那一个（`BLD_BUNDLE_CELL_DEG` = 0.05）。
+ *
+ * 为什么要导出：2026-10-04 第七条起**锚点也按同一张格网落格**（"相机进过的格"= 离线包格），
+ * 而编排层（`wsBldPickStore`）需要在**调用挑楼之前**就知道这个数（它得先决定"这一轮是不是新格"）。
+ * 两份各写一遍 `Number.isFinite(v) && v > 0 ? v : 0.05` 就是本项目三令五申的"两份真相"⇒ 只留这一处。
+ *
+ * @param cellDeg 宿主给**包自报**的 `index.json.cellSize`（`feed.facts().cellDeg`）
+ */
+export function bldResolvedCellDeg(cellDeg: unknown): number {
+  const v = Number(cellDeg);
+  return Number.isFinite(v) && v > 0 ? v : BLD_BUNDLE_CELL_DEG;
 }
 
 /** 每段墙固定 4 个顶点（MapLibre `fill_extrusion_bucket` 的 `prepareSegment(4, …)` + 4×`addVertex`） */
@@ -590,17 +638,43 @@ export interface BldBudgetInput<T> {
    *  ⚠️ 第五条起它是**总量**下限（**不读视野**）—— 读视野的下限会随相机变，正是机主否掉的那类口径。 */
   minInView?: number;
   /**
+   * 🆕 📍 **锚点列表**（2026-10-04 第七条「按格冻结的锚点」）—— 补齐件的参照点。
+   *
+   * 由编排层（`wsBldPickStore`）维护：**相机进过的每个离线包格一个锚点**，
+   * 坐标 = **首次进入该格时的相机中心**（此后同格内走动不再新增）。语义：
+   *   · **至少一个有限坐标** ⇒ 开启补齐：对**每个锚点**取"离它最近、又还没入选"的 `nearK` 栋，
+   *     **按锚点顺序**依次追加；同一栋只入列一次（按 id 去重，排序键仍是「距离升序 → id 升序」）；
+   *   · **空数组 / 没给 / `null`** ⇒ 老口径（不补、判词一字不加）；
+   *   · **里有任何一个不是有限坐标** ⇒ **数不出来**：判词明写原因，**一栋都不补**
+   *     （与单锚点那条逐字同判：不许拿 0 冒充"补了 0 栋"，也不许"跳坏的、用好的"偷偷继续）。
+   *
+   * ⚠️ 它**只进补齐件**：base（每格静态前 K / 排序 / 两个代价预算 / 总量下限）一个字节都不读它。
+   */
+  nearAnchors?: ReadonlyArray<{ lng: number; lat: number }> | null;
+  /**
+   * 🔒 **各锚点的补齐件冻结集**（与 `nearAnchors` **一一对应、同序**）——
+   * 每个锚点"**已经画出去过、必须保住**"的那批要素**引用**（编排层持有，不拷）。
+   *
+   * 规则：它们与该锚点"最近、还没入选"的那批**一起**按「距离升序 → id 升序」入列 ⇒
+   *   **哪怕离线包把那些格淘汰掉（它们已经不在 `features` 里了），也照样画得出来**（整场单调）。
+   * ⚠️ 它们**不占** `nearK` 的名额（冻结点是"保命"的，不是"新挑"的）：该锚点的入列数 =
+   *   最多 `nearK` 栋新补 + 该锚点冻结集里还没入列的那些。坏值（非数组/空）⇒ 当作没有。
+   */
+  nearFrozen?: ReadonlyArray<readonly T[] | null | undefined> | null;
+  /**
    * 🆕 📍 **相机中心**（2026-10-04 第六条「就近补齐」的参照点）—— 宿主**每轮 pick 取一次**
    * （`map.getCenter()`；页面与 App 各一处接线，**不是每帧**）。
    *
-   * 语义（三条，一条都不能少）：
-   *   · **给了四个有限数** ⇒ 开启补齐：base 之后追加"离它最近、又还没入选"的 `nearK` 栋；
+   * 🔴 **第七条起它是 `nearAnchors` 的"单锚点特例"**（老接线不走回头路，逐字节仍走同一条路）：
+   *   · **给了两个有限数** ⇒ 等价于 `nearAnchors: [{lng, lat}]`；
    *   · **没给 / `null`** ⇒ **老口径**（不补、判词一字不加）—— 与 `nearK: 0` **逐字节相同**，
    *     这是"关掉就回到改动前"的那条口子（自检两条判据都钉着：`nearK: 0` ⇔ `nearCenter: null`，
    *     以及"抠掉本功能源码的副本"逐字节对拍）；
    *   · **给了但不是有限数**（NaN / ±Infinity / 非对象）⇒ **数不出来**：判词明写原因，
    *     一栋都不补（**不许拿 0 冒充"补了 0 栋"**，也不许静默退回老口径）。
    *
+   * ⚠️ 给了 `nearAnchors`（非空）时**以它为准**，`nearCenter` 不再参与（编排层就是这么接的：
+   *    它把"相机中心"变成锚点播进表里，再把**整张表**交给纯函数）。
    * ⚠️ 它**只进补齐件**：base（每格静态前 K / 排序 / 两个代价预算 / 总量下限）一个字节都不读它。
    */
   nearCenter?: { lng: number; lat: number } | null;
@@ -674,16 +748,37 @@ export interface BldBudgetStats {
   /** 为了凑够下限而**破例**补进来的栋数（0 = 没破例） */
   floorAdded: number;
   /**
-   * 🆕 📍 **就近补齐补了几栋**（本次，有限整数；关掉/没给相机中心 = 0）。
+   * 🆕 📍 **本轮用了几个锚点**（有限整数；关掉/没给/空表 = 0）。
+   * ⚠️ 三态：**数不出来**时它也是 0（一个锚点都没用上），而**判词**里写着"数不出来（原因）"。
+   */
+  nearAnchors: number;
+  /**
+   * 🆕 📍 **就近补齐补了几栋**（本次，有限整数；关掉/没给锚点 = 0）。
+   * 口径：**本轮真的入了列的**（= 各锚点之和，见 `nearAddedPerAnchor`）——**含**冻结集还原的那部分
+   * （它们是这一轮真的又画出来的），其中"靠冻结保住"的栋数单独记在 `nearRestored`。
    * ⚠️ 它与 `floorAdded` **不是一回事**：`floorAdded` 凑的是"总量下限"（不读相机），
-   *    它凑的是"**屏幕上得有楼**"（读相机中心，米制距离排序）——两个数各自如实报，不许合并。
-   * ⚠️ 三态：**数不出来**时（相机中心给了但坏了）它仍是 0，而**判词**里写着"数不出来（原因）"
+   *    它凑的是"**屏幕上得有楼**"（读锚点，米制距离排序）——两个数各自如实报，不许合并。
+   * ⚠️ 三态：**数不出来**时（锚点里有坏值）它仍是 0，而**判词**里写着"数不出来（原因）"
    *    （不许拿 0 冒充"量过了，附近没有"）。
    */
   nearAdded: number;
   /**
+   * 🆕 🔒 **其中靠冻结集保住的栋数**（0 = 这一轮没有楼要保 —— 正常情况）。
+   * 它 > 0 意味着：那些楼**已经不在仓库里了**（离线包把格淘汰了），是编排层手里那份引用把它们画回来的。
+   * ⇒ "**已画出去的楼不许再消失**"这条就靠它可数（判词里也会念）。
+   */
+  nearRestored: number;
+  /**
+   * 🆕 📍 **每个锚点这一轮补了几栋**（与 `nearAnchors` **一一对应、同序**；关掉/数不出来 = `[]`）。
+   * 为什么要有它：编排层（`wsBldPickStore`）要**按锚点把补齐件冻下来**（"锚点 → 那批要素"），
+   * 而它是唯一能切开"尾部那一段"的信息（补齐件照口径**追加在结果尾部、按锚点顺序**）。
+   * ⚠️ HUD **不念**它（人读的那句在 `why` 里）；它是给编排/自检用的可数事实。
+   */
+  nearAddedPerAnchor: number[];
+  /**
    * 🆕 补进去那批里**最远**一栋的地面米数（四舍五入）；没补 = `null`。
-   * ⚠️ `null` 有两种含义，判词里会分开写：① 关掉/数量为 0（已量）；② 数不出来（给了坏中心）。
+   * 多锚点时 = **所有锚点里最远的那个**（如实，不做平均）。
+   * ⚠️ `null` 有两种含义，判词里会分开写：① 关掉/数量为 0（已量）；② 数不出来（锚点里有坏值）。
    */
   nearDistM: number | null;
   /**
@@ -734,9 +829,9 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
   const maxDrawn = Number.isFinite(input.maxDrawn as number)
     ? Math.max(0, Math.floor(Number(input.maxDrawn)))
     : WS_BLD_MAX_DRAWN;
-  /* 离线包格边长：坏值/没给 ⇒ 退回老包那一个（`BLD_BUNDLE_CELL_DEG`，与取数管道同一份常量） */
-  const cellDegIn = Number(input.cellDeg);
-  const cellDeg = Number.isFinite(cellDegIn) && cellDegIn > 0 ? cellDegIn : BLD_BUNDLE_CELL_DEG;
+  /* 离线包格边长：坏值/没给 ⇒ 退回老包那一个（`BLD_BUNDLE_CELL_DEG`，与取数管道同一份常量）。
+     ⚠️ 解析只有 `bldResolvedCellDeg` 那一处（第七条起**锚点落格**也要用它 —— 两张网必须同一张）。 */
+  const cellDeg = bldResolvedCellDeg(input.cellDeg);
   const minInView = Number.isFinite(input.minInView as number) ? Math.max(0, Number(input.minInView)) : 0;
   const b = input.bounds;
   /* 🌆 屏幕量的那把尺子（**不投影**）：米每 CSS 像素 + 1 米楼高几像素。
@@ -754,7 +849,12 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     px2: 0, verts: 0, px2Budget: budgetPx2, vertsBudget: budgetVerts,
     px2Bound: false, vertsBound: false, countBound: false, cellsCapped: 0, maxDrawn,
     cellDeg, gateDropped: 0, staticMpp: mpp,
-    minInView, floorAdded: 0, nearAdded: 0, nearDistM: null, overBudget: false, why: "",
+    minInView, floorAdded: 0,
+    /* 📍 补齐件那几个数**在字面量里就有初值**（第七条起多了 `nearAnchors` / `nearRestored` /
+       `nearAddedPerAnchor`）：① 关掉时逐字节等于改动前；② 影子对拍（把补齐件整段抠掉再编译）
+       两边都带这几个字段 ⇒ 对拍比的仍是"同一份形状"。 */
+    nearAnchors: 0, nearAdded: 0, nearRestored: 0, nearAddedPerAnchor: [], nearDistM: null,
+    overBudget: false, why: "",
   };
 
   /* 视野只用来**如实数**（不参与挑选）：给了且是四个有限数 ⇒ `viewCounted = true`。
@@ -898,22 +998,29 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
       : " · 视野计数：数不出来（没给视野）") +
     (stats.noRing ? " · 无外环 " + stats.noRing : "");
 
-  /* ══════════════ 🆕 📍 **就近补齐**（2026-10-04 第六条；机主「保证地图上绝对有楼」）══════════════
+  /* ══════════════ 🆕 📍 **就近补齐**（2026-10-04 第六条；第七条改成「锚点列表」）══════════════
      上面那些**一个字都不改**：base（每格静态前 K → 格内全序 → 两个代价预算 → 总量下限）先照旧算完，
-     这里只做一件事 —— 把「**离相机中心最近、又还没入选**」的 `nearK` 栋**追加到结果尾部**。
+     这里只做一件事 —— 把「**离锚点最近、又还没入选**」的那些栋**追加到结果尾部**。
 
      为什么必须有它（父代理真浏览器探针量过的事实，不是推测）：相机 38°~64° 俯角下"看得见的地面"
      只是**一条窄带**，而上面那套挑选（静态重要度）**完全不看相机** ⇒ 挑出来的那 12 栋锚点
      在 z16.4 实测**全落在 932×557 窗口外**；z19（放大到最大）更直接给出**空集**（0 栋 ⇒ `setData` 空）。
      机主看到的就是"楼没了"，缩回去也还是看不到。
 
-     🔴 三条纪律（缺一条就不是机主要的那个口径）：
-       ① **不进冻结集**：它读相机 ⇒ 每轮重算（与 `floorAdded` 同款"补齐件永不冻结"）；
-          base 那一段仍逐字节可复现（同数据 + 同用户档位 ⇒ 同一批，见第五条）；
+     🔴 2026-10-04 **第七条**（机主真机反馈：「**在我移动了角色后，角色周围就出现了楼，很诡异喵**」）：
+        第六条把参照点接成了**每轮现读的相机中心** —— 相机跟着角色 ⇒ "最近 10 栋"每轮换一批
+        ⇒ 楼在他脚边凭空冒出来。现在参照点是**锚点列表**（`nearAnchors`，编排层按格冻结、只增不删）：
+        **同格内走动 = 同一张锚点表 = 逐字节同一批输出**；跨格才新增，而且**已画出去的绝不消失**。
+
+     🔴 四条纪律（缺一条就不是机主要的那两个口径）：
+       ① **锚点顺序 = 编排层的首次出现序**：纯函数这一层**只读、不筛、不排序**（不按距离给锚点重排）——
+          否则"同格不变"就又要看相机了；
        ② **不调 `map.project`**：距离是**纯算术**的地面米数（同一栋楼的静态量早就记忆在 WeakMap 里，
-          分格点 `cLng/cLat` 就是它的代表点）—— 与"与相机无关"那条红线的唯一交汇点只是 `nearCenter` 这一个点；
-       ③ **不静默、不冒充**：补了几栋 / 最远多少米如实报；数不出来（中心给了但坏了）就写"数不出来（原因）"，
-          **不许写 0 冒充**；`nearK: 0` 或没给中心 ⇒ **判词一字不加**（逐字段回到改动前）。
+          分格点 `cLng/cLat` 就是它的代表点）—— 与"与相机无关"那条红线的唯一交汇点只是这几个锚点；
+       ③ **`nearFrozen`（各锚点"已经画出去过"的那批引用）照样入列** ⇒ 离线包把那些格淘汰掉也不消失；
+       ④ **不静默、不冒充**：补了几栋 / 最远多少米 / 其中几栋靠冻结保住，全部如实报；
+          数不出来（锚点里有坏值）就写"数不出来（原因）"，**不许写 0 冒充**；
+          `nearK: 0` 或没给锚点 ⇒ **判词一字不加**（逐字段回到改动前）。
 
      ⚠️ 排序键 = 「距离升序 → id 升序」：距离相同时靠 id 定序 ⇒ 不存在"等值不定序"（同一条确定性纪律）。
      ⚠️ 它是**破例**：补齐件直接入列、不过两个代价预算（否则"绝对有楼"会被预算一口否掉）——
@@ -923,62 +1030,137 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
          抠掉之后跑 `nearK: 0` 必须与带本段的 `nearK: 0` **逐字节相同** —— 那就是"关掉 = 回到改动前"的机器证明。
          ⇒ 本段之外**不许**依赖段内任何声明；段内也不许声明段外要用的东西。）┄┄┄ */
   {
-    const nearKIn = input.nearK;
-    const nearKOn = nearKIn === undefined || nearKIn === null
-      ? WS_BLD_NEAR_K
-      : (Number.isFinite(Number(nearKIn)) ? Math.max(0, Math.floor(Number(nearKIn))) : WS_BLD_NEAR_K);
+    /* 栋数解析**只有一处**（`bldNearKOf`；编排层播种锚点前也调它 —— 两边不可能漂） */
+    const nearKOn = bldNearKOf(input.nearK);
+    /* 锚点从哪来（**只有这一处**）：`nearAnchors`（编排层冻结的那张表，非空时以它为准）；
+       没给 / 空表 ⇒ 退回 `nearCenter` 的**单锚点特例** —— 老接线逐字节走的是下面同一条路。 */
+    const listRaw = input.nearAnchors;
+    const listGiven = Array.isArray(listRaw) && (listRaw as readonly unknown[]).length > 0;
     const nc = input.nearCenter as { lng?: unknown; lat?: unknown } | null | undefined;
     const ncGiven = !!nc && typeof nc === "object";
-    const ncLng = ncGiven ? Number((nc as { lng?: unknown }).lng) : NaN;
-    const ncLat = ncGiven ? Number((nc as { lat?: unknown }).lat) : NaN;
-    const ncOk = ncGiven && isFinite(ncLng) && isFinite(ncLat);
-    /* 三态（顺序即口径）：`nearK: 0` = 用户关掉（先说关）；没给中心 = 老口径；给了但坏 = 数不出来。 */
-    if (nearKOn > 0 && ncGiven && !ncOk) {
-      stats.why += " · 就近补齐：数不出来（相机中心不是有限数）";
-    } else if (nearKOn > 0 && ncOk) {
-      const cosLat = Math.cos((ncLat * Math.PI) / 180);
-      const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
-      const cands: Array<{ cand: Cand; i: number; d: number }> = [];
-      for (let i = 0; i < pool.length; i++) {
-        if (taken[i]) continue;                       /* 已入选的不再补（判据：补齐件 = 尚未入选的那批） */
-        const m2 = bldStaticMeasureOf(pool[i]!.f);
-        if (!m2) continue;
-        const dx = (m2.cLng - ncLng) * kx;
-        const dy = (m2.cLat - ncLat) * WS_BLD_M_PER_DEG_LAT;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (!isFinite(d)) continue;
-        cands.push({ cand: pool[i]!, i, d });
+    const raw: unknown[] = listGiven
+      ? (listRaw as readonly unknown[]).slice()
+      : (ncGiven ? [nc] : []);
+    /* 三态（顺序即口径）：`nearK: 0` = 用户关掉（先说关）；没给锚点 = 老口径；给了但坏 = 数不出来。 */
+    if (nearKOn > 0 && raw.length > 0) {
+      const anchors: Array<{ lng: number; lat: number }> = [];
+      let badN = 0;
+      for (const a of raw) {
+        const o = a as { lng?: unknown; lat?: unknown } | null | undefined;
+        const ok = !!o && typeof o === "object";
+        const lng = ok ? Number(o!.lng) : NaN;
+        const lat = ok ? Number(o!.lat) : NaN;
+        if (ok && isFinite(lng) && isFinite(lat)) anchors.push({ lng, lat }); else badN += 1;
       }
-      cands.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0)));
-      const take = Math.min(nearKOn, cands.length);
-      const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
-      let farM = 0;
-      for (let i = 0; i < take; i++) {
-        const it = cands[i]!;
-        taken[it.i] = true;
-        chosen.push(it.cand);
-        sumPx += it.cand.c.px;
-        sumV += it.cand.c.verts;
-        if (it.d > farM) farM = it.d;
+      if (badN > 0) {
+        /* 全有或全无：**只要有一个坏锚点，整条就"数不出来"**（与单锚点那条逐字同判）——
+           "跳掉坏的那个、拿好的继续补"是静默降级（本项目三令五申不许），也不许拿 0 冒充"量过了"。 */
+        stats.why += " · 就近补齐：数不出来（" +
+          (listGiven ? "锚点 " + raw.length + " 个里有 " + badN + " 个不是有限坐标" : "相机中心不是有限数") + "）";
+      } else {
+        const frozenList = input.nearFrozen;
+        const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
+        /** 已入列的 id（`""` 不算：没有 id 的要素只靠 `taken` / 对象同一性去重）——"同一栋只入列一次" */
+        const idSeen = new Set<string>();
+        for (const c of chosen) if (c.c.id !== "") idSeen.add(c.c.id);
+        const perAnchor: number[] = [];
+        let added = 0, restored = 0, farM = 0;
+        for (let ai = 0; ai < anchors.length; ai++) {
+          const a = anchors[ai]!;
+          const cosLat = Math.cos((a.lat * Math.PI) / 180);
+          const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
+          /* ① 离这个锚点最近、还没入选的候选（距离 = 纯算术米数，**一次投影都不做**） */
+          const cands: Array<{ cand: Cand; i: number; d: number }> = [];
+          for (let i = 0; i < pool.length; i++) {
+            if (taken[i]) continue;                     /* 已入选的不再补（判据：补齐件 = 尚未入选的那批） */
+            const m2 = bldStaticMeasureOf(pool[i]!.f);
+            if (!m2) continue;
+            const dx = (m2.cLng - a.lng) * kx;
+            const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (!isFinite(d)) continue;
+            cands.push({ cand: pool[i]!, i, d });
+          }
+          cands.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0)));
+          const take = Math.min(nearKOn, cands.length);
+          /* ② 该锚点的**冻结集**（已画出去过的那批**引用**）：与"最近的那批"**一起**按同一把键入列，
+                但**不占** `nearK` 的名额 —— 它们是"保命"的，不是"新挑"的。
+                ⚠️ 冻结点可能已经**不在 `features` 里**（离线包把那些格淘汰了）⇒ 它的静态量/代价**现算**
+                   （`bldStaticMeasureOf` 的 WeakMap 记忆照样命中同一个对象），`pool` 下标记 -1
+                   （`taken` 只覆盖 pool ⇒ 它们靠 `idSeen` + 对象同一性去重）。 */
+          type NearItem = { cand: Cand | null; f: T; i: number; d: number; frozen: boolean; c: BldCost; id: string };
+          const batch: NearItem[] = [];
+          const seenObj = new Set<unknown>();
+          for (let k = 0; k < take; k++) {
+            const it = cands[k]!;
+            seenObj.add(it.cand.f as unknown);
+            batch.push({ cand: it.cand, f: it.cand.f, i: it.i, d: it.d, frozen: false, c: it.cand.c, id: it.cand.c.id });
+          }
+          const fr = !Array.isArray(frozenList)
+            ? null
+            : (frozenList as ReadonlyArray<readonly T[] | null | undefined>)[ai];
+          if (Array.isArray(fr)) {
+            for (const f of fr) {
+              if (!f || typeof f !== "object" || seenObj.has(f as unknown)) continue;
+              seenObj.add(f as unknown);
+              const m2 = bldStaticMeasureOf(f);
+              if (!m2) continue;
+              const dx = (m2.cLng - a.lng) * kx;
+              const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (!isFinite(d)) continue;
+              const id = String((f as { id?: unknown }).id ?? "");
+              batch.push({ cand: null, f, i: -1, d, frozen: true, c: bldStaticScreenCost(m2, id, mpp, ppm), id });
+            }
+          }
+          /* ③ 统一定序（距离升序 → id 升序）后依次入列；同一栋**只入列一次**（按 id + 对象同一性） */
+          batch.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.id < B.id ? -1 : A.id > B.id ? 1 : 0)));
+          perAnchor.push(0);
+          for (const it of batch) {
+            if (it.i >= 0 && taken[it.i]) continue;                 /* 同一轮里被别的锚点先拿走了 */
+            if (it.id !== "" && idSeen.has(it.id)) continue;        /* 同一栋只入列一次（按 id 去重） */
+            if (it.id !== "") idSeen.add(it.id);
+            if (it.i >= 0) taken[it.i] = true;
+            if (it.cand) {
+              chosen.push(it.cand);
+            } else {
+              /* 冻结点不在 pool 里 ⇒ 临时拼一个候选（格键与 base 同一份格数学） */
+              const m2 = bldStaticMeasureOf(it.f)!;
+              const cell = bundleCellOf(m2.cLng, m2.cLat, cellDeg);
+              chosen.push({ f: it.f, c: it.c, score: m2.score, key: bundleCellKey(cell.w, cell.s, cellDeg) });
+            }
+            sumPx += it.c.px;
+            sumV += it.c.verts;
+            if (it.d > farM) farM = it.d;
+            perAnchor[ai]! += 1;
+            added += 1;
+            if (it.frozen) restored += 1;
+          }
+        }
+        stats.nearAnchors = anchors.length;
+        stats.nearAdded = added;
+        stats.nearRestored = restored;
+        stats.nearAddedPerAnchor = perAnchor;
+        stats.nearDistM = added > 0 ? Math.round(farM) : null;
+        if (added > 0) {
+          /* 画出去的变了 ⇒ 那几个**可数**的字段全部跟着重算（不许留旧数：`chosen`/`px2`/`verts`/出楼格） */
+          stats.chosen = chosen.length;
+          stats.px2 = Math.round(sumPx);
+          stats.verts = Math.round(sumV);
+          stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+          const seen = new Set<string>();
+          const keys: string[] = [];
+          for (const c of chosen) if (!seen.has(c.key)) { seen.add(c.key); keys.push(c.key); }
+          stats.cellKeys = keys;
+          stats.cellsChosen = keys.length;
+        }
+        stats.why +=
+          " · 就近补齐 " + added + " 栋 · 锚点 " + anchors.length + " 个" +
+          (added > 0
+            ? "（最远 " + stats.nearDistM + " m" + (restored > 0 ? " · 冻结还原 " + restored + " 栋" : "") + "）"
+            : (zeroCap ? "（每格上限 0 ⇒ 候选池为空，不复活）" : "（没有未入选的候选）")) +
+          (!overBefore && stats.overBudget ? " · ⚠️ 已超预算（就近补齐破例）" : "");
       }
-      stats.nearAdded = take;
-      stats.nearDistM = take > 0 ? Math.round(farM) : null;
-      if (take > 0) {
-        /* 画出去的变了 ⇒ 那几个**可数**的字段全部跟着重算（不许留旧数：`chosen`/`px2`/`verts`/出楼格） */
-        stats.chosen = chosen.length;
-        stats.px2 = Math.round(sumPx);
-        stats.verts = Math.round(sumV);
-        stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
-        const seen = new Set<string>();
-        const keys: string[] = [];
-        for (const c of chosen) if (!seen.has(c.key)) { seen.add(c.key); keys.push(c.key); }
-        stats.cellKeys = keys;
-        stats.cellsChosen = keys.length;
-      }
-      stats.why +=
-        " · 就近补齐 " + take + " 栋（相机中心" +
-        (take > 0 ? "，最远 " + stats.nearDistM + " m）" : (zeroCap ? "·每格上限 0 ⇒ 候选池为空，不复活）" : "·没有未入选的候选）")) +
-        (!overBefore && stats.overBudget ? " · ⚠️ 已超预算（就近补齐破例）" : "");
     }
   }
   /* ┄┄┄ 就近补齐 END ┄┄┄ */

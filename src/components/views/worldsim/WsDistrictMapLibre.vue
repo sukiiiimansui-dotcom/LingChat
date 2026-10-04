@@ -457,14 +457,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      🔴 **宿主只接线**（PR 门禁 C1：App 不许有第二份实现）：取数 / 真名标签 / 区名聚合 / 迟滞闸门 /
      动效参数全在共享真源 `wsNameLayer`（它再用 `wsLabels` + `wsZoneNames`）⇒ 代拍页接的是同一份。 */
   import {
+    /* 🧱 S5（M4）：`LABEL_MOTION` / `NameMapLike` / `NameRenderPlan` / `createNameLayer` /
+       `nameVerdictLine` 跟着"名字层落 DOM 那一族"搬去了 `wsNameHost.ts`（真源仍是本模块）——
+       宿主这边只剩 `labRootClass` 要的 `LABEL_CAMERA_CLASS` 与签名要的 `NameRenderNode`。 */
     LABEL_CAMERA_CLASS,
-    LABEL_MOTION,
-    type NameMapLike,
     type NameRenderNode,
-    type NameRenderPlan,
-    createNameLayer,
-    nameVerdictLine,
   } from "./wsNameLayer";
+  /* 🧱 S5（M4）：名字层**落 DOM 的那一整族**（`namesOn` / `nameLayer` / `namePlan` / `nameNodes` /
+     `switching` / `labRootEl` / 进场退场 / `reprojectNow` / `refreshNames` / `perfLow`）搬进了
+     `wsNameHost.ts` —— 宿主只接线，装配点在本文件那一处（见 `createNameHost` 的说明）。
+     S5（M5）：摇杆近景那整条会话搬进了 `wsJoystickStage.ts`（装配点同样只有一处）。
+     🔴 两个模块都**不 import 宿主**；模块之间也**没有**横向 import —— 共享量全由宿主注入（§2.2）。 */
+  import { createNameHost } from "./wsNameHost";
+  import { createJoystickStage } from "./wsJoystickStage";
   /* 🪪 **信息卡**（点楼体 / 点名字 / 点区名 ⇒ **同一张卡**；数据部分在纯逻辑 `wsBuildingCard` 里）。 */
   import { buildingCardData, type CardData } from "./wsBuildingCard";
   import WsBuildingCard from "./WsBuildingCard.vue";
@@ -483,38 +488,21 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   import WsJoystick from "./WsJoystick.vue";
   import {
     /* 🧱 S3：`JOY_HUD_LIFT_PX` / `JOY_INSET_PX` / `joyBasePxOf` / `joyGateOf` / `joyThumbPxOf`
-       随摇杆几何（`joyVars` 那一段）搬去了 `wsMapCamera.ts`（真源仍是 `wsJoystick.ts`）。 */
-    JOY_PITCH_DEG,
+       随摇杆几何（`joyVars` 那一段）搬去了 `wsMapCamera.ts`（真源仍是 `wsJoystick.ts`）。
+       🧱 S5（M5）：**摇杆近景那整条会话**（几何换算 / 运动模型 / 预走线 / 相机真值那一族：
+       `JOY_PITCH_DEG` / `JOY_STEP_PX` / `JOY_ZOOM_PUSH_LEVELS` / `createJoyMotion` / `joyAimModeOf` /
+       `joyAimRotateDegOf` / `joyAimStep` / `joyBearingNowOf` / `joyCamRestoreArgs` / `joyCamSnapshotOf` /
+       `joyDepthGainOf` / `joyFlushDue` / `joyLngLatOf` / `joyNamesHiddenOf` / `joyPanScaleOf` /
+       `joyPxScaleOf` / `joyScreenHeadingOf` / `joyScreenOf` / `joySetBearingNow` / `joySetCam` /
+       `joySetFrame` / `joySpeedMpsOf` / `joyWalkAnimOn`）整块搬去了 `wsJoystickStage.ts`
+       （真源仍是 `wsJoystick.ts`）。宿主这边只剩这四样：
+         · `JOY_SPEED_MPS` —— `joySpeedMps` 那个 ref 的初值（模板 `:speed-mps` 吃它，所有权留宿主）；
+         · `ROAM_PIN_ID`   —— 建钉子/`syncPins` 那条路（宿主的钉子名单）；
+         · `joyHomeBoxesOf` —— 屏外指示与三块禁区的几何（宿主的 `pinEdgeSync`）；
+         · `roamStore`     —— 建图那段要把「我」摆到原点。 */
     JOY_SPEED_MPS,
-    JOY_STEP_PX,
     ROAM_PIN_ID,
-    type JoyCamSnapshot,
-    type JoyFramePhase,
-    type JoyMotion,
-    type JoyPxScale,
-    JOY_ZOOM_PUSH_LEVELS,
-    createJoyMotion,
-    joyAimModeOf,
-    joyAimRotateDegOf,
-    joyAimStep,
-    joyBearingNowOf,
-    joyCamRestoreArgs,
-    joyCamSnapshotOf,
-    joyDepthGainOf,
-    /* 🕹🧱 走路期间补刷新的**唯一闸门**（纯函数；2026-10-04 第八轮"楼会不见"那条） */
-    joyFlushDue,
     joyHomeBoxesOf,
-    joyLngLatOf,
-    joyNamesHiddenOf,
-    joyPanScaleOf,
-    joyPxScaleOf,
-    joyScreenHeadingOf,
-    joyScreenOf,
-    joySetBearingNow,
-    joySetCam,
-    joySetFrame,
-    joySpeedMpsOf,
-    joyWalkAnimOn,
     roamStore,
   } from "./wsJoystick";
   /* 📍 **屏外方向指示**（2026-10-04 第七条；机主原话「**为什么其他角色不见了喵**」，
@@ -941,8 +929,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let bldTimer = 0;
   /** 🏷 名字层在 `zoomend` 之后的去抖（缩放会改变避让结果与区名模式，必须重排一次；卸载时要清） */
   let zoomNameTimer = 0;
-  /** 🏷 换批（"先隐后改字"）的定时器：新的一批到了要把它清掉（旧的不许覆盖新的）；卸载时要清 */
-  let switchTimer = 0;
+  /* 🧱 S5（M4）：`let switchTimer`（换批"先隐后改字"那个去抖）跟着 `applyNamePlanWithHud`
+     搬去了 `wsNameHost.ts` —— 它只有那一个消费者，宿主不再留副本（卸载收尾走 `cancelMotion()`）。 */
   /** 「地图库多久没画出第一帧就降级」的看门狗（卸载时要清，见 onBeforeUnmount） */
   let watchdog = 0;
   /** 地图库**真的出过一帧**没有？（`render` 事件；看门狗"别只看时间"就靠它） */
@@ -3203,52 +3191,37 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 上一轮 flush 真正**画出去**的楼（标签锚点必须落在"屏幕上那批"上，
    *  否则会出现机主报过的「有的压根没对应楼」——名字指到没画的楼）。 */
   let drawnBld: readonly unknown[] = [];
-  /** 名字层开关：`?names=0` 关（排查用；默认开）。
-   *  🔴 **必须声明在 `createNameLayer()` 之前**：`createNameLayer` 里会**同步**调一次
-   *  `host.enabled()`（初始化事实）⇒ 声明在后就是 TDZ `ReferenceError`，
-   *  而它会**整块炸掉地图的 setup**（真浏览器实测：`Cannot access 'er' before initialization`
-   *  ⇒ `.ws-dml` 根本没挂上 ⇒ 整屏只剩顶栏）。这条是探针抓出来的，不是推出来的。 */
-  const namesOn = ref(!/[?&]names=0/.test(String(typeof location !== "undefined" ? location.search : "")));
-  const nameLayer = createNameLayer({
-    map: () => (renderKind.value === "fallback2d" ? null : (map as unknown as NameMapLike | null)),
-    fetchCell,
-    enabled: () => namesOn.value,
-    /* 行政区名：街区级这一屏**没有**名册（城市包线还没给）⇒ 如实传空（不是"这里没有行政区"） */
-    admins: () => [],
-    drawnBuildings: () => drawnBld,
-    onPlan: (plan, facts) => { applyNamePlanWithHud(plan, nameVerdictLine(facts)); },
-    onError: (why) => {
-      stats.note = stats.note ? `${stats.note} · ${why}` : why;
-    },
-  });
-  /** 名字层开关：`?names=0` 关（排查用；默认开；**声明见上**，在 `createNameLayer` 之前） */
-  const namePlan = ref<NameRenderPlan>({ mode: "names", nodes: [], batch: 0, lite: false, cameraOpacity: LABEL_MOTION.cameraOpacity });
-  /** 屏上的节点（**节点池复用**：只在"换批"时替换数组内容） */
-  const nameNodes = ref<NameRenderNode[]>([]);
-  /** 相机运动中（整层淡化：一次 class + 一次 opacity，**只写 1 个节点**） */
+  /** 相机运动中（整层淡化：一次 class + 一次 opacity，**只写 1 个节点**）。
+   *  ⚠️ 它**没跟着 M4 走**：M1（相机跟手三个 handler）与 M5（摇杆那一路）都在写它，
+   *     而模板上的 `labRootClass` 也在读它 ⇒ 所有权留在宿主，两个模块经 ctx 拿同一个 ref。 */
   const cameraMoving = ref(false);
-  /** 换批中（"先隐后改字"：整层 opacity≈0 的那一帧才改 textContent） */
-  const switching = ref(false);
-  const labRootEl = ref<HTMLElement | null>(null);
-  /* 🆕 2026-10-01（机主：「换字动画我想要的是**像高德地图那样可以不用重算**的」）──────────────
-     两条：① 集合**没变** ⇒ 只更新坐标，**不加任何整层类**；
-          ② 集合**真变了** ⇒ 只让**新来的/要走的**那几张各自淡入/淡出（不是整层一起换）。
-     数据全来自**共享真源**的 `plan.changed / plan.entered / plan.exited`（宿主不自己算 diff）。 */
-  /** 这一批**新进来**的节点 id（给这几张挂 `is-enter`，两帧后摘掉 ⇒ 120ms 淡入） */
-  const nameEnter = ref<string[]>([]);
-  /** 这一批**要走的**节点（单独一层 DOM：先原样显示，再加 `is-ghost-out` 淡出，随后移除） */
-  const nameGhosts = ref<NameRenderNode[]>([]);
-  /** 幽灵的淡出态（两帧后才置 true ⇒ 才有一趟真正的过渡，而不是"一挂上就是透明"） */
-  const ghostFading = ref(false);
-  let enterTimer = 0;
-  let ghostTimer = 0;
-  /* 🆕 「传送帧」：相机停下时把容器位移烘进节点坐标（`reproject`）—— 那次坐标重写**必须看不见**，
-     但它落在 `.ws-lab` 的 `transition: transform 90ms` 上 ⇒ 画面会先退回拖动前再滑过来（实测反向行程 84px）。
-     ⇒ 举旗一帧（`.ws-labs.is-snap .ws-lab:not(.is-enter):not(.is-ghost) { transition: none; }`）。 */
-  const snapping = ref(false);
-  let snapRaf1 = 0;
-  let snapRaf2 = 0;
 
+  /* ══ 🧱 重构切片 S5（M4）：**名字层落 DOM 的那一整族**的装配 ══════════════════════════════
+     实现整块在 `wsNameHost.ts`（锚点 = 函数名，不按行号）。装配点为什么**必须在这儿**：
+       ① `createNameLayer` 会**同步**调一次 `enabled()` ⇒ `namesOn` 必须先于它存在（TDZ 前科）；
+       ② 它要 `stats` / `fetchCell` / `perf` / `renderKind` / `drawnBld`（全是 `const`/`let`）；
+       ③ 而 M1（下一段 `createMapCamera`）要 `namesOn` / `nameNodes` / `cameraMoving` / `labRootEl`
+          ⇒ 只能夹在中间。
+     ⚠️ `drawnBld` 走**取值器**（`drawnBldNow`）：宿主 `afterDraw` 每轮重写它，解构只会拿到快照。
+     ⚠️ `labRootClass`（模板那个 `:class`）**故意留在宿主**：它同时读 `cameraMoving` 与
+        `joyZoomPulling`（摇杆那一路）—— 搬进 M4 就要把两个别的域的状态也拖进去。
+     ⚠️ 只解构宿主真正还要用的：`applyNamePlan` / `applyNamePlanWithHud` / `fadeInNew` /
+        `fadeOutGone` 搬走后在宿主**一个调用点都没有**（前两个本来就只有定义处）——
+        删除按 §3 留给 S9（与 S2 的 `drawContours`、S3 的 `zoomBy` 同一口径）。 */
+  const nameHost = createNameHost({
+    stats,
+    fetchCell,
+    perf,
+    renderKind,
+    aliveNow: () => alive,
+    mapNow: () => map,
+    drawnBldNow: () => drawnBld,
+  });
+  const {
+    nameLayer, namesOn, namePlan, nameNodes, switching, labRootEl,
+    nameEnter, nameGhosts, ghostFading, snapping, perfLow,
+    labClassOf, reprojectNow, refreshNames, cancelMotion,
+  } = nameHost;
   /* ══ 🧱 重构切片 S3（M1 + M8 后半）：**相机 / 手势** 与 **包 HUD** 的装配 ══════════════════
      两个模块的实现整块在 `wsMapCamera.ts` / `wsHudStats.ts`（锚点 = 函数名，不按行号）。
      为什么装配点在这儿（而不是跟 M8 前半一起放在 `phase` / `stats` 那一段）：
@@ -3324,10 +3297,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   });
   const { fetchBuildingsWithRetry, loadRoadsForView, loadFacilities, loadBuildingsForView } = viewFetch;
 
-  function labClassOf(style: NameRenderNode["style"]): string {
-    return style === "real" ? "is-real" : style === "derived" ? "is-derived" : "is-generated";
-  }
-  /** 容器 class（相机运动 / 换批 / 整层降级 / 传送帧 / 🕹拉近隐藏）—— 类名来自真源常量，宿主不写字面量 */
+  /** 容器 class（相机运动 / 换批 / 整层降级 / 传送帧 / 🕹拉近隐藏）—— 类名来自真源常量，宿主不写字面量。
+   *  ⚠️ 它**故意留在宿主**（理由见上面 M4 装配点那段）：`cameraMoving` 与 `joyZoomPulling` 分属两域，
+   *     而它两个都要读 —— 搬进任何一边都要把另一边的状态拖过去。 */
   const labRootClass = computed(() => ({
     [LABEL_CAMERA_CLASS]: cameraMoving.value,
     "is-switching": switching.value,
@@ -3339,155 +3311,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     "is-zoom-pull": joyZoomPulling.value,
   }));
 
-  /**
-   * 把**渲染计划**落到 DOM。🔴 三条纪律：
-   * ① **位置只在此时写一次**（`translate3d`），相机运动期间一个字都不许再写节点；
-   * ② 集合**没变** ⇒ **只更新坐标**，不加任何整层类（机主要的"像高德那样跟手滑"，2026-10-01）；
-   * ③ 集合**真变了** ⇒ **只让新来的/要走的这几张各自淡入淡出**（`plan.entered/exited`），
-   *    不再是整层淡化；**绝不允许"看着旧名字变成新名字"**（节点 key 带 id ⇒ 换名字 = 换元素）。
-   */
-  function applyNamePlan(plan: NameRenderPlan): void { applyNamePlanWithHud(plan, ""); }
-  /**
-   * 把**渲染计划**落到 DOM，并**在同一刻**写 HUD 那一行。
-   *
-   * 🔴 为什么 HUD 必须跟着节点一起写（2026-09-26 真浏览器实测的坑）：
-   *   原来是 `refresh()` 里回调落节点（换批时**延迟 120ms** 做"先隐后改字"）、
-   *   而 `stats.names` 在 `refresh()` 返回后**立刻**写 ⇒ 有 120ms 的窗口里
-   *   **HUD 说的是新一批、屏上是旧一批**（实测抓到 `区名模式` 与"屏上 8 个真名"同时出现，
-   *   其实是两批数据）。探针/机主读到的就是这种自相矛盾的一行。
-   *   ⇒ 现在 HUD 文本随节点一起赋值，**两者永远描述同一批**。
-   *   ⚠️ 同时把"上一批的切换定时器"清掉：否则后到的批会被先到的定时器覆盖（旧覆盖新）。
-   */
-  function applyNamePlanWithHud(plan: NameRenderPlan, hud: string): void {
-    const changed = plan.batch !== namePlan.value.batch;
-    namePlan.value = plan;
-    if (switchTimer) { window.clearTimeout(switchTimer); switchTimer = 0; }
-    const commit = (afterPaint = false): void => {
-      nameNodes.value = plan.nodes;
-      if (hud) stats.names = hud;                 // ← 与节点同一批（不许 HUD 领先屏上）
-      /* 🔴 `switching` **必须在这里也清掉**：新的一批会 `clearTimeout(上一批的定时器)`，
-         被清掉的那一批的"收尾 16ms"就永远不会跑 ⇒ 容器永久停在 `is-switching`（opacity 0）
-         ⇒ 名字层**看不见了**（真浏览器实测抓到 `rootClass: "ws-labs is-switching"`）。
-         现在：只有走了"延迟换字"的路径才需要等一帧再摘类，其余路径立刻摘。 */
-      if (afterPaint) window.setTimeout(() => { if (alive) switching.value = false; }, 16);
-      else switching.value = false;
-    };
-    if (!changed) {
-      /* 同一批：数量/名字都没变 ⇒ 只更新坐标（**一次批量写**，moveend 才走到这里） */
-      commit();
-      return;
-    }
-    if (perfLow.value || reducedMotion()) {
-      /* 降级（§4.1 降级表）：**保留三幕结构但去掉错峰**；reduced-motion 下纯淡入淡出（不缩时长） */
-      commit();
-      return;
-    }
-    /* 🆕 2026-10-01 机主：「换字动画我想要的是**像高德地图那样可以不用重算**的」——
-       集合真变了时**只让新来的/要走的这几张各自淡入淡出**，屏上其余标签一张都不动。
-       ⚠️ 红线不变：节点 key 是 `slot:id` ⇒ 换了 id 就是**换元素**，不会"看着旧名字变成新名字"；
-          退场的那张走幽灵层（`span`，不可点），进场的那张从 0 淡到 1。 */
-    if (plan.changed !== undefined) {
-      commit();                                    // ← 位置/文案先落地（**不整层淡化**）
-      fadeInNew(plan.entered || []);
-      fadeOutGone(plan.exited || []);
-      return;
-    }
-    /* ⬇️ 兜底：计划没带 `changed`（模块比宿主旧）时，仍走原来的"整层先隐后改字"（逐字保留旧行为） */
-    switching.value = true;
-    switchTimer = window.setTimeout(() => {
-      switchTimer = 0;
-      if (!alive) return;
-      commit(true);                                 // ← 换字发生在整层看不见的那一帧
-    }, LABEL_MOTION.nameOutMs);
-  }
-
-  /**
-   * 🆕 **只给新来的那几张**播淡入（`is-enter`：opacity 0 → 1，用 `.ws-lab` 已有的 120ms 过渡）。
-   * 两帧后摘类：① 让 Vue 先把带 `is-enter` 的节点挂上去 ② 让浏览器结算这一帧
-   * ⇒ 才有"从 0 淡进来"的过渡，而不是"一出现就是全亮"。
-   * 降级/减少动效下**不播**（不是缩短时长）。
-   */
-  function fadeInNew(ids: string[]): void {
-    if (!ids.length || perfLow.value || reducedMotion()) return;
-    nameEnter.value = ids.slice();
-    if (enterTimer) window.clearTimeout(enterTimer);
-    enterTimer = window.setTimeout(() => {
-      enterTimer = 0;
-      if (alive) nameEnter.value = [];
-    }, 32);
-  }
-
-  /**
-   * 🆕 **只给要走的这几张**播淡出：先按原样挂进幽灵层，两帧后加 `is-ghost-out` 淡到 0，
-   * `nameOutMs` 之后移除。**不占** `nameNodes` 的节点池（否则复用池会把它当场改成别人的文案）。
-   */
-  function fadeOutGone(nodes: NameRenderNode[]): void {
-    if (!nodes.length || perfLow.value || reducedMotion()) return;
-    nameGhosts.value = nodes.slice();
-    ghostFading.value = false;
-    if (ghostTimer) window.clearTimeout(ghostTimer);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => { if (alive) ghostFading.value = true; });
-    });
-    ghostTimer = window.setTimeout(() => {
-      ghostTimer = 0;
-      if (!alive) return;
-      nameGhosts.value = [];
-      ghostFading.value = false;
-    }, LABEL_MOTION.nameOutMs + 40);
-  }
-
-  /**
-   * 🆕 **就地重投影**（`moveend` / `zoomend` 调）：把容器上那份位移烘进节点坐标，**只重投影、不重排**。
-   *
-   * 为什么还要举一帧 `is-snap`（2026-10-01 真浏览器逐帧实测）：
-   *   这次坐标重写是一次"传送"——容器同时从 `translate3d(Δ)` 归零、节点坐标加上同一个 Δ，
-   *   **两者同帧 ⇒ 画面本该一动不动**。但 `.ws-lab` 上有 `transition: transform 90ms`，
-   *   浏览器会把节点自己的坐标变化**做成过渡** ⇒ 实测屏幕 x 序列出现
-   *   `…273,273,**190**,234,261,280,283…`：先退回拖动前（反向行程 **84px** = 拖动量），再用 ~88ms 滑到位。
-   *   ⇒ 举旗一帧把过渡掐掉（**只掐传送**：`:not(.is-enter):not(.is-ghost)` ⇒ 淡入淡出照旧）。
-   *
-   * 🔴 举旗必须在**同一 tick**、且在 `reproject()` 之前：Vue 的 patch 是微任务，两者会落在同一次 DOM 变更里
-   *   （只加类不换坐标 = 白掐；只换坐标不加类 = 又滑一遍）。
-   *   摘旗用 **rAF 两帧**（不是 `setTimeout` 猜时长）：第一帧让浏览器带着 `transition:none` 画完这次传送，
-   *   第二帧恢复常态；此时 transform 没再变 ⇒ 不会补一次过渡。
-   */
-  function reprojectNow(): void {
-    if (!namesOn.value || !alive) return;
-    snapping.value = true;
-    const rp = nameLayer.reproject();                 // → onPlan → 节点新坐标（同一 tick 入队）
-    if (!rp) { snapping.value = false; return; }      // 还没算过任何一批 ⇒ 别留一个死类
-    if (snapRaf1) cancelAnimationFrame(snapRaf1);
-    if (snapRaf2) cancelAnimationFrame(snapRaf2);
-    snapRaf1 = requestAnimationFrame(() => {
-      snapRaf1 = 0;
-      snapRaf2 = requestAnimationFrame(() => {
-        snapRaf2 = 0;
-        if (alive) snapping.value = false;
-      });
-    });
-  }
-
-  /** 名字层刷新（moveend / load 之后调；**不阻塞首屏**） */
-  async function refreshNames(why = "view"): Promise<void> {
-    if (!namesOn.value || !alive) return;
-    try {
-      /* 判词由**真源**给；它跟着节点一起落进 HUD（见 `applyNamePlanWithHud`）⇒ 不用再写一次 */
-      await nameLayer.refresh(why);
-    } catch (e) {
-      stats.note = stats.note ? `${stats.note} · 名字层：${String((e as Error)?.message || e).slice(0, 40)}` : `名字层：${e}`;
-    }
-  }
+  /* 🧱 S5（M4）：`applyNamePlan` / `applyNamePlanWithHud` / `fadeInNew` / `fadeOutGone` /
+     `reprojectNow` / `refreshNames` 六个函数**整块搬进了 `wsNameHost.ts`** —— 上面那次
+     `createNameHost` 把 `reprojectNow` / `refreshNames` 接了回来（**同一个**函数，不是第二份），
+     所以本文件里那几个调用点（`moveend` / `zoomend` / `load` / 摇杆那一路）一个字都没改。
+     ⚠️ 另外四个在宿主**一个调用点都没有**：`applyNamePlan` 本来就只有定义处（死代码，删除留 S9），
+     `fadeInNew`/`fadeOutGone`/`applyNamePlanWithHud` 只有 M4 内部在调。 */
 
   /* ── 🪪 信息卡：三条入口（点楼体 / 点名字 / 点区名）⇒ 同一张卡 ───────────────── */
   const cardData = ref<CardData | null>(null);
   const cardOpen = ref(false);
-  const perfLow = computed(() => !!perf.low.value);
-  function reducedMotion(): boolean {
-    try {
-      return typeof window !== "undefined" && !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    } catch { return false; }
-  }
   /** 打开卡片：**唯一入口** —— 三条点击路径都走它，卡片数据只由 `buildingCardData` 生成 */
   function openCard(input: Parameters<typeof buildingCardData>[0], click?: { x: number; y: number } | null): void {
     try {
@@ -3625,92 +3458,20 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      **整块搬进了 `wsMapCamera.ts`** —— 下面接回来的就是**同一个**函数（不是第二份），
      `m.on(...)` 那几个调用点因此一个字都没改。 */
 
-  /* ══════════════════════════════════════════════════════════════════════════════
-   * 🕹 摇杆 → 相机（近景：**倾斜俯视的跟随**；机主裁决 2026-10-03）
-   * ══════════════════════════════════════════════════════════════════════════════
-   * 每帧只做这几件事（顺序不能动）：
-   *   ① `panBy([dx,dy],{duration:0})` —— 屏幕像素位移，库内已处理 pitch/bearing，
-   *      **我们一行投影数学都不写**（PLAN §2.3 红线）；
-   *   ② 名字层跟手：**只写 1 个容器**的 `translate3d`，且位移就是 `-累计位移`
-   *      （相机平移是刚体平移 ⇒ 这个值与 `map.project(锚点)` 逐位相同，但**0 次 project**）；
-   *   ③ 🆕 **角色真的动**：运动模型给的**世界坐标**写进漫游真源 → 「我」那颗钉子 `setLngLat`
-   *      （§3：角色与相机是**两件事**，不再互相反写）；同一帧顺带写 ④⑤ 两个 transform；
-   *   ④ 🆕 朝向：钉子上的箭头 `rotate(headingDeg)`（§4：朝向跟随移动方向）；
-   *   ⑤ 🆕 踏步：身体 `translate3d`，幅度 ∝ 速度（§4：就地行走动画，停下自动回正）；
-   *   ⑥ 别的什么都不做：不 reproject、不重排标签、不重挑楼、不启动 600ms 去抖。
-   *
-   * 🔴 `joyActive` 是**自持标志**（不是问地图"你在动吗"）：`panBy({duration:0})` 每帧都是一次
-   *    完整 ease ⇒ 每帧都会同步发 `movestart`/`move`/`moveend`（vendored `_ease()` 里
-   *    `duration===0` 直接 `easeFunc(1); finish()`，`_afterEase` 又把 `_moving` 清掉 ⇒ 下一帧重来）。
-   *    不早退的话就是"每帧重投影 + 每帧起一条 600ms 去抖 + 每帧重排标签"——
-   *    机主报过的「名字滑动刷新、错位严重 / 松手卡一下」的放大版。
-   *
-   * ⚠️ 符号口径（**从 vendored 源码逐字核出来的**，别凭手感改）：
-   *    `camera.panBy(offset)` = `panTo(center, {offset: offset.mult(-1)})`；
-   *    `handleEaseTo` 把**请求的中心**放到屏幕点 `centerPoint + offset` 上
-   *    ⇒ `panBy([dx,dy])` 的结果是"相机朝屏幕 (dx,dy) 方向走了 dx,dy 像素"（内容反向平移）。
-   *    所以：**推杆方向 = 相机前进方向**，直接用 `[d.dx, d.dy]`，**不取负**；
-   *    而内容/标签层的位移是 `-累计位移`（与既有 `onMove()` 算出来的那个值同号同值）。
-   *
-   * ⚠️ `zoomend` **不需要**早退：本图没有 `maxBounds` ⇒ `handleEaseTo` 的
-   *    `isZooming = (约束后的 zoom !== 原 zoom)` 恒为 false ⇒ `panBy` 一次 zoom 事件都发不出来
-   *    （vendored 源码逐字核过；判据 1 的"zoom 逐字节不变"由此成立）。
-   *    另一只手同时捏合缩放属于**用户明确的视角操作**，那一轮照旧重算 —— 不归摇杆管。 */
+  /* ══ 🕹 摇杆 → 相机（近景：**倾斜俯视的跟随**；机主裁决 2026-10-03）════════════════════════
+     🧱 重构切片 S5（M5）：**整条摇杆会话**（`joyCalibrate` / `joyReportCam` / `joyReadBearing` /
+        `joyReadCam` / `joyEnter` / `joyExit` / `joyApplyRoam` / `joyAimWrite` / `joyFaceSync` /
+        `joyAimReset` / `joyPinReset` / `joyNamesFollow` / `onJoyDrive` / `joyFlushNow` /
+        `onJoyHalt` 与它们那批会话状态）**整块搬进了 `wsJoystickStage.ts`**（锚点 = 函数名，
+        不按行号；机制的逐条注释在那边），下面接回来的就是**同一个**东西（不是第二份）。
+     ⚠️ **只有这面旗留在宿主**：`joyActive`（五个 `m.on(...)` 的早退与 `onBeforeUnmount` 都在读它
+        —— 那是宿主自己的守卫）⇒ 模块每次经注入的取值器**现读**、要改就喊一声（与 S4 的 `alive` 同一条处理）。
+     ⚠️ 两个 `watch`（`props.joy` 开合 / `joyGate.show` 卸载兜底）**也留在宿主**：它们是"接线"，
+        调用的是接回来的同一个 `joyEnter` / `joyExit` ⇒ 那两处的文本一个字都没改。 */
   let joyActive = false;
-  /** 本次按压累计的屏幕位移（px）——名字层容器跟手用；自己算 ⇒ 一次 `map.project()` 都不需要 */
-  let joyAccX = 0;
-  let joyAccY = 0;
-  /* 🕹🧱 **摇杆走路期间"边走边补"的三个数**（2026-10-04 第八轮；机主原话「在将屏幕**斜过来**时
-     移动角色**楼会不见**，**反复放大缩小就好了**，在正常直接**竖直向下看时就不会**喵」）。
-     机制与闸门见 `wsJoystick.joyFlushDue` 那段；这里是它要的四个数（写点**全在摇杆驱动那条路**上：
-     按下起算 / 每帧累加 / 刷完归零 / 松手与退出复位）：
-       · `joyFlushMovedM`  ：**这一次按下以来角色走过的世界米数** —— 按 `joyMpp`（米/标定档像素，
-                             本组件那把唯一的尺子，与挑楼/速度档同一把）把角色位移积分换算成米。
-                             累计的是**路程**（每一帧的位移长度相加），不是直线距离：绕圈也在挪视野；
-       · `joyFlushElapsedMs`：距上一次补刷新的**累计时间** —— 用驱动每帧给的 `dtMs` 累加
-                             （本仓"唯一时钟 / 唯一 rAF"纪律：**不在这里另读一个时钟源**）；
-       · `joyFlushPx/Py`   ：上一帧角色在**标定档像素**里的位置（本帧的世界位移 = 它与 `mv.px/py` 之差）。
-     🔴 三个数都只在**摇杆驱动**那条路上读写：`joyActive === false` 时一个字节都不动
-        （那条老路由 `moveend` 自己刷，见下面 `joyFlushNow()` 的说明）。 */
-  let joyFlushMovedM = 0;
-  let joyFlushElapsedMs = 0;
-  let joyFlushPx = 0;
-  let joyFlushPy = 0;
-  /**
-   * **接管前的相机**（关闭时要逐字还原到这一份；机主的硬要求："不许留残留状态"）。
-   * 两个来源，都只在这里写：
-   *   · 启动时存储值/URL 就是开 ⇒ 由建图那段填「**没有摇杆时**这一屏会落到的机位」；
-   *   · 运行时在面板里打开 ⇒ 现读相机（`getCenter/getZoom/getPitch/getBearing`）。
-   * 读不齐（任一项非有限）⇒ `joyCamSnapshotOf()` 给 `null` ⇒ **关闭时一次相机都不动**（宁可不还原，也不编）。
-   */
-  let joyPrevCam: JoyCamSnapshot | null = null;
+  /** 本次按压累计的屏幕位移与"边走边补"那几个计数、接管前的相机快照、漫游位置真源、
+   *  §13/§14 参考系、§16 视口倍率 —— **全是 M5 的会话状态**（见上面那段说明）。 */
 
-  /* 🕹🆕 2026-10-03 **运动模型落地**（机主验收原话：「这个移动不能真正像游戏那样移动！甚至角色都没有动，
-     太杂鱼了！能去学游戏引擎吗」）—— 下面这三个值就是"角色真的在动"的全部新增状态，各一处：
-       · `joyOrigin`：漫游**原点**（= 进近景那一刻的相机中心，世界坐标的锚）；
-       · `joyScale` ：屏幕 px → 经纬度的**局部标尺**（`joyCalibrate()` 用**地图库自己的** unproject 量一次）；
-       · `joyMove`  ：运动状态（速度 / 角色位移 / 相机位移 / 朝向 / 踏步相位），由
-                      `wsJoystick.joyMotionStep()` 每帧推进；**跨按压保留** ⇒ 松手再推不会把人瞬移回原点。 */
-  let joyOrigin: { lng: number; lat: number } | null = null;
-  let joyScale: JoyPxScale | null = null;
-  let joyMove: JoyMotion = createJoyMotion();
-  /**
-   * 🧭 §13 **参考系**（这一屏只有这一份）：
-   *   · `joyBearing0`：标定那一刻的相机 bearing —— 上面那把 px→经纬度的标尺就架在它上面；
-   *   · `joyDepthGain`：`1/cos(pitch)`（§14，标定那一刻的俯角算出来）。
-   * 相机 bearing 由**用户手势**改（双指旋转），**不跟角色朝向** —— 我们选的是"相机相对输入"那一套
-   * （研究 §13.2）。所以每一个推杆帧都要把当前的 bearing 报给模型：`Δβ ≠ 0` 时它先把屏幕向量
-   * 转回标尺坐标系，否则方向就按"标定那一刻的上"走（= 机主报的「移动方向和屏幕方向不一样」）。
-   */
-  let joyBearing0 = 0;
-  let joyDepthGain = 1;
-  /**
-   * 🎥 §16 **视口倍率** `2^(zoomNow − zoom0)` —— 上一次 `joyReportCam()` 量到的那个数。
-   * 用途只有一个：把模型给的**标定档**像素位移换成 `panBy` 要的**当前档**像素（`d × viewScale`）。
-   * 🔴 必须与**模型这一帧用的那个数**是同一个（模型从 ctx 拿到的是上一次报的），否则两者差一档
-   * ⇒ 相机按错的倍率追角色。所以它由同一处（`joyReportCam`）写、同一帧里只读一次。
-   */
-  let joyViewScale = 1;
   /**
    * 🎥 §16 **相机真值**（"单一几何真源"的那一根线，2026-10-04 第六轮）——
    * 把相机在**标尺坐标系**里的位置量出来报给模型（`joySetCam`），模型从此**不再自己积分** `cx/cy`。
@@ -3724,44 +3485,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    * **0 次 `project`、0 次布局**；反解是那次标定量到的同一个 2×2 的逆（`joyScreenOf` 纯函数）。
    * 量不到（没有 getCenter / 标尺还没有）⇒ 报 `NaN` ⇒ 模型回到开环旧行为 —— **宁可不报，也不编坐标**。
    */
-  function joyReportCam(): void {
-    const m = map as unknown as {
-      getCenter?: () => { lng: number; lat: number };
-      getZoom?: () => number;
-    } | null;
-    if (!m || !joyOrigin || !joyScale || typeof m.getCenter !== "function") {
-      joyViewScale = 1;
-      joySetCam(NaN, NaN, 1);
-      return;
-    }
-    let vs = 1;
-    try {
-      const z = typeof m.getZoom === "function" ? Number(m.getZoom()) : NaN;
-      /* `joyZoom0 > 0` 是"出发 zoom 量到过"的标志（量不到时它恒 0 ⇒ 不敢拿它当基准） */
-      if (Number.isFinite(z) && joyZoom0 > 0) vs = joyPanScaleOf(z - joyZoom0);
-    } catch {
-      vs = 1;
-    }
-    joyViewScale = vs;
-    try {
-      const c = m.getCenter();
-      const p = joyScreenOf(joyOrigin, joyScale, c.lng, c.lat);
-      if (p) joySetCam(p.x, p.y, vs);
-      else joySetCam(NaN, NaN, vs);
-    } catch {
-      joySetCam(NaN, NaN, vs);
-    }
-  }
-  /** 当前相机 bearing（**属性读**，不是 `project`、不触发布局）；读不到就沿用标定值 */
-  function joyReadBearing(): number {
-    const m = map as unknown as { getBearing?: () => number } | null;
-    try {
-      const b = m && typeof m.getBearing === "function" ? Number(m.getBearing()) : NaN;
-      return Number.isFinite(b) ? b : joyBearing0;
-    } catch {
-      return joyBearing0;
-    }
-  }
+  /* 🧱 S5（M5）：`joyReportCam` / `joyReadBearing` **搬进了 `wsJoystickStage.ts`** —— 上面那段
+     说明留在宿主是因为它讲的是"宿主为什么必须让相机自己报真值"（含离线读数出处）。 */
+
   /* 🕹🆕 2026-10-03 第二轮（机主：「视角无法锁定角色，**位移很大**喵！！！」）—— **世界尺度**两个数，
      各只有一处来源，都由 `joyCalibrate()` 量一次后传给摇杆组件（它自己一行换算都不写）：
        · `joyMpp`      ：米/像素 —— 用本组件**既有那把唯一的尺子** `bldMetersPerCssPixel(zoom, lat)`
@@ -3770,18 +3496,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                           与世界速度的口径误差就这么多，写在这里免得下一个人以为是 bug。
        · `joySpeedMps` ：满推速度（**米/秒**）—— `joySpeedMpsOf(zoom)` 选档（步行/载具）。
                         🔴 上一版速度按"屏宽/秒"给 ⇒ 这一档的 1024px 屏上等于 **967 m/s**（瞬移）。
-     量不到（没有 getZoom/getCenter）⇒ 两个数留 0 ⇒ 推杆无效：**宁可不走，也不编一个世界速度**。 */
+     量不到（没有 getZoom/getCenter）⇒ 两个数留 0 ⇒ 推杆无效：**宁可不走，也不编一个世界速度**。
+     ⚠️ 这两个 ref **仍归宿主**（模板 `:mpp` / `:speed-mps` 直接吃它们；`joyCalibrate` 经注入写它们）。 */
   const joyMpp = ref(0);
   const joySpeedMps = ref(JOY_SPEED_MPS);
   /* 🕹🆕 2026-10-03 第三轮（机主拍板 Ⓐ「相机拉近」）—— **相机距离**四个值，各只有一处：
        · `joyZoomLevels`：交给摇杆组件的"推杆期间拉近几级" —— **量到了出发 zoom 才给**，
                           量不到给 0（这条通路整条关掉：宁可不拉，也不把相机 move 到 zoom 0）；
-       · `joyZoom0`     ：进近景那一刻的出发 zoom（回程的目标值，容差 **0** —— `joyZoom0 + 0` 逐位相等）；
-       · `joyZoomApplied`：上一次**已经写进相机**的拉近量（判据：`zo` 没变 ⇒ 一次相机写点都不发）；
-       · `joyZoomPulling`：名字层是否正在**整层隐藏**（研究 §9.6；状态翻转才写一次 class，不进每帧循环）。 */
+       · `joyZoomPulling`：名字层是否正在**整层隐藏**（研究 §9.6；状态翻转才写一次 class，不进每帧循环）。
+     ⚠️ 另外两个（`joyZoom0` = 出发 zoom、`joyZoomApplied` = 已写进相机的拉近量）**只有摇杆那一族读**，
+        跟着 S5（M5）搬进了 `wsJoystickStage.ts`；这两个 ref 留着是因为模板与 `labRootClass` 都要读它们。 */
   const joyZoomLevels = ref(0);
-  let joyZoom0 = 0;
-  let joyZoomApplied = 0;
   const joyZoomPulling = ref(false);
   /** ♿ 系统"减弱动效"：**只关踏步**（摇杆是输入，任何档位都不许关；见 `joyWalkAnimOn`） */
   const joyReducedMotion = (() => {
@@ -3792,334 +3517,58 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
   })();
 
-  /* 🎯 2026-10-04 第四轮 **预走线**（机主："能给移动加预走线吗…动画要好看喵！"）—— 三个状态，各一处：
-       · `joyAimOn`  ：这一帧该不该画（= 速度比例 > 0 且不是 low 档）。**翻转时才写一次 class**；
-       · `joyAimK`   ：已经平滑过的线长比例 0..1（`joyAimStep` 按 `JOY_AIM_TAU_S` 收敛）；
-       · `joyFaceDeg`：上一次**真的写进 DOM** 的朝向（0.1° 死区）—— `face` 与预走线容器**共用**这一份
-                      （两者表示同一个朝向，同一帧只会有一个在画）。 */
-  let joyAimOn = false;
-  let joyAimK = 0;
-  let joyFaceDeg = NaN;
+  /* 🎯 2026-10-04 第四轮 **预走线**（机主："能给移动加预走线吗…动画要好看喵！"）—— 三个状态
+     （`joyAimOn` / `joyAimK` / `joyFaceDeg`）**搬进了 `wsJoystickStage.ts`**：它们只有预走线那一族
+     函数读写（`joyAimWrite` / `joyFaceSync` / `joyAimReset` / `joyApplyRoam`）。 */
 
-  /**
-   * 量**两把尺子**（整条链路只有这一处换算，共 3 次投影调用 + 1 次 `bldMetersPerCssPixel`）：
-   *   ① **屏幕 px → 经纬度**（局部雅可比）：四个数**全部**来自地图库自己的 `project`/`unproject`
-   *      —— 我们一行投影数学都不写（既有红线）。量的是**相机中心**处的雅可比，纯平移下不变。
-   *   ② 🆕 **米/像素 + 速度档**（世界尺度，交给摇杆组件）：`bldMetersPerCssPixel(zoom, lat)` +
-   *      `joySpeedMpsOf(zoom)` —— 只读 `getCenter`/`getZoom`，与 ① 相互独立（① 失败也能量出 ②）。
-   * 🔴 **移动中 0 次**：本函数只在"进近景"（`joyEnter`）与建图那一刻被调，**帧里一次都不调**。
-   * 量不齐 ①（库没这俩方法 / 抛错 / 非有限 / 全 0）⇒ `null`：**角色不动、只有相机走**
-   * （宁可退回旧行为，也不写一个编出来的经纬度）；量不齐 ② ⇒ 推杆无效（不编世界速度）。
-   */
-  function joyCalibrate(): void {
-    joyScale = null;
-    /* 🎥 §16 相机真值先作废（报"不知道"）：下面重新量到标尺之前，任何旧读数都是**上一台相机**的。
-       量不到就一直是 `NaN` ⇒ 模型走开环旧行为（与"量不到尺子就站住"同一条纪律）。 */
-    joySetCam(NaN, NaN, 1);
-    /* 🕹 相机距离那一路也**从这里归零**：量不到出发 zoom ⇒ `joyZoomLevels = 0` ⇒ 摇杆只平移、不拉近
-       （拉近量的真源由此处一处决定；`joyZoomApplied`/隐藏态跟着复位，避免拿上一台相机的状态接着用）。 */
-    joyZoomLevels.value = 0;
-    joyZoom0 = 0;
-    joyZoomApplied = 0;
-    joyZoomPulling.value = false;
-    const m = map as unknown as {
-      project?: (c: [number, number]) => { x: number; y: number };
-      unproject?: (p: [number, number]) => { lng: number; lat: number };
-      getCenter?: () => { lng: number; lat: number };
-      getZoom?: () => number;
-      getBearing?: () => number;
-      getPitch?: () => number;
-    } | null;
-    if (!m || typeof m.getCenter !== "function") return;
-    /* 🕹 **世界尺度**先量（只用到 getCenter/getZoom，**不依赖** project/unproject）：
-       量得到 ⇒ 即使下面那把 px→经纬度的标尺量不出来（角色不动），**相机照样按真实米/秒走**
-       （"宁可退回旧行为"那条降级路仍然成立）。 */
-    try {
-      const c0 = m.getCenter();
-      const z0 = typeof m.getZoom === "function" ? m.getZoom() : NaN;
-      joyMpp.value = bldMetersPerCssPixel(z0, c0.lat);
-      joySpeedMps.value = joySpeedMpsOf(z0);
-      /* 🕹 出发 zoom 量到了才**武装**拉近那条路（`JOY_ZOOM_PUSH_LEVELS` 是 policy，数值在 wsJoystick.ts 一处）；
-         `z0` 非有限 ⇒ 两个数都留 0/关 —— 与"不编世界速度"同一条纪律。 */
-      if (Number.isFinite(z0)) {
-        joyZoom0 = z0;
-        joyZoomLevels.value = JOY_ZOOM_PUSH_LEVELS;
-      }
-    } catch {
-      joyMpp.value = 0;
-    }
-    /* 🧭 §13/§14：**参考系**（屏幕向量 ⇄ 世界方向的唯一换算处，纯函数模块）交给模型：
-       · `bearing0` = 标尺架在哪个朝向（下面那把 px→经纬度的雅可比就是**此刻**的相机量的）；
-       · `depthGain` = `1/cos(pitch)`（俯角带来的竖直压缩，§14）——「往上推」的屏幕速度要按它收，
-         否则世界里会走出 2.28 倍的速度（旧行为）。
-       ⚠️ 量不到就如实退回 (0, 1) = "当作没转过、俯角 0 压缩"（与 mpp 那条"不编数"同一条纪律）。 */
-    try {
-      const b0 = typeof m.getBearing === "function" ? Number(m.getBearing()) : 0;
-      const p0 = typeof m.getPitch === "function" ? Number(m.getPitch()) : JOY_PITCH_DEG;
-      joyBearing0 = Number.isFinite(b0) ? b0 : 0;
-      joyDepthGain = joyDepthGainOf(p0);
-      joySetFrame({ bearing0: joyBearing0, bearingNow: joyBearing0 }, joyDepthGain);
-    } catch {
-      joyBearing0 = 0;
-      joyDepthGain = 1;
-      joySetFrame(null, 1);
-    }
-    if (typeof m.project !== "function" || typeof m.unproject !== "function") return;
-    try {
-      const c = m.getCenter();
-      const p0 = m.project([c.lng, c.lat]);
-      const px = m.unproject([p0.x + 1, p0.y]);
-      const py = m.unproject([p0.x, p0.y + 1]);
-      const s = joyPxScaleOf({
-        dxLng: px.lng - c.lng,
-        dxLat: px.lat - c.lat,
-        dyLng: py.lng - c.lng,
-        dyLat: py.lat - c.lat,
-      });
-      if (!s) return;
-      joyOrigin = { lng: c.lng, lat: c.lat };
-      joyScale = s;
-      joyMove = createJoyMotion();
-    } catch {
-      joyScale = null;
-    }
-    /* 🎥 §16 标定完成 ⇒ 立刻报一次**相机真值**：`joyOrigin` 就是这一刻的相机中心 ⇒ 真值是 (0,0)
-       （`vs` 也由这一处一并量出来 = `2^(z0 − z0)` = 1）。此前一律是 `NaN`（"不知道"），
-       模型那时走的是开环旧路 —— 与"量不到尺子就站住"同一条纪律。 */
-    joyReportCam();
-  }
+  /* 🧱 S5（M5）：`joyCalibrate`（量两把尺子）/ `joyApplyRoam` / `joyAimWrite` / `joyFaceSync` /
+     `joyAimReset` / `joyPinReset` / `joyReadCam` / `joyEnter` / `joyExit` **整块搬进了
+     `wsJoystickStage.ts`**（上面那次 `createJoystickStage` 把 `joyCalibrate` / `joyApplyRoam` /
+     `joyReadCam` / `joyEnter` / `joyExit` 接了回来 —— 同一个函数，不是第二份）。
+     ⚠️ 机制与逐条注释（含"为什么 `joyCalibrate` 必须排在改完俯角之后""为什么退出要逐字还原相机"）
+        都在那个文件里，别在这里另写一份。 */
 
-  /**
-   * 🕹 每帧**至多一次**：把运动模型算出来的**世界坐标**写进漫游真源，并驱动「我」那颗钉子。
-   * 写点一共 3 个，**全是 `setLngLat` / `transform`，没有一个布局属性**：
-   *   ① `Marker.setLngLat` —— "角色真的在动"就是这一行（§3：角色走世界坐标，相机另算，两者不再重合）；
-   *   ② 朝向箭头 `rotate`（§4：朝向跟随移动方向，`headingDeg` 由**速度方向**算出）；
-   *   ③ 身体踏步 `translate3d`（§4：就地行走动画 —— 位移归世界坐标、摆动归 transform；
-   *      幅度 ∝ 速度 ⇒ 停下时 `speedRatio = 0` ⇒ 恒等变换 ⇒ **自动回正**，不用再补一帧）。
-   * ⚠️ 诚实记一笔：`Marker.setLngLat()` 内部会自己 `project` 一次（**引擎自己的**，不是我们写的投影数学，
-   *    而且只涉及这一个 marker）。既有红线"移动中 0 次 `map.project()`"指的是**我们的代码**不许调 ——
-   *    这条仍然成立（自检 ⑩k3 钉着）。
-   */
-  function joyApplyRoam(mv: JoyMotion): void {
-    if (!joyOrigin || !joyScale) return;
-    const w = joyLngLatOf(joyOrigin, joyScale, mv.px, mv.py);
-    roamStore.write(w.lng, w.lat, mv.headingDeg);
-    const pin = pins.find((p) => p.id === ROAM_PIN_ID);
-    if (!pin) return; // 名单里还没有「我」⇒ 位置已经在真源里了，钉子出来时 `syncPins` 会照它摆
-    try {
-      pin.mk.setLngLat([w.lng, w.lat]);
-    } catch {
-      /* 地图拆了就算了（这一帧白写，不抛） */
-    }
-    /* 朝向：**只在"不在画预走线"时写**（预走线亮着时箭头是藏起来的 —— 写它等于白发一次）。
-       另加 **0.1° 死区**：直着走时 `headingDeg` 只会在浮点尾巴上抖，四舍五入到 0.1° 后大多数帧
-       根本没有变化 ⇒ 这些帧从"每帧 1 个写点"变成 0 个（写点预算里那个"最坏 8 / 稳态 5"就是这么来的）。 */
-    if (pin.face && !joyAimOn) {
-      /* 🧭 §13：`mv.headingDeg` 是**世界（罗盘）朝向** —— 画在屏幕上要减掉当前 bearing（唯一换算处） */
-      const deg = Number(joyScreenHeadingOf(mv.headingDeg, joyBearingNowOf()).toFixed(1));
-      if (deg !== joyFaceDeg) {
-        joyFaceDeg = deg;
-        pin.face.style.transform = `rotate(${deg}deg)`;
-      }
-    }
-    /* 踏步（§4：就地行走）：**一步一个起落**，不是一步两个。
-       🔴 2026-10-04 第四轮消抖（机主「移动时很诡异，一直在抖」）—— 旧写法是
-       `-|sin(stepPhase·2π)| × a`：`|sin|` 每个相位周期有**两个**波峰，而 `stepPhase` 的单位是**步**
-       （`JOY_STEP_HZ = 2.2` 步/秒）⇒ 那个"踏步"实际是 **4.4 次/秒的上下振**（研究 §11.2 的反面教材：
-       被相机跟随的角色身上，任何周期性位移都会被看成抖）。
-       现在用 `sin²(π·stepPhase)`：一个相位=**一个**起落（2.2 次/秒，人走路的量级），
-       而且 `sin²` 在触地那一点是 C¹ 连续的（`|sin|` 在那里有个折点，看着像"顿一下"）。
-       幅度仍是 `speedRatio × JOY_STEP_PX`（停下 ⇒ 0 ⇒ 恒等变换 ⇒ 自动回正，一个字没改）。 */
-    if (pin.body && joyWalkAnimOn({ low: !!perf.low.value, reduced: joyReducedMotion })) {
-      const a = mv.speedRatio * JOY_STEP_PX;
-      const bob = Math.sin(mv.stepPhase * Math.PI) ** 2;
-      pin.body.style.transform = a > 0 ? `translate3d(0, ${(-bob * a).toFixed(2)}px, 0)` : "";
-    }
-  }
-
-  /**
-   * 🎯 **预走线那一帧的两个写点**（机主："预走线 + 指向移动方向的箭头，动画要好看"）。
-   *
-   * 写点**恰好 2 个**（与 `JOY_AIM_WRITES_MAX` 对齐；都在**钉子自己的 DOM** 里）：
-   *   ① 虚线 `scaleX`（线长 ÷ 满长）——**只动 transform**，不碰 `width`；
-   *   ② 箭头 `translate3d(线长, 0, 0)`——同样只动 transform。
-   * 容器那次 `rotate` 是**第三个**、但带 0.1° 死区（角度没变就一次都不写）；
-   * `opacity` **一次都不写**：显隐是 `is-aim` class 翻转 + CSS 过渡（见文件末尾全局样式）。
-   *
-   * ⚠️ 为什么回中段（`phase === "center"`）也允许写这两个数：**线必须收回去**，
-   *    否则松手那一瞬它会长在半路"僵住"（`speedRatio` 在 `release()` 里当场归零，
-   *    线长的收敛只能靠模型按 `JOY_AIM_TAU_S` 走完）。所以回中段的角色写点**只有这 2 个**：
-   *    `setLngLat` / 真源 `roamStore.write` / `project` 三者仍然是 **0 次**（自检 ⑩e3/⑩e4 分别钉）。
-   */
-  function joyAimWrite(pin: { el: HTMLElement; aim: HTMLElement | null; dash: HTMLElement | null; tip: HTMLElement | null; face: HTMLElement | null } | undefined, mv: JoyMotion | undefined, dtMs: number): void {
-    if (!pin?.aim || !pin.dash || !pin.tip) return;
-    const mode = joyAimModeOf({ low: !!perf.low.value, reduced: joyReducedMotion });
-    /* ① 该不该画：`off`（low 档）⇒ 一次都不画；速度恰好 0（松手/停稳）⇒ 收线不再起新的 */
-    const want = mode !== "off" && !!mv && Number.isFinite(mv.speedRatio) && mv.speedRatio > 0;
-    if (want !== joyAimOn) {
-      joyAimOn = want;
-      /* **一次 class 写**（状态翻转那一帧）：CSS 过渡负责淡入 140ms / 淡出 320ms（ease-out，研究 §12.3）。
-         起新的一段时把平滑量**归零**：上一段末尾可能冻在 20% 上（那一帧之后 rAF 链就断了），
-         不归零的话线会"啪"地从 20% 开始长。 */
-      pin.el.classList.toggle("is-aim", want);
-      if (want) joyAimK = 0;
-      /* 🎯 起新一段时把角度死区**作废**（`NaN` ⇒ 下一帧必写）：上一段的容器角度停在收线那一刻，
-         若这一段的方向恰好相同，`deg !== joyFaceDeg` 会判"没变"而**一次都不写** ——
-         线就会带着上一段的旧角亮起来（0.1° 死区那个共用变量带来的唯一副作用，这里堵掉）。 */
-      if (want) joyFaceDeg = NaN;
-      /* 收线那一帧把**朝向箭头补到当前朝向**：预走线亮着的时候箭头是被 CSS 藏起来的
-         （`[data-ws-roam-pin].is-aim [data-ws-roam-face]` 那条），而箭头自己的 `rotate` 在
-         预走线期间**故意不写**（省一个写点）。不补这一下，松手后箭头会停在上一次写进去的旧角度上。 */
-      else joyFaceSync(pin, mv ? mv.headingDeg : NaN);
-    }
-    if (mode === "off") return;
-    if (!joyAimOn && joyAimK <= 0) return; // 收干净了 ⇒ 这一帧 0 个写点（不再空写）
-    const f = joyAimStep(joyAimK, mv ? mv.speedRatio : 0, dtMs);
-    joyAimK = f.k;
-    pin.dash.style.transform = `translate3d(0, 0, 0) scaleX(${f.scaleX.toFixed(4)})`;
-    pin.tip.style.transform = `translate3d(${f.tipPx.toFixed(2)}px, 0, 0)`;
-    /* ③ 容器：只吃 rotate（角度死区 0.1°）。为什么和 `pin.face` 共用 `joyFaceDeg`：
-       两者表示的是**同一个朝向**，同一帧只会有一个在画 —— 共用一份就少一次 `toFixed` 与一次比较。 */
-    if (mode === "full" || mode === "static") {
-      /* 🧭 §13：`headingDeg` 是**世界（罗盘）朝向** ⇒ 先换成**当前屏幕**角（`joyFaceDeg` 存的就是
-         这个口径，与朝向箭头共用一份）。
-         🎯 §13.4：预走线容器是**沿 `+x`（右）画的**（`.ws-aim__dash` 从 `left:17px` 起、箭头
-         `clip-path` 朝 +x），而 `rotate(θ)` 把 `+x` 转到屏幕角 θ ⇒ 要它指向 `h` 就得写 `h - 90`。
-         这一处就是那个 `-90`（`joyAimRotateDegOf`）。**朝向箭头不减**（它是沿 `-y` 画的）——
-         两个元素本来就该用两个式子，这也是"线、箭头、真实位移"从此同一个角的全部代价。 */
-      const deg = Number(joyScreenHeadingOf(mv ? mv.headingDeg : 0, joyBearingNowOf()).toFixed(1));
-      if (deg !== joyFaceDeg) {
-        joyFaceDeg = deg;
-        pin.aim.style.transform = `rotate(${joyAimRotateDegOf(deg)}deg)`;
-      }
-    }
-  }
-  /**
-   * 朝向箭头的**补写**（唯一一处）：只在"预走线收线那一帧"与"收尾 `joyAimReset`"两处调。
-   * 为什么需要它：预走线亮着时箭头被 CSS 藏着，而它的 `rotate` 在那一整段里**故意不写**
-   * （省一个每帧写点）—— 收线时若不补，箭头会停在上一次写进 DOM 的**旧角度**上（人是停下了，
-   * 朝向就是他最后走的方向，不该是一个更早的方向）。
-   */
-  function joyFaceSync(pin: { face: HTMLElement | null } | undefined, headingDeg: number): void {
-    if (!pin?.face || !Number.isFinite(headingDeg)) return;
-    /* 🧭 §13：调用方原样传的是 `mv.headingDeg`（**世界**朝向）⇒ 这里换成当前**屏幕**角再写 */
-    joyFaceDeg = Number(joyScreenHeadingOf(headingDeg, joyBearingNowOf()).toFixed(1));
-    pin.face.style.transform = `rotate(${joyFaceDeg}deg)`;
-  }
-  /** 🎯 把预走线收干净（**幂等**）：class 摘掉 + 平滑量归零 + 朝向补写。`onJoyHalt`/`joyExit` 都会调一次 —— 保证"线不会僵住" */
-  function joyAimReset(): void {
-    const wasAiming = joyAimOn;
-    joyAimOn = false;
-    joyAimK = 0;
-    const pin = pins.find((p) => p.id === ROAM_PIN_ID);
-    pin?.el.classList.remove("is-aim");
-    /* 只有"刚才真的在画"才补写箭头（否则就是一次白写：箭头本来就是那个角度） */
-    if (wasAiming) joyFaceSync(pin, joyMove.headingDeg);
-  }
-
-  /**
-   * 「我」钉子上那两处漫游写点回**恒等**。
-   * `clearHeading = false`（松手）：只收踏步 —— 人是停下了，不是转回正北；
-   * `clearHeading = true`（关掉摇杆）：朝向也回正 —— 一切还原，与"相机逐字还原"同一条纪律。
-   */
-  function joyPinReset(clearHeading: boolean): void {
-    const pin = pins.find((p) => p.id === ROAM_PIN_ID);
-    if (pin?.body) pin.body.style.transform = "";
-    if (pin?.dash) pin.dash.style.transform = "";
-    if (pin?.tip) pin.tip.style.transform = "";
-    joyAimReset(); // 🎯 预走线也一并收（class 摘掉 + 平滑量归零；幂等）
-    if (clearHeading && pin?.face) pin.face.style.transform = "";
-    if (clearHeading && pin?.aim) pin.aim.style.transform = "";
-  }
-
-  /** 读当前相机 → 快照（缺值给 null；宿主不许在没快照时动相机） */
-  function joyReadCam(): JoyCamSnapshot | null {
-    const m = map as unknown as {
-      getCenter?: () => { lng: number; lat: number };
-      getZoom?: () => number;
-      getPitch?: () => number;
-      getBearing?: () => number;
-    } | null;
-    if (!m) return null;
-    try {
-      return joyCamSnapshotOf({
-        center: typeof m.getCenter === "function" ? m.getCenter() : null,
-        zoom: typeof m.getZoom === "function" ? m.getZoom() : NaN,
-        pitch: typeof m.getPitch === "function" ? m.getPitch() : NaN,
-        bearing: typeof m.getBearing === "function" ? m.getBearing() : NaN,
-      });
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 打开（面板开关 / 启动时就是开）：记下接管前的相机 → 进近景（只改俯角）→ 量标尺 →
-   * 位置真源与「我」一起落到现在这个中心。
-   * 🔴 `joyCalibrate()` 必须排在**改完俯角之后**：俯角不同，同一个屏幕 px 对应的地面距离差好几倍
-   *    （38° 与 64° 量的标尺不是一回事）。
-   */
-  function joyEnter(): void {
-    const m = map as unknown as { jumpTo?: (o: unknown) => void } | null;
-    if (joyPrevCam || !m) return; // 幂等：已经在近景里就什么都不做
-    joyPrevCam = joyReadCam();
-    try {
-      /* **只改俯角**（中心/zoom/bearing 一个字不动）——"进近景"= 抬头看这座城市，不是把镜头搬走 */
-      if (typeof m.jumpTo === "function") m.jumpTo({ pitch: JOY_PITCH_DEG, duration: 0 });
-    } catch {
-      /* 相机收不了就当没进近景；摇杆照常能推（推的还是 panBy，不依赖俯角） */
-    }
-    joyCalibrate();
-    /* 位置真源 = 原点（相机中心）；`joyApplyRoam(joyMove)` 用的是刚归零的运动状态 ⇒
-       「我」**立刻**站到画面中心 —— 进近景就看得见自己，不是推一下才冒出来。 */
-    if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
-    joyApplyRoam(joyMove);
-  }
-
-  /**
-   * 关闭（面板开关关掉 / 2D 降级把摇杆收走）：先收尾 → **相机逐字还原** → 位置真源清空。幂等。
-   * ⚠️ 顺序不能反：先 `onJoyHalt()`（把这次按压的容器位移烘进节点坐标、并做那**一次**重算），
-   *    再 `jumpTo` 还原 —— 否则还原那一跳会作用在一层还没对齐的标签上（就是机主报过的"错位"）。
-   */
-  function joyExit(): void {
-    if (joyActive) onJoyHalt();
-    const args = joyCamRestoreArgs(joyPrevCam);
-    joyPrevCam = null;
-    roamStore.clear();
-    /* 🕹 会话状态**清干净**（2026-10-03 新增的三个值 + 钉子上的朝向/踏步）：
-       不清 `joyOrigin`/`joyScale` 的话，下一次打开会拿着**上一台相机**的标尺算世界坐标
-       （俯角/缩放早变了）—— 那正是"编出来的坐标"；不清朝向的话，箭头会停在最后一次的方向上。 */
-    joyOrigin = null;
-    joyScale = null;
-    joyMove = createJoyMotion();
-    joyAccX = 0;
-    joyAccY = 0;
-    /* 🕹🧱 走路补刷新的那两个计数（米数 / 时间）也一并清掉（与 `joyAccX/joyAccY` 同一类残留：
-       留着一个"走了一半"的米数，下一次打开时按下的那一帧会被它接走 —— 虽然按下那一刻还会重置，
-       但这里清干净更省心）。 */
-    joyFlushMovedM = 0;
-    joyFlushElapsedMs = 0;
-    /* 🕹 相机距离这四个值一个都不能留：留 `joyZoom0` 会拿着**上一台相机**的出发 zoom 去还原
-       （与"不清标尺"同一类错误），留 `joyZoomPulling` 会让名字层一直藏着。
-       `joyZoomLevels` 交给下一次 `joyCalibrate()` 重新武装（它开头就把四个值全归零）。 */
-    joyZoomLevels.value = 0;
-    joyZoom0 = 0;
-    joyZoomApplied = 0;
-    joyZoomPulling.value = false;
-    /* 🎥 §16 相机真值也清掉（报"不知道"）：留着上一台相机的数，下一次开摇杆会拿着它去纠偏
-       —— 与"不清标尺""不清出发 zoom"是同一类错误（宁可回到开环，也不拿旧读数当真值）。 */
-    joyViewScale = 1;
-    joySetCam(NaN, NaN, 1);
-    joyPinReset(true);
-    /* 「我」回到名单里的网格位置：真源已清空 ⇒ `syncPins` 走的是常规那一路（含吸附） */
-    syncPins();
-    if (!args) return; // 没快照 ⇒ **一次相机都不动**（绝不编一个"原来的机位"）
-    try {
-      (map as unknown as { jumpTo?: (o: unknown) => void } | null)?.jumpTo?.(args);
-    } catch {
-      /* 还原失败也不抛：位置真源已经清掉，功能上等于"回到默认路" */
-    }
-  }
+  /* ══ 🧱 重构切片 S5（M5）：**摇杆近景那整条会话**的装配 ══════════════════════════════════
+     实现整块在 `wsJoystickStage.ts`（锚点 = 函数名，不按行号）。装配点为什么在这儿：
+       · 它要 `pins`（钉子名单）/ `perf` / `bldFlush` / `syncPins` / `pinEdgeSync`（宿主自己的）；
+       · 要 `joyMpp` / `joySpeedMps` / `joyZoomLevels` / `joyZoomPulling` / `joyReducedMotion`
+         （上面那几行刚声明完 —— 它们是模板与 `labRootClass` 的读者 ⇒ 所有权留在宿主）；
+       · 要 M4 接回来的 `labRootEl` / `reprojectNow` / `refreshNames` 与 M8 接回来的 `refreshBundles`、
+         M1 接回来的 `onMoveEndNames` ⇒ 必须晚于那三处装配（§2.2 规则①：同层不横向 import，
+         共享量一律由宿主注入）。
+     ⚠️ 四处**现读**（宿主那面是 `let`，布尔/数字没法按引用共享 —— 与 S4 的 `alive` 同一条处理）：
+        `alive` / `map` / `joyActive` / `bldTimer` —— 模块侧逐处列在 `wsJoystickStage.ts` 文件头。
+     ⚠️ 只解构宿主真正还要用的：`joyNamesFollow` / `joyFlushNow` 搬走后在宿主一个调用点都没有
+        （前者只被 `onJoyDrive` 调、后者只被那个闸门调）—— 删除按 §3 留给 S9。 */
+  const joyStage = createJoystickStage({
+    cameraMoving,
+    labRootEl,
+    pins,
+    syncPins,
+    pinEdgeSync,
+    bldFlush,
+    refreshBundles,
+    refreshNames,
+    onMoveEndNames,
+    reprojectNow,
+    perf,
+    joyMpp,
+    joySpeedMps,
+    joyZoomLevels,
+    joyZoomPulling,
+    joyReducedMotion,
+    aliveNow: () => alive,
+    mapNow: () => map,
+    joyActiveNow: () => joyActive,
+    setJoyActive: (v) => { joyActive = v; },
+    bldTimerNow: () => bldTimer,
+    setBldTimer: (v) => { bldTimer = v; },
+  });
+  const {
+    joyCalibrate, joyApplyRoam, joyReadCam, joyEnter, joyExit,
+    onJoyDrive, onJoyHalt,
+    prevCamNow, setPrevCam, originNow, moveNow, scaleNow, resetAcc,
+  } = joyStage;
 
   /* 面板里的开关（`WsCharPanel` → `WsCityEntry` → `:joy`）在运行时会变 ⇒ 这两件事跟着它走：
      打开 = 进近景（记快照 + 抬头），关闭 = **逐字还原**（相机回快照、DOM 卸载、位置真源清空）。
@@ -4133,247 +3582,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
   );
 
-  /** 名字层跟手：**只写 1 个容器**（O(1)），节点一个字都不写 */
-  function joyNamesFollow(): void {
-    const el = labRootEl.value;
-    if (!el) return;
-    el.style.transform = `translate3d(${(-joyAccX).toFixed(2)}px, ${(-joyAccY).toFixed(2)}px, 0)`;
-  }
-
-  /** 每帧**至多一次**（来自摇杆组件那唯一一个 rAF）；`mv` = 这一步的运动状态（角色那一半），
-   *  `phase` = `"push"`（推着/滑行）或 `"center"`（**松手后的回中段**：角色已停稳，只有相机在贴回角色）。 */
-  function onJoyDrive(d: { dx: number; dy: number }, _v?: unknown, mv?: JoyMotion, phase?: JoyFramePhase, dtMs = 0): void {
-    const m = map as unknown as {
-      panBy?: (o: [number, number], opt?: { duration: number }) => void;
-      easeTo?: (o: Record<string, unknown>) => void;
-    } | null;
-    if (!alive || !m || typeof m.panBy !== "function") return;
-    /* 🧭 §13：每帧**只报一个数**（相机 bearing）——属性读，0 次 `project`、0 次布局读。
-       用户转过地图之后，"屏幕上往上推"对应的世界方向变了；不报这一下，模型就还按标定那一刻算。 */
-    joySetBearingNow(joyReadBearing());
-    /* 🔴 两条路**分开判**（2026-10-03 第二轮）：世界速度下相机头 ~2 秒会被死区按在原地
-       （满推 8.8 px/s），那几帧 `d = {0,0}` 但**角色已经在走** ⇒ 相机那一半要跳过、
-       角色那一半照写。老代码把两者绑在"相机位移非 0"上，于是那 2 秒里钉子一动不动。 */
-    const camMoved = !!(d.dx || d.dy);
-    /* 🕹 相机距离（研究 §9；机主拍板 Ⓐ 拉近）：`zo` = 运动模型算出来的"已拉近几级"（松手后回 0）。
-       它跟 `camMoved` **不是一回事**：拉近从第一帧就开始改相机，而死区让 `panBy` 头 ~2.3 秒一动不动
-       ⇒ 接管标志（`joyActive`）必须**两条都算**，否则那 2.3 秒里 `easeTo` 引发的
-       `movestart/move/moveend/zoomend` 全部不会早退，每帧都走一遍常规重投影/取包
-       （判据 3/6 的红线；`zoomend` 那一支是这一轮**必须补**的早退，见它的注释）。 */
-    const zoomArmed = joyZoomLevels.value > 0;
-    const zo = zoomArmed && mv && Number.isFinite(mv.zo) ? mv.zo : 0;
-    const zoomMoved = zo !== joyZoomApplied;
-    if ((camMoved || zoomMoved) && !joyActive) {
-      /* 进入：**一次 class**（与既有 `movestart` 同一套 `is-camera-moving`，整层淡到 0.25）+
-         累计位移归零。`panAnchor` 保持 null ⇒ 后面那几个 handler 早退也不会有人误用旧锚点。
-         ⚠️ 归零是**必须**的：上一次收尾时 `onMoveEndNames()` 已经把位移烘进节点坐标了，
-         这里不归零就是把同一段位移**再叠一次**（名字层越推越偏）。
-         ⚠️ 只在**相机真的动**这一刻置位：相机没动的那些帧不置位 ⇒ 收尾也不必白跑一次取包
-         （那一次重算是给"画面位移"擦屁股的，画面没位移就没有屁股要擦）。
-         🕹 回中段也会走到这里（`joyActive` 那时仍为 true —— `onHalt` 要等相机停稳才发）⇒
-         名字层照旧跟手，回中那点位移（~17px）也一并被烘进去，不会留一条错位的缝。 */
-      joyActive = true;
-      joyAccX = 0;
-      joyAccY = 0;
-      /* 🕹🧱 补刷新的那四个数也从**这一刻**起算（与 `joyAccX/joyAccY` 同一次按下的口径）：
-         "上一次刷新" = 按下那一刻 ⇒ 第一次补刷新最早也在 600ms 之后、而且必须走够 100m。
-         `mv` 在相机真的动了的这一帧一定有（驱动每帧都传）；量不到就按 0 起算 —— 只用差值，不影响。 */
-      joyFlushMovedM = 0;
-      joyFlushElapsedMs = 0;
-      joyFlushPx = mv ? mv.px : 0;
-      joyFlushPy = mv ? mv.py : 0;
-      /* 整层淡化只跟**真的平移**走：拉近期间名字层本来就整层隐藏（§9.6），没必要再叠一层淡化 */
-      if (camMoved) cameraMoving.value = true;
-    }
-    /* 🕹🆕 **相机距离写点**（唯一一处；`zo` 与上一次相同 ⇒ **一次都不发** —— 常态每帧都是这一支）：
-       走的是**既有相机通路** `easeTo`（与 `panBy` 同一族，库内处理映射），**一行投影数学都不写**。
-       `duration: 0` 与 `panBy({duration:0})` 同口径：平滑已经由 `joyMotionStep` 的指数逼近做完了
-       （研究 §9 的 τ=0.5s 拉近 / 复用 `JOY_RECENTER_TAU_S` 回程），这里只负责"把这一刻的值落到相机上"。
-       🔴 `joyZoom0 + 0` 逐位等于出发 zoom ⇒ 回程结束时相机距离**恰好**回到进近景那一刻。 */
-    if (zoomMoved) {
-      joyZoomApplied = zo;
-      if (typeof m.easeTo === "function") {
-        try {
-          m.easeTo({ zoom: joyZoom0 + zo, duration: 0 });
-        } catch {
-          /* 相机收不了就当这一帧没拉（下一帧还会再试）；平移那一路照旧 */
-        }
-      }
-    }
-    /* 🕹 名字层：拉近期间**整层隐藏**（研究 §9.6 —— 标签坐标是按进近景那一档 zoom 投影的，
-       容器只补 translate，zoom 一变就系统性错位）。🔴 **状态翻转才写一次**（不进每帧循环）。 */
-    const hideNames = joyNamesHiddenOf(zo);
-    if (hideNames !== joyZoomPulling.value) joyZoomPulling.value = hideNames;
-    if (camMoved) {
-      /* 🕹 像素换算（研究 §9.4；`joyPanScaleOf` 一个乘方，不碰投影）：角色的位移积分在**进近景那一档**
-         的像素里（世界尺度冻结，红线），`panBy` 走的却是**当前**这一档 ⇒ 拉近 zo 级要乘 2^zo，
-         否则相机按 2^zo 的倍率追不上角色，角色被甩到硬夹带边缘（= 上一版"视角无法锁定角色"）。
-         累计位移（名字层跟手用）也按**实际写进相机的像素**记，收尾烘进节点坐标的才是真值。
-         🎥 §16：这个倍率现在取自 `joyViewScale`（上一帧 `joyReportCam()` 量的**真实** zoom 差，
-         含用户自己捏合进去的那几级）—— 与模型这一帧用的 `ctx.viewScale` **是同一个数**
-         （模型拿的也是上一次报的）⇒ 两边不可能差一档。没有真值时它恒 1 ⇒ 逐位等于旧行为。 */
-      const k = joyViewScale;
-      m.panBy([d.dx * k, d.dy * k], { duration: 0 });
-      joyAccX += d.dx * k;
-      joyAccY += d.dy * k;
-      joyNamesFollow();
-    }
-    /* 🎥 §16 **报相机真值**（每帧恰好一次，且在**所有**相机写点之后 —— 下一帧的模型看的就是它）：
-       位置 = `getCenter()` 用标定那把尺子反解出来的标定档坐标；倍率 = 真实 zoom 差。
-       量不到 ⇒ `NaN` ⇒ 模型回开环。这是"相机位置只有一个来源（地图自己）"的落地处。 */
-    joyReportCam();
-    /* 🆕 角色那一路（与相机**分成两件事**，§3）：世界坐标写进真源 + 钉子 `setLngLat` + 朝向 + 踏步。
-       🔴 位置**不再**从 `getCenter()` 反写 —— 反写就等于"我 = 相机"，屏幕上的钉子永远不动
-       （上一版"角色都没有动"的病根就在这一处）。
-       🔴 **回中段一个角色写点都不发**（判据：`phase === "center"` ⇒ 0 次 `setLngLat` / 0 次
-       `roamStore.write` / 0 次 `Marker.setLngLat` 内部那次 project）：那时角色已经停稳
-       （`joyMotionStep` 的 `centering` 只在"没输入且速度恰好 0"时为真），发出去也只是把同一个
-       坐标重写一遍 —— 而那正是"回中只许动相机"这句要求的可数形式。 */
-    if (mv && phase !== "center") {
-      joyMove = mv; // 留一份最新状态（这一份**不是**驱动的那份；只给"进来时先站到原点"用）
-      joyApplyRoam(mv);
-      /* 🕹🧱 **这一次按下以来角色走了多少米**（世界位移 → `joyMpp` 那把唯一的尺子 → 米）。
-         `mv.px/py` 是角色在**标定档像素**里的位置（世界尺度冻结在那一档），`joyMpp` 正是
-         "1 个标定档像素 = 多少米" ⇒ 两者相乘就是世界米数，**一次投影、一次 DOM 写都没有**。
-         代价：每帧 3 个乘/加 + 1 个 `Math.sqrt`（见自检 ⑰ 的"每帧代价"那一组）。 */
-      const fdx = mv.px - joyFlushPx;
-      const fdy = mv.py - joyFlushPy;
-      if (joyMpp.value > 0) joyFlushMovedM += Math.sqrt(fdx * fdx + fdy * fdy) * joyMpp.value;
-      joyFlushPx = mv.px;
-      joyFlushPy = mv.py;
-      joyFlushElapsedMs += dtMs;
-    }
-    /* 🕹🧱 **受节流约束的那一次补刷新**（机主「走路时楼会不见」的正解；机制见 `joyFlushNow()`）：
-       `joyFlushDue` 是**唯一**判定点 —— ≥100m **且** ≥600ms 才放行 ⇒ 常态每帧只做
-       "读两个数 + 比大小"（0 次 `setData`、0 次重挑、0 次 DOM 写）。
-       🔴 `joyActive === false` 时这一支不进：那条老路（`moveend`/`zoomend` 那几个 handler）
-       一个字都没改 —— 相机没被摇杆接管时，刷新照旧归它们管。 */
-    if (joyActive && joyFlushDue({ movedM: joyFlushMovedM, elapsedMs: joyFlushElapsedMs })) {
-      joyFlushMovedM = 0;
-      joyFlushElapsedMs = 0;
-      joyFlushNow();
-    }
-    /* 🎯 预走线（**两个写点，两条路都要走**）：push 段跟着速度长出来；`center` 段只做一件事 ——
-       **把线收回去**（`speedRatio` 在 `release()` 里当场归零，收敛只能由 `joyAimStep` 按 τ 走完）。
-       🔴 它与上面那条"回中段 0 个角色写点"不冲突：那条红线管的是**角色的世界位置**
-       （`setLngLat` / 真源 / 投影），而这里只写钉子内部两个**装饰性 transform**。
-       判据在自检 ⑩e3（那三条仍是 0）+ ⑩e4（回中段的预走线写点 ≤ 2/帧，且结尾必须收到 0）。 */
-    joyAimWrite(pins.find((p) => p.id === ROAM_PIN_ID), mv, dtMs);
-  }
-
-  /**
-   * 🕹🧱 **摇杆期间的"边走边补"**（2026-10-04 第八轮；唯一入口 —— 每帧那个闸门在 `onJoyDrive` 末尾）。
-   *
-   * 为什么必须有它（机主原话：「在将屏幕**斜过来**时移动角色**楼会不见**，**反复放大缩小就好了**，
-   * 在正常直接**竖直向下看时就不会**喵」）：摇杆驱动期间 `move`/`moveend` 整条"刷新包 + 落楼 + 名字"
-   * 的路都被早退（`m.on("move", …)` 与 `m.on("moveend", …)` 那两句 `if (joyActive) return;`，
-   * 理由见那两处注释），俯角 64° 下看得见的地面只有**一条窄带**
-   * ⇒ 走几十米那批楼就滚出屏幕、而没有新的补进来；`zoomend` 仍会重挑一次（`bldTierCrossedFlush`）
-   * ⇒ 所以"反复放大缩小就好了"。判据与常量在 `wsJoystick.joyFlushDue`（≥100m 且 ≥600ms）。
-   *
-   * 三件事，顺序不能反：
-   *   ① **先把容器那份位移烘进节点坐标**（`onMoveEndNames()` 容器归零 + `reprojectNow()` 就地重投影）：
-   *      名字层的节点坐标是**相对容器**的，而容器上正挂着这一段走过的位移；不先烘就重排名字，
-   *      新算出来的坐标会与旧位移**叠加**一次 ⇒ 整层标签偏掉（机主报过的"名字错位"那一族）。
-   *      烘完把累计位移归零，跟手从新基准接着累（`joyNamesFollow()` 每帧写的就是它）。
-   *      ⚠️ `onMoveEndNames()` 会顺手清 `cameraMoving`（= 摘掉"相机在动"那层淡化）——摇杆还推着，
-   *         所以同一个 tick 里立刻置回来：Vue 的 patch 在微任务里，**只落一次 DOM 结果、不闪**。
-   *   ② **落楼**（`bldFlush("joy")` → 真源 `flushBldStore` → 按**当前**视野重挑一次）：这一发才是
-   *      "楼会不见"的正解。`refreshBundles` **替代不了它**：格都取过时它在 `wsOfflineFeed` 里整轮早退
-   *      （`if (!batch.length) return`）⇒ 光靠取包**不重挑楼**，屏上就一直是走路前那一批。
-   *   ③ **取新格 + 重排名字**（与 `moveend` / `onJoyHalt` **同一条路**，不新写第二条）：
-   *      `refreshBundles("joy")` → 完成后 `refreshNames("joy")`（新数据落地时 feed 自己会再落一次图）。
-   *
-   * 🔴 节流由调用方那一处判据保证（≥100m **且** ≥600ms）——本函数**不是**每帧调用的。
-   * 🔴 冻结集 / 锚点一个都不清：走的是同一份 `wsBldPickStore`（`bldFlush` 里那套"只增不减"）。
-   * 🔴 刷新函数名与 `moveend` 完全同一批三个，**没有**第二条刷新路（自检 ⑰ 钉着）。
-   */
-  function joyFlushNow(): void {
-    if (!alive) return;
-    /* ① 烘位移（口径与 `onJoyHalt` 的收尾逐字相同：容器归零 → 就地重投影） */
-    const moved = joyAccX !== 0 || joyAccY !== 0;
-    joyAccX = 0;
-    joyAccY = 0;
-    if (moved) {
-      onMoveEndNames();
-      reprojectNow();
-      /* 摇杆还在推着 ⇒ "相机在动"这个状态照旧（同一个 tick，不产生一次闪烁） */
-      cameraMoving.value = true;
-    }
-    /* ② 落楼：按当前视野重挑一次（仓库并集、冻结集、锚点一个都不动） */
-    bldFlush("joy");
-    /* ③ 取新格 → 重排名字（既有通路；新格落地时 feed 会自己再落一次图） */
-    void refreshBundles("joy").then(() => (alive ? refreshNames("joy") : undefined));
-  }
-
-  /**
-   * 收尾 —— **恰好一次**重算（判据 6：不是 0 次，也不是每帧 1 次）。
-   *
-   * 🔴 2026-10-03 第二轮**时点变了**：不再在手指抬起那一刻发，而是**相机回中跑完之后**才发
-   * （`release()` → 回中段 → 相机贴回角色 → `onHalt`）。这样做有两个好处，都是一个原因：
-   *   · 回中段里 `joyActive` **仍然为 true** ⇒ `panBy` 每帧引发的 `movestart/move/moveend`
-   *     全部照旧早退，**回中期间 0 次重投影 / 0 次取包 / 0 次重排标签**（判据 ⑩e3 钉着）；
-   *   · 那一次重算因此落在**画面已经停稳之后**，烘进节点坐标的位移是最终值 —— 不会留一条
-   *     "重投影完了相机还在挪"的错位缝（机主报过的"名字错位/松手卡一下"就是这么来的）。
-   *
-   * 顺序照抄既有 `moveend`（同一个理由，见那里 2026-10-01 那段注释）：
-   *   清标志 → 容器归零 → **就地重投影**（把这次位移烘进节点坐标）→ 一次取包 + 一次重排。
-   * 🔴 那 600ms 去抖**不启动**（推送期间它一直没起过；收尾就直接跑一次，不再等）。
-   */
-  function onJoyHalt(): void {
-    if (!joyActive) return;            // 没推过 ⇒ 不是"松手"，一次重算都不该有
-    /* 🎯 预走线**紧跟着收干净**（幂等）：`halt` 是"每一次按压恰好一次"的收尾
-       —— 正常路根本轮不到它干活（松手后第一帧 `phase="center"` 就把 class 摘了），
-       它挡的是**病态路**：某一发按压短到松手后一帧都没投递
-       （相机没动过、`zo` 也没动过），那时不在这里收，线就会**僵在半路**。
-       放在守卫之后是**必须**的：这条判据钉着"没推过 ⇒ 一次重算都不做"（自检 ⑦）。 */
-    joyAimReset();
-    joyActive = false;
-    /* 🕹🔴 **相机距离的保险丝**（研究 §9.5「松手后 zoom 回到出发值」的结构保证）：
-       正常路走不到这里 —— 回中段的最后一帧会把 `zo` **恰好**写 0（`JOY_ZOOM_EPS_LEVELS` 那一跳），
-       宿主那时就已经把相机 distance 放回 `joyZoom0`、名字层也跟着恢复，所以 `joyZoomApplied === 0`。
-       只有病态路会命中：时钟被冻住 / rAF 反复给同一时间戳 ⇒ 回程被 `JOY_CENTER_MAX_FRAMES` 强收尾，
-       `zo` 还停在半路。那时必须补一发，否则相机会**永久停在拉近后的距离**上、名字层也一直藏着。 */
-    if (joyZoomApplied !== 0) {
-      joyZoomApplied = 0;
-      joyZoomPulling.value = false;
-      const em = map as unknown as { easeTo?: (o: Record<string, unknown>) => void } | null;
-      if (em && typeof em.easeTo === "function") {
-        try {
-          em.easeTo({ zoom: joyZoom0, duration: 0 });
-        } catch {
-          /* 相机收不了也不抛：`joyExit()` 的 `jumpTo(快照)` 兜底 */
-        }
-      }
-    }
-    const moved = joyAccX !== 0 || joyAccY !== 0;
-    joyAccX = 0;
-    joyAccY = 0;
-    /* 🕹🧱 **补刷新的两个计数在这里复位**（"松手 = 上一次刷新翻篇"；下一次按下时 `onJoyDrive`
-       还会再置一次 —— 这里复位是防"留在半路的值被下一次按下接走"）。
-       ⚠️ 只动这两个计数：`joyMove`（跨按压保留的位置/朝向）一个字都不碰。 */
-    joyFlushMovedM = 0;
-    joyFlushElapsedMs = 0;
-    /* 🕹🧱 **松手再刷一次**（"与既有松手补一次同口径"）：下面那条 `refreshBundles("joyhalt")`
-       只会在**有新格**时落图（`wsOfflineFeed` 的 `if (!batch.length) return`）⇒ 停下来的这一屏
-       可能一直停在走路中间那一批楼上。补一发 `bldFlush` 按**最终**视野重挑一次（同一条通路）。 */
-    bldFlush("joyhalt");
-    /* 🆕 停下即回正（§4）：踏步是 transform，不补这一下就会**停在"半抬腿"那一帧**上。
-       朝向**不清**（人是停下了，不是转回正北）—— 关掉摇杆时才由 `joyExit()` 一并还原。
-       角色位置也**不动**：速度在 `release()` 那一刻已经归零，松手后又不再跑帧 ⇒ 位置自然冻结。 */
-    joyPinReset(false);
-    if (!alive) return;
-    if (moved) {
-      onMoveEndNames();                // 容器归零（`cameraMoving=false` + 一次 transform 写）
-      reprojectNow();                  // 重投影**只重投影、不重排**（O(N)，N ≤ 26）
-    }
-    /* 📍 **恰好一次**：摇杆推着的时候三个相机钩子全部早退（判据 3/6 的红线），
-       屏外指示停在推杆前那一刻 —— 画面停稳之后在这里补一次（与名字层那一次重算同一个时点）。 */
-    pinEdgeSync();
-    if (bldTimer) window.clearTimeout(bldTimer);
-    bldTimer = 0;
-    void refreshBundles("joyhalt").then(() => (alive ? refreshNames("joyhalt") : undefined));
-  }
+  /* 🧱 S5（M5）：`joyNamesFollow`（名字层跟手，**只写 1 个容器**）与**帧里那一路** ——
+     `onJoyDrive`（每帧至多一次的唯一驱动点）/ `joyFlushNow`（🕹🧱 受节流约束的"边走边补"）/
+     `onJoyHalt`（收尾那**恰好一次**重算）—— **整块搬进了 `wsJoystickStage.ts`**。
+     🔴 本轮机主点名的热区（摇杆补刷新 / `joyFlushDue` 节流 / 松手那一发按最终视野重挑楼）就在那三个
+        函数里，搬的是**定义**、不是复制 ⇒ 全仓仍然只有一个实现（`ws_joystick_selftest` 的 ⑦/⑩/⑰ 组钉着）。
+     ⚠️ 上面那次 `createJoystickStage` 把 `onJoyDrive` / `onJoyHalt` 接了回来 → 模板那两个回调
+        （`@drive` / `@halt`）一个字都没改；`refreshBundles("joy")` / `refreshNames("joy")` 那几个
+        调用点也照旧是宿主既有那批函数（经注入拿到的同一个）。 */
 
   /* 🔴 摇杆**被卸载**时（面板把开关关掉、或 WebGL 掉了走 2D 降级路）组件那边只 `cancel()` ——
      它**不**发 `halt`（"控件没了" ≠ "松手"）。但这边的收尾一件都不能少，否则会留下两种残留：
@@ -4921,7 +4137,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
              关了开关要**逐字还原**到这一份（俯角 = `basePitch`，不是 64）。
              ⚠️ 只有这一处能在建图期填快照：此刻相机已经是 64 了，现读只会读到"接管后"的值。 */
           if (props.joy) {
-            joyPrevCam = { center: [c[0], c[1]], zoom: 16.4, pitch: basePitch.value, bearing: 0 };
+            setPrevCam({ center: [c[0], c[1]], zoom: 16.4, pitch: basePitch.value, bearing: 0 });
           }
           stats.mode = "街区视野（街道级）";
           stats.view = "街区视野";
@@ -4949,9 +4165,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          没有 bbox 时相机停在建图默认值上，center/zoom/bearing 现读即可（近景只改过俯角），
          `pitch` 用 `basePitch`（= 关着时该有的那个 38）。
          ⚠️ 读不齐就**不填**（`joyPrevCam` 留 null）⇒ 关闭时一次相机都不动 —— 宁可不动，也不编一个机位。 */
-      if (props.joy && !joyPrevCam) {
+      if (props.joy && !prevCamNow()) {
         const cam0 = joyReadCam();
-        if (cam0) joyPrevCam = { ...cam0, pitch: basePitch.value };
+        if (cam0) setPrevCam({ ...cam0, pitch: basePitch.value });
       }
       /* 📍 **屏外方向指示的几何**（容器尺寸 + 四边安全区）在这里量一次 —— **与摇杆无关**
          （摇杆关着也照样要有"其他角色在哪"的指示），resize/转屏时在 `onWinResize()` 里重量。 */
@@ -4966,8 +4182,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       if (joyGate.value.show) {
         joyMeasureVh();     // 🕹 §15：底盘尺寸按容器高度定（建图这一刻量一次；resize 时再量）
         joyCalibrate();
-        if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
-        joyApplyRoam(joyMove);
+        /* 🧱 S5（M5）：`joyOrigin` / `joyMove` 是摇杆会话自己的状态（已搬进 `wsJoystickStage.ts`）
+           ⇒ 这里经那两个出口**现读**（`o0` 与 `moveNow()` 都是同一刻的值，与原实现逐字同序）。 */
+        const o0 = originNow();
+        if (o0) roamStore.write(o0.lng, o0.lat, moveNow().headingDeg);
+        joyApplyRoam(moveNow());
       }
       /* 🗄 2026-09-24 已移除：区县边界（`dist-fill` / `dist-line`，"整区铺满"的可读性）。
          代拍页那一屏没有它；机主要"只留代拍页代码"⇒ 这一层不挂。
@@ -5039,10 +4258,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          会给出非有限值），`joyCalibrate()` 会如实退回 `null`（⇒ 只有相机走、角色不动）。
          `load` 时版面已经有了 ⇒ 在这里补量一次。**只在还没量到时**才调（正常路径 0 次调用），
          而且同样**不在帧里** —— "移动中 0 次投影"那条红线不受影响。 */
-      if (joyGate.value.show && !joyScale) {
+      if (joyGate.value.show && !scaleNow()) {
         joyCalibrate();
-        if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
-        joyApplyRoam(joyMove);
+        /* 🧱 S5（M5）：`joyOrigin` / `joyMove` 是摇杆会话自己的状态（已搬进 `wsJoystickStage.ts`）
+           ⇒ 这里经那两个出口**现读**（`o0` 与 `moveNow()` 都是同一刻的值，与原实现逐字同序）。 */
+        const o0 = originNow();
+        if (o0) roamStore.write(o0.lng, o0.lat, moveNow().headingDeg);
+        joyApplyRoam(moveNow());
       }
     });
 
@@ -5129,19 +4351,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /* 🕹 摇杆会话**就地作废**（不重算 —— 这一屏马上就没了）：`alive=false` 之后 `onJoyHalt()`
        本来也会早退，但这里显式清一次，免得"标志留在 true 上"这种事再被后来的人踩。 */
     joyActive = false;
-    joyAccX = 0;
-    joyAccY = 0;
+    /* 🧱 S5（M5）：那两个累计位移（跟手/补刷新用）是摇杆会话自己的状态（已搬进 `wsJoystickStage.ts`）
+       ⇒ 经那个出口清掉（`resetAcc()` 逐字就是原来的 `joyAccX = 0; joyAccY = 0;`）。 */
+    resetAcc();
     unguard?.();
     unguard = null;
     unlockPageGestures();
     stopTimer();
     if (bldTimer) window.clearTimeout(bldTimer);
     if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
-    if (switchTimer) window.clearTimeout(switchTimer);
-    if (enterTimer) window.clearTimeout(enterTimer);      // 🆕 进场淡入的收尾定时器
-    if (ghostTimer) window.clearTimeout(ghostTimer);      // 🆕 退场幽灵的移除定时器
-    if (snapRaf1) cancelAnimationFrame(snapRaf1);         // 🆕 传送帧的举旗/摘旗
-    if (snapRaf2) cancelAnimationFrame(snapRaf2);
+    /* 🧱 S5（M4）：换批 / 进场淡入 / 退场幽灵 / 传送帧举旗摘旗那**五个**定时器与两帧句柄
+       都是 `wsNameHost.ts` 私有的 `let` ⇒ 经这个出口一次清掉（函数体里那五条判据与顺序
+       与原宿主逐字相同，见 `cancelMotion` 的说明）。 */
+    cancelMotion();
     if (watchdog) window.clearTimeout(watchdog);
     watchdog = 0;
     if (recoverTimer) window.clearTimeout(recoverTimer);

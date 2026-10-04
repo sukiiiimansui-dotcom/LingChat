@@ -281,3 +281,94 @@ export interface ViewFetchCtx {
    *  解构会拿到快照；这里每次调用现读，与原实现在**同一时刻**读同一个值。 */
   aliveNow(): boolean;
 }
+
+/* ══ S5（M4 `wsNameHost` / M5 `wsJoystickStage`）的注入面 ═══════════════════════════════
+ * 与 S2/S3/S4 同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体一个字都不用动）。
+ * 这一片的别名比 S4 多一处**形状上**的差别，两条都写清楚：
+ *   · `alive` 仍走 `aliveNow()`（**不许冻在入口**：M4/M5 的函数会跑在定时器/rAF/微任务里）；
+ *   · `map` 在 **M5** 里走"函数体第一行的 `const map = ctx.mapNow()`"而不是形参默认值 ——
+ *     因为 `onJoyDrive` / `onJoyHalt` 的**签名行**被 `ws_joystick_selftest` 逐字钉着（判据 ⑦/⑫h），
+ *     多一个形参就红了（理由逐条写在 `wsJoystickStage.ts` 的文件头）。
+ * ⚠️ 同样是"形状的说明书，不是第二份实现"：真源永远只有一份
+ *    （`stats` / `perf` / `pins` / `cameraMoving` / ref 那几个都在宿主）。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
+ */
+
+/** 宿主 `pins` 里**摇杆真正读到**的那几个字段（结构化视图；`edge*` 三件是屏外指示的，不在这里）。 */
+export interface StagePin {
+  id: string;
+  el: HTMLElement;
+  mk: { setLngLat(c: [number, number]): unknown };
+  face: HTMLElement | null;
+  body: HTMLElement | null;
+  aim: HTMLElement | null;
+  dash: HTMLElement | null;
+  tip: HTMLElement | null;
+}
+
+/** M4（`createNameHost`）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。 */
+export interface NameHostCtx {
+  /** HUD 计数（`names` 由本模块写、`note` 读写 —— 与 `applyNamePlanWithHud` 同一刻写是硬纪律） */
+  stats: StageStats;
+  /** 浏览器取数（名字层取格用；`fetchWithTimeout` 的装配在宿主） */
+  fetchCell: BundleFetch;
+  /** 性能档位单例（`perfLow` 就是它的结构化视图 —— 那个 computed 也跟着本片搬来了） */
+  perf: PerfApi;
+  /** 分路状态（`fallback2d` 时名字层不许再要地图 —— 判据就在喂给 `createNameLayer` 的取值器里） */
+  renderKind: Ref<"init" | "webgl" | "waiting" | "failed" | "fallback2d">;
+  /** 🔴 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`） */
+  aliveNow(): boolean;
+  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  mapNow(): unknown;
+  /** 🔴 宿主那个 `let drawnBld` 的**取值器**（`afterDraw` 每轮重写 ⇒ 名字层要读当下那一份） */
+  drawnBldNow(): readonly unknown[];
+}
+
+/** M5（`createJoystickStage`）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。
+ *  ⚠️ 两个 `watch`（`props.joy` 开合 / `joyGate.show` 卸载兜底）**故意留在宿主** ⇒ 这里没有
+ *     `props` / `joyGate`（模块不需要它们；写上来就是没人用的字段，见文件头那条纪律）。 */
+export interface JoystickStageCtx {
+  /** 相机运动中（摇杆判定"相机真的动了"那一刻置位；名字层跟手那一层淡化用它） */
+  cameraMoving: Ref<boolean>;
+  /** 标签层容器（跟手只写它一个节点） */
+  labRootEl: Ref<HTMLElement | null>;
+  /** 钉子名单（「我」那颗由 `ROAM_PIN_ID` 找；本模块只读，不新增/删除） */
+  pins: StagePin[];
+  /** 「我」回到名单里的网格位置（`joyExit` 收尾用；规则在宿主 `syncPins`） */
+  syncPins(): void;
+  /** 屏外方向指示补一次（`onJoyHalt` 那**恰好一次**的时点；规则在 `wsPinEdge`） */
+  pinEdgeSync(): void;
+  /** 落楼（真源 `wsDistrictScene.flushBldStore`；本模块只管"什么时候喊一声"） */
+  bldFlush(why: string): void;
+  /** 按视野补离线格（实现在 M8 `wsHudStats.ts`；**宿主注入 ⇒ M5 不与 M8 横向 import**） */
+  refreshBundles(why?: string): Promise<void>;
+  /** 名字层重排（实现在 M4 `wsNameHost.ts`；同上，走宿主注入） */
+  refreshNames(why?: string): Promise<void>;
+  /** 容器归零（实现在 M1 `wsMapCamera.ts`；同上） */
+  onMoveEndNames(): void;
+  /** 就地重投影（实现在 M4 `wsNameHost.ts`；同上） */
+  reprojectNow(): void;
+  /** 性能档位单例（踏步/预走线的 low 档判据） */
+  perf: PerfApi;
+  /** 米/像素（`joyCalibrate` 量一次；宿主 `JoyMotion` 的世界速度用它） */
+  joyMpp: Ref<number>;
+  /** 满推速度档（同上；模板 `:speed-mps` 直接吃它） */
+  joySpeedMps: Ref<number>;
+  /** 推杆期间拉近几级（`joyCalibrate` 武装；模板 `:zoom-levels` 直接吃它） */
+  joyZoomLevels: Ref<number>;
+  /** 名字层是否正在整层隐藏（拉近期间；`labRootClass` 的 `is-zoom-pull` 读它） */
+  joyZoomPulling: Ref<boolean>;
+  /** ♿ 系统"减弱动效"（**只关踏步**；宿主那段 `matchMedia` 求值仍在宿主 —— 本模块只读） */
+  joyReducedMotion: boolean;
+  /** 🔴 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`） */
+  aliveNow(): boolean;
+  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  mapNow(): unknown;
+  /** 🔴 宿主那面 `joyActive` 旗（**唯一一份仍在宿主**：五个 `m.on(...)` 早退与卸载都在读它）
+   *  —— 与 S4 的 `alive` 同一条处理：模块每帧现读，要改就喊一声。 */
+  joyActiveNow(): boolean;
+  setJoyActive(v: boolean): void;
+  /** 🔴 宿主那个 `let bldTimer`（`moveend` 那条 600ms 去抖也用它）—— 取值器 + 写入器 */
+  bldTimerNow(): number;
+  setBldTimer(v: number): void;
+}

@@ -706,8 +706,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      （MapLibre 给不出那种东西：地面是平面贴图、楼是挤出体）。
 
      🧱 重构切片 S3（M1）：这段几何（`joyGate` / `basePitch` / `joyVh` / `joyMeasureVh` /
-     `initPitch` / `joyVars`）**整块搬进了 `wsMapCamera.ts`** —— 装配点在下面 3800 行那一段
-     （它要等 `labRootEl` 那几个名字层的 ref 声明完，否则踩 TDZ）。**这里不许再写第二份。** */
+     `initPitch` / `joyVars`）**整块搬进了 `wsMapCamera.ts`** —— 装配点在下面 `labRootEl` 之后那一段
+     （它要等那几个名字层的 ref 声明完，否则踩 TDZ）。**这里不许再写第二份。** */
   /* 📊 样式自检要带上 **HUD 原话**（机主看到的那一行）—— 只读，不参与任何渲染逻辑 */
   const hudEl = ref<HTMLElement | null>(null);
   /**
@@ -1103,10 +1103,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
 
   /* ══ 🧱 重构切片 S3（M8）：**HUD / stats 的前半**装配（实现整块在 `wsHudStats.ts`）════════
      锚点 = 函数名（不按行号）：`aiOn` / `stats` / 长等待那一段 / `startFps`。
-     为什么装配点在这儿（而不是与 M1 一起放到 3800 行那一段）：**S2 的装配点在 2800 行**，
-     它那份只读 ctx 里就有 `stats` / `aiOn` / `stopTimer` ⇒ 这三样必须先存在；
+     为什么装配点在这儿（而不是与 M1 一起放到名字层那几个 ref 之后）：**S2（2D 降级路）的装配点
+     在 `domPins` 之后那一段**，它那份只读 ctx 里就有 `stats` / `aiOn` / `stopTimer` ⇒ 这三样必须先存在；
      晚的那半（`hudMode` + 包 HUD + 署名取句）在同一个模块的 `createBundleHud` ——
-     它要读的离线包管道声明在 3300 行之后，早构造必踩 TDZ。两个工厂各自的说明见模块文件头。
+     它要读的离线包管道声明在这之后（`fetchCell` / `bldFeed` / `gwLayer` 那一段），早构造必踩 TDZ。
+     两个工厂各自的说明见模块文件头。
      ⚠️ 下面三样**故意留在宿主**：`phase`（宿主与 S2 都还在写它）· `K_MS`（`onMounted` 里还在写它）
         · `BLD_SPARSE`（与 2D 降级路共用的阈值）。 */
   type Phase = "fetch" | "build" | "render" | "done";
@@ -3640,7 +3641,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
 
   /* ══ 🧱 重构切片 S3（M1 + M8 后半）：**相机 / 手势** 与 **包 HUD** 的装配 ══════════════════
      两个模块的实现整块在 `wsMapCamera.ts` / `wsHudStats.ts`（锚点 = 函数名，不按行号）。
-     为什么装配点在这儿（而不是跟 M8 前半一起放在 1150 行那段）：
+     为什么装配点在这儿（而不是跟 M8 前半一起放在 `phase` / `stats` 那一段）：
        ① M1 要 `namesOn` / `nameNodes` / `cameraMoving` / `labRootEl` 四个名字层的 ref（上一段刚声明完）
           —— 它们是 `const`，早引必踩 TDZ（本文件对 TDZ 有过前科，不靠"函数是惰性的"兜）；
        ② M8 后半要 `bldFeed` / `roadsFeed` / `placesFeed` / `gwLayer` / `fetchCell`（离线包那几条管道）。

@@ -1060,6 +1060,16 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
       } else {
         const frozenList = input.nearFrozen;
         const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
+        /** 🔴 **每个候选的静态量只取一次**（与 base 同一个记忆表 ⇒ 值一模一样，数值逐字节不变）：
+         *  这一段的代价是**乘法**（锚点数 × 候选数）。本机真包读数（12,741 候选 / 5 次中位数 / node，
+         *  **不是真机、不是 WebGL**）：0 锚点 84ms · 1 个 108ms · 5 个 185ms · 20 个 382ms
+         *  ⇒ 每多一个锚点约 +20~25ms。`bldStaticMeasureOf` 的 WeakMap 查询占其中不小一块
+         *  ⇒ 先按 pool 下标铺一遍，循环里只做算术。A/B（同夹具同机）：20 个锚点时
+         *  +298ms（铺一遍）对 +449ms（循环里现查）。
+         *  ⚠️ **仍是 O(锚点数 × 候选数)，而锚点只增不删** ⇒ 走得越远这一项越大（30k 候选约翻倍）。
+         *     真要再压只有两条路：①把"整池排序"换成"只选前 K 名"（同一把全序键、结果相同，
+         *     常数约 1/4）；②让老锚点不再做"新挑"、只吃冻结集（**改口径，得先问过机主**）。 */
+        const poolMeasure: Array<BldStaticMeasure | null> = pool.map((c) => bldStaticMeasureOf(c.f));
         /** 已入列的 id（`""` 不算：没有 id 的要素只靠 `taken` / 对象同一性去重）——"同一栋只入列一次" */
         const idSeen = new Set<string>();
         for (const c of chosen) if (c.c.id !== "") idSeen.add(c.c.id);
@@ -1073,7 +1083,7 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
           const cands: Array<{ cand: Cand; i: number; d: number }> = [];
           for (let i = 0; i < pool.length; i++) {
             if (taken[i]) continue;                     /* 已入选的不再补（判据：补齐件 = 尚未入选的那批） */
-            const m2 = bldStaticMeasureOf(pool[i]!.f);
+            const m2 = poolMeasure[i];
             if (!m2) continue;
             const dx = (m2.cLng - a.lng) * kx;
             const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;

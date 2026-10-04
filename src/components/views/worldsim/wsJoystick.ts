@@ -580,8 +580,10 @@ export interface JoyDriverDeps {
    * 第 3 个参数是**这一步之后的运动状态**：宿主用它写角色世界坐标（`px/py`）、朝向与踏步
    * （§3/§4；相机那一路只认 `d`）。第 4 个参数是**相位**：`phase === "center"` 时角色已经停稳，
    * 宿主**只许动相机**（不写 `setLngLat`、不写真源、不重挑楼/不算名字）—— 自检 ⑩e3 钉着。
+   * 🎯 第 5 个参数是**这一帧的 dt（ms，已夹到 `JOY_MAX_DT_MS`）**：只给预走线那条平滑用
+   * （`joyAimStep` 要按时间常数收线；宿主自己去读时钟就会多出第二个时间源 —— 本仓"唯一 rAF / 唯一时钟"纪律）。
    */
-  onFrame: (d: JoyFrameDelta, v: JoyVector, move: JoyMotion, phase: JoyFramePhase) => void;
+  onFrame: (d: JoyFrameDelta, v: JoyVector, move: JoyMotion, phase: JoyFramePhase, dtMs: number) => void;
   /**
    * 收尾：**恰好一次**（宿主在这里清 `joyActive` + 做那一次重算；没按下过就不会回调）。
    * 🔴 2026-10-03 第二轮：时机**推迟到回中结束**（原先在 `release()` 里同步发）。
@@ -695,7 +697,9 @@ export function createJoyDriver(deps: JoyDriverDeps): JoyDriver {
        ⚠️ 断链那条不变量照旧：停稳（`settled`，含 `zo === m.zo`）⇒ 三个判据全假 ⇒ 一帧都不发。 */
     const zoomMoved = r.move.zo !== before.zo;
     if (r.d.dx || r.d.dy || (r.moving && charMoved) || zoomMoved) {
-      deps.onFrame(r.d, v, move, r.centering ? "center" : "push");
+      /* 第 5 个参数 = 这一帧的 dt（**同一个夹法**：`clampDt` 是唯一一处夹，预走线的平滑与运动模型
+         用的是同一个时间步长 —— 不然掉帧时线会按真实 dt 收、角色按 64ms 走，两者对不上）。 */
+      deps.onFrame(r.d, v, move, r.centering ? "center" : "push", clampDt(dt));
     }
     if (active) {
       /* 还推着 / 还在滑行 / 相机还没追上 ⇒ 续帧；都停了就断链（不空转、不残留定时器）。
@@ -965,4 +969,274 @@ export function joyCamRestoreArgs(prev: JoyCamSnapshot | null): (JoyCamSnapshot 
   const ok = [...prev.center, prev.zoom, prev.pitch, prev.bearing].every((n) => Number.isFinite(n));
   if (!ok) return null;
   return { center: [prev.center[0], prev.center[1]], zoom: prev.zoom, pitch: prev.pitch, bearing: prev.bearing, duration: 0 };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 八、🕹 摇杆的"家"（位置）：长按搬家 + 记住 + 安全区（2026-10-04 第四轮）
+ * ══════════════════════════════════════════════════════════════════
+ * 机主原话：「**这个摇杆位置太反人类了喵**！」—— 固定左下角那块 112px，要拇指每次都回到同一个点。
+ * 研究 §10 查到两条硬事实，决定了本轮的取舍：
+ *   · §10.1 [官方] Unity Input System 的 `OnScreenStick` 就是**以 pointer-down 那个点为中心**生成摇杆的
+ *     （逐字："within a box **centered on the pointer-down screen point**, and with an edge length defined in
+ *     the component's Movement Range property"）—— "触点即生成"确实是引擎官方的做法；
+ *   · 但**整片拇指区不能归摇杆**：本屏地图的拖动/捏合是 MapLibre 自己挂在画布上的监听
+ *     （`WsDistrictMapLibre.vue` **一个默认手势都没关**），盖一层透明"拇指区"会把地图拖动、双指缩放
+ *     **全挡掉** ⇒ 那是一条会破功能的改法，本轮**不做**（要做就得把地图手势接过来自己转发，另一个量级）。
+ * ⇒ 折中方案（**这就是本轮的完整口径**，别当成没做完）：
+ *     **在地图上长按（不在浮块/标签/钉子上）⇒ 摇杆的家搬到这里，并记住**；
+ *     底盘默认仍是左下 `JOY_INSET_PX`（既有几何红线一条不动），命中区仍是整块 112。
+ * 三条纪律：
+ *   ① **被动监听**：只读 pointerdown/move/up，从不 `preventDefault`/`stopPropagation`
+ *      （长按没触发 ⇒ 那一次拖动照旧是地图拖动；不抢手势就不会有"地图拖不动了"这种回归）；
+ *   ② **搬到哪儿都夹住**：先夹进容器，再把 HUD 让位带 / 📱 FAB / 🔬 三个矩形**往上推开**
+ *      （§10.2 [标准] WCAG 2.2 SC 2.5.8：目标要么够大、要么彼此够开 —— 我们两个都要）；
+ *   ③ **记忆要能坏**：归一化坐标存本地；读不出来 / 坏数据 / 夹到放不下 ⇒ **回默认左下**（绝不抛、绝不猜）。
+ */
+
+/** 位置的**本地记忆键**（唯一一处定义；`wsm:v1:` 前缀与其它世界模拟存储一致） */
+export const JOY_HOME_STORE_KEY = "wsm:v1:joypos";
+/**
+ * 长按多久算"搬到这里"（ms）。
+ * ⚠️ 数字是**本仓自定**（没抓到外部来源，见研究 §10 的失败清单）：取 420 而不是 iOS/Android 常见的 500，
+ * 因为**手指只要移动超过 `JOY_HOME_SLOP_PX` 就立刻取消**（那一次是地图拖动）⇒ 宁可短一点、早给反馈。
+ */
+export const JOY_HOME_HOLD_MS = 420;
+/** 长按期间允许的手指抖动（px）：超过它就判"这是地图拖动"，取消搬家（与 §10.1 的拖动阈值同一族概念） */
+export const JOY_HOME_SLOP_PX = 10;
+/** HUD 在让位后的**一行高度**（px）——与自检 ③ 的那组字面量同值（HUD 一行 ≈22px 含 padding） */
+export const JOY_HOME_HUD_ROW_PX = 22;
+/** 📱 FAB 的外接矩形（`WsPhone.vue:205-216`：52×52、right 14、bottom 96） */
+export const JOY_HOME_FAB = { w: 52, h: 52, right: 14, bottom: 96 } as const;
+/** 🔬 的外接矩形（`WsVerifyPanel.vue:439-444`：44×44、right 8、bottom 8） */
+export const JOY_HOME_MAG = { w: 44, h: 44, right: 8, bottom: 8 } as const;
+
+/** 一个矩形（容器坐标，CSS px；左上原点） */
+export interface JoyHomeBox {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+/** 家的**归一化坐标**（底盘中心 ÷ 容器宽高）—— 存这一个，转屏/换窗口都能复原 */
+export interface JoyHome {
+  fx: number;
+  fy: number;
+}
+/** 容器里**碰不得**的三块（HUD 让位带 / 📱 / 🔬）——容器尺寸决定，所以是函数不是常量表 */
+export function joyHomeBoxesOf(w: number, h: number): JoyHomeBox[] {
+  const W = Number.isFinite(w) && w > 0 ? w : 0;
+  const H = Number.isFinite(h) && h > 0 ? h : 0;
+  if (!W || !H) return [];
+  return [
+    /* HUD：`left:8`、`bottom: calc(8px + JOY_HUD_LIFT_PX)`、宽 `W-60`、一行 22 —— 与自检 ③ 同一组数 */
+    { l: JOY_INSET_PX, t: H - (JOY_INSET_PX + JOY_HUD_LIFT_PX) - JOY_HOME_HUD_ROW_PX, r: JOY_INSET_PX + (W - 60), b: H - (JOY_INSET_PX + JOY_HUD_LIFT_PX) },
+    { l: W - JOY_HOME_FAB.right - JOY_HOME_FAB.w, t: H - JOY_HOME_FAB.bottom - JOY_HOME_FAB.h, r: W - JOY_HOME_FAB.right, b: H - JOY_HOME_FAB.bottom },
+    { l: W - JOY_HOME_MAG.right - JOY_HOME_MAG.w, t: H - JOY_HOME_MAG.bottom - JOY_HOME_MAG.h, r: W - JOY_HOME_MAG.right, b: H - JOY_HOME_MAG.bottom },
+  ];
+}
+/** 默认的家（与现行 CSS 逐字一致：左下角、`JOY_INSET_PX` 边距）——`resolve` 放不下时也回这里 */
+export function joyHomeDefaultOf(w: number, h: number): { cx: number; cy: number } | null {
+  const W = Number.isFinite(w) && w > 0 ? w : 0;
+  const H = Number.isFinite(h) && h > 0 ? h : 0;
+  if (!W || !H) return null;
+  const r = JOY_BASE_PX / 2;
+  return { cx: JOY_INSET_PX + r, cy: H - JOY_INSET_PX - r };
+}
+/**
+ * **把家夹进安全区**（唯一的"能不能放这儿"判据）。步骤固定、可离线复算：
+ *   ① 夹进容器（四边留 `JOY_INSET_PX`）；② 与任一禁区（各自外扩 `JOY_GAP_PX`）相交 ⇒ **往上推**到它上方；
+ *   ③ 推完再夹一次（最多 4 轮，三个矩形足够收敛）；④ 推上去放不下（比容器还高）⇒ `null`（调用方回默认）。
+ * 为什么是"往上推"而不是"左右推"：三块禁区全部贴在**下缘**（HUD / 📱 / 🔬），往上推一次就走开，
+ * 而且"拇指自然落点是下半屏"这件事不需要被破坏 —— 家仍然在够得着的地方。
+ */
+export function joyHomeResolve(w: number, h: number, cx: number, cy: number): { cx: number; cy: number } | null {
+  const W = Number.isFinite(w) && w > 0 ? w : 0;
+  const H = Number.isFinite(h) && h > 0 ? h : 0;
+  if (!W || !H) return null;
+  const r = JOY_BASE_PX / 2;
+  const lo = JOY_INSET_PX + r;
+  const hiX = W - lo;
+  const hiY = H - lo;
+  if (hiX < lo || hiY < lo) return null; // 容器还装不下一块底盘 ⇒ 没有可信的家
+  const clamp = (v: number, a: number, b: number): number => (Number.isFinite(v) ? Math.max(a, Math.min(b, v)) : a);
+  let x = clamp(cx, lo, hiX);
+  let y = clamp(cy, lo, hiY);
+  const boxes = joyHomeBoxesOf(W, H);
+  for (let pass = 0; pass < 4; pass++) {
+    let hit = false;
+    for (const b of boxes) {
+      const out =
+        x + r <= b.l - JOY_GAP_PX || x - r >= b.r + JOY_GAP_PX || y + r <= b.t - JOY_GAP_PX || y - r >= b.b + JOY_GAP_PX;
+      if (out) continue;
+      y = b.t - JOY_GAP_PX - r;
+      hit = true;
+    }
+    if (!hit) break;
+    if (y < lo) return null; // 推到容器外了 ⇒ 交给调用方回默认
+    y = clamp(y, lo, hiY);
+  }
+  return { cx: x, cy: y };
+}
+/**
+ * 家的最终裁决（宿主只调这一个）：**有记忆 ⇒ 先用它**（归一化 × 当前容器）、**放不下/没有/坏数据 ⇒ 默认左下**。
+ * 返回的一定是"夹过的、不与三块禁区相交的"中心；容器量不出来 ⇒ `null`（宿主动不了它 —— 与"量不到尺子就站住"同一纪律）。
+ */
+export function joyHomeOf(w: number, h: number, stored: JoyHome | null): { cx: number; cy: number } | null {
+  const def = joyHomeDefaultOf(w, h);
+  if (!def) return null;
+  if (!stored) return joyHomeResolve(w, h, def.cx, def.cy) || def;
+  return joyHomeResolve(w, h, stored.fx * w, stored.fy * h) || joyHomeResolve(w, h, def.cx, def.cy) || def;
+}
+/** 底盘 CSS 锚在**左下角**（`left/bottom: var(--ws-joy-inset)`）⇒ 家到"默认位置"的差就是那**唯一一个** `translate3d` */
+export function joyHomeOffsetOf(w: number, h: number, home: { cx: number; cy: number } | null): { dx: number; dy: number } {
+  const def = joyHomeDefaultOf(w, h);
+  if (!def || !home) return { dx: 0, dy: 0 };
+  return { dx: home.cx - def.cx, dy: home.cy - def.cy };
+}
+/**
+ * 存的那一位：`"fx,fy"`（两个 0..1 的有限数）；**坏数据一律 `null`**（`"{}"` / `"1"` / `"abc"` / 越界 / 空 ⇒ 没有记忆）。
+ * 与 `joyStoredOf` 同一条纪律：绝不抛、绝不猜（坏数据不该把摇杆搬到屏幕外）。
+ */
+export function joyHomeStoredOf(raw: unknown): JoyHome | null {
+  const s = String(raw == null ? "" : raw).trim();
+  if (!/^-?\d*\.?\d+,-?\d*\.?\d+$/.test(s)) return null;
+  const [a, b] = s.split(",").map((t) => Number(t));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (a < 0 || a > 1 || b < 0 || b > 1) return null;
+  return { fx: a, fy: b };
+}
+/** 读盘（坏了/没有/读不动 ⇒ `null`，绝不抛 —— 与 `readJoyStored` 同款） */
+export function readJoyHome(): JoyHome | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return joyHomeStoredOf(localStorage.getItem(JOY_HOME_STORE_KEY));
+  } catch {
+    return null;
+  }
+}
+/** 落盘（写不进去不影响本次会话）；`null` = 忘掉记忆 ⇒ 下次回默认左下 */
+export function writeJoyHome(home: JoyHome | null): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    if (!home) localStorage.removeItem(JOY_HOME_STORE_KEY);
+    else localStorage.setItem(JOY_HOME_STORE_KEY, `${home.fx},${home.fy}`);
+  } catch {
+    /* 写不进去就只活这一次会话 */
+  }
+}
+/**
+ * 长按判定（**纯函数**，自检钉真值表；组件在 pointermove 与定时器两处都用它）：
+ *   · 手指抬了（`down=false`）⇒ `"cancel"`；
+ *   · 位移超过 `JOY_HOME_SLOP_PX` ⇒ `"cancel"`（这是**地图拖动**，不是搬家）；
+ *   · 按够 `JOY_HOME_HOLD_MS` 且没走 ⇒ `"fire"`；
+ *   · 其余 ⇒ `"pending"`（继续等）。
+ */
+export function joyHoldDecide(input: { down: boolean; movedPx: number; heldMs: number }): "pending" | "fire" | "cancel" {
+  if (!input || !input.down) return "cancel";
+  const moved = Number.isFinite(input.movedPx) ? input.movedPx : Infinity;
+  if (moved > JOY_HOME_SLOP_PX) return "cancel";
+  const held = Number.isFinite(input.heldMs) ? input.heldMs : 0;
+  return held >= JOY_HOME_HOLD_MS ? "fire" : "pending";
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 九、🎯 预走线（指向移动方向的虚线 + 箭头）—— 2026-10-04 第四轮
+ * ══════════════════════════════════════════════════════════════════
+ * 机主原话：「能给移动加**预走线**吗，就是在移动方向上加一个**可以指向移动方向的箭头**（**动画要好看**喵！）」。
+ * 研究 §12 的三条结论直接决定画法：
+ *   · §12.1 [官方] Mapbox 定位指示器（puck）的标准形态是"**绕自身转朝向 + 视口跟随**"
+ *     （`createDefault2DPuck(withBearing = true)` + `puckBearing = PuckBearing.COURSE`）⇒ 指示器要**长在角色身上**，
+ *     不是屏幕正中一个固定箭头；
+ *   · §12.2 [官方] 导航把位置点钉在取景框下缘、靠内容流动表达"在动" ⇒ 线必须挂在角色上、跟着角色走；
+ *   · §12.3 [官方] MDN：`ease-out` = `cubic-bezier(0, 0, 0.58, 1)`，"starts abruptly and then progressively
+ *     slows down towards the end" ⇒ **淡出用 ease-out**，且入场（140ms）比退场（320ms）快。
+ * 四个硬约束（逐条落在常量与判据里）：
+ *   ① **只写 transform/opacity**：线长 = 虚线元素的 `scaleX`、箭头位置 = 箭头元素的 `translate3d`、
+ *      显隐 = class 驱动的 CSS `opacity` 过渡（**每帧 0 次 opacity 写**）；**一个布局属性都不碰**；
+ *   ② **停下优雅淡出**（不是硬切）：`is-aim` 摘掉那一帧起走 320ms `ease-out`，同时线长按 `JOY_AIM_TAU_S` 收回；
+ *   ③ **可关**：`low` 档整条不画（省性能）；`prefers-reduced-motion` 只关"流动"（虚线不跑、线照画 ——
+ *      它同时是**操作反馈**：告诉你"我正在往哪边走、推多满"）；
+ *   ④ **不与名字层/标签打架**：最远端 = `JOY_AIM_GAP_PX + JOY_AIM_MAX_PX + JOY_AIM_TIP_PX = 58px`（有上界），
+ *      而且它画在**钉子自己的 DOM 里**（与朝向箭头同一层），**一个名字层节点都不碰**（判据钉着）。
+ * ⚠️ 诚实记一笔：线长与"米数"**没有**换算关系（§6 的红线是"世界速度不许按像素放大"，这里反过来）——
+ *    它是一个**风格化的推出量指示**，不许被读成"我还能走 34px"。
+ */
+
+/** 虚线起点离身体中心的距离（px）= 身体 30px 的半径 15 + 2px 缝（长在身体外面一点，别盖住人） */
+export const JOY_AIM_GAP_PX = 17;
+/** 起步线长（px）—— ≈ 半个身体直径：一推就看得见，不是"推到底才出现" */
+export const JOY_AIM_MIN_PX = 14;
+/** 满推线长（px）—— 34 ≈ 拉近后满推的屏幕速度 20.0058 px/s（研究 §9.8 实测）× 1.7（约一秒半的路程） */
+export const JOY_AIM_MAX_PX = 34;
+/** 箭头（三角）宽度（px）——也是它 `translate3d` 的终点偏移量 */
+export const JOY_AIM_TIP_PX = 7;
+/**
+ * 线长的**平滑时间常数**（秒）—— 松手后按它收回（与速度那条指数逼近同构，研究 §1）。
+ * 0.22s：0.3 秒收掉 `1−e^(−1.36) = 74.4%`，正好落在 CSS 那 320ms 淡出的窗口里 ⇒ 观感是"线**缩回去**并淡掉"，
+ * 不是"啪一下没了"。**为什么不用 CSS transition 管线长**：push 期间线长每帧都在写，
+ * transition 会把每一帧都当成一次新过渡的起点（线永远追不上手指）——所以"平滑"必须由模型负责。
+ */
+export const JOY_AIM_TAU_S = 0.22;
+/** 虚线周期（px）：CSS 的"流动"动画平移**恰好一个周期** ⇒ 无缝循环（§12.4 的正统做法，但我们走 transform） */
+export const JOY_AIM_DASH_PX = 9;
+/**
+ * 每帧**写点预算**（**具名** —— 机主的要求是"有界且具名"，不是一个模糊的"很少"）：
+ *   相机 3：`panBy`（有位移才写）/ `easeTo({zoom})`（`zo` 变了才写）/ 名字层容器跟手（同上）
+ *   角色 5：`setLngLat` / 朝向（`face.rotate` 与 `aim.rotate` **同一帧只可能有一个**）/ 踏步 /
+ *           虚线 `scaleX` / 箭头 `translate3d`
+ * ⇒ **最坏 8 个**；稳态（方向不变、zoom 已收敛）通常 5 个。**预走线自己最多占 2 个**（`JOY_AIM_WRITES_MAX`）。
+ * 另有两个 class 写点（`is-aim` / `is-zoom-pull`）**只在状态翻转那一帧**发生，不进每帧循环；
+ * 预走线**收线那一帧**另有一次朝向箭头补写（`joyFaceSync`，同一帧 ≤ 9 个写点）—— 那是"箭头在预走线期间
+ * 让位、收线时要带着**当前**角度淡回来"的代价，一次一段，不在稳态里。
+ */
+export const JOY_FRAME_WRITES_MAX = 8;
+export const JOY_AIM_WRITES_MAX = 2;
+
+/**
+ * 预走线这一档怎么画（**唯一判据**，自检钉真值表）：
+ *   · `"off"`    = `low` 档：**整条不画**（每帧 0 个写点 —— 省性能）；
+ *   · `"static"` = 系统"减弱动效"：线照画（它是操作反馈），但**虚线不流动**（CSS 关掉那段动画）；
+ *   · `"full"`   = 正常：虚线流动 + 淡入淡出。
+ */
+export type JoyAimMode = "full" | "static" | "off";
+export function joyAimModeOf(input: { low: boolean; reduced: boolean }): JoyAimMode {
+  if (input && input.low) return "off";
+  return input && input.reduced ? "static" : "full";
+}
+/** 推出量 → 线长比例的缓动（ease-out 二次，§12.3 的曲线族）：起步就长出来一截，快满推时变化放缓 */
+export function joyAimEase(k: number): number {
+  const x = Number.isFinite(k) ? Math.max(0, Math.min(1, k)) : 0;
+  return 1 - (1 - x) * (1 - x);
+}
+/** 一帧要写进 DOM 的两个数（**只有两个** —— 与 `JOY_AIM_WRITES_MAX` 对齐） */
+export interface JoyAimFrame {
+  /** 线长比例 0..1（虚线元素 `scaleX`）——已经按 `JOY_AIM_TAU_S` 平滑过 */
+  k: number;
+  /** 虚线长度（px）= `MIN + (MAX − MIN) × k` */
+  dashPx: number;
+  /** 虚线元素的 `scaleX` = `dashPx / JOY_AIM_MAX_PX` */
+  scaleX: number;
+  /** 箭头的 `translate3d` 位移（px，沿**朝向**轴）= `GAP + dashPx` */
+  tipPx: number;
+  /** 要不要画（`k` 还没到 0）—— 宿主据此决定"还写不写这两个数" */
+  on: boolean;
+}
+/**
+ * 预走线的一步（**纯函数**，宿主每帧调一次）。
+ * 不变量（自检钉着）：① 非有限输入一律归 0（绝不写 NaN 进 `transform`）；② `k` 单调趋近目标、不越界；
+ * ③ 松手（`speedRatio = 0`）后按 `JOY_AIM_TAU_S` 收回，**且低到 `JOY_AIM_MIN_PX` 以下就写 0**（能收尾）。
+ */
+export function joyAimStep(prevK: number, speedRatio: number, dtMs: number): JoyAimFrame {
+  const dt = clampDt(dtMs) / 1000;
+  const target = joyAimEase(speedRatio);
+  const prev = Number.isFinite(prevK) ? Math.max(0, Math.min(1, prevK)) : 0;
+  const a = dt > 0 ? 1 - Math.exp(-dt / JOY_AIM_TAU_S) : 0;
+  let k = prev + (target - prev) * a;
+  if (!Number.isFinite(k)) k = 0;
+  k = Math.max(0, Math.min(1, k));
+  const dashPx = JOY_AIM_MIN_PX + (JOY_AIM_MAX_PX - JOY_AIM_MIN_PX) * k;
+  /* 收尾：目标就是 0 且已经够短 ⇒ **写恰好 0**（指数衰减永远到不了 0，与 `JOY_REST_MPS` 同一条纪律） */
+  if (target === 0 && k < 0.02) k = 0;
+  const dash = k === 0 ? 0 : dashPx;
+  return { k, dashPx: dash, scaleX: dash / JOY_AIM_MAX_PX, tipPx: JOY_AIM_GAP_PX + dash, on: k > 0 };
 }

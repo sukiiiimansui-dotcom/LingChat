@@ -275,11 +275,16 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
    *   ① 把宿主给的**相机中心**落成锚点格（与 base 同一份 `cellDeg`、同一份格数学）；
    *   ② **同一个格只认第一次**那个点 ⇒ 同格内走动不新增锚点 ⇒ 输出逐字节不变；
    *   ③ 把每个锚点"这一轮真的入了列"的那批要素**按引用冻下来**，下一轮原样交回规则模块当
-   *      `nearFrozen` ⇒ **离线包把那些格淘汰掉，已画的楼也不会消失**（整场单调）。
+   *      `nearFrozen` ⇒ **离线包把那些格淘汰掉，已画的楼也不会消失**（整场单调）；
+   *   ④ 标出**哪一个锚点是"当前锚点"**（相机所在那一格的那一个）：只有它还要**全量重算**，
+   *      其余（老锚点）**只并冻结集**（`frozenOnly`）⇒ 每轮代价 = 1 次全池扫描 + 并集，
+   *      **与锚点数无关**。这不是新口径，是"冻结"二字的直译：老锚点那批本来就"不许再变"。
    * 🔴 锚点表**只增不删**（口径如此：删一个锚点就会让它那批楼消失）。
    *    换包/换城市要换一份**新实例**（`clear()` 只清"按格挑选"那条路的冻结集，不动这里）。 */
   const nearAnchors: Array<{ lng: number; lat: number; key: string }> = [];
   const nearFeat = new Map<string, unknown[]>();
+  /** 当前锚点的格键（相机这一轮落在哪一格）——`null` = 还没播过种（此时锚点表本来就是空的） */
+  let nearCurrentKey: string | null = null;
 
   return {
     pick<T extends PickFeature>(input: BldPickInput<T>): BldPickOutcome<T> {
@@ -368,11 +373,20 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
           nearAnchors.push({ lng: seedLng, lat: seedLat, key });
           nearFeat.set(key, []);
         }
+        /* 🔴 **每轮都写**（不是只在新建时写）：相机**走回老格**时，那一个锚点就重新成为"当前锚点"
+           —— 只有当前锚点还要全量重算（冷加载时那一格的数据可能还在陆续到位）。 */
+        nearCurrentKey = key;
       }
       /* ② **所有锚点**交给规则模块（只增不删；顺序 = 首次出现序 ⇒ "按锚点顺序追加"这条可复现）。
             坏种子**不参与**（这一轮不新增锚点）—— 规则模块那边的"数不出来"只留给**直接调它**的人
-            （旧 vendor/页面），本模块不替它编一个坏锚点出来（那会把已有锚点整条打成"数不出来"）。 */
-      const anchorsOut = nearAnchors.map((a) => ({ lng: a.lng, lat: a.lat }));
+            （旧 vendor/页面），本模块不替它编一个坏锚点出来（那会把已有锚点整条打成"数不出来"）。
+            🔒 **老锚点标 `frozenOnly`**：相机已经不在它那一格里 ⇒ 它的贡献早就定稿，
+               只并冻结集、不再花一次全池扫描重算它（**代价回到"与锚点数无关"**）。 */
+      const anchorsOut = nearAnchors.map((a) => ({
+        lng: a.lng,
+        lat: a.lat,
+        frozenOnly: a.key !== nearCurrentKey,
+      }));
       const frozenOut = nearAnchors.map((a) => (nearFeat.get(a.key) || []) as unknown as T[]);
       const out = pickBuildingsByBudget<T>({
         features: input.features,

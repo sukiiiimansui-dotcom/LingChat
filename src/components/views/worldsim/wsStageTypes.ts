@@ -56,6 +56,11 @@ import type { ComputedRef, Ref } from "vue";
 import type { AiItem, BBox } from "./wsAiLayers";
 import type { PerfApi } from "./wsPerf";
 import type { WsMapTheme } from "./wsMapTheme";
+/* S3（M8/M1）的注入面要用到的形状 —— **只 import type**（编译后不留运行时痕迹 ⇒ 不拉依赖） */
+import type { BundleBuildingFeature, BundleFeed, BundlePlaceFeature, BundleRoadFeature, BundleFetch } from "./wsOfflineFeed";
+import type { GwLayer } from "./wsGwLayer";
+import type { joyGateOf } from "./wsJoystick";
+import type { NameRenderNode } from "./wsNameLayer";
 
 /** 宿主 `stats`（`reactive({…})`）里 M6 读写的那些字段 —— **只列用到的**。
  *  口径：M6 写 `count/height/levels/default/parts/contour/mode/perf/pins/note`，读 `note`。 */
@@ -118,4 +123,117 @@ export interface Fallback2dCtx {
   isAutomation(): boolean;
   /** 美术档取参（真源在宿主，M6 只转调） */
   artTheme(t: WsMapTheme | null): WsMapTheme;
+}
+
+/* ══ S3（M8 `wsHudStats` / M1 `wsMapCamera`）的注入面 ═══════════════════════════════════
+ * 与上面 S2 那段同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体一个字都不用动），
+ * 差别只有一处：**S3 有三个装配点**（依赖时点不同，见 `wsHudStats.ts` 文件头）——
+ *   · `createHudStats`（早：stats/aiOn/长等待/fps）—— 必须早于 S2 的装配点（那边要 `stats`/`aiOn`）；
+ *   · `createMapCamera`（晚：晚于 `labRootEl`）与 `createBundleHud`（晚：晚于离线包管道）。
+ * ⚠️ 同样是"形状的说明书，不是第二份实现"：`StageStats` 只描述**搬到 M8 里的**那个 `reactive`，
+ *    真源永远只有一份（现在它就诞生在 `wsHudStats.ts` 的 `createHudStats` 里）。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
+ */
+
+/** 宿主那份 `stats`（`reactive({…})`）的**结构化视图** —— 全部字段（它现在在 M8 里诞生）。
+ *  口径：这是屏幕上每一个计数的唯一落点；M6/M8/M9 都只读写这张表里的格子。 */
+export interface StageStats {
+  mode: string;
+  count: number;
+  height: number;
+  levels: number;
+  default: number;
+  names: string;
+  card: string;
+  fps: number;
+  note: string;
+  contour: number;
+  area: string;
+  view: string;
+  pins: number;
+  pinsAnchor: string;
+  pinsNote: string;
+  roads: number;
+  roadStore: string;
+  bldBundle: string;
+  bldMode: number;
+  parts: number;
+  bldPick: string;
+  roadsBundle: string;
+  bldVerdict: string;
+  roadsVerdict: string;
+  attribution: string;
+  gwVerdict: string;
+  roadNote: string;
+  facilities: number;
+  facNote: string;
+  perf: string;
+}
+
+/** M8 前半（`createHudStats`）要用的宿主状态 —— 全部**只读**。 */
+export interface HudStatsCtx {
+  /** 只用到 `showAi` / `aiAuto`（`aiOn` 的两半判据）。
+   *  ⚠️ 两个都是**必填** `boolean`：宿主那份 `withDefaults` 给了默认值（false / true）
+   *     ⇒ Vue 解析后的 props 类型里它们不是 `boolean | undefined`（松写成可选会让
+   *     `aiOn` 变成 `ComputedRef<boolean | undefined>`，与 S2/M6 那份 `ComputedRef<boolean>` 对不上）。 */
+  props: { showAi: boolean; aiAuto: boolean };
+  /** 「真楼够不够」的阈值（`aiOn` 用它；原样从宿主搬去 M8，不复制第二份数） */
+  BLD_SPARSE: number;
+  /** 加载阶段（宿主与 S2 都还在写它 ⇒ **所有权仍在宿主**，这里只读） */
+  phase: Ref<"fetch" | "build" | "render" | "done">;
+  /** 形体档（`?bld=2` = 2；`stats.bldMode` 初值就是它） */
+  WS_BLD_MODE: number;
+  /** 「上次取数耗时」的 localStorage 键（宿主 `onMounted` 里还在写它 ⇒ 只读注入） */
+  K_MS: string;
+  /** 宿主那面 `alive` 旗（`let`，卸载时置 false）——**取值器**：解构会快照（`startFps` 每次调用读一次） */
+  aliveNow(): boolean;
+}
+
+/** M1（`createMapCamera`）要用的宿主状态 —— 全部**只读**。 */
+export interface MapCameraCtx {
+  /** 只用到 `joy` / `pitch`（近景判据与两个俯角）。
+   *  ⚠️ 两个都是**必填**：宿主 `withDefaults` 给了默认值（`joy: false` / `pitch: 38`）
+   *     ⇒ 解析后的 props 类型就是 `boolean` / `number`（松写会让 `setPitch?.(props.pitch)` 报 TS2345）。 */
+  props: { joy: boolean; pitch: number };
+  /** 组件根元素（`joyMeasureVh` 量它的高度） */
+  host: Ref<HTMLElement | null>;
+  /** 2D 自绘画布要不要存在（`joyGate` 的第二个输入） */
+  show2d: Ref<boolean>;
+  /** 区界 bbox（`fitDistrict` 铺满整区用） */
+  bboxRef: Ref<[number, number, number, number] | null>;
+  /** HUD 计数（`fitDistrict` 写 `mode`/`view`/`note` 三格） */
+  stats: StageStats;
+  /** 名字层开关（`onMoveStart` 第一道早退） */
+  namesOn: Ref<boolean>;
+  /** 屏上的名字节点（跟手要拿第一个节点的锚点） */
+  nameNodes: Ref<NameRenderNode[]>;
+  /** 相机运动中（跟手那三个 handler 的唯一状态） */
+  cameraMoving: Ref<boolean>;
+  /** 标签层容器（位移只写它一个节点） */
+  labRootEl: Ref<HTMLElement | null>;
+  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  mapNow(): unknown;
+}
+
+/** M8 后半（`createBundleHud`）要用的宿主状态 —— 全部**只读**。 */
+export interface BundleHudCtx {
+  /** HUD 计数（包那一行 + 判词 + 署名都写它） */
+  stats: StageStats;
+  /** 近景分流判据（`hudMode` 拼第二句；真源在 M1，宿主注入 ⇒ 两个模块之间**没有**横向 import） */
+  joyGate: ComputedRef<ReturnType<typeof joyGateOf>>;
+  /** 楼/路/片区名三条离线管道（`refreshBundles` 转调它们，不重写取数规则） */
+  bldFeed: BundleFeed<BundleBuildingFeature>;
+  roadsFeed: BundleFeed<BundleRoadFeature>;
+  placesFeed: BundleFeed<BundlePlaceFeature>;
+  /** 🌊🌳 水/绿地那一条（**不设 zoom 闸门**） */
+  gwLayer: GwLayer;
+  /** 浏览器取数（每格独立超时；`fetchWithTimeout` 的装配在宿主） */
+  fetchCell: BundleFetch;
+  /** 取楼/取路各自的 zoom 闸门（阈值只有一份，仍留在宿主） */
+  BLD_MIN_ZOOM: number;
+  ROAD_MIN_ZOOM: number;
+  /** HUD 去重器（**留在宿主**：它闭包宿主的 `bundleHudQueued` 与 `alive`） */
+  scheduleBundleHud(): void;
+  /** 🔴 宿主那个 `let map` 的取值器（同 `MapCameraCtx.mapNow`） */
+  mapNow(): unknown;
 }

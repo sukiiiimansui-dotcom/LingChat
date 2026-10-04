@@ -257,7 +257,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+  import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
   import worldMapApi, { facilitiesAuto, geoJson } from "@/api/services/worldMap";
   import WsLoading from "./WsLoading.vue";
   import type { WsDistrictPin } from "./wsActors";
@@ -269,6 +269,14 @@
      宿主只做**装配**（构造只读 ctx + 调用那几个函数），依赖方向永远向下：那个模块**不 import 宿主**。
      装配点 = 下面 `domPins` 之后那一段（它必须在所有被 ctx 捕获的量都声明之后）。 */
   import { createFallback2d } from "./wsFallback2d";
+  /* 🧱 重构切片 S3：**HUD/stats** 与 **相机/手势** 各搬进一个模块（`PLAN-REFACTOR.md` §2.1/§2.2/§3）。
+     · `createHudStats`  —— 早装配（stats / aiOn / 长等待 / fps）：必须早于 S2 的装配点，
+       因为那边（2D 降级路）的只读 ctx 里就有 `stats` / `aiOn` / `stopTimer`；
+     · `createMapCamera` —— 晚装配（晚于 `labRootEl`）；
+     · `createBundleHud` —— 晚装配（晚于离线包那几条管道）。
+     三个装配点各自的理由写在两个模块的文件头。依赖方向永远向下：它们都**不 import 宿主**。 */
+  import { createBundleHud, createHudStats } from "./wsHudStats";
+  import { createMapCamera } from "./wsMapCamera";
   /* 性能档位（模块级单例，与 `WorldSim.vue` 拿到的是**同一份**）。
      为什么这个组件也要拿它：**降级决定发生在这里** —— 只有这里知道"最后到底走了哪条渲染路"，
      而档位必须跟着那条路走（见 `fallback2d()` 里 `perf.forceLow()` 那段）。 */
@@ -339,13 +347,13 @@
     WS_FETCH_R_BACKEND_MAX,
     applyPitchGuard,
     bldLiveDecision,
-    bldVerdictText,
     cameraDefaults,
+    /* 🧱 S3：`bldVerdictText` / `roadsVerdictText` 随 `renderBundleHud` 搬去了 `wsHudStats.ts`
+       （判词真源仍是 `wsScene`，两边都从那儿取 —— 不是第二份实现）。 */
     fetchRadiusForView,
     fetchRadiusLadder,
     prerenderSourceOf,
     roadsLiveDecision,
-    roadsVerdictText,
     sceneOrderViolations,
     sceneSelfReport,
     viewHalfMetersOf,
@@ -410,16 +418,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     type BundleView,
     bldIdOf,
     bldPointOf,
-    bldVerdictState,
-    bundleCountsLine,
+    /* 🧱 S3：`bldVerdictState` / `bundleCountsLine` / `loadBundleIndex` / `roadsVerdictState`
+       随 `renderBundleHud`/`attributionOfFeed` 搬去了 `wsHudStats.ts`（真源仍是本模块）。 */
     createBundleFeed,
     fetchWithTimeout,
-    loadBundleIndex,
     placesIdOf,
     placesPointOf,
     roadsIdOf,
     roadsPointOf,
-    roadsVerdictState,
   } from "./wsOfflineFeed";
   /* 🏠 「我的家」要的形状（`{name,lng,lat,kind}`）——**只有类型**从共享真源 `wsDaily.ts` 取，
      规则（怎么挑家/怎么排三件事）一行都不在这边（PR 门禁 C1）。 */
@@ -458,8 +464,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           （`wsJoystick.ts` 里一行米/像素换算都不写）—— 速度是**米/秒**，屏幕像素只是结果。 */
   import WsJoystick from "./WsJoystick.vue";
   import {
-    JOY_HUD_LIFT_PX,
-    JOY_INSET_PX,
+    /* 🧱 S3：`JOY_HUD_LIFT_PX` / `JOY_INSET_PX` / `joyBasePxOf` / `joyGateOf` / `joyThumbPxOf`
+       随摇杆几何（`joyVars` 那一段）搬去了 `wsMapCamera.ts`（真源仍是 `wsJoystick.ts`）。 */
     JOY_PITCH_DEG,
     JOY_SPEED_MPS,
     JOY_STEP_PX,
@@ -473,14 +479,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyAimModeOf,
     joyAimRotateDegOf,
     joyAimStep,
-    joyBasePxOf,
     joyBearingNowOf,
     joyCamRestoreArgs,
     joyCamSnapshotOf,
     joyDepthGainOf,
     /* 🕹🧱 走路期间补刷新的**唯一闸门**（纯函数；2026-10-04 第八轮"楼会不见"那条） */
     joyFlushDue,
-    joyGateOf,
     joyHomeBoxesOf,
     joyLngLatOf,
     joyNamesHiddenOf,
@@ -492,7 +496,6 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joySetCam,
     joySetFrame,
     joySpeedMpsOf,
-    joyThumbPxOf,
     joyWalkAnimOn,
     roamStore,
   } from "./wsJoystick";
@@ -702,39 +705,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      镜头中心 = 「我」的漫游位置、`pitch` = 64°、`bearing` = 朝向；**不是**眼睛高度的实景
      （MapLibre 给不出那种东西：地面是平面贴图、楼是挤出体）。
 
-     分流只在一处（判据 9 / 10）：`joyGateOf()` 同时决定「DOM 里有没有摇杆」与「HUD 多写哪一句」：
-       · `props.joy=false`（`?joy=0`）⇒ 不渲染 + **0 次相机更新**（组件都不在，没人建驱动）；
-       · 2D 降级路 ⇒ 不渲染 + HUD 写「2D 降级路没有相机，摇杆不适用」（不静默消失）。
-     ⚠️ 声明位置必须在 `show2d` 之后（上面那一行）：本文件对 TDZ 有过前科，不靠"computed 是惰性的"兜。 */
-  const joyGate = computed(() => joyGateOf({ joy: !!props.joy, fallback2d: !!show2d.value }));
-  /** **没有摇杆时**这一屏的俯角（= 改造前那个值；`props.pitch` 默认 38）—— 近景与"还原"都对着它 */
-  const basePitch = computed(() => props.pitch || cameraDefaults().pitch);
-  /**
-   * 🕹 §15 容器高度（px）——底盘尺寸按它收（`16vh`）。只在挂载与 resize/转屏那一帧量一次，
-   * **不进每帧循环**（读 `clientHeight` 是强制布局，红线）。
-   */
-  const joyVh = ref(0);
-  function joyMeasureVh(): void {
-    const h = host.value?.clientHeight || 0;
-    if (h > 0 && h !== joyVh.value) joyVh.value = h;
-  }
-  /** 初始倾角：**只有 `joy === true` 才 64**（机主 2026-10-03：默认关**不许**有副作用 ⇒ 关着时逐字 38） */
-  const initPitch = computed(() => (props.joy ? JOY_PITCH_DEG : basePitch.value));
-  /** 摇杆几何 → CSS 变量（**唯一真源**是 `wsJoystick.ts` 的常量；组件与 HUD 都从这里继承） */
-  const joyVars = computed<Record<string, string>>(() => {
-    /* 🕹 §15：底盘**随容器高度收**（`16vh`，夹 [76,112]）—— 112px 在 581px 高的视口上占 19%，
-       真机横屏更狠（1/4 屏）。三个数（底盘/杆头/让位高度）全部由**同一处**的纯函数算。 */
-    const base = joyBasePxOf(joyVh.value);
-    return {
-      "--ws-joy-base": `${base}px`,
-      "--ws-joy-thumb": `${joyThumbPxOf(base)}px`,
-      "--ws-joy-inset": `${JOY_INSET_PX}px`,
-      /* 让位高度：**无摇杆路 = 0px** ⇒ HUD 的 `calc(8px + var(--ws-joy-h))` 逐字回到 `bottom:8px`。
-         ⚠️ 这一格**故意不跟着底盘缩**（判据 ② 逐字钉着 `JOY_HUD_LIFT_PX`，且"多让一点"无害：
-         底盘变小只是让 HUD 与它之间多一条缝，不会压住）。 */
-      "--ws-joy-h": joyGate.value.show ? `${JOY_HUD_LIFT_PX}px` : "0px",
-    };
-  });
+     🧱 重构切片 S3（M1）：这段几何（`joyGate` / `basePitch` / `joyVh` / `joyMeasureVh` /
+     `initPitch` / `joyVars`）**整块搬进了 `wsMapCamera.ts`** —— 装配点在下面 3800 行那一段
+     （它要等 `labRootEl` 那几个名字层的 ref 声明完，否则踩 TDZ）。**这里不许再写第二份。** */
   /* 📊 样式自检要带上 **HUD 原话**（机主看到的那一行）—— 只读，不参与任何渲染逻辑 */
   const hudEl = ref<HTMLElement | null>(null);
   /**
@@ -944,7 +917,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   // eslint 不需要 map 的类型细节；这里只留一个句柄用于销毁
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let map: any = null;
-  let raf = 0;
+  /* 🧱 S3（M8）：`let raf = 0;`（fps 采样那个 rAF 句柄）跟着 `startFps` 搬去了 `wsHudStats.ts`。 */
   let alive = true;
   /** 「放大才取楼」的去抖定时器（moveend 里用；卸载时要清） */
   let bldTimer = 0;
@@ -1128,131 +1101,36 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 示意街区铺在哪（一个"小区尺度"的正方形，可以跟真楼的 bbox 不是同一块） */
   const aiBboxRef = ref<BBox | null>(null);
 
-  /**
-   * 现在到底该不该画示意层。
-   *
-   * **唯一真源**：`stats.count`（= 上一次真的取回来的真楼栋数，`classify`/`dressBld` 里写的）
-   * —— 不另开一个计数器，否则"HUD 说的"和"画的"迟早漂移。
-   * 这样它天然满足"真数据优先"：真楼一到 40 栋，`aiOn` 自己变 false，
-   * 下面的 watcher 会把已经画上去的图层**摘掉**（不是留着不管）。
-   */
-  const aiOn = computed(() => props.showAi || (props.aiAuto && stats.count < BLD_SPARSE));
-
-  const stats = reactive({
-    mode: "初始化…",
-    count: 0,
-    height: 0,
-    levels: 0,
-    default: 0,
-    /** 🏷🗺 名字层那一行（**真源判词**：真名 N · 区名 M=数据驱动+示意 · **生成名上屏 0** · 点/格/D/模式）
-     *  —— 三档**分开计数**，且"生成名上屏"恒为 0（机主拍板：生成名只进信息卡） */
-    names: "",
-    /** 🪪 信息卡：当前开着没有（探针读 DOM，不靠调试出口） */
-    card: "",
-    fps: 0,
-    note: "",
-    /** 等高线段数：>0 有效、0 还没画、-1 取不到（HUD 上如实显示） */
-    contour: 0,
-    /** 当前渲染的是**哪个区**（取自 `/api/geo_json` 的 properties.name，如"涪陵区"）—— 验证用 */
-    area: "",
-    /** 视野档：全区视野 / 街区视野（放大后才取楼栋） */
-    view: "",
-    /** 画在屏幕上的"人"的数量（WebGL 走地图库 Marker、2D 降级走 DOM；两个都算） */
-    pins: 0,
-    /** 👤 人的锚点从哪来（`视野兜底（无 adcode）` / `行政区 bbox`）；空 = 还没有锚点 */
-    pinsAnchor: "",
-    /** 👤 放不下人时的**原因原文**（三态里的"数不出来"；空 = 没这个问题） */
-    pinsNote: "",
-    /** 🛣 本视野**看得见**的路条数（口径与画法一致：按 zoom 过滤档位，见 `visibleRoadCount`） */
-    roads: 0,
-    /** 🛣 累积仓库那一行（可数：仓库 N 条 / 已取格 / 包外 / 失败）—— 与 HUD 同源 */
-    roadStore: "",
-    /** 🏢 离线楼房包那一行（`🏢 离线格 已取 x / 包外 y / 失败 z · 仓库 N 栋`） */
-    bldBundle: "",
-    /** 🏢 形体档：1 = 原始脚印（默认，与代拍页同源）· 2 = 拆件（`?bld=2`）—— 探针/回证要读它 */
-    bldMode: 1,
-    /** 🏢 拆件档拆出来几个要素（`ShapeCounts.parts`；默认档也会拆屋顶系 ⇒ 要素数 ≥ 栋数） */
-    parts: 0,
-    /** 🏙 **挑楼那一行**（真源 `wsBldBudget.stats.why`：视野内 N 栋 / Σ投影 px² / Σ顶点 / 谁拦住了；
-     *  宿主在最前面加"现在哪一档形体（足迹/立体/多楼房）+ 栋数上限 + 有没有到上限"，见 `bldPickLine`）
-     *  —— 机主在真机上判"卡不卡"时，这一行是**可数**那一半的证据（另一半是 fps） */
-    bldPick: "",
-    /** 🛣 离线路网包那一行（同式） */
-    roadsBundle: "",
-    /** 🏢 判词（**真源** `wsScene.bldVerdictText`：包外 / 取数失败 / 正常，三态不混） */
-    bldVerdict: "",
-    /** 🛣 判词（**真源** `wsScene.roadsVerdictText`；包外只在计数行里如实写） */
-    roadsVerdict: "",
-    /** 🔴 署名（**原句取自包里的 `index.json`**，不在这里重写第二版）—— ODbL 硬要求 */
-    attribution: "",
-    /** 🌊🌳 水/绿地那一行（**真源** `wsGwLayer.gwVerdictLine`：正数 / 0（已量）/ 数不出来，三态不混） */
-    gwVerdict: "",
-    /** 路网统计的一句话（主干几条 / 有几条有名字）—— 数据质量要看得见 */
-    roadNote: "",
-    /** 🏪 画在地图上的设施点（`/api/facilities` 的生活类 + 交通类） */
-    facilities: 0,
-    /** 设施统计的一句话（哪几类、共几个；缺的类如实说） */
-    facNote: "", 
-    /** 低档的原因（被**实际渲染路**压下来的，见 `wsPerf.forceLowTier`）。空串 = 没被压 */
-    perf: "",
-  });
-  /* 🏢 形体档写进 stats：探针/HUD 要能读出"这一屏是默认档还是拆件档"（回证） */
-  stats.bldMode = WS_BLD_MODE;
-
-  /**
-   * HUD **第一格的原话**：`stats.mode` + 近景那一句（文案由 `joyGateOf` 给，**唯一拼法**）。
-   *
-   * 为什么必须在屏幕上说出来：这一屏现在多了一层"角色第一视角"的观感，不说清楚，
-   * 机主与探针都会把它当成"地图改坏了 / 变成街景了" —— 而它是**倾斜俯视的跟随**（不是实景）。
-   * 2D 降级路写「2D 降级路没有相机，摇杆不适用」：摇杆不在 DOM 里，但**原因必须看得见**。
-   */
-  const hudMode = computed(() => `${stats.mode}${joyGate.value.hudNote ? " · " + joyGate.value.hudNote : ""}`);
-
-  /* ── 长等待可视化：三段**真实**阶段 + 已等秒数（机主 2026-09-19）────────────
-     · `fetch` 是唯一的长尾（Overpass 现取，十秒到一分半都见过）；
-     · `lastMs` = **上次同半径成功取数的真实耗时**（localStorage 记忆）——它是唯一
-       有资格当"约还需"的数；没有它就**不画进度条**，只转等高线（不装确定）。 */
-  /* ⚠️ 别写 `as const`：只读元组不能喂给 `WsLoading` 的 `stages?: string[]`（TS4104，已实测踩到） */
-  const STAGE_NAMES: string[] = ["取真实楼栋", "整理数据", "画 2.5D"];
+  /* ══ 🧱 重构切片 S3（M8）：**HUD / stats 的前半**装配（实现整块在 `wsHudStats.ts`）════════
+     锚点 = 函数名（不按行号）：`aiOn` / `stats` / 长等待那一段 / `startFps`。
+     为什么装配点在这儿（而不是与 M1 一起放到 3800 行那一段）：**S2 的装配点在 2800 行**，
+     它那份只读 ctx 里就有 `stats` / `aiOn` / `stopTimer` ⇒ 这三样必须先存在；
+     晚的那半（`hudMode` + 包 HUD + 署名取句）在同一个模块的 `createBundleHud` ——
+     它要读的离线包管道声明在 3300 行之后，早构造必踩 TDZ。两个工厂各自的说明见模块文件头。
+     ⚠️ 下面三样**故意留在宿主**：`phase`（宿主与 S2 都还在写它）· `K_MS`（`onMounted` 里还在写它）
+        · `BLD_SPARSE`（与 2D 降级路共用的阈值）。 */
   type Phase = "fetch" | "build" | "render" | "done";
   const phase = ref<Phase>("fetch");
-  const waited = ref(0);
-  const lastMs = ref(0);
-  const t0 = Date.now();
-  let timer = 0;
   const K_MS = "wsm:v1:bldgMs";
-  try {
-    lastMs.value = Number(localStorage.getItem(K_MS) || 0) || 0;
-  } catch {
-    /* 隐私模式读不到就当没记录 */
-  }
-  const stageIdx = computed(() => {
-    const i = STAGE_NAMES.indexOf(
-      phase.value === "fetch" ? "取真实楼栋" : phase.value === "build" ? "整理数据" : "画 2.5D"
-    );
-    return Math.max(0, i);
+  const hudStats = createHudStats({
+    props,
+    BLD_SPARSE,
+    phase,
+    WS_BLD_MODE,
+    K_MS,
+    /* 🔴 宿主那面 `alive` 是 `let`（卸载时置 false）⇒ 传**取值器**：解构会拿到快照，
+       `startFps` 的每帧判据就永远停在 true 上（那条路的收尾由 `stopFps()` 取消 rAF 兜住）。 */
+    aliveNow: () => alive,
   });
-  const waitText = computed(() =>
-    phase.value === "fetch" ? "正在取真实楼栋…" : phase.value === "build" ? "整理楼栋数据…" : "正在画 2.5D…"
-  );
-  const waitSub = computed(() => {
-    const s = (waited.value / 1000).toFixed(1);
-    if (phase.value === "fetch" && lastMs.value > 0) {
-      return `已等 ${s}s · 上次 ${(lastMs.value / 1000).toFixed(1)}s（估算）`;
-    }
-    return `已等 ${s}s`;
-  });
-  const etaMs = computed(() => (phase.value === "fetch" && lastMs.value > 0 ? lastMs.value : undefined));
-  const progRatio = computed(() => {
-    if (phase.value !== "fetch" || lastMs.value <= 0) return undefined; // 没有分母 → 交给不确定态
-    return Math.min(0.9, waited.value / lastMs.value);
-  });
-  function stopTimer() {
-    if (timer) {
-      clearInterval(timer);
-      timer = 0;
-    }
-  }
+  /* ⚠️ `STAGE_NAMES` 的真源也在 M8 里（「别写 `as const`」那条注释跟着它搬过去了）——
+     这里解构回来只为模板的 `:stages=`。 */
+  const { aiOn, stats, STAGE_NAMES, lastMs, stageIdx, waitText, waitSub, etaMs, progRatio } = hudStats;
+  /* 这三个是宿主自己调的出口：装载心跳 / fps 起停（`waitSub`/`etaMs`/`progRatio` 已在上一行） */
+  const { stopTimer, armTimer, startFps, stopFps } = hudStats;
+
+  /* 🧱 长等待那一段（`STAGE_NAMES` / `waited` / `lastMs` / `t0` / `timer` / `stageIdx` / `waitText` /
+     `waitSub` / `etaMs` / `progRatio` / `stopTimer`）整块搬进了 `wsHudStats.ts`（S3 / M8），
+     上面那次 `createHudStats` 已经把它们接回来了 —— 这里**不许**再写第二份。 */
 
   /**
    * 以某点为**中心**、边长 `m` 米的正方形 bbox —— 给"示意街区"当画布。
@@ -2238,48 +2116,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    * 好累～ 每次 moveend 都要重算一遍吗？不用 —— 网格→经纬度只依赖区界 bbox，
    * 与相机无关，所以只在"人变了 / 区界到了"时同步。
    */
-  /** 节流：`click` 与 `pointerup` 都可能触发同一动作（双保险），150ms 内只认第一次 */
-  let lastZoomAt = 0;
-  function zoomOnce(delta: number): void {
-    const now = Date.now();
-    if (now - lastZoomAt < 150) return;
-    lastZoomAt = now;
-    zoomBy(delta);
-  }
-
-  /** 「全区」：铺满整个区县（这个缩放下不取楼栋——楼只是几个像素点，Overpass 也扛不住大半径） */
-  function fitDistrict(): void {
-    const b = bboxRef.value;
-    const m = map as unknown as { fitBounds(x: unknown, o?: unknown): void; setPitch?(v: number): void } | null;
-    if (!b || !m) return;
-    try {
-      m.fitBounds(
-        [
-          [b[0], b[1]],
-          [b[2], b[3]],
-        ],
-        { padding: 16, pitch: props.pitch, duration: 500 }
-      );
-      /* 不赌库的默认值：整区铺满之后**显式**把倾角摆回来（2.5D 的观感全靠它） */
-      m.setPitch?.(props.pitch);
-      stats.mode = "全区视野（区县边界）";
-      stats.view = "全区视野";
-      stats.note = "全区视野：放大到街区后自动加载楼房";
-    } catch {
-      /* 收不了相机就算了 */
-    }
-  }
-
-  /** 按钮缩放：走地图库的 zoomTo（带一点动画，手感比瞬移好） */
-  function zoomBy(delta: number): void {
-    const m = map as unknown as { getZoom(): number; zoomTo(z: number, o?: unknown): void } | null;
-    if (!m) return;
-    try {
-      m.zoomTo(Math.max(1, Math.min(18, m.getZoom() + delta)), { duration: 420 });
-    } catch {
-      /* 缩不动就算了，不影响别的 */
-    }
-  }
+  /* 🧱 缩放那三个（`zoomOnce` 150ms 节流 / `fitDistrict` 全区 / `zoomBy` 按钮缩放）搬进了
+     `wsMapCamera.ts`（S3 / M1）。它们**目前没有任何调用点**（模板里 `＋ / － / 全区` 早已整块移除）
+     —— 是死代码这件事不在本片处理（§3 把删死代码排在 S9），搬的时候一个字没改。 */
 
   /**
    * 把 AI 的产出同步到地图上（楼 → 挤出、路 → 线、公园/水系 → 面）。
@@ -3799,6 +3638,50 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let snapRaf1 = 0;
   let snapRaf2 = 0;
 
+  /* ══ 🧱 重构切片 S3（M1 + M8 后半）：**相机 / 手势** 与 **包 HUD** 的装配 ══════════════════
+     两个模块的实现整块在 `wsMapCamera.ts` / `wsHudStats.ts`（锚点 = 函数名，不按行号）。
+     为什么装配点在这儿（而不是跟 M8 前半一起放在 1150 行那段）：
+       ① M1 要 `namesOn` / `nameNodes` / `cameraMoving` / `labRootEl` 四个名字层的 ref（上一段刚声明完）
+          —— 它们是 `const`，早引必踩 TDZ（本文件对 TDZ 有过前科，不靠"函数是惰性的"兜）；
+       ② M8 后半要 `bldFeed` / `roadsFeed` / `placesFeed` / `gwLayer` / `fetchCell`（离线包那几条管道）。
+     ⚠️ `map` 一律走**取值器**（`mapNow`）：宿主那份是 `let`（建图时赋值、降级/卸载时置 null），
+        解构只会拿到快照 ⇒ 模块里真正读它的那几个函数用「形参默认值 = 调用时现读」
+        —— 与原实现读它的时刻是同一个同步点，所以宿主这边的调用点一个字都没改。
+     依赖方向（§2.2）：两个模块都**不 import 宿主**；模块之间也**没有**横向 import
+     （`joyGate` 由这一处注入 M8 的 `hudMode`）。
+     ⚠️ `zoomOnce` / `fitDistrict` / `zoomBy` **故意不解构**：它们目前没有任何调用点（死代码，
+        模板里那三个按钮早已移除）—— 跟着 S2 的 `drawContours` 同一个口径，删除留给 S9。 */
+  const cam = createMapCamera({
+    props,
+    host,
+    show2d,
+    bboxRef,
+    stats,
+    namesOn,
+    nameNodes,
+    cameraMoving,
+    labRootEl,
+    mapNow: () => map,
+  });
+  const { joyGate, basePitch, joyMeasureVh, initPitch, joyVars } = cam;
+  const { onMoveStart, onMove, onMoveEndNames, guardGestures, lockPageGestures, unlockPageGestures } = cam;
+
+  const bundleHud = createBundleHud({
+    stats,
+    joyGate,
+    bldFeed,
+    roadsFeed,
+    placesFeed,
+    gwLayer,
+    fetchCell,
+    BLD_MIN_ZOOM,
+    ROAD_MIN_ZOOM,
+    /* HUD 去重器留在宿主（它闭包 `bundleHudQueued` 与 `alive`）—— 函数声明提升，这里引用得到 */
+    scheduleBundleHud,
+    mapNow: () => map,
+  });
+  const { hudMode, renderBundleHud, refreshBundles, attributionOfFeed } = bundleHud;
+
   function labClassOf(style: NameRenderNode["style"]): string {
     return style === "real" ? "is-real" : style === "derived" ? "is-derived" : "is-generated";
   }
@@ -4095,34 +3978,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* ── 跟手（§4.0）：相机运动期间**只写容器**；节点位置一个字都不写 ─────────────────
      算法：`movestart` 时记下"第一个节点的锚点此刻在屏幕上的位置"，
      之后每帧算它现在在哪 ⇒ 差值就是整层的位移（地图平移 = 全体标签同位移，所以这是**精确**的）。
-     ⚠️ 只在**平移**（pan）时这么做；旋转/俯仰不是平移，那时整层淡到 0.25 就够（§4.2）。 */
-  let panAnchor: { lng: number; lat: number; x: number; y: number } | null = null;
-  function onMoveStart(): void {
-    if (!namesOn.value || !nameNodes.value.length) return;
-    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
-    const n0 = nameNodes.value[0];
-    if (!m?.project || !n0) return;
-    const p = m.project([n0.lng, n0.lat]);
-    if (!p) return;
-    panAnchor = { lng: n0.lng, lat: n0.lat, x: p.x, y: p.y };
-    cameraMoving.value = true;                           // 一次 class + 一次 opacity（**只写 1 个节点**）
-  }
-  function onMove(): void {
-    if (!panAnchor || !cameraMoving.value) return;
-    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
-    if (!m?.project) return;
-    const p = m.project([panAnchor.lng, panAnchor.lat]);
-    const el = labRootEl.value;
-    if (!p || !el) return;
-    /* 🔴 一次 transform 写在一个容器上（O(1)），**不是** N 个节点 —— 这就是"不卡"的全部秘密 */
-    el.style.transform = `translate3d(${(p.x - panAnchor.x).toFixed(2)}px, ${(p.y - panAnchor.y).toFixed(2)}px, 0)`;
-  }
-  function onMoveEndNames(): void {
-    cameraMoving.value = false;
-    panAnchor = null;
-    const el = labRootEl.value;
-    if (el) el.style.transform = "translate3d(0, 0, 0)";   // 节点自身已经是新位置 ⇒ 容器归零
-  }
+     ⚠️ 只在**平移**（pan）时这么做；旋转/俯仰不是平移，那时整层淡到 0.25 就够（§4.2）。
+     🧱 S3（M1）：`panAnchor` 与这三个 handler（`onMoveStart` / `onMove` / `onMoveEndNames`）
+     **整块搬进了 `wsMapCamera.ts`** —— 下面接回来的就是**同一个**函数（不是第二份），
+     `m.on(...)` 那几个调用点因此一个字都没改。 */
 
   /* ══════════════════════════════════════════════════════════════════════════════
    * 🕹 摇杆 → 相机（近景：**倾斜俯视的跟随**；机主裁决 2026-10-03）
@@ -4886,17 +4745,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
   );
 
-  /** HUD/面板那一行（**可数口径只有一份**：`wsOfflineFeed.bundleCountsLine`）
-   *  · `stats.bldBundle/roadsBundle` = 机主看的**可数一行**（已取/包外/失败 + 仓库数）；
-   *  · `stats.bldVerdict/roadsVerdict` = **真源判词**（三态：包外 / 取数失败 / 正常；数不出来照实写）。 */
-  function renderBundleHud(): void {
-    const bf = bldFeed.facts();
-    const rf = roadsFeed.facts();
-    stats.bldBundle = bundleCountsLine(bf, "🏢", "栋");
-    stats.roadsBundle = bundleCountsLine(rf, "🛣", "条");
-    stats.bldVerdict = bldVerdictText({ state: bldVerdictState(bf), n: bf.n, cells: bf.have, cap: bf.cap });
-    stats.roadsVerdict = roadsVerdictText({ state: roadsVerdictState(rf), n: rf.n });
-  }
+  /* 🧱 S3（M8）：`renderBundleHud` 整块搬进了 `wsHudStats.ts` —— 下面是**同一个函数**（从上面那次
+     `createBundleHud` 接回来的），`scheduleBundleHud` 与 `bldFlush`/`roadsFlush` 那几个调用点
+     一字未改、也没有第二份实现。 */
 
   /**
    * 🔴 **F4（2026-10-01 性能审计 §5.4）：HUD 一次落图只渲染一次。**
@@ -4924,57 +4775,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     });
   }
 
-  /**
-   * 按视野补离线格（**后台、串行、每格独立超时**；一次最多 2 格，不堵首屏）。
-   * 楼/路/水绿各一条管道，三条互不阻塞；**都不打 `/api/*`**。
-   */
-  async function refreshBundles(why = "view"): Promise<void> {
-    const m = map as BldMapLike | null;
-    if (!m) return; // 地图还没建（或 2D 降级路）⇒ 没有视野可算，管道如实不取
-    const z = m.getZoom();
-    /* 阈值与实时层对齐（楼 z≥13.5、路 z≥12）：整区视野下楼是亚像素，取它只是白花流量 */
-    if (z >= BLD_MIN_ZOOM) await bldFeed.refresh(why);
-    if (z >= ROAD_MIN_ZOOM) await roadsFeed.refresh(why);
-    /* 🌊🌳 水/绿地**不设 zoom 闸门**（远景下它才最有用；判词由真源回填 `stats.gwVerdict`） */
-    await gwLayer.refresh(why);
-    /* 🏘 片区名**也不设 zoom 闸门**（切片③）：它是「我的家」的取名点，而家是**一进来就要有**的
-       —— 开页若停在远景（z<13.5），有闸门就永远挑不到家（表现是 HUD 一直"数不出来"）。
-       点很稀、包很小 ⇒ 代价可忽略；取到就进 `placesStore`，由 `placesFlush` 变成取值器的快照。 */
-    await placesFeed.refresh(why);
-    scheduleBundleHud();
-  }
-
-  /**
-   * 📦 **取一个包的署名原句** —— **目录由 feed 的候选表决定**，这里不许自己拼路径。
-   *
-   * 🔴 2026-09-26 修的真 bug：这里原来三处**直连** `loadBundleIndex(fetchCell, kind)`（不传 dir）
-   * ⇒ 它只用 `spec.dir`（**老包目录那一个**），而**页面走的是 feed 的候选表**
-   * （`bldbundle-002` 细格包在前、退回 `bldbundle`）。
-   * ⇒ 后果：**老包一删，App 会"署名取不到"而页面正常**（署名是 ODbL 合规项，不能少）。
-   *
-   * 现在：① 先读 feed 自己已经读到的索引事实（`facts().index.attribution`，它走的就是候选表，已读 ⇒ 零请求）；
-   *      ② feed 还没读（首屏 `refreshBundles` 与署名是**并发**的）⇒ 按 **feed 给出的候选表**
-   *         （`facts().dirs`）逐个目录试读 —— 顺序与 feed 完全一致，**不在这里写第二份目录名单**。
-   */
-  async function attributionOfFeed(
-    feed: { facts(): { dirs?: string[]; index: { attribution: string | null } } },
-    kind: string
-  ): Promise<string> {
-    try {
-      const a = feed.facts().index.attribution;
-      if (a) return a;
-    } catch { /* 落 ② */ }
-    let dirs: string[] = [];
-    try { dirs = feed.facts().dirs || []; } catch { dirs = []; }
-    for (const d of dirs) {
-      try {
-        const f = await loadBundleIndex(fetchCell, kind as never, d);
-        const a = f.attribution || f.source;
-        if (a) return a;
-      } catch { /* 试下一个目录 */ }
-    }
-    return "";
-  }
+  /* 🧱 S3（M8）：`refreshBundles`（按视野补离线格）与 `attributionOfFeed`（取一个包的署名原句）
+     整块搬进了 `wsHudStats.ts` —— 上面那次 `createBundleHud` 把它们接了回来。
+     ⚠️ **摇杆那条补刷新调的就是同一个 `refreshBundles`**（`refreshBundles("joy")` / `("joyhalt")`，
+     见 `onJoyDrive`/`onJoyHalt`）：搬的是定义、不是复制，`ws_joystick_selftest` 的 ⑰ 组钉着这一点。 */
 
   /** 🔴 署名（ODbL 硬要求）：句子**取自包里的 `index.json`**（导出脚本写的那句原话），不在这里重写 */
   async function loadBundleAttribution(): Promise<void> {
@@ -4999,81 +4803,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* ── 浏览器手势兜底（CSS 之外的保险）─────────────────────────────────────
      机主实测：即使 `.ws-dml` 上写了 `touch-action: none`，浏览器仍然把滑动当成页面手势
      （Via / 部分国产内核会忽略 touch-action，或抢的是"边缘返回手势"）。
-     所以这里在 **JS 层再拦一次**：`touchmove` 一律 preventDefault（被动监听是拦不住的，
-     必须 `{ passive: false }`），多指 `touchstart` 也拦。注意 preventDefault **不会**
-     阻止地图库自己的监听器 —— 它只掐掉浏览器的默认行为。 */
-  function guardGestures(el: HTMLElement): () => void {
-    const onMove = (e: TouchEvent): void => {
-      if (e.cancelable) e.preventDefault();
-    };
-    const onStart = (e: TouchEvent): void => {
-      if (e.touches.length > 1 && e.cancelable) e.preventDefault();
-    };
-    el.addEventListener("touchmove", onMove, { passive: false });
-    el.addEventListener("touchstart", onStart, { passive: false });
-    return () => {
-      el.removeEventListener("touchmove", onMove);
-      el.removeEventListener("touchstart", onStart);
-    };
-  }
+     🧱 S3（M1）：`guardGestures` / `lockPageGestures` / `unlockPageGestures`（连它们的
+     `htmlTouchBackup`）整块搬进了 `wsMapCamera.ts`；宿主只留 `unguard` 这个句柄。 */
   let unguard: (() => void) | null = null;
 
-  /* ── 页面级手势封锁（机主诊断：滑动不足 0.3 秒就被浏览器捕获）────────────────
-     这条现象说明：触摸**开始时确实到了地图**，但滑到约 300ms 时被**浏览器页面级手势**
-     （侧滑返回 / 页面滚动 / 下拉刷新）判走了。只在地图元素上写 `touch-action` 挡不住它
-     —— 必须在**根元素**上临时声明"这一屏不做任何页面手势"，否则浏览器的手势识别器
-     照样在系统层抢先。离开小区级时**原样还原**（别污染其它页面）。 */
-  let htmlTouchBackup: { touchAction: string; overscroll: string; overflow: string } | null = null;
-  function lockPageGestures(): void {
-    try {
-      const el = document.documentElement;
-      htmlTouchBackup = { touchAction: el.style.touchAction, overscroll: el.style.overscrollBehavior, overflow: el.style.overflow };
-      el.style.touchAction = "none";
-      el.style.overscrollBehavior = "none";
-      el.style.overflow = "hidden";
-    } catch {
-      /* 拿不到根元素就算了（不该发生） */
-    }
-  }
-  function unlockPageGestures(): void {
-    if (!htmlTouchBackup) return;
-    try {
-      const el = document.documentElement;
-      el.style.touchAction = htmlTouchBackup.touchAction;
-      el.style.overscrollBehavior = htmlTouchBackup.overscroll;
-      el.style.overflow = htmlTouchBackup.overflow;
-    } catch {
-      /* 忽略 */
-    }
-    htmlTouchBackup = null;
-  }
-
-  /**
-   * fps 采样（滚动 1 秒窗口，与项目其它地方同一口径）。
-   *
-   * ⚠️ **必须在"分渲染路"之前启动**：以前它写在 WebGL 路的末尾 ⇒
-   * 降级路（2D）的 HUD 永远显示 `0 fps`，看起来像"卡死了"，其实是没人在数。
-   * 数字本身也更有意义 —— 它量的是**这个页面**的帧率，不是某条渲染路的。
-   */
-  function startFps(): void {
-    let last = performance.now();
-    let frames = 0;
-    let win = 0;
-    const tick = (now: number) => {
-      if (!alive) return;
-      const dt = now - last;
-      last = now;
-      frames++;
-      win += dt;
-      if (win >= 1000) {
-        stats.fps = Math.round((frames * 1000) / win);
-        frames = 0;
-        win = 0;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-  }
+  /* 🧱 S3（M8）：fps 采样（`startFps`）整块搬进了 `wsHudStats.ts`，连 **rAF 句柄 `raf`** 一起
+     （宿主 `onBeforeUnmount` 里那两句 `cancelAnimationFrame(raf); raf = 0;` 现在就是 `stopFps()`）。
+     口径没变：它在"分渲染路"**之前**启动（上面那次 `startFps()`），降级路也有数。 */
 
   onMounted(async () => {
     /* ⚠️ 守卫看的是 **host**，不是 `cv`：2D 画布在 WebGL 路下**故意不存在**（`v-if="show2d"`），
@@ -5092,9 +4828,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        按钮是 canvas 的兄弟节点，只守护 canvas 就两全。 */
     if (cv.value) unguard = guardGestures(cv.value);
     lockPageGestures();
-    timer = window.setInterval(() => {
-      waited.value = Date.now() - t0;
-    }, 200);
+    /* 🧱 S3（M8）：那句 `timer = window.setInterval(… waited.value = Date.now() - t0 …, 200)` 就是
+       `armTimer()`（`t0` / `waited` / `timer` 三个量一起搬去了 `wsHudStats.ts`）—— 时点与周期一字未改。 */
+    armTimer();
     // ① WebGL 预检（无头/低端机可能是软件渲染甚至没有）→ **如实降级**，不白屏
     let ok = false;
     try {
@@ -5780,8 +5516,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       /* 断开失败无所谓 */
     }
     resizeRo = null;
-    if (raf) cancelAnimationFrame(raf);
-    raf = 0;
+    /* 🧱 S3（M8）：rAF 句柄随 `startFps` 搬去了 `wsHudStats.ts` ⇒ 这里调它的出口（逐字等价于
+       原来那两句 `if (raf) cancelAnimationFrame(raf); raf = 0;`）。 */
+    stopFps();
     try {
       map?.remove?.();
     } catch {

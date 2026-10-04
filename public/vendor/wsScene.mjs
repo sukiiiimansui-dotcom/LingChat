@@ -2413,6 +2413,7 @@ function pickBuildingsByBudget(input) {
     nearAnchors: 0,
     nearAdded: 0,
     nearRestored: 0,
+    nearPicked: 0,
     nearAddedPerAnchor: [],
     nearDistM: null,
     overBudget: false,
@@ -2544,8 +2545,9 @@ function pickBuildingsByBudget(input) {
         const ok = !!o && typeof o === "object";
         const lng = ok ? Number(o.lng) : NaN;
         const lat = ok ? Number(o.lat) : NaN;
-        if (ok && isFinite(lng) && isFinite(lat)) anchors.push({ lng, lat });
-        else badN += 1;
+        if (ok && isFinite(lng) && isFinite(lat)) {
+          anchors.push({ lng, lat, frozenOnly: o.frozenOnly === true });
+        } else badN += 1;
       }
       if (badN > 0) {
         stats.why += " · 就近补齐：数不出来（" + (listGiven ? "锚点 " + raw.length + " 个里有 " + badN + " 个不是有限坐标" : "相机中心不是有限数") + "）";
@@ -2556,23 +2558,26 @@ function pickBuildingsByBudget(input) {
         const idSeen = /* @__PURE__ */ new Set();
         for (const c of chosen) if (c.c.id !== "") idSeen.add(c.c.id);
         const perAnchor = [];
-        let added = 0, restored = 0, farM = 0;
+        let added = 0, restored = 0, farM = 0, picked = 0;
         for (let ai = 0; ai < anchors.length; ai++) {
           const a = anchors[ai];
           const cosLat = Math.cos(a.lat * Math.PI / 180);
           const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
           const cands = [];
-          for (let i = 0; i < pool.length; i++) {
-            if (taken[i]) continue;
-            const m2 = poolMeasure[i];
-            if (!m2) continue;
-            const dx = (m2.cLng - a.lng) * kx;
-            const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            if (!isFinite(d)) continue;
-            cands.push({ cand: pool[i], i, d });
+          if (a.frozenOnly !== true) {
+            picked += 1;
+            for (let i = 0; i < pool.length; i++) {
+              if (taken[i]) continue;
+              const m2 = poolMeasure[i];
+              if (!m2) continue;
+              const dx = (m2.cLng - a.lng) * kx;
+              const dy = (m2.cLat - a.lat) * WS_BLD_M_PER_DEG_LAT;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (!isFinite(d)) continue;
+              cands.push({ cand: pool[i], i, d });
+            }
+            cands.sort((A, B) => A.d !== B.d ? A.d - B.d : A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0);
           }
-          cands.sort((A, B) => A.d !== B.d ? A.d - B.d : A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0);
           const take = Math.min(nearKOn, cands.length);
           const batch = [];
           const seenObj = /* @__PURE__ */ new Set();
@@ -2621,6 +2626,7 @@ function pickBuildingsByBudget(input) {
         stats.nearAnchors = anchors.length;
         stats.nearAdded = added;
         stats.nearRestored = restored;
+        stats.nearPicked = picked;
         stats.nearAddedPerAnchor = perAnchor;
         stats.nearDistM = added > 0 ? Math.round(farM) : null;
         if (added > 0) {
@@ -4945,6 +4951,7 @@ function createBldPickStore(opts) {
   const frozen = opts?.frozen ?? {};
   const nearAnchors = [];
   const nearFeat = /* @__PURE__ */ new Map();
+  let nearCurrentKey = null;
   return {
     pick(input) {
       const r = capBuildingsPerCell(input.features, {
@@ -5009,8 +5016,13 @@ function createBldPickStore(opts) {
           nearAnchors.push({ lng: seedLng, lat: seedLat, key });
           nearFeat.set(key, []);
         }
+        nearCurrentKey = key;
       }
-      const anchorsOut = nearAnchors.map((a) => ({ lng: a.lng, lat: a.lat }));
+      const anchorsOut = nearAnchors.map((a) => ({
+        lng: a.lng,
+        lat: a.lat,
+        frozenOnly: a.key !== nearCurrentKey
+      }));
       const frozenOut = nearAnchors.map((a) => nearFeat.get(a.key) || []);
       const out = pickBuildingsByBudget({
         features: input.features,

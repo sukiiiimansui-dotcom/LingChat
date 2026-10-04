@@ -105,6 +105,16 @@ export interface BldBudgetInputLite<T> {
    */
   cellDeg?: number;
   minInView?: number;
+  /**
+   * 🆕 📍 **相机中心**（2026-10-04 第六条「就近补齐」）—— 与 `maxDrawn`/`cellDeg` 同一路**原样透传**：
+   * 语义（给/不给/给坏各是什么）只有规则模块那一处说了算，本模块**不判、不补默认值**。
+   *
+   * ⚠️ 页面那条路要**换包**（`public/vendor/wsScene.mjs` 由主对话统一重建）才会真的走到这一行 ——
+   * 旧产物里的 `pickBudget` 会把不认识的字段丢掉（不报错、静默无效）。App 宿主不经过产物，改完即生效。
+   */
+  nearCenter?: { lng: number; lat: number } | null;
+  /** 🆕 就近补齐的栋数（默认在规则模块里 = 10；`0` = 关闭）；同样**原样透传** */
+  nearK?: number;
 }
 
 /* ══ 🏙 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
@@ -311,6 +321,10 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
            ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）。 */
         cellDeg: input.cellDeg,
         minInView: input.minInView,
+        /* 📍 2026-10-04 第六条**就近补齐**：相机中心与栋数**原样透传** —— 规则模块那一处说了算
+           （没给/给坏/`nearK: 0` 三种语义都在 `wsBldBudget.BldBudgetInput` 的注释里，这里一个字都不重复判）。 */
+        nearCenter: input.nearCenter,
+        nearK: input.nearK,
       });
     },
 

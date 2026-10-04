@@ -456,13 +456,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           （`wsJoystick.ts` 里一行米/像素换算都不写）—— 速度是**米/秒**，屏幕像素只是结果。 */
   import WsJoystick from "./WsJoystick.vue";
   import {
-    JOY_BASE_PX,
     JOY_HUD_LIFT_PX,
     JOY_INSET_PX,
     JOY_PITCH_DEG,
     JOY_SPEED_MPS,
     JOY_STEP_PX,
-    JOY_THUMB_PX,
     ROAM_PIN_ID,
     type JoyCamSnapshot,
     type JoyFramePhase,
@@ -471,15 +469,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     JOY_ZOOM_PUSH_LEVELS,
     createJoyMotion,
     joyAimModeOf,
+    joyAimRotateDegOf,
     joyAimStep,
+    joyBasePxOf,
+    joyBearingNowOf,
     joyCamRestoreArgs,
     joyCamSnapshotOf,
+    joyDepthGainOf,
     joyGateOf,
     joyLngLatOf,
     joyNamesHiddenOf,
     joyPanScaleOf,
     joyPxScaleOf,
+    joyScreenHeadingOf,
+    joySetBearingNow,
+    joySetFrame,
     joySpeedMpsOf,
+    joyThumbPxOf,
     joyWalkAnimOn,
     roamStore,
   } from "./wsJoystick";
@@ -701,16 +707,32 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   const joyGate = computed(() => joyGateOf({ joy: !!props.joy, fallback2d: !!show2d.value }));
   /** **没有摇杆时**这一屏的俯角（= 改造前那个值；`props.pitch` 默认 38）—— 近景与"还原"都对着它 */
   const basePitch = computed(() => props.pitch || cameraDefaults().pitch);
+  /**
+   * 🕹 §15 容器高度（px）——底盘尺寸按它收（`16vh`）。只在挂载与 resize/转屏那一帧量一次，
+   * **不进每帧循环**（读 `clientHeight` 是强制布局，红线）。
+   */
+  const joyVh = ref(0);
+  function joyMeasureVh(): void {
+    const h = host.value?.clientHeight || 0;
+    if (h > 0 && h !== joyVh.value) joyVh.value = h;
+  }
   /** 初始倾角：**只有 `joy === true` 才 64**（机主 2026-10-03：默认关**不许**有副作用 ⇒ 关着时逐字 38） */
   const initPitch = computed(() => (props.joy ? JOY_PITCH_DEG : basePitch.value));
   /** 摇杆几何 → CSS 变量（**唯一真源**是 `wsJoystick.ts` 的常量；组件与 HUD 都从这里继承） */
-  const joyVars = computed<Record<string, string>>(() => ({
-    "--ws-joy-base": `${JOY_BASE_PX}px`,
-    "--ws-joy-thumb": `${JOY_THUMB_PX}px`,
-    "--ws-joy-inset": `${JOY_INSET_PX}px`,
-    /* 让位高度：**无摇杆路 = 0px** ⇒ HUD 的 `calc(8px + var(--ws-joy-h))` 逐字回到 `bottom:8px` */
-    "--ws-joy-h": joyGate.value.show ? `${JOY_HUD_LIFT_PX}px` : "0px",
-  }));
+  const joyVars = computed<Record<string, string>>(() => {
+    /* 🕹 §15：底盘**随容器高度收**（`16vh`，夹 [76,112]）—— 112px 在 581px 高的视口上占 19%，
+       真机横屏更狠（1/4 屏）。三个数（底盘/杆头/让位高度）全部由**同一处**的纯函数算。 */
+    const base = joyBasePxOf(joyVh.value);
+    return {
+      "--ws-joy-base": `${base}px`,
+      "--ws-joy-thumb": `${joyThumbPxOf(base)}px`,
+      "--ws-joy-inset": `${JOY_INSET_PX}px`,
+      /* 让位高度：**无摇杆路 = 0px** ⇒ HUD 的 `calc(8px + var(--ws-joy-h))` 逐字回到 `bottom:8px`。
+         ⚠️ 这一格**故意不跟着底盘缩**（判据 ② 逐字钉着 `JOY_HUD_LIFT_PX`，且"多让一点"无害：
+         底盘变小只是让 HUD 与它之间多一条缝，不会压住）。 */
+      "--ws-joy-h": joyGate.value.show ? `${JOY_HUD_LIFT_PX}px` : "0px",
+    };
+  });
   /* 📊 样式自检要带上 **HUD 原话**（机主看到的那一行）—— 只读，不参与任何渲染逻辑 */
   const hudEl = ref<HTMLElement | null>(null);
   /**
@@ -1867,6 +1889,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }
   /** 视口/方向变化 → 延迟一点再量（浏览器改布局是异步的） */
   function onWinResize(): void {
+    joyMeasureVh();      // 🕹 §15：转屏/改窗口 ⇒ 底盘尺寸跟着变（同一个 resize 里量，不新开监听）
     if (!alive || !map) return;
     window.setTimeout(() => doResize(map as { resize?: () => void }, "窗口/转屏"), 300);
   }
@@ -4263,6 +4286,26 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let joyOrigin: { lng: number; lat: number } | null = null;
   let joyScale: JoyPxScale | null = null;
   let joyMove: JoyMotion = createJoyMotion();
+  /**
+   * 🧭 §13 **参考系**（这一屏只有这一份）：
+   *   · `joyBearing0`：标定那一刻的相机 bearing —— 上面那把 px→经纬度的标尺就架在它上面；
+   *   · `joyDepthGain`：`1/cos(pitch)`（§14，标定那一刻的俯角算出来）。
+   * 相机 bearing 由**用户手势**改（双指旋转），**不跟角色朝向** —— 我们选的是"相机相对输入"那一套
+   * （研究 §13.2）。所以每一个推杆帧都要把当前的 bearing 报给模型：`Δβ ≠ 0` 时它先把屏幕向量
+   * 转回标尺坐标系，否则方向就按"标定那一刻的上"走（= 机主报的「移动方向和屏幕方向不一样」）。
+   */
+  let joyBearing0 = 0;
+  let joyDepthGain = 1;
+  /** 当前相机 bearing（**属性读**，不是 `project`、不触发布局）；读不到就沿用标定值 */
+  function joyReadBearing(): number {
+    const m = map as unknown as { getBearing?: () => number } | null;
+    try {
+      const b = m && typeof m.getBearing === "function" ? Number(m.getBearing()) : NaN;
+      return Number.isFinite(b) ? b : joyBearing0;
+    } catch {
+      return joyBearing0;
+    }
+  }
   /* 🕹🆕 2026-10-03 第二轮（机主：「视角无法锁定角色，**位移很大**喵！！！」）—— **世界尺度**两个数，
      各只有一处来源，都由 `joyCalibrate()` 量一次后传给摇杆组件（它自己一行换算都不写）：
        · `joyMpp`      ：米/像素 —— 用本组件**既有那把唯一的尺子** `bldMetersPerCssPixel(zoom, lat)`
@@ -4325,6 +4368,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       unproject?: (p: [number, number]) => { lng: number; lat: number };
       getCenter?: () => { lng: number; lat: number };
       getZoom?: () => number;
+      getBearing?: () => number;
+      getPitch?: () => number;
     } | null;
     if (!m || typeof m.getCenter !== "function") return;
     /* 🕹 **世界尺度**先量（只用到 getCenter/getZoom，**不依赖** project/unproject）：
@@ -4343,6 +4388,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       }
     } catch {
       joyMpp.value = 0;
+    }
+    /* 🧭 §13/§14：**参考系**（屏幕向量 ⇄ 世界方向的唯一换算处，纯函数模块）交给模型：
+       · `bearing0` = 标尺架在哪个朝向（下面那把 px→经纬度的雅可比就是**此刻**的相机量的）；
+       · `depthGain` = `1/cos(pitch)`（俯角带来的竖直压缩，§14）——「往上推」的屏幕速度要按它收，
+         否则世界里会走出 2.28 倍的速度（旧行为）。
+       ⚠️ 量不到就如实退回 (0, 1) = "当作没转过、俯角 0 压缩"（与 mpp 那条"不编数"同一条纪律）。 */
+    try {
+      const b0 = typeof m.getBearing === "function" ? Number(m.getBearing()) : 0;
+      const p0 = typeof m.getPitch === "function" ? Number(m.getPitch()) : JOY_PITCH_DEG;
+      joyBearing0 = Number.isFinite(b0) ? b0 : 0;
+      joyDepthGain = joyDepthGainOf(p0);
+      joySetFrame({ bearing0: joyBearing0, bearingNow: joyBearing0 }, joyDepthGain);
+    } catch {
+      joyBearing0 = 0;
+      joyDepthGain = 1;
+      joySetFrame(null, 1);
     }
     if (typeof m.project !== "function" || typeof m.unproject !== "function") return;
     try {
@@ -4391,10 +4452,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        另加 **0.1° 死区**：直着走时 `headingDeg` 只会在浮点尾巴上抖，四舍五入到 0.1° 后大多数帧
        根本没有变化 ⇒ 这些帧从"每帧 1 个写点"变成 0 个（写点预算里那个"最坏 8 / 稳态 5"就是这么来的）。 */
     if (pin.face && !joyAimOn) {
-      const deg = Number(mv.headingDeg.toFixed(1));
+      /* 🧭 §13：`mv.headingDeg` 是**世界（罗盘）朝向** —— 画在屏幕上要减掉当前 bearing（唯一换算处） */
+      const deg = Number(joyScreenHeadingOf(mv.headingDeg, joyBearingNowOf()).toFixed(1));
       if (deg !== joyFaceDeg) {
         joyFaceDeg = deg;
-        pin.face.style.transform = `rotate(${mv.headingDeg.toFixed(1)}deg)`;
+        pin.face.style.transform = `rotate(${deg}deg)`;
       }
     }
     /* 踏步（§4：就地行走）：**一步一个起落**，不是一步两个。
@@ -4438,6 +4500,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          不归零的话线会"啪"地从 20% 开始长。 */
       pin.el.classList.toggle("is-aim", want);
       if (want) joyAimK = 0;
+      /* 🎯 起新一段时把角度死区**作废**（`NaN` ⇒ 下一帧必写）：上一段的容器角度停在收线那一刻，
+         若这一段的方向恰好相同，`deg !== joyFaceDeg` 会判"没变"而**一次都不写** ——
+         线就会带着上一段的旧角亮起来（0.1° 死区那个共用变量带来的唯一副作用，这里堵掉）。 */
+      if (want) joyFaceDeg = NaN;
       /* 收线那一帧把**朝向箭头补到当前朝向**：预走线亮着的时候箭头是被 CSS 藏起来的
          （`[data-ws-roam-pin].is-aim [data-ws-roam-face]` 那条），而箭头自己的 `rotate` 在
          预走线期间**故意不写**（省一个写点）。不补这一下，松手后箭头会停在上一次写进去的旧角度上。 */
@@ -4452,10 +4518,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /* ③ 容器：只吃 rotate（角度死区 0.1°）。为什么和 `pin.face` 共用 `joyFaceDeg`：
        两者表示的是**同一个朝向**，同一帧只会有一个在画 —— 共用一份就少一次 `toFixed` 与一次比较。 */
     if (mode === "full" || mode === "static") {
-      const deg = Number((mv ? mv.headingDeg : 0).toFixed(1));
+      /* 🧭 §13：`headingDeg` 是**世界（罗盘）朝向** ⇒ 先换成**当前屏幕**角（`joyFaceDeg` 存的就是
+         这个口径，与朝向箭头共用一份）。
+         🎯 §13.4：预走线容器是**沿 `+x`（右）画的**（`.ws-aim__dash` 从 `left:17px` 起、箭头
+         `clip-path` 朝 +x），而 `rotate(θ)` 把 `+x` 转到屏幕角 θ ⇒ 要它指向 `h` 就得写 `h - 90`。
+         这一处就是那个 `-90`（`joyAimRotateDegOf`）。**朝向箭头不减**（它是沿 `-y` 画的）——
+         两个元素本来就该用两个式子，这也是"线、箭头、真实位移"从此同一个角的全部代价。 */
+      const deg = Number(joyScreenHeadingOf(mv ? mv.headingDeg : 0, joyBearingNowOf()).toFixed(1));
       if (deg !== joyFaceDeg) {
         joyFaceDeg = deg;
-        pin.aim.style.transform = `rotate(${deg}deg)`;
+        pin.aim.style.transform = `rotate(${joyAimRotateDegOf(deg)}deg)`;
       }
     }
   }
@@ -4467,7 +4539,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    */
   function joyFaceSync(pin: { face: HTMLElement | null } | undefined, headingDeg: number): void {
     if (!pin?.face || !Number.isFinite(headingDeg)) return;
-    joyFaceDeg = Number(headingDeg.toFixed(1));
+    /* 🧭 §13：调用方原样传的是 `mv.headingDeg`（**世界**朝向）⇒ 这里换成当前**屏幕**角再写 */
+    joyFaceDeg = Number(joyScreenHeadingOf(headingDeg, joyBearingNowOf()).toFixed(1));
     pin.face.style.transform = `rotate(${joyFaceDeg}deg)`;
   }
   /** 🎯 把预走线收干净（**幂等**）：class 摘掉 + 平滑量归零 + 朝向补写。`onJoyHalt`/`joyExit` 都会调一次 —— 保证"线不会僵住" */
@@ -4603,6 +4676,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       easeTo?: (o: Record<string, unknown>) => void;
     } | null;
     if (!alive || !m || typeof m.panBy !== "function") return;
+    /* 🧭 §13：每帧**只报一个数**（相机 bearing）——属性读，0 次 `project`、0 次布局读。
+       用户转过地图之后，"屏幕上往上推"对应的世界方向变了；不报这一下，模型就还按标定那一刻算。 */
+    joySetBearingNow(joyReadBearing());
     /* 🔴 两条路**分开判**（2026-10-03 第二轮）：世界速度下相机头 ~2 秒会被死区按在原地
        （满推 8.8 px/s），那几帧 `d = {0,0}` 但**角色已经在走** ⇒ 相机那一半要跳过、
        角色那一半照写。老代码把两者绑在"相机位移非 0"上，于是那 2 秒里钉子一动不动。 */
@@ -5532,6 +5608,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          ⚠️ 判据用 `joyGate.show`（= 摇杆到底在不在）而不是 `props.joy`：2D 降级路 DOM 里没有摇杆，
             那条路一个字都不许动（判据 9/10）。 */
       if (joyGate.value.show) {
+        joyMeasureVh();     // 🕹 §15：底盘尺寸按容器高度定（建图这一刻量一次；resize 时再量）
         joyCalibrate();
         if (joyOrigin) roamStore.write(joyOrigin.lng, joyOrigin.lat, joyMove.headingDeg);
         joyApplyRoam(joyMove);

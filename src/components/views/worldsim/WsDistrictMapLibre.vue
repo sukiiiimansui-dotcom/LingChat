@@ -477,6 +477,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyCamSnapshotOf,
     joyDepthGainOf,
     joyGateOf,
+    joyHomeBoxesOf,
     joyLngLatOf,
     joyNamesHiddenOf,
     joyPanScaleOf,
@@ -491,6 +492,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     joyWalkAnimOn,
     roamStore,
   } from "./wsJoystick";
+  /* 📍 **屏外方向指示**（2026-10-04 第七条；机主原话「**为什么其他角色不见了喵**」，
+     他自己点的方案是「**屏外加方向指示（小箭头 + 距离）**」）。
+     病根：角色钉子走地图库 `Marker`，**出了视口就是真的没有**（没有"贴边"这回事）⇒ 屏外的人看不见。
+     🔴 规则（夹取 / 角度 / 距离文案）**一行都不在这里**（在 `wsPinEdge.ts`，纯函数、Node 可直连）；
+     本组件只做三件事：建节点（每颗钉子一个，**建一次复用**）、每轮算一次屏幕点、**只在变了才写 DOM**。
+     🔴 角度换算（CSS `rotate()` 那个 `−90`）也**不在这里**：`pinEdgeRotateDegOf()` 转调摇杆那一份。 */
+  import { PIN_EDGE_MARGIN_PX, PIN_EDGE_MIN_GAP_PX, pinDistText, pinEdgeOf, pinEdgeRotateDegOf } from "./wsPinEdge";
   /* 🔬 「验证面板」（机主 2026-09-21：「**保证我们的全部验证功能在 App 页可全部看到喵！**」）。
      面板与样式 JSON **吃同一份快照** —— 同一件事两种读者（人看图、agent 读 JSON），不许各算一套。 */
   import WsVerifyPanel from "./WsVerifyPanel.vue";
@@ -1092,7 +1100,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let pins: Array<{
     id: string;
     el: HTMLElement;
-    mk: { setLngLat(c: [number, number]): unknown; remove(): void };
+    mk: { setLngLat(c: [number, number]): unknown; getLngLat?(): { lng: number; lat: number }; remove(): void };
     /** 🕹 只有「我」那颗钉子有：朝向箭头 / 身体（建钉子时抓一次，**不在帧里 `querySelector`**） */
     face: HTMLElement | null;
     body: HTMLElement | null;
@@ -1100,6 +1108,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     aim: HTMLElement | null;
     dash: HTMLElement | null;
     tip: HTMLElement | null;
+    /** 📍 屏外方向指示三件（**只有"别人"的钉子上建**，「我」不做）——
+     *  `edge` = 定位容器（只吃 `translate3d`）、`edgeArrow` = 转的那根小箭头、`edgeDist` = 距离那一行。 */
+    edge: HTMLElement | null;
+    edgeArrow: HTMLElement | null;
+    edgeDist: HTMLElement | null;
+    /** 📍 上一轮写进 DOM 的那份"边缘状态"（`"off"` 或 `"1|角|文案"`）——**它没变就一次都不写** */
+    edgeKey: string;
   }> = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mlMod: any = null;
@@ -1892,6 +1907,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 视口/方向变化 → 延迟一点再量（浏览器改布局是异步的） */
   function onWinResize(): void {
     joyMeasureVh();      // 🕹 §15：转屏/改窗口 ⇒ 底盘尺寸跟着变（同一个 resize 里量，不新开监听）
+    /* 📍 屏外指示的几何也在这里重量（容器尺寸 + 安全区）——**同一个 resize 里**，不新开监听；
+       量完立刻同步一次：转屏后箭头的落点是按新矩形算的，不补这一下会停在旧位置上。 */
+    pinEdgeMeasure();
+    pinEdgeSync();
     if (!alive || !map) return;
     window.setTimeout(() => doResize(map as { resize?: () => void }, "窗口/转屏"), 300);
   }
@@ -2567,6 +2586,27 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       aim.appendChild(tip);
       hit.appendChild(aim);
     }
+    /* 📍 **屏外方向指示**（2026-10-04 第七条；机主：「其他角色不见了喵」+ 他自己点的「屏外加方向指示」）。
+       结构：一个定位容器 + 里面两件（转的箭头 / 不转的距离文案）。
+       🔴 三条都是**硬约束**，改它的人先读这三行：
+         ① `position:absolute` —— 外层 `hit` 是 `display:flex` 的 44×44，**多一个普通子节点就会变成第二个
+            flex 项**、把身体圆挤走（`.ws-aim` 当年就是这么栽的，见它上面那段注释）；
+         ② `pointer-events:none` —— 箭头只是指示，**不许**吃掉地图手势、也不许抢 `hit` 的点击；
+         ③ 每颗钉子**建一次、之后只复用**（`pinEdgeSync` 只写 `transform` / `textContent` / 一个 class）。
+       ⚠️ 「我」那颗钉子**不建**（相机跟着他，"屏外"对他没有意义 —— 机主点的是"其他角色"）。
+       ⚠️ 这里只建节点：**位置/朝向/文案一个字都不在这里算**（那些在 `wsPinEdge.ts`，纯函数）。 */
+    if (!a.isMe) {
+      const edge = document.createElement("span");
+      edge.className = "ws-pin-edge";
+      edge.dataset.wsPinEdge = "";
+      const arrow = document.createElement("i");
+      arrow.className = "ws-pin-edge__arrow";
+      const dist = document.createElement("em");
+      dist.className = "ws-pin-edge__dist";
+      edge.appendChild(arrow);
+      edge.appendChild(dist);
+      hit.appendChild(edge);
+    }
     /* 标题里如实带出"位置是怎么来的"：吸附到路上（`road`）和网格示意位置，
        精度完全不是一回事 —— 以后排查"怎么站到江里了"就靠这一行。
        （挂在 `hit` 上 = 挂钩子的那个元素上，`syncPins` 更新 title 时也是它。） */
@@ -2836,6 +2876,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           aim: el.querySelector<HTMLElement>("[data-ws-roam-aim]"),
           dash: el.querySelector<HTMLElement>(".ws-aim__dash"),
           tip: el.querySelector<HTMLElement>(".ws-aim__tip"),
+          /* 📍 三件（只有"别人"的钉子上有 ⇒ 「我」那三栏恒 null，`pinEdgeSync` 据此跳过它） */
+          edge: el.querySelector<HTMLElement>("[data-ws-pin-edge]"),
+          edgeArrow: el.querySelector<HTMLElement>(".ws-pin-edge__arrow"),
+          edgeDist: el.querySelector<HTMLElement>(".ws-pin-edge__dist"),
+          edgeKey: "",
         });
       }
     }
@@ -2849,6 +2894,173 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     }
     pins = pins.filter((p) => alive.has(p.id));
     stats.pins = pins.length;
+    /* 📍 新钉子刚建出来 ⇒ **立刻补一次**屏外指示（不补的话，屏外的那个人要等到下一次相机事件才长出箭头）。
+       ⚠️ 这里调的两个函数是**函数声明**（提升可见），而它们读的 `pinEdgeGeom` 是 setup 里的 `const` ——
+          本函数的所有调用点都在 setup 跑完之后（watch 回调 / map 事件 / 异步 load）⇒ 不会踩 TDZ。 */
+    pinEdgeMeasure();
+    pinEdgeSync();
+  }
+
+  /* ══════════ 📍 **屏外方向指示**（2026-10-04 第七条）══════════════════════════════════
+     机主原话：「**为什么其他角色不见了喵**，放大到最大后楼就没了喵」（前半句归本段）；他自己点的方案：
+     「**屏外加方向指示（小箭头 + 距离）**」。病根：角色钉子走地图库 `Marker` ⇒ **出了视口就是真的没有**。
+
+     ## 三个"只在变了才写"（与 `joyAimWrite` 同款；写点数**可数**，写在这里备查）
+       · 一颗钉子从"屏内"翻到"屏外"（或翻回来）⇒ **1 次 class 写**（`is-off`），显隐交给 CSS 过渡；
+       · 屏外时每轮：**≤2 次 `transform`**（容器位移 + 箭头 `rotate`）+ **≤1 次 `textContent`**（距离文案）；
+         三者的合成串（`edgeKey`）**没变就一次都不写** —— 相机不动时稳态是 **0 次/轮**。
+       · 屏内时：**0 次**（只有翻转那一轮那 1 次 class）。
+     ## 时点：跟着**相机事件**走（`move` / `moveend` / `zoom`），**不在 rAF 里**（红线：不进每帧循环）
+       · 摇杆推着的时候与其它 handler 一样**早退**（`joyActive`）—— 拉近期间整层都在早退，
+         收尾由 `onJoyHalt()` 那**恰好一次**重算带上（与名字层同一套时点，判据 3/6 的红线）；
+       · 新钉子建出来时（`syncPins` 末尾）与容器尺寸变化时（resize）各补一次。
+     ## 几何：**只在挂载 / resize 量一次**（读 `clientWidth` 是强制布局，红线）
+       · 安全区（刘海/手势条）用 `env(safe-area-inset-*)` 探针量一次 ⇒ 折成一个**内缩后的子矩形**，
+         再把结果平移回去（纯函数只认一个标量 margin ⇒ 这里做的是仿射平移，**不是第二份几何**）；
+       · 三块禁区（HUD 让位带 / 📱 / 🔬）用摇杆那一份 `joyHomeBoxesOf()`（**同一份矩形、同一个间距**
+         `PIN_EDGE_MIN_GAP_PX = JOY_GAP_PX`）⇒ 箭头绝不会压在 HUD 上。 */
+  /** 📍 开关（**默认开**）：唯一的关法是 `?edge=0`（与 `?names=0`/`?joy=0` 同一族写法） */
+  const pinEdgeOn = ref(!/[?&]edge=0\b/.test(String(typeof location !== "undefined" ? location.search : "")));
+  /** 量一次就缓存：容器 CSS 尺寸 + 四边安全区（`measured=false` ⇒ 数不出来，一颗箭头都不写） */
+  const pinEdgeGeom = { w: 0, h: 0, l: 0, t: 0, r: 0, b: 0, measured: false };
+  /** `env(safe-area-inset-*)` 探针：读**一次**就拆掉（量不到 ⇒ 四边 0，与"没有刘海"同义） */
+  function pinEdgeInsetsOf(): { l: number; t: number; r: number; b: number } {
+    const zero = { l: 0, t: 0, r: 0, b: 0 };
+    try {
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:absolute;left:-9999px;top:0;width:0;height:0;visibility:hidden;" +
+        "padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);";
+      (host.value || document.body).appendChild(probe);
+      const cs = getComputedStyle(probe);
+      const v = {
+        t: parseFloat(cs.paddingTop) || 0,
+        r: parseFloat(cs.paddingRight) || 0,
+        b: parseFloat(cs.paddingBottom) || 0,
+        l: parseFloat(cs.paddingLeft) || 0,
+      };
+      probe.remove();
+      return v;
+    } catch {
+      return zero;   /* 读不出来 ⇒ 当"没有安全区"（**不改**任何其它判定；不是把"数不出来"写成别的数） */
+    }
+  }
+  function pinEdgeMeasure(): void {
+    const el = host.value;
+    const w = el?.clientWidth || 0;
+    const h = el?.clientHeight || 0;
+    if (w <= 0 || h <= 0) return;             /* 量不到 ⇒ 保持 `measured=false`（数不出来，不编坐标） */
+    const ins = pinEdgeInsetsOf();
+    pinEdgeGeom.w = w;
+    pinEdgeGeom.h = h;
+    pinEdgeGeom.l = ins.l;
+    pinEdgeGeom.t = ins.t;
+    pinEdgeGeom.r = ins.r;
+    pinEdgeGeom.b = ins.b;
+    pinEdgeGeom.measured = true;
+  }
+  /**
+   * 把一个点从三块禁区里**往上推**出去（与摇杆的"家"同一套矩形、同一个间距 ⇒ 不会打架）。
+   * 为什么是"往上推"：三块禁区全部贴在**下缘**（HUD / 📱 / 🔬），推一次就走开。
+   * 推完仍夹回安全矩形 —— 返回的点一定在屏内（含边）。
+   */
+  function pinEdgeAvoid(x: number, y: number): { x: number; y: number } {
+    const G = pinEdgeGeom;
+    const loX = G.l + PIN_EDGE_MARGIN_PX, hiX = G.w - G.r - PIN_EDGE_MARGIN_PX;
+    const loY = G.t + PIN_EDGE_MARGIN_PX, hiY = G.h - G.b - PIN_EDGE_MARGIN_PX;
+    let px = Math.max(loX, Math.min(hiX, x));
+    let py = Math.max(loY, Math.min(hiY, y));
+    const boxes = joyHomeBoxesOf(G.w, G.h);
+    for (let pass = 0; pass < 4; pass++) {
+      let hit = false;
+      for (const b of boxes) {
+        const inside = px > b.l - PIN_EDGE_MIN_GAP_PX && px < b.r + PIN_EDGE_MIN_GAP_PX &&
+          py > b.t - PIN_EDGE_MIN_GAP_PX && py < b.b + PIN_EDGE_MIN_GAP_PX;
+        if (!inside) continue;
+        py = b.t - PIN_EDGE_MIN_GAP_PX;
+        hit = true;
+      }
+      if (!hit) break;
+      py = Math.max(loY, Math.min(hiY, py));
+    }
+    return { x: px, y: py };
+  }
+  /**
+   * 📍 **一轮**：每颗"别人"的钉子算一次屏幕点 ⇒ 屏外画边缘箭头 + 距离，回到屏内就藏起来。
+   * 规则（夹取/角度/文案）全在纯函数 `wsPinEdge.ts`；这里只做三件事：投影、写 DOM、**只在变了才写**。
+   */
+  function pinEdgeSync(): void {
+    if (!pinEdgeOn.value) return;
+    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+    if (!m || typeof m.project !== "function") return;
+    if (!pinEdgeGeom.measured) return;        /* 容器还没量过 ⇒ 数不出来（不编坐标、不写 DOM） */
+    const G = pinEdgeGeom;
+    const vw = G.w - G.l - G.r;
+    const vh = G.h - G.t - G.b;
+    /* 相机中心**一轮读一次**（距离那一行要用它；不是每颗钉子读一次相机） */
+    let cLng = NaN, cLat = NaN;
+    try {
+      const c = (map as unknown as { getCenter?: () => { lng: number; lat: number } } | null)?.getCenter?.();
+      cLng = Number(c?.lng);
+      cLat = Number(c?.lat);
+    } catch {
+      cLng = NaN; cLat = NaN;
+    }
+    for (const p of pins) {
+      const edge = p.edge;
+      /* 「我」那颗钉子**没有这三个节点**（相机跟着他，"屏外"对他没意义 —— 机主点的是"其他角色"） */
+      if (!edge || !p.edgeArrow || !p.edgeDist) continue;
+      let px = NaN, py = NaN, lng = NaN, lat = NaN;
+      try {
+        const ll = p.mk.getLngLat ? p.mk.getLngLat() : null;
+        lng = Number(ll?.lng);
+        lat = Number(ll?.lat);
+        const q = m.project([lng, lat]);
+        px = Number(q?.x);
+        py = Number(q?.y);
+      } catch {
+        px = NaN; py = NaN;
+      }
+      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;   /* 数不出来 ⇒ 这一颗本轮一个字都不写 */
+      /* 折算进"安全子矩形"再交给纯函数（仿射平移：先减左上安全区，算完再加回去） */
+      const r = pinEdgeOf({ x: px - G.l, y: py - G.t }, { w: vw, h: vh });
+      if (r.note) continue;
+      if (!r.off) {
+        /* 屏内：**只翻转一次 class**（显隐交给 CSS 过渡），位置/角度一个字都不写 */
+        if (p.edgeKey !== "off") {
+          p.edgeKey = "off";
+          edge.classList.remove("is-off");
+        }
+        continue;
+      }
+      const at = pinEdgeAvoid(r.ex + G.l, r.ey + G.t);
+      const rot = pinEdgeRotateDegOf(r.angleDeg);
+      const text = pinDistText(pinEdgeMetersOf(lng, lat, cLng, cLat));
+      const key = "1|" + at.x.toFixed(1) + "|" + at.y.toFixed(1) + "|" + rot.toFixed(1) + "|" + text;
+      if (key === p.edgeKey) continue;         /* 三个写点全都一样 ⇒ 这一轮 **0 次** DOM 写 */
+      p.edgeKey = key;
+      edge.classList.add("is-off");
+      edge.style.transform =
+        `translate3d(${(at.x - px).toFixed(1)}px, ${(at.y - py).toFixed(1)}px, 0) translate(-50%, -50%)`;
+      p.edgeArrow.style.transform = `rotate(${rot}deg)`;
+      if (p.edgeDist.textContent !== text) p.edgeDist.textContent = text;
+    }
+  }
+  /**
+   * 📏 **"离我多远"**：相机中心 → 这一颗钉子的**地面米数**（纯算术，与挑楼那把尺子同一对常数
+   * `111320·cos(lat)` / `110540`；**一次投影都不做** —— 两个点本来就是经纬度）。
+   *
+   * 口径：相机锁着「我」（近景那条口径）⇒ 中心就是「我」；两者不重合时以**相机中心**为准
+   *   —— 这行字答的是"屏幕上那颗箭头指的那个人，离你现在看的地方多远"。
+   * 三态：任一输入不是有限数 ⇒ `null` ⇒ 文案写「—」（**不许**写 `0 m` 冒充"就在我脚下"）。
+   */
+  function pinEdgeMetersOf(lng: number, lat: number, cLng: number, cLat: number): number | null {
+    if (![lng, lat, cLng, cLat].every((v) => Number.isFinite(v))) return null;
+    const lat0 = (lat + cLat) / 2;
+    const dx = (lng - cLng) * 111320 * Math.cos((lat0 * Math.PI) / 180);
+    const dy = (lat - cLat) * 110540;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    return Number.isFinite(d) ? d : null;
   }
 
   /* 人变了就同步一次（`placed` 每次 load 会换新数组，浅层 watch 就够） */
@@ -3635,7 +3847,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                   minInView: WS_BLD_INVIEW,
                 }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
               }
-              const centerLat = map && typeof map.getCenter === "function" ? Number(map.getCenter().lat) : 0;
+              /* 📍 2026-10-04 第六条「**就近补齐**」的参照点：**每轮 pick 取一次**（不是每帧）。
+                 为什么加（机主原话）：「**保证地图上绝对有楼就行**」（他在"楼不见后还缩小了看，还是没有楼"）。
+                 根因（真浏览器探针量过）：相机 38°~64° 俯角下"看得见的地面"只是一条窄带，而"每格取前 K"
+                 **完全不看相机** ⇒ z16.4 那 12 栋锚点全落在窗口外、z19（放大到最大）直接是**空集**。
+                 ⚠️ 与原 `centerLat` **共用这一次 `getCenter()`**（一轮一次相机读，不为了补楼多读一遍）。 */
+              const centerLL = map && typeof map.getCenter === "function" ? map.getCenter() : null;
+              const centerLat = centerLL ? Number(centerLL.lat) : 0;
               const pitch = map && typeof map.getPitch === "function" ? Number(map.getPitch()) : 0;
               return store.pickBudget({
                 features: feats,
@@ -3662,6 +3880,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                    包自报优先、读不到才退回 0.05（老包）。写死 0.01 会让换包时"格"与包对不上。 */
                 cellDeg: bldCellDegNow(),
                 minInView: WS_BLD_INVIEW,
+                /* 📍 **就近补齐**（2026-10-04 第六条）：把"离相机中心最近、又还没入选"的 10 栋
+                   追加到这批的**尾部**。它**不进冻结集**、base 一个字节都不受影响；
+                   栋数不在这里写死 —— 默认值只有 `wsBldBudget.WS_BLD_NEAR_K` 那一处。 */
+                nearCenter: centerLL ? { lng: Number(centerLL.lng), lat: Number(centerLL.lat) } : null,
               });
             };
           } catch { return null; }
@@ -4885,6 +5107,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       onMoveEndNames();                // 容器归零（`cameraMoving=false` + 一次 transform 写）
       reprojectNow();                  // 重投影**只重投影、不重排**（O(N)，N ≤ 26）
     }
+    /* 📍 **恰好一次**：摇杆推着的时候三个相机钩子全部早退（判据 3/6 的红线），
+       屏外指示停在推杆前那一刻 —— 画面停稳之后在这里补一次（与名字层那一次重算同一个时点）。 */
+    pinEdgeSync();
     if (bldTimer) window.clearTimeout(bldTimer);
     bldTimer = 0;
     void refreshBundles("joyhalt").then(() => (alive ? refreshNames("joyhalt") : undefined));
@@ -5678,6 +5903,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         const cam0 = joyReadCam();
         if (cam0) joyPrevCam = { ...cam0, pitch: basePitch.value };
       }
+      /* 📍 **屏外方向指示的几何**（容器尺寸 + 四边安全区）在这里量一次 —— **与摇杆无关**
+         （摇杆关着也照样要有"其他角色在哪"的指示），resize/转屏时在 `onWinResize()` 里重量。 */
+      pinEdgeMeasure();
       /* 🕹 启动时摇杆就是开（存储值/`?joy=1`）⇒ 在这里把**漫游会话**也建起来，与运行期打开走同一条语义：
          ① `joyCalibrate()` 量「屏幕 px → 经纬度」（此刻俯角已经是 64 ⇒ 量的是近景那把尺子）；
          ② 位置真源 +「我」那颗钉子一起落到画面中心 —— 不这么做的话，"启动就开摇杆"这条路上
@@ -5831,6 +6059,17 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          分界线两边画法与栋数上限都不同，不重挑就会一直按旧档画到下一次 `moveend`。 */
       bldTierCrossedFlush();
     });
+
+    /* ══ 📍 **屏外方向指示**的相机钩子（2026-10-04 第七条）════════════════════════════════
+       为什么是**单独一组监听**而不是塞进上面那五个 handler：那五个是摇杆红线的判据对象
+       （`ws_joystick_selftest.mjs` ⑦ 逐字钉着它们的形状），把新功能混进去会让"改一处、红一片"；
+       单独注册一条，**早退条件与它们逐字相同**（`if (joyActive) return;`）⇒ 时点也完全相同。
+       时点 = **相机事件**（不是 rAF、不是每帧循环）；写点数与开关见 `pinEdgeSync` 上方那段说明。
+       ⚠️ 只挂 `move` / `moveend` / `zoom` 三个（`zoomend` **故意不挂** —— 它是摇杆那条"唯一入口"
+         判据的对象，且 `zoom` 已经在跟了；多挂一条就是给那条红线添一个新的解释空间）。 */
+    m.on("move", () => { if (joyActive) return; pinEdgeSync(); });
+    m.on("moveend", () => { if (joyActive) return; pinEdgeSync(); });
+    m.on("zoom", () => { if (joyActive) return; pinEdgeSync(); });
 
     /* fps 计数已提到 `startFps()`（在"分渲染路"之前启动，降级路也有数） */
   });
@@ -6422,12 +6661,66 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   }
   /* ♿ 系统"减弱动效"⇒ **只关流动**（虚线变静止的虚线；线本身照画 —— 它是操作反馈，不是装饰）。
      `low` 档更狠：整条不画（JS 的 `joyAimModeOf` 给 `"off"` ⇒ 一次都不写、class 都不加）。 */
+  /* ══ 📍 **屏外方向指示**（2026-10-04 第七条；机主：「为什么其他角色不见了喵」+
+     他自己点的「屏外加方向指示（小箭头 + 距离）」）══════════════════════════════════════
+     结构：`.ws-pin-edge`（定位容器，挂在钉子的 44×44 命中区里）+ 箭头 + 距离文案。
+     🔴 三条硬约束（与 `pinEl`/`pinEdgeSync` 那两段注释是同一份口径）：
+       ① `position:absolute` —— 外层 `hit` 是 `display:flex` 的 44×44，**普通子节点会变成第二个
+          flex 项**、把身体圆挤走（`.ws-aim` 当年就是这么把轴心挤到身体右边的）；
+       ② `pointer-events:none` —— 箭头只是指示：不吃地图手势、不抢钉子的点击（命中区仍是那 44×44）；
+       ③ 只动 `transform` / `opacity`（`opacity` 的过渡交给 CSS，JS 只翻转一次 class）——
+          "动画里不碰布局属性"是全项目红线（`ws_anim_ban_selftest.mjs` ① 扫的就是它）。
+     🛡 刘海/手势条：**不在 CSS 里躲**（那会与 JS 算出来的落点错位）——JS 侧用
+        `env(safe-area-inset-*)` 探针把四边量出来，折进"安全子矩形"再算落点，见 `pinEdgeMeasure()`。 */
+  .ws-pin-edge {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    pointer-events: none;
+    opacity: 0;                       /* 屏内 = 不显示（翻转 `is-off` 才亮） */
+    transition: opacity 160ms ease-out;
+    will-change: transform;           /* 每轮只写 transform ⇒ 走合成器，不重新栅格化 */
+  }
+  .ws-pin-edge.is-off {
+    opacity: 1;
+  }
+  /* 箭头：**沿 +x（向右）画**（`clip-path` 尖端在右）—— 这样 `pinEdgeRotateDegOf()` 里那一个 `−90`
+     对它和摇杆的预走线箭头**同时成立**（全项目只有这一处换算，不各写一套）。
+     ⚠️ **不加 `filter`/`box-shadow`**：它在相机移动时每轮都在转，加一层滤镜就是每轮一次重新栅格化
+     —— 与既有朝向箭头 `.ws-aim__tip` 同一条纪律。 */
+  .ws-pin-edge__arrow {
+    width: 9px;
+    height: 9px;
+    background: rgba(233, 244, 255, 0.95);
+    clip-path: polygon(0 18%, 100% 50%, 0 82%);
+    transform-origin: 50% 50%;
+  }
+  .ws-pin-edge__dist {
+    font-size: 10px;
+    line-height: 1.2;
+    font-style: normal;               /* 它是个 `<em>`：默认斜体，这里按正体排 */
+    color: #e9f4ff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+    white-space: nowrap;
+  }
+  /* ♿ 系统"减弱动效"⇒ **只关流动**（虚线变静止的虚线；线本身照画 —— 它是操作反馈，不是装饰）。
+     `low` 档更狠：整条不画（JS 的 `joyAimModeOf` 给 `"off"` ⇒ 一次都不写、class 都不加）。 */
   @media (prefers-reduced-motion: reduce) {
     .ws-aim__flow {
       animation: none;
     }
     .ws-aim {
       transition-duration: 180ms;
+    }
+  }
+  /* ♿ 系统"减弱动效" ⇒ 屏外指示的显隐不做过渡（指示本身照旧，它承载的是"人在哪"这个信息） */
+  @media (prefers-reduced-motion: reduce) {
+    .ws-pin-edge {
+      transition-duration: 0ms;
     }
   }
 </style>

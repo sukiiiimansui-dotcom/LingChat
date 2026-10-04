@@ -226,7 +226,7 @@
      "tiles": [
       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
      ],
-     "maxzoom": 15,
+     "maxzoom": 16,
      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
      "tileSize": 256,
      "crossOrigin": "anonymous"
@@ -262,9 +262,9 @@
        [
         "zoom"
        ],
-       13.6,
+       16.6,
        1,
-       14.8,
+       18,
        0
       ],
       "raster-saturation": 0.55,
@@ -355,8 +355,8 @@
     "aiStrokeW": 0.8
    },
    "baseFade": {
-    "from": 13.6,
-    "to": 14.8
+    "from": 16.6,
+    "to": 18
    },
    "verticalGradient": false,
    "extrudOpacity": [
@@ -646,7 +646,7 @@
       "tiles": [
        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
       ],
-      "maxzoom": 15,
+      "maxzoom": 16,
       "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
       "tileSize": 256,
       "crossOrigin": "anonymous"
@@ -682,9 +682,9 @@
         [
          "zoom"
         ],
-        13.6,
+        16.6,
         1,
-        14.8,
+        18,
         0
        ],
        "raster-saturation": 0.55,
@@ -755,8 +755,8 @@
      "aiStrokeW": 0.8
     },
     "baseFade": {
-     "from": 13.6,
-     "to": 14.8
+     "from": 16.6,
+     "to": 18
     },
     "verticalGradient": false,
     "extrudOpacity": [
@@ -1067,7 +1067,7 @@
       "tiles": [
        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
       ],
-      "maxzoom": 15,
+      "maxzoom": 16,
       "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
       "tileSize": 256,
       "crossOrigin": "anonymous"
@@ -1103,9 +1103,9 @@
         [
          "zoom"
         ],
-        13.6,
+        16.6,
         1,
-        14.8,
+        18,
         0
        ],
        "raster-saturation": 0.55,
@@ -1196,8 +1196,8 @@
      "aiStrokeW": 0.8
     },
     "baseFade": {
-     "from": 13.6,
-     "to": 14.8
+     "from": 16.6,
+     "to": 18
     },
     "verticalGradient": false,
     "extrudOpacity": [

@@ -87,12 +87,16 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom
       tiles: basemapTiles(dark),
       tileSize: 256,
       /* ⚠️ 2026-10-01 首屏审计（`BLUEPRINT-FIRSTPAINT.md` 方案 3）发现的**白等**，已修：
-         有 `baseFade` 的主题到 `to`（薄荷/暗色 14.8）就完全透明，而 App 默认机位 z=16.4
-         ⇒ `maxzoom: 20` 会让它白取 8~10 张 z16 瓦片（每张 330~424ms，画出来全透明）。
-         `GeoTheme`（本函数的入参类型）上**没有** `baseFade` —— 它在 `WsMapTheme`/`WsMapLookSpec`
-         （`wsMapTheme.ts:149/597`，也就是主题 JSON 的 `themes[*].baseFade`：`night` 是 `null`、
-         `anime` 才有值）⇒ 所以收口值由**调用方**用可选的 `opts.baseMaxZoom` 递进来
+         有 `baseFade` 的主题到 `to` 就完全透明，再往上取瓦片是纯等（实测 z16 每张 330~424ms、8~10 张）。
+         `GeoTheme`（本函数的入参类型）上**没有** `baseFade`/`sources` —— 它们在
+         `WsMapTheme`/`WsMapLookSpec`（`wsMapTheme.ts`，也就是主题 JSON 的 `themes[*].baseFade`：
+         `night` 是 `null`、`anime` 才有值）⇒ 所以收口值由**调用方**用可选的 `opts.baseMaxZoom` 递进来
          （`useWsMapLibre.ts` 建图那条：`stageThemeParts()` → `wsMapTheme.baseMaxZoomFor()`）。
+         🔴 2026-10-04 语义收窄：那个函数现在**同时**夹一层"主题自己声明的 `sources.base.maxzoom`"
+         （只收口、不放大）—— 起因是机主推翻「地面太糊」之后，二次元的淡出终点抬到 18，
+         若把 18 原样写进这里，地图库到 z17 就会去要 Esri 那张 **2521B 占位图**
+         「Map data not yet available」= 2026-09-25「地图变白/没了」换个入口重演。
+         ⇒ 这里拿到的永远是 `min(主题声明的 16, ceil(淡出终点))`。
 
          🔴 纪律（两条都别破坏）：
          · **默认行为逐字不变** —— 不传 `baseMaxZoom`（`undefined`）时 `maxzoom` 仍是 `20`：

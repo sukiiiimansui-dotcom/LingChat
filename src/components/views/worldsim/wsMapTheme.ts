@@ -499,11 +499,21 @@ const ANIME: WsMapTheme = {
      注：这条同时影响"示意水体"与 gw 真水（**两处用的是同一个 `ai.water`**）——真水是 OSM 多边形、
      样式仍与示意件可区分（示意件另有暖色调与描边口径），没有把示意混成事实。 */
   ai: { park: "rgba(126, 200, 138, 0.60)", water: "rgba(46, 158, 214, 0.92)" },
-  /* 🔴 治「地面太糊」：**z13.6 起淡出、z14.8 起完全不用照片**（小区级默认 16.4 ⇒ 全在淡出之后）。
-     淡出后露出的是 `bg` + `tint` 合成出来的浅青地面 —— 它的亮度（0.922）
-     和"有瓦片时"（0.924）**只差 0.002** ⇒ 过渡不会"咔"一下变个色（这是刻意的：我当初把
-     `tint` 调成 0.45 就是为了让两种情况落在一起）。自检里有一条钉这个 Δ。 */
-  baseFade: { from: 13.6, to: 14.8 },
+  /* 🔴 2026-10-04 机主：「地图是**纯色**的，很难看喵（**推翻我之前的话**）」——
+     推翻的就是本节原来那条「治地面太糊 ⇒ z13.6 起淡出、z14.8 起完全不用照片」。
+     旧值坏在哪：小区级**默认机位 z16.4** 早就过了 `to=14.8` ⇒ 底图整层 `raster-opacity = 0`
+     ⇒ 屏上只剩 `bg` + `tint` 合成出来的**单色地面**（≈ `#D4F0FC`，亮度 0.921、**方差 0**）——
+     机主看到的那块"纯色"就是它，不是瓦片坏、也不是取色错。
+     现在把窗口整体抬到**源的真实细节上限之上**：
+       · `from = 16.6` ⇒ z ≤ 16.6 底图**全不透明**（默认机位 16.4 落在里面 ⇒ 真瓦片回来了）；
+       · `to = 18.0`  ⇒ 只在**放大复用区**（源 maxzoom = 16，z17 起是 2~4 倍拉伸，那一段才是真会糊的）
+                        淡出；终点处与 `bg`+`tint` 单色的亮度**只差 0.003** ⇒ 不"咔"一下跳色
+                        （`tint` 当初调 0.45 就是为了让两种情况落在一起；自检里有一条钉这个 Δ）。
+     ⚠️ `to = 18` **只影响 `raster-opacity` 这一条表达式**：底图源的取瓦片上限由 `baseMaxZoomFor()`
+        夹在 **16**（= 主题自己声明的 `sources.base.maxzoom`）⇒ **永远不去要 z17 那张 2521B 占位图**。
+     ⚠️ 观感（瓦片够不够清楚、和我们自己的矢量路网叠一起会不会花）**只有机主能判**；
+        这里就是**一对常量**：他说"再淡一点 / 再清楚一点"，只动这一行，别的都不用碰。 */
+  baseFade: { from: 16.6, to: 18.0 },
   /* 路网：浅底那一套 —— **路芯近白 + 蓝灰描边**（BA/地图 App 的常见做法：
      靠描边把路"勾"出来，而不是靠路芯比地面亮）。描边比地面暗一档 ⇒ 看得见。
      🔴 2026-10-02 机主「**道路清晰**」这一刀：**只动下面两个值**（幅度按"一档"取，保守）——
@@ -565,23 +575,39 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
 /**
  * 底图瓦片源的 **`maxzoom` 上限** —— `wsMapStyle.styleFor(theme, { baseMaxZoom })` 的**唯一真源**。
  *
- * 🔴 为什么需要它（2026-10-01 首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3）：
- * 有 `baseFade` 的主题到 `to`（薄荷/暗色 **14.8**）底图就**完全透明**了，而 App 默认机位
- * 是 **z=16.4**（`wsScene.ts` 的 `cameraDefaults()`）⇒ 底图 source 写死 `maxzoom: 20`
- * 会让它在 z16 上**白取 8~10 张 Esri 瓦片**（实测每张 330~424ms，画出来全透明 = 纯等）。
- * ⇒ 收口到**淡出终点**：`Math.ceil(to)`。
- *   ⚠️ 圆整方向是"**多要一档**"：宁可多取一张 z15，也不许在还没淡完时就停止取瓦片
- *      —— 那会在 `to` 附近露出一块没底图的地面（比慢更难看）。
+ * ## 它算两件事（顺序不能反）
+ * ① **淡出终点**：`Math.ceil(baseFade.to)` —— 底图到 `to` 就完全透明了，再往上取瓦片是纯白等
+ *    （2026-10-01 首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3：z16 每张 330~424ms、8~10 张）。
+ *    圆整方向是"**多要一档**"：宁可多取一张，也不许在还没淡完时就停止取瓦片
+ *    —— 那会在 `to` 附近露出一块没底图的地面（比慢更难看）。
+ * ② 🔴 **再夹一次主题自己声明的上限**（`sources.base.maxzoom`）—— "**只收口、不放大**"这条规矩
+ *    现在由**函数本身**保证（以前只由 `themeStyleParts` 里那一次 `min(原值, …)` 保证）。
+ *    为什么必须补（2026-10-04，机主推翻「地面太糊」之后）：
+ *      二次元的淡出终点抬到 **18**（默认机位 16.4 要看得见真瓦片）⇒ `ceil(to) = 18`，
+ *      而这条值会被 `wsMapStyle.styleFor({ baseMaxZoom })` **原样**写进底图源（区县级那条路）
+ *      ⇒ 地图库到 z17 就会去要 Esri 那张 **2521B 占位图**「Map data not yet available」
+ *      = 2026-09-25「地图变白/没了」那次事故**换个入口再来一遍**。
+ *    现在：`min(主题声明的 maxzoom, ceil(to))` ⇒ 二次元 = `min(16, 18) = **16**`（真实细节上限，
+ *    z17 起交给地图库放大复用 z16，永不请求占位图）。
  *
  * 🔴 **没有 `baseFade` 的主题返回 `undefined`**（`null` = 全程不淡出，暗色/对照组用它）——
  * ⇒ 调用方（`styleFor`）保持原有的 **20**，那类主题真的要瓦片看东西，砍了就糊。
+ * ⚠️ 主题对象上**没有 `sources`** 时（自检里的裸对象、老调用点）行为与以前**逐位相同**：只做 `ceil`，
+ *    不替调用方兜测 —— 判据 ② 是"夹到主题声明的上限"，不是"凭空发明一个上限"。
  *
  * 纯函数（零 IO、零副作用）⇒ Node 自检可直连（`ws_base_maxzoom_selftest.mjs`）。
  */
-export function baseMaxZoomFor(theme: { baseFade?: { from: number; to: number } | null } | null | undefined): number | undefined {
+export function baseMaxZoomFor(
+  theme:
+    | { baseFade?: { from: number; to: number } | null; sources?: { base?: { maxzoom?: number } | null } | null }
+    | null
+    | undefined
+): number | undefined {
   const f = theme && theme.baseFade;
   if (!f || typeof f.to !== "number" || !Number.isFinite(f.to)) return undefined;
-  return Math.ceil(f.to);
+  const want = Math.ceil(f.to);
+  const cap = theme && theme.sources && theme.sources.base ? theme.sources.base.maxzoom : undefined;
+  return typeof cap === "number" && Number.isFinite(cap) && cap < want ? cap : want;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1437,17 +1463,20 @@ export function themeStyleParts(
   /* ⚠️ 上面两条用 `...theme.sources.x` 展开 —— 它会**连 attribution 一起**带过来。
      别改成"只挑 tiles/maxzoom 手抄"：我第一版就是手抄的，结果**把 Esri 的署名弄丢了**
      （见 `WsMapRasterSource.attribution` 的说明）。自检里有一条专门断言署名在。 */
-  /* 🕳 底图瓦片上限**收口**（2026-10-01 续修，首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3 · **App 那条路**）：
-     App 默认机位 **z=16.4**（`wsScene.cameraDefaults()`），而**有 `baseFade` 的主题**（薄荷 `anime`）
-     到 `to`（**14.8**）底图就**全透明**了 ⇒ 再往上取瓦片是纯白等（实测 z16 每张 330~424ms、8~10 张）。
-     `theme.sources.base.maxzoom` 是**主题 JSON 里的值（16）**，它比淡出终点高 ⇒ 这里按**同一条真源**
-     （`baseMaxZoomFor`）收口：**只收口、不放大**（`min(原值, ceil(baseFade.to))`）。
-     · **没有 `baseFade`**（`night` 等）⇒ **原值一字不动** —— 那套 z19 有真细节，砍了就糊；
+  /* 🕳 底图瓦片上限**收口**（2026-10-01 首屏审计 `BLUEPRINT-FIRSTPAINT.md` 方案 3 · **App 那条路**；
+     2026-10-04 语义收窄，见下）：
+     一条真源 `baseMaxZoomFor(theme)` 同时算两件事 —— ① 淡出终点 `ceil(baseFade.to)`；
+     ② **不许超过主题自己声明的 `sources.base.maxzoom`**（这条 2026-10-04 补进函数里，
+     起因：机主推翻「地面太糊」后二次元的淡出终点抬到 18，`ceil` 会变成 18，
+     而区县级那条路会把它**原样**写进源 ⇒ z17 去要 2521B 占位图 = 2026-09-25「地图变白」重演）。
+     · 二次元：`min(16, 18) = 16` ⇒ 还是"真实细节上限"，z17 起由地图库放大复用；
+     · **没有 `baseFade`**（`night` 等）⇒ 返回 `undefined`，**原值一字不动**（那套 z19 有真细节，砍了就糊）；
      · **只动 `sources.base.maxzoom` 这一个字段**：`ref` / 图层 / paint / attribution 全部原样
        （自检里有"除这一个字段外逐字节相同"的影子对拍）；
-     · 🔴 **快照 `/wstheme.json` 不许手改**（代拍页 `ws3dshow.html` 直接读它）⇒ 覆盖只发生在
-       **消费侧**（这里）；改完 JSON 里仍写着 16（自检断言它没被动过）。
-     判据：默认机位下不再出现 z16 底图请求（地图库改成过采样 z15；那一层 opacity 已是 0，画面无差别）。 */
+     · 🔴 **快照 `/wstheme.json` 不许手改**（代拍页 `ws3dshow.html` 直接读它）⇒ 它是**生成物**
+       （`node ws_map_theme_selftest.mjs --write-theme-json`），主题改了必须重生成；
+       生成器走的也是这条 `themeStyleParts` ⇒ 快照里的值与 App 侧**同源**。 */
+
   const baseCap = baseMaxZoomFor(theme);
   const baseSrc = sources.base as { maxzoom?: number };
   if (baseCap !== undefined && (typeof baseSrc.maxzoom !== "number" || baseCap < baseSrc.maxzoom)) baseSrc.maxzoom = baseCap;
@@ -1464,10 +1493,10 @@ export function themeStyleParts(
       id: "base",
       type: "raster",
       source: "base",
-      /* 🔴 高 zoom 淡出（治「地面太糊」）：二次元的亮灰底图最高只到 z16，
-         小区级放大到 17~18 就是"把 z16 放大 4 倍" ⇒ 必糊。
-         淡出后露出 `bg` + `tint` 合成出来的纯色地面（和"有瓦片时"只差 0.002 亮度）
-         + 我们自己的路网 + 楼体 ⇒ 全是矢量，任何缩放都锐利。
+      /* 🔴 高 zoom 淡出（原来的理由「治地面太糊」，2026-10-04 机主**推翻**：他要看得见底图）：
+         二次元的亮灰底图**最高只到 z16**，z17~18 就是"把 z16 放大 2~4 倍" ⇒ 那一段才是真会糊的。
+         所以窗口抬到 `16.6 → 18.0`：**默认机位 16.4 处底图全不透明**（真瓦片回来了，不再是一块纯色），
+         只在放大复用区淡出，终点处露出 `bg` + `tint` 合成的浅青地面 + 我们自己的路网/楼体（矢量，任何缩放都锐利）。
          ⚠️ `baseFade` 只覆盖 `raster-opacity` 这一个字段，**不动**主题里写的
             saturation/contrast/brightness（那些在淡出区间里照样按 zoom 生效）。 */
       paint: theme.baseFade

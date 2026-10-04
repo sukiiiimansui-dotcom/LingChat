@@ -1222,7 +1222,9 @@ function applyPitchGuard(map) {
 function baseMaxZoomFor(theme) {
   const f = theme && theme.baseFade;
   if (!f || typeof f.to !== "number" || !Number.isFinite(f.to)) return void 0;
-  return Math.ceil(f.to);
+  const want = Math.ceil(f.to);
+  const cap = theme && theme.sources && theme.sources.base ? theme.sources.base.maxzoom : void 0;
+  return typeof cap === "number" && Number.isFinite(cap) && cap < want ? cap : want;
 }
 function themeForTier(theme, low) {
   if (!low) return { sky: theme.sky, outlineWidth: theme.outline.width, tint: theme.tint };
@@ -1254,10 +1256,10 @@ function themeStyleParts(theme, low = false, transitionMs = 0) {
       id: "base",
       type: "raster",
       source: "base",
-      /* 🔴 高 zoom 淡出（治「地面太糊」）：二次元的亮灰底图最高只到 z16，
-         小区级放大到 17~18 就是"把 z16 放大 4 倍" ⇒ 必糊。
-         淡出后露出 `bg` + `tint` 合成出来的纯色地面（和"有瓦片时"只差 0.002 亮度）
-         + 我们自己的路网 + 楼体 ⇒ 全是矢量，任何缩放都锐利。
+      /* 🔴 高 zoom 淡出（原来的理由「治地面太糊」，2026-10-04 机主**推翻**：他要看得见底图）：
+         二次元的亮灰底图**最高只到 z16**，z17~18 就是"把 z16 放大 2~4 倍" ⇒ 那一段才是真会糊的。
+         所以窗口抬到 `16.6 → 18.0`：**默认机位 16.4 处底图全不透明**（真瓦片回来了，不再是一块纯色），
+         只在放大复用区淡出，终点处露出 `bg` + `tint` 合成的浅青地面 + 我们自己的路网/楼体（矢量，任何缩放都锐利）。
          ⚠️ `baseFade` 只覆盖 `raster-opacity` 这一个字段，**不动**主题里写的
             saturation/contrast/brightness（那些在淡出区间里照样按 zoom 生效）。 */
       paint: theme.baseFade ? {
@@ -2202,6 +2204,7 @@ var WS_BLD_BUDGET_PX2 = 4e5;
 var WS_BLD_BUDGET_VERTS = 4e4;
 var WS_BLD_MAX_DRAWN = 3;
 var WS_BLD_MAX_DRAWN_MANY = 4e3;
+var WS_BLD_NEAR_K = 10;
 var WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
 var WS_BLD_TIER_HYSTERESIS = 0.25;
 function bldTierOfZoom(zoom, prevTier) {
@@ -2398,6 +2401,8 @@ function pickBuildingsByBudget(input) {
     staticMpp: mpp,
     minInView,
     floorAdded: 0,
+    nearAdded: 0,
+    nearDistM: null,
     overBudget: false,
     why: ""
   };
@@ -2508,10 +2513,65 @@ function pickBuildingsByBudget(input) {
   const bd = [];
   if (stats.px2Bound) bd.push("像素");
   if (stats.vertsBound) bd.push("顶点");
-  stats.why = "格 " + stats.cells + " 个" + (stats.cellKeys.length > 1 ? "（" + stats.cellKeys[0] + " … " + stats.cellKeys[stats.cellKeys.length - 1] + "）" : stats.cellKeys.length === 1 ? "（" + stats.cellKeys[0] + "）" : "") + " ⇒ 画 " + stats.chosen + " 栋（" + stats.cellsChosen + " 格出楼） · 每格取前 " + maxDrawn + "（静态重要度 · 与相机/缩放无关 · 0 次投影）" + /* 被 K 截过的格数如实报（"上限起作用了"要与"楼就这么少"分得开） */
+  stats.why = "格 " + stats.cells + " 个" + (stats.cellKeys.length > 1 ? "（" + stats.cellKeys[0] + " … " + stats.cellKeys[stats.cellKeys.length - 1] + "）" : stats.cellKeys.length === 1 ? "（" + stats.cellKeys[0] + "）" : "") + " ⇒ 画 " + stats.chosen + " 栋（" + stats.cellsChosen + " 格出楼） · 每格取前 " + maxDrawn + "（静态重要度 · 挑选与相机无关 · 0 次投影）" + /* 被 K 截过的格数如实报（"上限起作用了"要与"楼就这么少"分得开） */
   (stats.countBound ? " · 每格上限截过 " + stats.cellsCapped + " 格" : "") + " · Σ投影 " + stats.px2 + "px²/" + budgetPx2 + " · Σ顶点 " + stats.verts + "/" + budgetVerts + /* 安全闸：拦下来的**个数**也念出来（不许静默丢） */
   (bd.length ? " · 安全闸拦住过：" + bd.join("+") + "（跳过 " + stats.gateDropped + " 栋）" : " · 两个预算都没咬住") + (!(mpp > 0) ? " · ⚠️ 没给 metersPerPixel：px² 数不出来（只剩顶点预算在管）" : "") + (minInView ? " · 下限 " + minInView + " 栋" : "") + (stats.floorAdded ? " · 破例补 " + stats.floorAdded + " 栋（凑下限）" : "") + (stats.overBudget ? " · ⚠️ 已超预算（下限破例）" : "") + /* 视野：**只报不改**（数不出来时不写 0 冒充"视野外没有"） */
   (stats.viewCounted ? stats.outOfView ? " · 视野外 " + stats.outOfView + "（不影响挑选）" : "" : " · 视野计数：数不出来（没给视野）") + (stats.noRing ? " · 无外环 " + stats.noRing : "");
+  {
+    const nearKIn = input.nearK;
+    const nearKOn = nearKIn === void 0 || nearKIn === null ? WS_BLD_NEAR_K : Number.isFinite(Number(nearKIn)) ? Math.max(0, Math.floor(Number(nearKIn))) : WS_BLD_NEAR_K;
+    const nc = input.nearCenter;
+    const ncGiven = !!nc && typeof nc === "object";
+    const ncLng = ncGiven ? Number(nc.lng) : NaN;
+    const ncLat = ncGiven ? Number(nc.lat) : NaN;
+    const ncOk = ncGiven && isFinite(ncLng) && isFinite(ncLat);
+    if (nearKOn > 0 && ncGiven && !ncOk) {
+      stats.why += " · 就近补齐：数不出来（相机中心不是有限数）";
+    } else if (nearKOn > 0 && ncOk) {
+      const cosLat = Math.cos(ncLat * Math.PI / 180);
+      const kx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
+      const cands = [];
+      for (let i = 0; i < pool.length; i++) {
+        if (taken[i]) continue;
+        const m2 = bldStaticMeasureOf(pool[i].f);
+        if (!m2) continue;
+        const dx = (m2.cLng - ncLng) * kx;
+        const dy = (m2.cLat - ncLat) * WS_BLD_M_PER_DEG_LAT;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (!isFinite(d)) continue;
+        cands.push({ cand: pool[i], i, d });
+      }
+      cands.sort((A, B) => A.d !== B.d ? A.d - B.d : A.cand.c.id < B.cand.c.id ? -1 : A.cand.c.id > B.cand.c.id ? 1 : 0);
+      const take = Math.min(nearKOn, cands.length);
+      const overBefore = sumPx > budgetPx2 || sumV > budgetVerts;
+      let farM = 0;
+      for (let i = 0; i < take; i++) {
+        const it = cands[i];
+        taken[it.i] = true;
+        chosen.push(it.cand);
+        sumPx += it.cand.c.px;
+        sumV += it.cand.c.verts;
+        if (it.d > farM) farM = it.d;
+      }
+      stats.nearAdded = take;
+      stats.nearDistM = take > 0 ? Math.round(farM) : null;
+      if (take > 0) {
+        stats.chosen = chosen.length;
+        stats.px2 = Math.round(sumPx);
+        stats.verts = Math.round(sumV);
+        stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+        const seen = /* @__PURE__ */ new Set();
+        const keys = [];
+        for (const c of chosen) if (!seen.has(c.key)) {
+          seen.add(c.key);
+          keys.push(c.key);
+        }
+        stats.cellKeys = keys;
+        stats.cellsChosen = keys.length;
+      }
+      stats.why += " · 就近补齐 " + take + " 栋（相机中心" + (take > 0 ? "，最远 " + stats.nearDistM + " m）" : zeroCap ? "·每格上限 0 ⇒ 候选池为空，不复活）" : "·没有未入选的候选）") + (!overBefore && stats.overBudget ? " · ⚠️ 已超预算（就近补齐破例）" : "");
+    }
+  }
   return { features: chosen.map((c) => c.f), stats };
 }
 
@@ -4878,7 +4938,11 @@ function createBldPickStore(opts) {
         /* 🧮 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
            ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）。 */
         cellDeg: input.cellDeg,
-        minInView: input.minInView
+        minInView: input.minInView,
+        /* 📍 2026-10-04 第六条**就近补齐**：相机中心与栋数**原样透传** —— 规则模块那一处说了算
+           （没给/给坏/`nearK: 0` 三种语义都在 `wsBldBudget.BldBudgetInput` 的注释里，这里一个字都不重复判）。 */
+        nearCenter: input.nearCenter,
+        nearK: input.nearK
       });
     },
     frozenObject() {
@@ -6951,6 +7015,7 @@ export {
   WS_BLD_LIVE_VERDICT,
   WS_BLD_MAX_DRAWN,
   WS_BLD_MAX_DRAWN_MANY,
+  WS_BLD_NEAR_K,
   WS_BLD_OUTLINE_FULL_ZOOM,
   WS_BLD_OUTLINE_STOPS,
   WS_BLD_SMALL_M2,

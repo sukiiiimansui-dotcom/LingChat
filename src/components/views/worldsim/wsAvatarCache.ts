@@ -117,10 +117,3 @@ export class AvatarCache {
   }
 }
 
-/**
- * 全模块共用的那一份缓存。
- *
- * 为什么是模块级（而不是 per-composable）：同一张页面上头像可能被两处解析
- * （地图层与「众人小地图」/ 手机通讯录），共享一份才不会重复 invoke。
- */
-export const actorAvatarCache = new AvatarCache();

@@ -63,6 +63,12 @@ import type { joyGateOf } from "./wsJoystick";
 import type { NameRenderNode } from "./wsNameLayer";
 /* S4（M2）的注入面要用到的形状 —— 同样是**只 import type**（编译后不留运行时痕迹） */
 import type { FeatureStore } from "./wsFeatureStore";
+/* S6（M3）的注入面要用到的形状 —— 同上（只 import type）：
+   `ThemeTier`（形体档对应的样式档，真源 `wsDistrictScene.themeForTier` 的产物）、
+   `RoadSeg`（路的吸附段）、`BldFeature`（上妆那两个函数的入参形状）。 */
+import type { ThemeTier } from "./wsDistrictScene";
+import type { RoadSeg } from "./wsSnap";
+import type { BldFeature } from "./wsBuildingSources";
 
 /** 宿主 `stats`（`reactive({…})`）里 M6 读写的那些字段 —— **只列用到的**。
  *  口径：M6 写 `count/height/levels/default/parts/contour/mode/perf/pins/note`，读 `note`。 */
@@ -371,4 +377,68 @@ export interface JoystickStageCtx {
   /** 🔴 宿主那个 `let bldTimer`（`moveend` 那条 600ms 去抖也用它）—— 取值器 + 写入器 */
   bldTimerNow(): number;
   setBldTimer(v: number): void;
+}
+
+/* ══ S6（M3 `wsBldLanding`）的注入面 ═══════════════════════════════════════════════════
+ * 与 S2~S5 同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体几乎一个字都不用动）。
+ * 这一片的别名有**四类**（逐类逐处可数，理由写在 `wsBldLanding.ts` 的文件头）：
+ *   · `alive` → `aliveNow()`（4 处，与原实现同一时刻现读；不许冻在入口）；
+ *   · `map` → `mapNow()`（6 处读点 = 3 个函数体首行 + 3 处内联；唯一不许快照的是 `gwLayer`
+ *     那个**以后才会被调**的取值器，它走内联）；
+ *   · `roadSegs` / `drawnBld`（宿主那两个 `let` 是**只写**的）⇒ 走**写入器**各 1 处
+ *     （与 S5 的 `setJoyActive` / `setBldTimer` 同一条落法：宿主握真源，模块不养第二份）。
+ * ⚠️ 同样是"形状的说明书，不是第二份实现"：真源永远只有一份
+ *    （`stats` / `renderKind` / `theme` / `themeTier` / `fetchCell` / `roadSegs` / `drawnBld` 都在宿主）。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加：本块里**零引用**的 `perf` / `props` 因此没写上来
+ *    （与 S1 里被推迟的 `StageCtx`、S5 的 `JoystickStageCtx` 同一条纪律）。
+ */
+
+/** M3 读的那几个地图成员 —— `BldMapLike`（取楼那一套）**再补两个 M3 用到的**。
+ *  ⚠️ 为什么是"补"而不是新写一份：`BldMapLike` 已经是宿主那个 `map` 的**同一份**结构化视图
+ *     （S1 搬来的，M2/M5/M6 都在用）⇒ 这里只 `extends` 它，绝不复制它的字段（C1 那条红线）。
+ *  ⚠️ 这两个成员写**必填**：`project` 在挑楼那个闭包里是直接调的（`map ? … : null` 只是判空，
+ *     没有 `typeof` 守卫），写成可选反而要往正文里加一处守卫 —— 那就不是"只搬不改"了。 */
+export interface BldLandingMapLike extends BldMapLike {
+  getPitch(): number;
+  project(c: [number, number]): { x: number; y: number };
+}
+
+/** M3（挑楼流水线 / 落地）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。
+ *  ⚠️ 两个写入器是**唯一**允许 M3 改的宿主状态：那两个 `let` 的读者（吸附/寻路、名字层）
+ *     都在宿主 ⇒ 模块自己养一份就是第二份真源。 */
+export interface BldLandingCtx {
+  /** HUD 计数（`bldPick` / `roads` / `roadStore` / `gwVerdict` / `note` 几格是 M3 写的） */
+  stats: StageStats;
+  /** 分路状态（`bldFlush` 与 `gwLayer` 的取值器都按它判"有没有图可落"） */
+  renderKind: Ref<"init" | "webgl" | "waiting" | "failed" | "fallback2d">;
+  /** 当前主题（`bldLayerSpecsFor` 与 `gwLayer` 的配色唯一来源） */
+  theme: ComputedRef<WsMapTheme>;
+  /** 形体档对应的样式档（真源 `wsMapTheme.themeForTier`；宿主那个 computed 的所有权不动） */
+  themeTier: ComputedRef<ThemeTier>;
+  /** 浏览器取数（M3 那三条离线管道都用它；`fetchWithTimeout` 的装配仍在宿主） */
+  fetchCell: BundleFetch;
+  /** 上妆（真源在 M6 `wsFallback2d`；M3 只在落图那一次调它） */
+  dressBld(fc: { features?: BldFeature[] } | null, map: BldMapLike | null): { type: "FeatureCollection"; features: unknown[] };
+  /** 2D 降级路的自绘（真源在 M6；`onNoMap` 那一支调它） */
+  draw2d(fc: { features?: BldFeature[] } | null): void;
+  /** HUD 去重器（**留在宿主**：它闭包宿主的 `bundleHudQueued` 与 `alive`） */
+  scheduleBundleHud(): void;
+  /** 路网图层规格（`roadLayerSpecsForMap` 的实现仍在宿主，M3 只转调，不写第二份） */
+  roadLayerSpecsForMap(): Array<Record<string, unknown>>;
+  /** 美术档（`?art=`；阈值/取参都在共享真源，宿主只给"读到几"） */
+  WS_ART_LEVEL: number;
+  /** 形体档（`?bld=2` = 2；`bldLayerSpecsFor` 的 `mode` 由它定） */
+  WS_BLD_MODE: number;
+  /** `?bldn=` 钉住的**旧口径**（非 null ⇒ 走按格挑的 A/B 老路） */
+  WS_BLDN_PIN: number | null;
+  /** 「视野内最少十栋房」阈值（挑楼时原样交给规则模块） */
+  WS_BLD_INVIEW: number;
+  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  mapNow(): BldLandingMapLike | null;
+  /** 🔴 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`；`bldFlush` 每处现读） */
+  aliveNow(): boolean;
+  /** 🔴 宿主那个 `let roadSegs` 的**写入器**（取值那半在宿主：吸附/寻路在读它） */
+  setRoadSegs(v: RoadSeg[]): void;
+  /** 🔴 宿主那个 `let drawnBld` 的**写入器**（取值那半在宿主：名字层经 `drawnBldNow()` 读它） */
+  setDrawnBld(v: readonly unknown[]): void;
 }

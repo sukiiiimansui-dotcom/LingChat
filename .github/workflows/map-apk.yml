@@ -56,6 +56,8 @@ on:
     paths:
       - 'src/**'
       - 'src-tauri/**'
+      # 上游 2026-10-02 workspace 化后，我们的 Rust（含 world_map）在 crates/ 下
+      - 'crates/**'
       - 'public/world_map/**'
       - '.github/workflows/map-apk.yml'
 

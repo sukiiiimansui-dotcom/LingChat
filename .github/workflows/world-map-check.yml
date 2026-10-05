@@ -94,6 +94,14 @@ jobs:
       - name: 前端打包（vite build）
         run: npx vite build
 
+      - name: 生成图标
+        # `src-tauri/icons/*.png|*.icns|*.ico` 在 `.gitignore` 里**全被忽略**（只放行 icon.png/icon.icns），
+        # 而 `tauri::generate_context!()` 会去读 `icons/32x32.png` 这些**生成物** ⇒ 干净 checkout 上必然
+        # 报 `failed to open icon .../icons/32x32.png: No such file or directory`（proc macro panicked）。
+        # APK 工作流里本来就有这一步（`map-apk.yml` 的「生成图标」），这边照抄。tauri CLI 是 devDependency
+        # ⇒ 必须排在「装依赖」之后。
+        run: pnpm tauri icon src-tauri/icons/icon.png
+
       - name: 生成 Tauri 桌面前置资源
         # `src-tauri/.bundled_resources/` 是 gitignore 的构建产物，平时由 `tauri.conf.json` 的
         # `beforeBuildCommand` 生成 —— 而**纯 `cargo check` 不会跑它**。少了它，Tauri 的 build script

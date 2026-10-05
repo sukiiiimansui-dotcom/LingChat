@@ -23,5 +23,10 @@ pub mod resource_sync;
 pub mod state;
 pub mod utils;
 
+// 世界模拟（地图系统）Rust 后端：地理数据 / 渲染 / 地图库 / 实时流 / 移动状态机 / 事件引擎。
+// 原本挂在 `src-tauri/src/world_map`（外壳里），跟随后端 workspace 化搬进本 crate —— 
+// Tauri 侧只保留 `world_map_*` 命令与 Android 定位插件的注册（见 `src-tauri/src/app/`）。
+pub mod world_map;
+
 // 全局状态容器定义在 `state`，这里重导出以保持 `crate::AppState` 等既有路径不变。
 pub use state::{AppState, ChatComponents, InnerAppState, ScreenshotCaptureState};

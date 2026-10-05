@@ -71,6 +71,9 @@ pub fn setup(
     app.manage(cast::CastManager::default());
     app.manage(utils::cpu_perf::CpuDetectionCache::new());
     app.manage(utils::gpu_perf::GpuDetectionCache::new());
+    // 世界模拟（地图系统）：进程内运行时状态句柄。它**不牵对话主干**，
+    // 整块删掉也能编译（`world_map` 模块一起删即可）。
+    app.manage(ling_chat_main::world_map::state::handle());
     app.manage(api::role_archive::RoleArchiveState::default());
 
     #[cfg(desktop)]

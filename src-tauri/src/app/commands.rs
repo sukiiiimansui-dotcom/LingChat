@@ -12,13 +12,77 @@
 //! 有意例外——它是进程生命周期命令，没有对应的 `config/` 业务逻辑，且与注册表
 //! 同文件时可保持清单里的裸 `exit_app` 条目不变。
 
-use ling_chat_main::{ai_service, api, cast, lan_sync, resource_sync, utils};
+use ling_chat_main::{ai_service, api, cast, lan_sync, resource_sync, utils, world_map};
 use ling_chat_plugins as plugins;
 
 /// 把全部命令注册到 `builder` 上。
 pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     // 注册所有 API 命令
     builder.invoke_handler(tauri::generate_handler![
+        // ══════════ 世界模拟（地图系统）══════════
+        // ⚠️ 前缀不是装饰：`#[tauri::command]` 除了函数本体，还会在**定义它的模块里**
+        // 生成 `pub use {__cmd__xxx, __tauri_command_name_xxx}`，
+        // `generate_handler!` 就是拿这条路径去找宏的。所以凡是命令定义在子模块里的，
+        // 都必须写全路径（`world_map::live::world_map_location`），
+        // 写短成 `world_map::world_map_location` 会在编译期直接 E0433（本项目踩过）。
+        world_map::world_map_blocks,
+        world_map::world_map_blocks_at,
+        world_map::world_map_geo_status,
+        world_map::world_map_coord_selftest,
+        world_map::world_map_render_svg,
+        world_map::world_map_push_events,
+        world_map::world_map_recent_events,
+        // ── 真源 world_map_rs 模块搬入后新暴露的命令 ──
+        world_map::world_map_render,
+        world_map::world_map_geo_svg,
+        world_map::world_map_stats,
+        world_map::world_map_maplib_stats,
+        world_map::world_map_maplib_list,
+        world_map::world_map_maplib_cleanup,
+        // P5-4：离线可用清单（纯读本地：geo 缓存 + 地图库 + 布局缓存）
+        world_map::world_map_offline_available,
+        world_map::world_map_schedule,
+        world_map::world_map_transport_plan,
+        world_map::world_map_osm_summary,
+        world_map::world_map_time,
+        // ── T2-1：生活设施（7 类）。组件 `WsFacilityLayer` 优先走这三条命令，
+        //    浏览器预览走调试服务 8791 的 `/api/facilities`；两条路都不通时**如实显示取不到**，
+        //    不画假点（T2-1 卡的硬要求）。──
+        world_map::world_map_facilities,
+        world_map::world_map_facilities_types,
+        world_map::world_map_facility_at,
+        // ── T2-2：交通站点（公交/地铁/停车…），供 `WsTransitLayer` 把上下车点吸附到真实站点 ──
+        world_map::world_map_transport_nodes,
+        // ── 真 2.5D 楼房（OSM 建筑轮廓 + 楼高）。浏览器通路走调试服务的 `/api/buildings`，
+        //    真壳走这条命令。⚠️ 数据质量实测：OSM 楼高覆盖率只有 13~18%，其余回落默认 8m
+        //    （见 world_map/PROJECT-STATE.md 的覆盖率表；要真实天际线需引 Overture/Cesium）。──
+        world_map::world_map_buildings,
+        // ── 应用内实时绘制（Channel 版；浏览器/调试服务的 SSE 路并存）──
+        world_map::bridge::world_map_district_stream,
+        world_map::bridge::world_map_district_stream_cancel,
+        // ── 实时数据：定位 / 天气（前端 worldMapApi.location / .weather）──
+        world_map::live::world_map_location,
+        world_map::live::world_map_weather,
+        // ── 世界模拟运行时状态（P3：前端推状态 / 读状态）──
+        world_map::state::world_map_update_runtime,
+        world_map::state::world_map_runtime,
+        // ── 世界模拟移动状态机（P4：AI 位置指令 → 角色在地图上移动）──
+        world_map::move_cmd::world_map_trip_status,
+        world_map::move_cmd::world_map_trip_start,
+        world_map::move_cmd::world_map_trip_cancel,
+        world_map::move_cmd::world_map_trip_speedup,
+        // ── 世界模拟现实事件引擎（P5-2/P5-3：驱动器 / 读最近事件 / 待写记忆）──
+        // ⚠️ 待写记忆两条路：`world_map_pending_memory` 是**只读预览**（前端用），
+        //    `world_map_take_pending_memory` 是 drain（记忆管线用）。
+        //    消费权裁定见 `event_cmd.rs::world_map_pending_memory` 的注释。
+        world_map::event_cmd::world_map_tick,
+        world_map::event_cmd::world_map_events_recent,
+        world_map::event_cmd::world_map_pending_memory,
+        world_map::event_cmd::world_map_take_pending_memory,
+        // ── 城市级**真拼接**大图（T5-1：区县街区图按经纬度拼成一张大 SVG）──
+        // 与 `world_map_geo_svg`（行政区划总览）是两件事，不互相替代。
+        world_map::stitch_cmd::world_map_bigmap_svg,
+        world_map::stitch_cmd::world_map_bigmap_plan,
         utils::log_bridge::get_log_history,
         utils::log_bridge::open_log_window,
         utils::log_bridge::is_log_window_open,

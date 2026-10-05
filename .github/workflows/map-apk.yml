@@ -56,6 +56,7 @@ on:
     paths:
       - 'src/**'
       - 'src-tauri/**'
+      - 'crates/**'          # 上游对齐后 Rust 业务模块的新家（dev 的 workspace 重构）；master 现在还没有这个目录，先占位
       - 'public/world_map/**'
       - '.github/workflows/map-apk.yml'
 

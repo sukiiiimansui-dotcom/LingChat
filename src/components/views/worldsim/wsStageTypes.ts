@@ -60,7 +60,10 @@ import type { WsMapTheme } from "./wsMapTheme";
 import type { BundleBuildingFeature, BundleFeed, BundlePlaceFeature, BundleRoadFeature, BundleFetch } from "./wsOfflineFeed";
 import type { GwLayer } from "./wsGwLayer";
 import type { joyGateOf } from "./wsJoystick";
-import type { NameRenderNode } from "./wsNameLayer";
+import type { NameLayer, NameRenderNode } from "./wsNameLayer";
+/* S7（M7）的注入面要用到的形状 —— 同上（只 import type）：`WsDistrictPin` 是
+   `pinEl` / `props.markers` 的元素形状（真源 `wsActors`）。 */
+import type { WsDistrictPin } from "./wsActors";
 /* S4（M2）的注入面要用到的形状 —— 同样是**只 import type**（编译后不留运行时痕迹） */
 import type { FeatureStore } from "./wsFeatureStore";
 /* S6（M3）的注入面要用到的形状 —— 同上（只 import type）：
@@ -300,16 +303,25 @@ export interface ViewFetchCtx {
  * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
  */
 
-/** 宿主 `pins` 里**摇杆真正读到**的那几个字段（结构化视图；`edge*` 三件是屏外指示的，不在这里）。 */
+/** 宿主 `pins` 里**真正被读到**的那些字段（结构化视图）。
+ *  ⚠️ S7（M7）把 `mk` 收窄成 `PickMarkerLike`，并补了 `edge*` 三件 + `edgeKey` ——
+ *     这是**同一份**宿主对象的视图（真对象就是 `new mlMod.Marker(…)`，
+ *     `remove()` / `getLngLat?()` 本来就在它身上）⇒ 只扩不复制，绝不为同一个形状再写第二份 interface。 */
 export interface StagePin {
   id: string;
   el: HTMLElement;
-  mk: { setLngLat(c: [number, number]): unknown };
+  mk: PickMarkerLike;
   face: HTMLElement | null;
   body: HTMLElement | null;
   aim: HTMLElement | null;
   dash: HTMLElement | null;
   tip: HTMLElement | null;
+  /** 📍 屏外方向指示三件（**只有"别人"的钉子上建**，「我」那三栏恒 null） */
+  edge: HTMLElement | null;
+  edgeArrow: HTMLElement | null;
+  edgeDist: HTMLElement | null;
+  /** 📍 上一轮写进 DOM 的那份"边缘状态"（`"off"` 或 `"1|角|文案"`）—— 没变就一次都不写 */
+  edgeKey: string;
 }
 
 /** M4（`createNameHost`）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。 */
@@ -441,4 +453,87 @@ export interface BldLandingCtx {
   setRoadSegs(v: RoadSeg[]): void;
   /** 🔴 宿主那个 `let drawnBld` 的**写入器**（取值那半在宿主：名字层经 `drawnBldNow()` 读它） */
   setDrawnBld(v: readonly unknown[]): void;
+}
+
+/* ══ S7（M7 `wsPickInteract`）的注入面 ══════════════════════════════════════════════════
+ * 与 S2~S6 同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体几乎一个字都不用动）。
+ * 这一片的别名有**六类**（逐类逐处可数，理由写在 `wsPickInteract.ts` 的文件头）：
+ *   · `map` → `mapNow()`（5 处内联；布尔/对象没法按引用共享，每处现读）；
+ *   · `mlMod` / `pins` → 体首 `mlModNow()` / `pinsNow()`（各 1 处 hoist）——
+ *     `new mlMod.Marker(…)` 对箭头调用有优先级坑，`pins` 又既读又写；
+ *   · `pins = …` → `setPins(…)`（1 处写入器，与 S6 的 `setRoadSegs` / `setDrawnBld` 同款）；
+ *   · `roadSegs` → `roadSegsNow()`（2 处）· `drawnBld` → `drawnBldNow()`（1 处）。
+ * ⚠️ 同样是"形状的说明书，不是第二份实现"：`stats` / `theme` / `bboxRef` / `pins` / `drawnBld` /
+ *    `roadSegs` / `nameLayer` / `labRootEl` 的真源都只有一份（在宿主那一侧）。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加：`domPins`（任务书列进 M7 但**故意留在宿主**）、
+ *    `draw2dBbox` / `mapAvailable` / `aiFeatureCollection` 这些本块里零引用 ⇒ 没写上来。
+ */
+
+/** 建角色钉子用的那一个 MapLibre 成员 —— **只声明用到的**（不复制整个引擎类型，
+ *  与 `BldMapLike` 同一条纪律）。`new` 那一句写在模块体首 hoist 下来的 `mlMod` 上。 */
+export interface PickMarkerModLike {
+  Marker: new (o: { element: HTMLElement; anchor: string; subpixelPositioning: boolean }) => {
+    setLngLat(c: [number, number]): { addTo(m: unknown): PickMarkerLike };
+  };
+}
+
+/** `new mlMod.Marker(…).setLngLat(pos).addTo(m)` 的产物 —— 宿主 `pins` 里存的就是它。
+ *  ⚠️ `getLngLat` 是**可选**：`pinEdgeSync` 读它时带 `?.`（MapLibre 有，桩里可能没有）。 */
+export interface PickMarkerLike {
+  setLngLat(c: [number, number]): unknown;
+  getLngLat?(): { lng: number; lat: number };
+  remove(): void;
+}
+
+/** 宿主那个 `let pins` 的元素形状 —— **不在这里再写一份**：它就是上面（M5 那一段）那个
+ *  `StagePin`，本片只**增量**加了 `mk.remove()` / `mk.getLngLat?()` 与 `edge*` / `edgeKey`
+ *  （见那一段的说明；真对象本来就是 `new mlMod.Marker(…)`，对摇杆是纯增量）。
+ *  🔴 **这是本片唯一的非机械改动**：它是**类型**（编译后不存在）⇒ 运行时零改动。 */
+
+/** M7（交互命中：钉子 / 吸附 / 锚点 / AI 示意层 / 信息卡点选）要用的宿主状态 —— 全部**只读**。
+ *  ⚠️ 三个"不按引用共享"的入口是**取值器/写入器**：`map` / `mlMod` / `pins` 都是宿主 `let`
+ *     （建图、动态 import、新增与移除钉子都会重写它）⇒ 模块自己养一份就是第二份真源。
+ *  ⚠️ `cardData` / `cardOpen` / `closeCard` / `panel` **不在这里**：它们在 M7 那一块**里面**
+ *     （连声明一起搬进模块，宿主同名解构回去给模板用）。
+ *  ⚠️ `domPins` **故意不在**：它唯一的同步消费点 `createFallback2d` 在本装配点**之前**
+ *     ⇒ 搬进 M7 就成环（理由写在 `wsPickInteract.ts` 文件头）。 */
+export interface PickInteractCtx {
+  /** 只用到 `adcode` / `grid` / `markers` / `aiItems` / `snapPins` 五个。
+   *  ⚠️ 按**解析后的**类型写（宿主 `withDefaults` 给了默认值的那四个 ⇒ 不是 `| undefined`）；
+   *     `adcode` **不在** `withDefaults` 的默认值表里 ⇒ 如实写可选（写成 `string` 会 TS2322）。 */
+  props: { adcode?: string; grid: number; markers: WsDistrictPin[]; aiItems: AiItem[]; snapPins: boolean };
+  /** HUD 计数（M7 写 `pins` / `pinsNote` / `pinsAnchor` / `card` / `note` 那几格） */
+  stats: StageStats;
+  /** 当前主题（AI 示意层的配色唯一来源） */
+  theme: ComputedRef<WsMapTheme>;
+  /** 「真数据够不够」⇒ 要不要留 AI 示意层（真源在 M8 `createHudStats`） */
+  aiOn: ComputedRef<boolean>;
+  /** 已画到地图上的 AI 示意图元数（HUD 要如实报） */
+  aiDrawn: Ref<number>;
+  /** 示意街区铺在哪（一个"小区尺度"的正方形） */
+  aiBboxRef: Ref<BBox | null>;
+  /** 区界 bbox（网格 → 经纬度要用它；`ensurePinAnchor` 也会写它） */
+  bboxRef: Ref<[number, number, number, number] | null>;
+  /** 钉子被点时只"报点"（开面板是宿主 `WsCharPanel` 那一侧的事） */
+  emit(event: "pick-actor", id: string): void;
+  /** 标签层容器（M4 接回来的 ref；`openCard` 量卡片矩形要读它） */
+  labRootEl: Ref<HTMLElement | null>;
+  /** 名字层实例（`indexFactOfNames` 只念它的 `facts()`；真源在 M4 `wsNameHost`） */
+  nameLayer: NameLayer;
+  /** 📍 屏外指示的两个宿主函数（`syncPins` 末尾各补一次；**故意留在宿主**：
+   *  它们读宿主那一份几何缓存 `pinEdgeGeom`，搬进来就会把屏外指示整段拖进 M7） */
+  pinEdgeMeasure(): void;
+  pinEdgeSync(): void;
+  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  mapNow(): unknown;
+  /** 🔴 宿主那个 `let mlMod` 的**取值器**（动态 import 完才赋值 ⇒ 不许解构快照） */
+  mlModNow(): PickMarkerModLike | null;
+  /** 🔴 宿主那个 `let pins` 的**取值器**（新增/移除都会重写它；`pinEdgeSync` 与 M5 也在读） */
+  pinsNow(): StagePin[];
+  /** 🔴 宿主那个 `let pins` 的**写入器**（`syncPins` 末尾按存活名单过滤后写回） */
+  setPins(v: StagePin[]): void;
+  /** 🔴 宿主那个 `let roadSegs`（M3 的 `setRoadSegs` 在写它）—— 吸附只读 */
+  roadSegsNow(): RoadSeg[];
+  /** 🔴 宿主那个 `let drawnBld`（`afterDraw` 每轮重写）—— 屏幕距离兜底只读 */
+  drawnBldNow(): readonly unknown[];
 }

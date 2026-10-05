@@ -369,7 +369,7 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 机主截图那次
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-10-04-v100";
+      const BUILD = "ws3dshow-2026-10-05-v101";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -829,12 +829,15 @@
       }
 
       function bldLayerSpecs() {
-        /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数 */
+        /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数。
+           ⚠️ 为什么这里**只剩** `bldMinzoom()`（原来还有一条 `bldDetailTierZoom(1)/(2) === null`）：
+              共享真源 `bldLayerSpecsFor()` 里的分档阈值（14/16）是**它自己闭包里的常量**
+              （`wsBldDetailTiers` 的 `WS_BLD_DETAIL_ROOF_ZOOM` / `..._EQUIP_ZOOM`，不是从
+              `window.__TF__` 上读符号）⇒ 只要模块在，那两个数就**必然**在，页面无从也无需再判一次。
+              而 `WS_BLD_VECTOR_MINZOOM` 在共享函数里是**写死的 11** ⇒ 它到底读不读得出来，
+              只有页面这一侧知道 ⇒ 这条守卫**必须留着**（"数不出来就不建"的语义没放松）。
+              副带好处：图层与数据都来自同一份产物 ⇒ 不再出现"旧产物下整批不建、两头都不画"。 */
         if (bldMinzoom() === null) return [];
-        /* 🏢 分档阈值同样来自共享真源：读不到 ⇒ **整批不建**（同一条判词纪律）。
-           为什么是"整批"而不是"少建一条"：三条层是同一条分档规则的三个切面，
-           缺一个门槛就会出现"该画的没画、不该画的画了"这种**看不出来**的错。 */
-        if (bldDetailTierZoom(1) === null || bldDetailTierZoom(2) === null) return [];
         /* 🎨 **取参只有一份**（2026-09-26 抽真源）：色阶（含 `artRamp`）/ 描边 / 平涂开关 / 不透明度 /
            铺平的停靠点 / 描边 zoom 插值 / 高度分档表达式 —— 全从 `wsArtParams.bldArtParamsOf()` 来，
            本页**不再持有第二份**（原来那 5 行内联就是"两页观感不同"的来源：App 侧根本没有它们）。
@@ -842,15 +845,56 @@
               绝不拿一份内联拷贝顶上（拷贝就是下一次"两边不一致"）。 */
         const M = artMod();
         if (!M) return [];
-        const P = M.bldArtParamsOf(THEME, { art: ART, look: LOOK });
         /* 🔘 `?bld=0`：**一层都不建**（调用方也会跳过 addLayer；这里返回空数组是双保险） */
         if (BLD_OFF) return [];
-        /* 🏢 `?bld=2` 走"拆件"那套图层（颜色读要素自带的 `color3d`、底座读 `h_base`） */
-        if (BLD === 2) return bldShadowLayers().concat(bldLayerSpecsDetail(P));
-        if (BST === 2) return bldShadowLayers().concat(bstLayers(P));
-        /* 🏢 **默认档**（2026-10-02 起也拆件：主体 + 女儿墙 + 设备箱 + 天线，按 zoom 固定分档）——
-           三条挤出层的规格与 App 侧 `bldLayerSpecsFor(mode:"base")` **逐字段相同**。 */
-        return bldShadowLayers().concat(bldTierSpecs(P), [bldLineLayer(P)]);
+        /* 🏢 **图层本体已换成共享真源那一份**（2026-10-05 收口，原来这里是第二份实现）：
+           默认档 = `bldLayerSpecsFor(mode:"base")`、`?bld=2` = `mode:"parts"` —— 层序/取色/
+           分档 `minzoom`/描边**逐字段都由它给**，本页不再各写一句（`ws_pages_consistency`
+           的 ④a/④b 以前就是在盯这两份对不上）。
+           ⚠️ **第 2 参只吃 `tier.outlineWidth`**（`wsDistrictScene.ts` 里唯一的读法），
+              而 `themeForTier()` **不在 vendor 导出面**（`wsMapTheme` 没进 `wsPageVendor.ts`）
+              ⇒ 本页按 `themeForTier` 的语义现算这一格：低端档吃 `THEME.low.outlineWidth`，
+              否则吃 `THEME.outline.width`；读不出数 ⇒ `null`（共享侧见到 null 就**不产描边层**，
+              与"数不出来就不建"同一条判词，不猜一个数顶上）。 */
+        const T = THEME;
+        const outlineWidth = BLD_LOW
+          ? ((T && T.low && typeof T.low.outlineWidth === "number") ? T.low.outlineWidth : null)
+          : ((T && T.outline && typeof T.outline.width === "number") ? T.outline.width : null);
+        const tiers = M.bldLayerSpecsFor(THEME, { outlineWidth: outlineWidth },
+          { art: ART, look: LOOK, mode: BLD === 2 ? "parts" : "base" });
+        /* 🎮 **共享真源一份都不产的那两条路，逐字留在本页**：
+           · `?bld=2`（拆件档）—— 共享那三条挤出层 + 本页独有的**窗格层**（`bld-win`）；
+           · `?bst=2`（楼体观感 v2）—— 三层，**只在非拆件档**（改造前就是这个优先级：`?bld=2`
+             那条 `return` 在 `?bst=2` 之前 ⇒ 两个都给时拆件档赢、`?bst=2` 不生效）。
+           `?look=2` 的接触阴影两层由下面每一条 `return` 开头的 `bldShadowLayers()` 追加。 */
+        if (BLD === 2) {
+          if (!WINS) return bldShadowLayers().concat(tiers);
+          const P = M.bldArtParamsOf(THEME, { art: ART, look: LOOK });
+          const specs = tiers.slice();
+          /* 位置照旧：**足迹层之后、色彩层之前**（索引 1） */
+          specs.splice(1, 0, {
+            id: "bld-win", type: "fill-extrusion", source: "bld",
+            minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
+            filter: ["==", ["get", "win"], 1],
+            paint: {
+              "fill-extrusion-height": ["get", "h3d"],
+              "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
+              "fill-extrusion-opacity": P.opacity,
+              "fill-extrusion-vertical-gradient": P.vgrad,
+              "fill-extrusion-pattern": WIN_IMAGE_ID,
+            },
+          });
+          /* 色彩层与窗格层**互补**（`win != 1`）：互补靠要素上的 0/1 标记，不在图层里拼判定表达式 */
+          return bldShadowLayers().concat(specs.map(function (l) {
+            if (l.id !== "bld-ext") return l;
+            return Object.assign({}, l, { filter: ["all", ["==", ["coalesce", ["get", "zt"], 0], 0], ["!=", ["get", "win"], 1]] });
+          }));
+        }
+        if (BST === 2) {
+          const Pb = M.bldArtParamsOf(THEME, { art: ART, look: LOOK });
+          return bldShadowLayers().concat(bstLayers(Pb));
+        }
+        return bldShadowLayers().concat(tiers);
       }
 
       /**
@@ -905,131 +949,6 @@
             paint: { "line-color": outline.color, "line-width": outline.width },
           },
         ];
-      }
-
-      /**
-       * 🏢 **按 zoom 分档的三条挤出层**（2026-10-02 机主拍板的 B1）——
-       * 与 App 侧 `wsDistrictScene.bldLayerSpecsFor()` **逐字段同形**（`ws_pages_consistency.mjs` ④a/④b 盯着）。
-       *
-       * 档位（阈值来自共享真源 `bldDetailTierZoom`，页面不写死）：
-       *   · `bld-ext`   第 0 档 = 主体/裙楼/塔楼/退台 → **一直画**（`minzoom` = 共享 `WS_BLD_VECTOR_MINZOOM`）；
-       *   · `bld-roof`  第 1 档 = 女儿墙          → `z ≥ 14`；
-       *   · `bld-equip` 第 2 档 = 设备箱 + 天线    → `z ≥ 16`。
-       * 🔴 **闸是 `minzoom`**（图层级开关 ⇒ z 低于阈值时该层**不可见 = 0 顶点 / 0 draw call**）：
-       *    MapLibre 的 `layout.visibility` **不接受 zoom 表达式**（v6.10.0 的 spec 里
-       *    `parameters` 只有 `global-state`）⇒ 写成 zoom 表达式会让**整份 style 校验失败、地图永不 load**。
-       * ⚠️ **固定阈值**：只跟 zoom 走，**不看帧率、不看设备**（机主红线：不许性能档位自动降级）。
-       * 🔴 分层靠要素上算好的 `zt`（拆件时写的 0/1/2），**不在 filter 里拼表达式** ——
-       *    表达式报错是静默的（本项目为此付过代价）。`zt` 缺席（没上妆的要素）**按第 0 档算** ⇒ 照旧画。
-       *
-       * @param P           美术取参（`bldArtParamsOf` 的产物；本函数只读它，不自己算颜色）
-       * @param extExtra    额外的 `bld-ext` 过滤条件（只有 `?win=1` 的窗格层需要：与窗格层互补）；
-       *                    不给 ⇒ `bld-ext` 的 filter **逐字段等于 App 侧那一条**
-       */
-      function bldTierSpecs(P, extExtra) {
-        /* 🎨 **取色只有一份**：足迹层（`fill-color`）与三条挤出层（`fill-extrusion-color`）**共用同一个
-           表达式对象** —— "远了是足迹、近了是立体"的颜色口径同一个字节都不会漂（各写一份迟早一片楼两种色）。
-           ⚠️ 这个表达式就是下面 `paint` 里原来那一行的**原文**，只是提出来当共享项（与 App 侧同一处置）。 */
-        const bldColor = ["coalesce", ["get", "color3d"], P.rampColor];
-        /* 屋顶系两层共用的 paint：颜色读要素自带的 `color3d`（同一张高度色阶 + 按部位调明暗），
-           底座读 `h_base`（屋顶件不是从地面长出来的）—— 与 App 侧 `detailPaint` 逐字段相同。 */
-        const paint = {
-          "fill-extrusion-height": ["get", "h3d"],
-          "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
-          "fill-extrusion-opacity": P.opacity,
-          "fill-extrusion-vertical-gradient": P.vgrad,
-          "fill-extrusion-color": bldColor,
-        };
-        const z0 = ["==", ["coalesce", ["get", "zt"], 0], 0];
-        /* 🌆 **2026-10-03 按 zoom 分层：足迹<14 / 立体≥14**（机主拍板：「z<14 画"足迹"（平面，看得见
-           城市肌理）；z≥14 画立体（严格档 100 栋）」）：
-             · `bld-foot`：`fill` + 同一个 source，`maxzoom` = 共享分界线 ⇒ **z ≥ 14 整层不可见**；
-             · `bld-ext` 的 `minzoom` 从 `bldMinzoomSpec()`(11) 抬到**同一条分界线** ⇒ 立体只在 z≥14 出现；
-             · 分界线读不出来（`null`）⇒ **不加足迹层、`bld-ext` 沿用旧起点**（照旧画，不拿猜的数顶上）；
-             · 足迹层的 filter 与 `bld-ext` **同一份**（含 `?win=1` 那一路的互补条件）⇒ 两层的要素集一致。 */
-        const footZoom = bldFootprintMaxZoom();
-        const footSpecs = (typeof footZoom === "number") ? [{
-          id: "bld-foot", type: "fill", source: "bld",
-          minzoom: bldMinzoomSpec(),
-          maxzoom: footZoom,
-          filter: extExtra ? ["all", z0, extExtra] : z0,
-          paint: { "fill-color": bldColor, "fill-opacity": bldFootprintOpacity() },
-        }] : [];
-        return footSpecs.concat([
-          {
-            id: "bld-ext", type: "fill-extrusion", source: "bld",
-            minzoom: (typeof footZoom === "number") ? footZoom : bldMinzoomSpec(),
-            filter: extExtra ? ["all", z0, extExtra] : z0,
-            paint: { ...paint },
-          },
-          {
-            id: "bld-roof", type: "fill-extrusion", source: "bld",
-            minzoom: bldDetailTierZoom(1),
-            filter: ["==", ["get", "zt"], 1],
-            paint: { ...paint },
-          },
-          {
-            id: "bld-equip", type: "fill-extrusion", source: "bld",
-            minzoom: bldDetailTierZoom(2),
-            filter: ["==", ["get", "zt"], 2],
-            paint: { ...paint },
-          },
-        ]);
-      }
-
-      /** 描边层（两种形体档**共用同一份规格**：A/B 时"只有形体不同"，别把描边也换了） */
-      function bldLineLayer(P) {
-        const outlineFoot = bldFootprintMaxZoom();
-        return {
-          id: "bld-line", type: "line", source: "bld",
-          /* 🌆 2026-10-03（PLAN-BLD-LOWZOOM §4 表那一笔）：**低缩放不再给同一批要素画第二遍** ——
-             足迹档（z<14）已经有 `bld-foot`（`fill`）在画同一批要素，再叠描边就是那片"深色小面"。
-             🔴 闸开在 `minzoom` 这一侧（= 只在立体档画）：方案表里写的是"加 `maxzoom`"，但按 MapLibre
-                语义 `maxzoom: 14` 会把 **z≥14 的描边整层关掉**（近景那套描边是机主认过的，
-                见方案 §验收 6）⇒ 取两侧意图都满足的那一侧，与 App 真源**同一份规格**
-                （`ws_pages_consistency.mjs` ④b 逐字段对拍 minzoom）。
-             ⚠️ 分界线读不到（**旧产物**）⇒ 退回 `bldMinzoomSpec()`（改造前的起点 11），不拿猜的数顶上。 */
-          minzoom: (typeof outlineFoot === "number") ? outlineFoot : bldMinzoomSpec(),
-          paint: {
-            "line-color": P.outline.color,
-            "line-width": P.lineWidth,   /* 🎨 art≥2 ⇒ zoom 插值；art=1 ⇒ 主题固定宽度（都在共享取参里决定） */
-          },
-        };
-      }
-
-      /**
-       * 🏢 `?bld=2` 的楼房图层：**色彩层 + （可选）窗格层 + 描边层**。
-       *
-       * 为什么窗格要单开一层：`fill-extrusion-color` 带 `requires: 非 pattern`
-       * ⇒ **同一个图层里 pattern 与 color 互斥**（写了 pattern 再写 color，样式校验会失败、
-       *  图层不画，而这个项目为"图层静默不画"付过代价）。所以两层，filter **互补**：
-       *  · `bld-win`：`win == 1`（纯函数里算好的"够高的墙面"）→ 铺图案；
-       *  · `bld-ext`：`win != 1` → 走色阶（与基准版同一张色阶，逐要素取 `color3d`）。
-       * 互补由**要素上的 0/1 标记**保证（不是在图层的 filter 里拼表达式 —— 表达式报错是静默的）。
-       */
-      function bldLayerSpecsDetail(P) {
-        /* 🔴 阈值数不出来 ⇒ 不建这批图层（HUD 说明原因）；绝不用猜的数 */
-        if (bldMinzoom() === null) return [];
-        if (bldDetailTierZoom(1) === null || bldDetailTierZoom(2) === null) return [];
-        /* 🏢 三条挤出层与默认档**同一份构造**（`bldTierSpecs`）—— 拆件档多出来的只是**数据**
-           （裙楼/塔楼/退台/窗格），图层这边不再需要第二套 paint。
-           `?win=1` 时 `bld-ext` 多一条"与窗格层互补"的过滤（`win != 1`）。 */
-        const tiers = bldTierSpecs(P, WINS ? ["!=", ["get", "win"], 1] : null);
-        if (!WINS) return tiers.concat([bldLineLayer(P)]);
-        const paintCommon = {
-          "fill-extrusion-height": ["get", "h3d"],
-          "fill-extrusion-base": ["coalesce", ["get", "h_base"], ["coalesce", ["get", "min_height"], 0]],
-          "fill-extrusion-opacity": P.opacity,
-          "fill-extrusion-vertical-gradient": P.vgrad,
-        };
-        const winLayer = {
-          id: "bld-win", type: "fill-extrusion", source: "bld",
-          minzoom: bldMinzoomSpec(),   /* 🔴 起点 = 共享真源（`WS_BLD_VECTOR_MINZOOM`）；页面**不许**再写死数字 */
-          filter: ["==", ["get", "win"], 1],
-          paint: { ...paintCommon, "fill-extrusion-pattern": WIN_IMAGE_ID },
-        };
-        /* 顺序与图层语义：色彩层 → 窗格层（互补）→ 屋顶系两条 → 描边层 */
-        return [tiers[0], winLayer].concat(tiers.slice(1), [bldLineLayer(P)]);
       }
 
       /* ══ 🎨 美术变体 `?art=2`（机主 2026-09-21：先在**代拍页**做一版，别碰 App 与角色）════
@@ -1366,7 +1285,14 @@
             传播机制本来就不靠它：`VENDOR_VER` 是**产物内容哈希**，重建后 URL 必换 ⇒ 一定拿到新的。
             ⚠️ 读不到时页面各自退回**改造前的行为**（`bldTierAt` / `bldMetersPerPixelAt` 里的兜底），
             不静默画错、也不往 `errs` 堆噪声；vendor 重建之后可以把这两行加进表里（等价，只是更严）。 */
-        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget", "bldMaxDrawnOf"];
+        "bldDetailTierZoom", "bldPxPerMeter", "pickBuildingsByBudget", "bldMaxDrawnOf",
+        /* 🏢🌆 2026-10-05（S8 图层收口）：本页的楼房图层改成**调共享真源**了 ——
+           `bldLayerSpecsFor(theme, tier, opts)` 造层（层序/取色/分档 minzoom/描边都由它给），
+           所以它必须进这张表：产物里没有它（旧副本 / 还没重建）⇒ `ensureVendor()` 带版本号重取，
+           而不是让页面在 `if (!M) return []` 之外**抛 TypeError 把整张图拖下水**。
+           ⚠️ 它是**函数**（`tfMissing()` 的判据就是 `typeof === "function"`）；
+              `themeForTier()` 同族但**不在这里** —— 它没进 vendor 导出面，页面按语义现算那一格（见 `bldLayerSpecs`）。 */
+        "bldLayerSpecsFor"];
       /** 🛰 `?lod=1` 需要的那几个（**只在开了 LOD 时才要求**：没开时旧模块照样能用，不该被这条判红） */
       const LOD_NEEDED = ["lodPlan", "lodTierOf", "lodTierLabel", "lodOpacityAt", "lodOpacityExpression",
         "lodEventTileKey", "lodViewTiles", "lodTileVerdict", "lodLiveVerdict", "lodHudLine",

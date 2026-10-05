@@ -7,7 +7,7 @@
   "scripts": {
     "init": "tauri icon src-tauri/icons/icon.png && node scripts/prepare-desktop-resources.mjs && node scripts/download_emotion_model.mjs",
     "dev": "vite",
-    "build": "vue-tsc --noEmit --skipLibCheck && vite build",
+    "build": "node scripts/gen-locale-version.mjs && vue-tsc --noEmit --skipLibCheck && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "android:prepare": "tauri android init && node scripts/generate-android-icons.mjs",

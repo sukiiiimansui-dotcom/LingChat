@@ -5,16 +5,36 @@ on:
     # 2026-10-05：把当前开发分支 `feat/worldsim` 加进来 —— 否则这份**四平台全量构建**
     # （windows-amd64 / linux-amd64 / linux-aarch64 / macos）在 fork 上永远不会为我们的提交跑。
     branches: ["feat/worldsim", "dev", "dev/**"]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".vscode/**"
+    # 2026-10-05 第二改：`paths-ignore` → **`paths` 白名单**。
+    # 原来只忽略 `**.md`/`docs/**`/`.vscode/**` ⇒ 改 CI 配置、改工具脚本、动 `.github/**` 之类
+    # **任何非文档改动都会拉一次 20 分钟的四平台构建**（主人原话：「现在干什么都会触发 ci」）。
+    # 现在只有**真会影响构建的目录**才自动触发；要临时跑一次用 `workflow_dispatch`（下面本来就有）。
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'crates/**'            # 上游对齐后 Rust 业务模块的新家（dev 的 workspace 重构）
+      - 'public/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.*'
+      - 'tsconfig*.json'
+      - '.cargo/**'
+      - '.github/workflows/dev-build-full.yml'
   pull_request:
     branches: ["dev", "dev/**"]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".vscode/**"
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.*'
+      - 'tsconfig*.json'
+      - '.cargo/**'
+      - '.github/workflows/dev-build-full.yml'
   workflow_dispatch:
 
 jobs:

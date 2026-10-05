@@ -23,6 +23,18 @@ pub async fn start_screenshot(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    // iOS / 其它既非桌面、也非 Android 的目标：这里没有截屏能力，也没有相册通道的接线。
+    // 🔴 补这一支是为了修一个**上游既有编译错**：原来只有 `#[cfg(desktop)]`（:26）与
+    // `#[cfg(target_os = "android")]`（:18）两块，iOS 目标下两块都被编译掉 ⇒ 函数体为空 ⇒
+    // 隐式返回 `()` 与签名 `Result<(), String>` 撞上（`error[E0308]: mismatched types`，
+    // 指向 `src/api/screenshot.rs:12`）⇒ `tauri ios build` 失败、xcodebuild archive 退出 65。
+    // 桌面与 Android 的行为**一个字没改**；iOS 上如实报"不支持"，不假装成功。
+    #[cfg(not(any(desktop, target_os = "android")))]
+    {
+        let _ = &app;
+        return Err("当前平台暂不支持屏幕截图".to_string());
+    }
+
     #[cfg(desktop)]
     {
         // 如果已有覆盖窗口，先关闭

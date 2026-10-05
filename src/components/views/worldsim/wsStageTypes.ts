@@ -57,7 +57,7 @@ import type { AiItem, BBox } from "./wsAiLayers";
 import type { PerfApi } from "./wsPerf";
 import type { WsMapTheme } from "./wsMapTheme";
 /* S3（M8/M1）的注入面要用到的形状 —— **只 import type**（编译后不留运行时痕迹 ⇒ 不拉依赖） */
-import type { BundleBuildingFeature, BundleFeed, BundlePlaceFeature, BundleRoadFeature, BundleFetch } from "./wsOfflineFeed";
+import type { BundleBuildingFeature, BundleFeed, BundleFeedFacts, BundlePlaceFeature, BundleRoadFeature, BundleFetch } from "./wsOfflineFeed";
 import type { GwLayer } from "./wsGwLayer";
 import type { joyGateOf } from "./wsJoystick";
 import type { NameLayer, NameRenderNode } from "./wsNameLayer";
@@ -536,4 +536,93 @@ export interface PickInteractCtx {
   roadSegsNow(): RoadSeg[];
   /** 🔴 宿主那个 `let drawnBld`（`afterDraw` 每轮重写）—— 屏幕距离兜底只读 */
   drawnBldNow(): readonly unknown[];
+}
+
+/* ══ S7（M9 `wsEngineGuard`）的注入面 ══════════════════════════════════════════════════
+ * 与 S2~S7 同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体除别名外一个字都不用动）。
+ * 这一片的别名逐类可数（理由与处数写在 `wsEngineGuard.ts` 的文件头）：
+ *   · `alive` → `aliveNow()`（10 处）；`map` → `mapNow()`（14 处）+ `setMap(null)`（1 处）；
+ *   · `resizeRo` / `recoverTimer` → 取值器 + 写入器（2+1 / 1+3）；`sawRender` → `sawRenderNow()`（5 处）。
+ * ⚠️ 同样是"形状的说明书，不是第二份实现"：`stats` / `renderKind` / `cv` / `host` / `map` / `sawRender` /
+ *    `resizeRo` / `recoverTimer` / `resizeTimers` / `isAutomation` 的真源都只有一份（在宿主那一侧）。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加。
+ */
+
+/** M9（引擎自愈 / 验证 / 自拍）要用的宿主状态 —— 全部**只读**，除了三个写入器与一个共享数组。 */
+export interface EngineGuardCtx {
+  /** 只用到 `locSource` / `worldTime`（验证面板那两格；两个都有默认值 ⇒ 是 `string` 不是可选） */
+  props: { locSource: string; worldTime: string };
+  /** HUD 计数（M9 写 `mode` / `note` / `perf` / `pins` 那几格，读别的） */
+  stats: StageStats;
+  /** 当前主题（面板要拿 `themeStyleParts` 算"期望的图层"） */
+  theme: ComputedRef<WsMapTheme>;
+  /** 性能档（`low` 与 `clearForce` 都在用；真源 `wsPerf` 的模块级单例） */
+  perf: PerfApi;
+  /** 模板那块画布（降级路会被换成新画布；`promoteToWebgl` 会写回真地图那块） */
+  cv: Ref<HTMLCanvasElement | null>;
+  /** 地图容器（resize 量与观察的对象） */
+  host: Ref<HTMLElement | null>;
+  /** HUD 节点（验证快照要把"人看到的那一行"原样带走） */
+  hudEl: Ref<HTMLElement | null>;
+  /** 装载阶段（`motionFacts` 读它报"现在到哪一段"） */
+  phase: Ref<string>;
+  /** 主题 id（快照里如实写出来是哪一套） */
+  themeId: Ref<string>;
+  /** 夜色开关 / 档位（快照那两格） */
+  nightOn: Ref<boolean>;
+  nightLvl: ComputedRef<number>;
+  /** 渲染路（`in`it`/`waiting`/`failed`/`fallback2d` 都在这条路上写） */
+  renderKind: Ref<"init" | "webgl" | "waiting" | "failed" | "fallback2d">;
+  /** 降级原因原文（面板/JSON 都念它，不许转述） */
+  fallbackWhy: Ref<string>;
+  /** 临时还是永久（看门狗判的；面板要区分"还会回来"与"回不来了"） */
+  fallbackKind: Ref<"none" | "temp" | "perm">;
+  /** 地图库错误原文（数组是**共享的**：`m.on("error")` 那一路在 push） */
+  mapErrs: string[];
+  /** 真的把地图库跑起来了？（2D 降级时为 false；`promoteToWebgl` 切回来时会置 true） */
+  mapAvailable: Ref<boolean>;
+  /** 2D 降级路开关（M6 的出口；看门狗按它决定"等"还是"降"） */
+  ALLOW_2D: boolean;
+  /** 2D 降级路的落地（真源在 M6；看门狗只在临时/永久两类各调一次） */
+  fallback2d(mode: string, fc: { features?: BldFeature[] } | null, why?: string, kind?: "temp" | "perm", map?: BldMapLike | null): void;
+  /** M2 的读数出口（面板的 `bundle.live` 那一行；`on` 由宿主拼）。
+   *  ⚠️ 形状按 `VerifySnapshot.bundle.live` 如实写：写成 `Record<string, unknown>` 的话，
+   *     `...viewFetch.liveFacts()` 展开出来的东西对不上 `bundle.live` ⇒ TS2322。 */
+  viewFetch: { liveFacts(): { bldHits: number; roadHits: number; bldInfo: string; roadInfo: string } };
+  /** offline-first 开关（宿主自己那一份；面板如实写"默认不发 /api"） */
+  LIVE_ON: boolean;
+  /** 两条离线包的 facts 出口（面板念它们的读数，不重算） */
+  bldFeed: { facts(): BundleFeedFacts };
+  roadsFeed: { facts(): BundleFeedFacts };
+  /** M1 的出口：转屏/改窗口时重量底盘尺寸（`onWinResize` 里那一句） */
+  joyMeasureVh(): void;
+  /** 📍 屏外指示的两个宿主函数（`onWinResize` 里各补一次；它们读宿主那份几何缓存） */
+  pinEdgeMeasure(): void;
+  pinEdgeSync(): void;
+  /** 钉子的总同步（`promoteToWebgl` 切回 WebGL 那一下补一次；真源在 M7 `wsPickInteract`） */
+  syncPins(): void;
+  /** 🔴 宿主那个 `const` **数组**（`onBeforeUnmount` 要遍历清定时器）—— 模块只 `.push`，
+   *  宿主那边照旧看得见 ⇒ 它是**同一个引用**，不是别名、也不是第二份。 */
+  resizeTimers: number[];
+  /** 自动化/无头判定（**留在宿主**：M6 装配那一刻就同步调它 ⇒ 搬进 M9 会成环） */
+  isAutomation(): boolean;
+  /** 🔴 宿主那面 `alive` 旗的取值器（卸载后所有异步路都要早退；每处现读） */
+  aliveNow(): boolean;
+  /** 🔴 宿主那个 `let map` 的取值器。
+   *  ⚠️ 宿主那一份的类型**就是 `any`**（见它上面那行 eslint-disable 的注释）⇒ 这里如实写 `any`：
+   *     写 `unknown` 会让快照里那几处 `map?.getStyle?.()` / `map?.isStyleLoaded?.()` 直接编不过
+   *     （而"补一层 cast"就是改被搬走的正文了）。 */
+  mapNow(): any;
+  /** 🔴 宿主那个 `let map` 的写入器（watchdogFire 的**永久类**那一路会置 null） */
+  setMap(v: unknown): void;
+  /** 🔴 宿主那个 `let resizeRo` 的**写入器**（卸载要 `disconnect`；模块只写一次）。
+   *  ⚠️ 它**返回**写进去的那个引用：`kickResize` 里把它绑成块内 `const resizeRo` 之后，
+   *     下面两行 `resizeRo.observe(...)` **一个字都不用动**、TS 的「刚赋值」窄化也还在
+   *     （只给取值器的话那两行会被判 possible null —— 那就得往被搬走的正文里加东西了）。 */
+  setResizeRo(v: ResizeObserver): ResizeObserver;
+  /** 🔴 宿主那个 `let recoverTimer`（卸载要 `clearTimeout`）—— 取值器 + 写入器 */
+  recoverTimerNow(): number;
+  setRecoverTimer(v: number): void;
+  /** 🔴 宿主那面 `sawRender` 旗（`m.on("render")` 在写；看门狗"别只看时间"就靠它） */
+  sawRenderNow(): boolean;
 }

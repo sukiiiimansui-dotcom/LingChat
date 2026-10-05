@@ -347,7 +347,11 @@ impl StreamProducer {
         // 世界模拟没开、或本轮没有指令 → `directives` 为空 → 一次函数调用都不发生。
         let directives = self.scanner.take_directives();
         if !directives.is_empty() {
-            crate::world_map::move_cmd::dispatch_directives(&self.app, &directives);
+            // 上游把 `app` 改成了 `Option<AppHandle>`（同文件 :240 也是这么用的）⇒ 这里跟着包一层。
+            // 取不到句柄就**不派发**（那是"app 已销毁"的路径，派发本身也没有意义）。
+            if let Some(app) = &self.app {
+                crate::world_map::move_cmd::dispatch_directives(app, &directives);
+            }
         }
 
         Ok(ProducerOutput {

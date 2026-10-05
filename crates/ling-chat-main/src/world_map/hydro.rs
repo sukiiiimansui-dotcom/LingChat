@@ -52,7 +52,7 @@ use std::sync::OnceLock;
 /// 编译期内嵌的中国域水系资产（Natural Earth 1:50m 抽取，紧凑 GeoJSON）。
 ///
 /// 149KB / 144 要素 / 7507 顶点。路径相对本文件：`src-tauri/src/world_map/` → `src-tauri/assets/`。
-pub const ASSET: &str = include_str!("../../assets/hydro_cn.json");
+pub const ASSET: &str = include_str!("../../../../src-tauri/assets/hydro_cn.json");
 
 /// 水系要素类别。
 ///

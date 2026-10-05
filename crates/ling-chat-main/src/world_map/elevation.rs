@@ -56,7 +56,7 @@ use std::sync::OnceLock;
 /// 编译期内嵌的中国域高程网格（SRTM 90m 采样，紧凑 JSON）。
 ///
 /// 10.8KB / 64×38 = 2432 点 / 1° 步长。路径相对本文件：`src-tauri/src/world_map/` → `src-tauri/assets/`。
-pub const ASSET: &str = include_str!("../../assets/elev_cn.json");
+pub const ASSET: &str = include_str!("../../../../src-tauri/assets/elev_cn.json");
 
 /// 无数据的哨兵值（JSON 里用它表示"海面 / SRTM 无覆盖"）。
 ///

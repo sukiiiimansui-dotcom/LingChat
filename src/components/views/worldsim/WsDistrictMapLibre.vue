@@ -317,6 +317,11 @@
      代拍 / App 自拍、验证快照与面板）整块搬到了 `wsEngineGuard.ts`（装配点在 M7 那一处之后，
      理由在模块文件头）。⚠️ 宿主里空出来的 import 不删，清理归 S9。 */
   import { createEngineGuard } from "./wsEngineGuard";
+  /* 🧱 重构切片 S11：**地图事件接线**（`onMounted` 里那 13 处 `m.on(...)` 与它们的回调体）
+     整块搬到了 `wsStageEvents.ts`（装配点在 `onMounted` 里 `map = m;` 之后 —— ctx 要按值收五个
+     `onMounted` 局部量；注册点与顺序**逐字留在原地**，理由在模块文件头）。
+     ⚠️ 宿主里空出来的 import 按 §3 第 5 条一行都不删，清理归 S9。 */
+  import { createStageEvents } from "./wsStageEvents";
   /* ⚠️ 上面这几条 import 里有 9 个名字**在本切片之后暂时没有消费者了**（它们的唯一用途跟着 M2 走了）：
      `facilitiesAuto` · `mergeBuildingSources` · `shouldAskSecondSource` · `hash32` · `roadStatsLine` ·
      `toXY` · `toLngLat` · `fetchRadiusLadder` · `WS_FETCH_R_BACKEND_MAX`。
@@ -2309,6 +2314,79 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       ...(perf.low.value ? { pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5) } : {}),
     });
     map = m;
+    /* ══ 🧱 重构切片 S11：**地图事件接线**的装配 ═════════════════════════════════════════
+       13 处 `m.on(...)` 与回调体整块在 `wsStageEvents.ts`（按 8 组注册，事件名与顺序在那边列着）。
+       装配点在这儿（不是 setup 作用域）的原因：ctx 要**按值**收上面那几个已经定稿的
+       `onMounted` 局部量 —— `fc` / `seat` / `districtBbox` / `districtFeat` / `maplibregl`
+       （改成取值器会丢掉 `if (fc?.features?.length)` 那处的 TS 窄化；理由在模块文件头）。
+       🔴 注册点与顺序**逐字留在原地**：下面那 8 处调用逐个待在原来 `m.on` 的位置上 ——
+       `m.once("style.load"/"load")` 的补层队列、`kickResize` 与看门狗都夹在它们中间，
+       整串提前注册会让 `load` 上的监听次序变（那就不是"零行为变化"了）。
+       宿主那面 `alive` / `joyActive` / `watchdog` / `sawRender` / `bldTimer` / `zoomNameTimer`
+       是活状态 ⇒ 取值器/写入器（与 S5 的 `setBldTimer` / `setJoyActive` 同一条落法）。 */
+    const stageEvents = createStageEvents({
+      props,
+      stats,
+      phase,
+      emit,
+      mapErrs,
+      fc,
+      seat,
+      districtBbox,
+      districtFeat,
+      maplibregl,
+      initPitch,
+      basePitch,
+      joyGate,
+      applyPitchGuard,
+      onMoveStart,
+      onMove,
+      onMoveEndNames,
+      onMapClick,
+      reprojectNow,
+      refreshNames,
+      refreshBundles,
+      stopTimer,
+      syncPins,
+      pinEdgeSync,
+      pinEdgeMeasure,
+      loadBuildingsForView,
+      loadRoadsForView,
+      loadFacilities,
+      loadBundleAttribution,
+      bldStore,
+      bldFlush,
+      bldTierCrossedFlush,
+      bldLive,
+      roadsLive,
+      placesGetter,
+      selfShotArmed,
+      runSelfShot,
+      maybeAppSelfShot,
+      joyCalibrate,
+      joyApplyRoam,
+      joyReadCam,
+      prevCamNow,
+      setPrevCam,
+      originNow,
+      moveNow,
+      scaleNow,
+      roamStore,
+      joyMeasureVh,
+      aliveNow: () => alive,
+      joyActiveNow: () => joyActive,
+      setSawRender: (v) => { sawRender = v; },
+      watchdogNow: () => watchdog,
+      bldTimerNow: () => bldTimer,
+      setBldTimer: (v) => { bldTimer = v; },
+      zoomNameTimerNow: () => zoomNameTimer,
+      setZoomNameTimer: (v) => { zoomNameTimer = v; },
+    });
+    /* 解构出来的 8 个注册函数 —— 名字与调用点见下面那 8 处（顺序与事件名逐字未变）。 */
+    const {
+      registerPitchGuard, registerMapErrors, registerRenderFlag, registerMapLoad,
+      registerCameraMotion, registerViewMoveEnd, registerViewZoomEnd, registerPinEdge,
+    } = stageEvents;
 
     /* 🎬 侧视角护栏（**唯一真源** `wsScene.applyPitchGuard()`）—— 补「App = 代拍页那一屏」的欠账：
        代拍页早就有这套（pitch > 55° 按比例降拖动/滚轮速度），App 侧一直没搬 ⇒ 侧视角一划就没
@@ -2316,26 +2394,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        调两次：建图后立刻一次（此刻 `dragPan` 可能还没挂 ⇒ 函数内部静默跳过），
        之后每次 `pitch` 变化重设一次（已读源码确认 `enable()` 会重写惯性选项 ⇒ 真的生效）。 */
     applyPitchGuard(m);
-    m.on("pitch", () => {
-      applyPitchGuard(m);
-    });
+    /* ① pitch → wsStageEvents.registerPitchGuard（注册点与顺序留在原地） */
+    registerPitchGuard(m);
 
-    /* 🔴 **必须有这个监听器**（2026-09-19 用一次真实事故换来的）：
-       地图库的错误**不会**冒泡成 JS 异常 —— 样式校验失败时它只发一个 `error` 事件，
-       然后 `load` **永远不触发**：底图不画、楼不画、连瓦片都不请求，
-       屏幕上是一块**全透明的空画布**，而页面**零报错**（控制台也干干净净）。
-       代拍回来的三张"纯白"就是这么来的（白 = α=0 的透明图）。
-       ⇒ 把它接到 HUD 的 note 上：**坏掉要看得见**，而不是让人猜"是不是没做好"。 */
-    m.on("error", (e: { error?: { message?: string } }) => {
-      const msg = String(e?.error?.message || e || "").slice(0, 60);
-      if (msg) stats.note = stats.note ? `${stats.note} · 地图库：${msg}` : `地图库报错：${msg}`;
-    });
-    /* 📊 **另挂一个只记不改的**（不动上面那条的语义）：`stats.note` 会被后来的写入覆盖，
-       而样式自检 JSON 要的是"从头到现在一共报过哪些错"。最多留 20 条（自检包不灌水）。 */
-    m.on("error", (e: { error?: { message?: string } }) => {
-      const msg = String(e?.error?.message || e || "").slice(0, 160);
-      if (msg && mapErrs.length < 20) mapErrs.push(msg);
-    });
+    /* ② error ×2 → wsStageEvents.registerMapErrors */
+    registerMapErrors(m);
 
     /* ⏱ **看门狗**：地图库"起来了"不等于"画出来了"。
        WebGL 初始化失败、上下文被系统回收、驱动摆烂时，MapLibre **不发错误、也不发 `load`**
@@ -2354,9 +2417,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        ② **别只看时间**：期限到点先问一句"它到底动过没有"（`sawRender` = 真出过一帧）。
           动过 ⇒ 真机上再宽限一次（**只宽限一次**，且自动化不宽限，免得无限等下去）。
           仍然没动 ⇒ 如实降级，并把**实际期限**写进 HUD（原来写死"8 秒"，改了期限就成了假话）。 */
-    m.on("render", () => {
-      sawRender = true;
-    });
+    /* ③ render → wsStageEvents.registerRenderFlag */
+    registerRenderFlag(m);
     /* 🔴 建图后**立刻**清一次"容器里那些不是地图的画布"：
        定案证据（机主 canvas 清单）—— 地图那块 `maplibregl-canvas` **尺寸完全正确 3759×1287**，
        而模板那块 `ws-dml__cv`（buffer 停在默认 300×150、CSS 拉满整屏、display:block）**压在它上面**
@@ -2414,260 +2476,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       watchdogFire(m, fc, limitMs);
     }, WATCHDOG_MS.value);
 
-    m.on("load", () => {
-      /* 第一帧真的出来了 ⇒ 撤掉看门狗（它不是"超时就算失败"，是"到点还没好才算失败"） */
-      window.clearTimeout(watchdog);
-      if (fc?.features?.length) {
-        /* `?live=1` 的首批（或老路径）：**并进同一个累积仓库**再 flush ——
-           落图通路只有一条（`bldFlush` → 真源 `flushBldStore`），一次 `setData`，换视野不减。 */
-        bldStore.merge(fc.features as unknown as BundleBuildingFeature[], "live:init");
-        bldFlush("live+init");
-        // 用真实楼房的范围收一下相机（取不到就保持默认中心）
-        try {
-          const b = new (maplibregl as unknown as { LngLatBounds: new () => unknown }).LngLatBounds();
-          for (const f of (fc as { features?: Array<{ geometry?: { coordinates?: unknown } }> }).features || []) {
-            const g = f.geometry || {};
-            const walk = (v: unknown): void => {
-              if (Array.isArray(v) && typeof v[0] === "number" && typeof v[1] === "number") {
-                (b as { extend: (c: [number, number]) => void }).extend([v[0] as number, v[1] as number]);
-              } else if (Array.isArray(v)) {
-                for (const x of v) walk(x);
-              }
-            };
-            walk(g.coordinates);
-          }
-          m.fitBounds(b as never, { padding: 24, pitch: initPitch.value, duration: 0 });
-        } catch {
-          /* 收不了相机就用默认视野，不影响可用性 */
-        }
-      }
-      /* ④ **整区视野**：先按区县 bbox 铺满（"像省级地图一样显示整个区"）。
-         楼栋在整区尺度上只是几个像素点，所以**放大到街区再取**（见下面的 moveend）。 */
-      /* 🔴 默认视野 = **街道级 + 倾斜**（机主 2026-09-19：「这个小区怎么是 2d 的，我的 3d 建筑呢」）。
-         之前我为了让"整区铺满"生效，一进来就 `fitBounds(整个区)`（zoom≈10）——
-         那个缩放下楼栋是亚像素的，加上"放大到街区才取楼"的规则 ⇒ **一栋楼都看不见、看着就是 2D**。
-         现在反过来：默认落在**区驻地**的街道级（zoom 15.2 + pitch），楼栋立刻可取 ⇒ 3D 马上可见；
-         "看整个区"降级成右上角那个「全区」按钮（想广角时点一下）。 */
-      if (seat || districtBbox) {
-        try {
-          const c: [number, number] = seat
-            ? [seat.lng, seat.lat]
-            : [(districtBbox![0] + districtBbox![2]) / 2, (districtBbox![1] + districtBbox![3]) / 2];
-          /* 🔴 2026-09-19 再把默认缩放**推近一档**（15.2 → 16.4）。
-             为什么：zoom 15.2 在手机横屏上**一眼 4km 宽**（分辨率约 3.6m/px），
-             一栋 20m 的楼只有 5~6 个像素 —— 这不是"小区级"，是"城区全景"，
-             而且取楼半径按视野算会落到 1.4km 上限，Overpass 更容易拖挂。
-             16.4 ≈ 1.6m/px：同样的楼有 12~13 像素，成片的街区才真的"成片"。 */
-          m.jumpTo({ center: c, zoom: 16.4, pitch: initPitch.value, bearing: 0 } as never);
-          /* 🕹 **启动时摇杆就是开**（存储值/URL 显式打开）⇒ 把"没有摇杆时的机位"记下来：
-             关了开关要**逐字还原**到这一份（俯角 = `basePitch`，不是 64）。
-             ⚠️ 只有这一处能在建图期填快照：此刻相机已经是 64 了，现读只会读到"接管后"的值。 */
-          if (props.joy) {
-            setPrevCam({ center: [c[0], c[1]], zoom: 16.4, pitch: basePitch.value, bearing: 0 });
-          }
-          stats.mode = "街区视野（街道级）";
-          stats.view = "街区视野";
-          /* 🆕 建图这一刻就**主动取一次楼**（以前只靠 `moveend` 触发）。
-             为什么必须补这一下：`jumpTo` 之后如果视野没变（或 moveend 在监听器挂上之前就发过了），
-             `moveend` 根本不会来 ⇒ 屏幕上永远没有楼、HUD 永远 `🏢 0`。
-             用户看到的是"这功能坏了"，而不是"还差一次移动"。 */
-          void loadBuildingsForView(m as unknown as BldMapLike);
-          void loadRoadsForView(m as unknown as BldMapLike); // 路网与楼并行取（互不阻塞）
-          void loadFacilities(m as unknown as BldMapLike); // 设施一次就够（不随视野重取）
-        } catch {
-          /* 收不了相机就保持默认视野 */
-        }
-      } else {
-        /* 🆕 2026-09-26（父代理批准的一行，**读数诚实**问题）：
-           上面那段只在"给了 adcode"（有驻地/区界 bbox）时才跑，而**新入口 `/worldsim`
-           故意不传 adcode**（城市数据按城市包来，没有"区县"这一级）⇒ `stats.mode` 会一直停在
-           初值「初始化…」，尽管地图早就跑起来了（离线格/楼/水绿都在动）。
-           用户与探针都会把「初始化…」读成"还没就绪" —— 那是一句**会骗人的读数**。
-           这里如实换一句：默认机位、没有指定区县。**不改任何行为**（只是给读数赋值）。 */
-        stats.mode = "默认机位（未指定区县）";
-      }
-      /* 🕹 **启动时摇杆就是开**（存储值/`?joy=1`）⇒ 记下"没有摇杆时的机位"，关了开关要逐字还原。
-         上面那条分支（有驻地/区界 bbox）已经在 `jumpTo` 那行旁边填过快照了；这里是**兜底**：
-         没有 bbox 时相机停在建图默认值上，center/zoom/bearing 现读即可（近景只改过俯角），
-         `pitch` 用 `basePitch`（= 关着时该有的那个 38）。
-         ⚠️ 读不齐就**不填**（`joyPrevCam` 留 null）⇒ 关闭时一次相机都不动 —— 宁可不动，也不编一个机位。 */
-      if (props.joy && !prevCamNow()) {
-        const cam0 = joyReadCam();
-        if (cam0) setPrevCam({ ...cam0, pitch: basePitch.value });
-      }
-      /* 📍 **屏外方向指示的几何**（容器尺寸 + 四边安全区）在这里量一次 —— **与摇杆无关**
-         （摇杆关着也照样要有"其他角色在哪"的指示），resize/转屏时在 `onWinResize()` 里重量。 */
-      pinEdgeMeasure();
-      /* 🕹 启动时摇杆就是开（存储值/`?joy=1`）⇒ 在这里把**漫游会话**也建起来，与运行期打开走同一条语义：
-         ① `joyCalibrate()` 量「屏幕 px → 经纬度」（此刻俯角已经是 64 ⇒ 量的是近景那把尺子）；
-         ② 位置真源 +「我」那颗钉子一起落到画面中心 —— 不这么做的话，"启动就开摇杆"这条路上
-            `joyEnter()` 不会被调用（`watch` 只在**变化**时触发），标尺是空的 ⇒ 人推杆只有相机动、
-            角色还是不动（同一句"太杂鱼"再犯一次）。
-         ⚠️ 判据用 `joyGate.show`（= 摇杆到底在不在）而不是 `props.joy`：2D 降级路 DOM 里没有摇杆，
-            那条路一个字都不许动（判据 9/10）。 */
-      if (joyGate.value.show) {
-        joyMeasureVh();     // 🕹 §15：底盘尺寸按容器高度定（建图这一刻量一次；resize 时再量）
-        joyCalibrate();
-        /* 🧱 S5（M5）：`joyOrigin` / `joyMove` 是摇杆会话自己的状态（已搬进 `wsJoystickStage.ts`）
-           ⇒ 这里经那两个出口**现读**（`o0` 与 `moveNow()` 都是同一刻的值，与原实现逐字同序）。 */
-        const o0 = originNow();
-        if (o0) roamStore.write(o0.lng, o0.lat, moveNow().headingDeg);
-        joyApplyRoam(moveNow());
-      }
-      /* 🗄 2026-09-24 已移除：区县边界（`dist-fill` / `dist-line`，"整区铺满"的可读性）。
-         代拍页那一屏没有它；机主要"只留代拍页代码"⇒ 这一层不挂。
-         `districtFeat` 仍然照旧取（相机中心/驻地/取楼半径都靠它），只是不再画边界。
-         恢复：`git revert <本 commit>`。 */
-      if (false && districtFeat) {
-        try {
-          m.addSource("dist", {
-            type: "geojson",
-            data: { type: "FeatureCollection", features: [districtFeat] },
-          });
-          const below = m.getLayer("bld-ext") ? "bld-ext" : undefined;
-          m.addLayer(
-            { id: "dist-fill", type: "fill", source: "dist", paint: { "fill-color": "#79d9ff", "fill-opacity": 0.06 } },
-            below
-          );
-          m.addLayer(
-            {
-              id: "dist-line",
-              type: "line",
-              source: "dist",
-              paint: { "line-color": "#79d9ff", "line-width": 1.4, "line-opacity": 0.9 },
-            },
-            below
-          );
-        } catch {
-          /* 画不上就算了：区界只是更好读，不该影响主流程 */
-        }
-      }
+    /* ④ load → wsStageEvents.registerMapLoad（本片最大的一处） */
+    registerMapLoad(m);
 
-      /* 🗄 2026-09-24 机主裁定「App 页现在只准保留代拍页代码」⇒ 三样不再挂：
-         ① **等高线**（`drawContours`，代拍页没有这一层）；② **AI 示意层**（`syncAiLayers`，
-         楼栋稀疏时叠的暖色示意图元）；③ 下面的**区县边界**（`dist-fill`/`dist-line`）。
-         ⚠️ `syncPins()` **保留**：它是地图上的人（`markers`），代拍页之外但属"同一屏"的地图图层，
-            机主没点它；要停就传 `:markers="[]"`（`WorldSim` 那边一行的事）。
-         恢复：`git revert <本 commit>`（备份 tag `attic/pre-sceneview2-20260924`）。 */
-      syncPins();
-      phase.value = "done";
-      stopTimer();
-      /* 🧱🏢🛣 **离线包首刷**（切片 A）：地图一就绪就按视野补格（后台、串行、每格独立超时）。
-         放在 `phase=done` 之后 ⇒ **不阻塞首屏**（这正是治"加载慢"的那一刀：以前要等
-         `/api/buildings` 十几秒到 91.7s，现在首屏一出来楼就一批批补进来）。
-         ⚠️ 楼/路走同一条管道（`refreshBundles`），live 只在 `?live=1` 时另外打。
-         🔴 2026-09-28 **删掉了一次重复调用**：这里原来先 `void refreshBundles("init")`，
-         下一行又 `void refreshBundles("init").then(名字层)` —— 两次调用会让首屏的
-         楼/路/水绿**每条管道多跑一整轮**（第二次撞上 feed 的 `busy` 守卫 ⇒ `queued=true`
-         ⇒ 本轮结束后**再跑一轮 `runOnce`**；楼每轮还要吃 `BLD_BUNDLE_PER_REFRESH` 格预算）。
-         名字层只需要**挂在第一份 promise 上**（下面那一行就是），不需要第二个 kick。
-         ⇒ 现在只留下面那一行：**一轮取数 + 取完挂名字**。 */
-      /* 🏷🗺 **名字层首刷**（与楼同一个道理：只挂 `moveend` 会"开页没有名字"——本项目栽过三次的
-         「挂钩只在用户事件上 ⇒ 首屏空白」）⇒ 这里 kick 一次，成功即停、不常驻轮询。
-         放在取包之后：先有楼（锚点只认**画出去的那批**），再挂名字。 */
-      void refreshBundles("init").then(() => (alive ? refreshNames("init") : undefined));
-      /* 🔴 署名（ODbL）**随数据一起显示**：句子取自包里的 `index.json`（导出脚本那句原话） */
-      void loadBundleAttribution();
-      /* 🎬 场景就绪 ⇒ 把地图与**真楼栋**交给外层（交通设施要用楼脚印；见 `emit` 的说明）。
-         放在 `phase` 之后：这时 loading 已收起、楼体图层已 addLayer，外层加图层不会插进加载态。 */
-      emit("scene-ready", {
-        map: m,
-        buildings: (fc as { features?: unknown[] } | null) || null,
-        /* 🏠 切片③：把「我的家」的取名点取值器**一起**递出去（与楼栋同一次事件 —— 外层不必再取一遍） */
-        places: placesGetter,
-      });
-      /* 代拍：`?autoshot=1` 开了开关才跑，没开就是一次 boolean 判断（零开销） */
-      if (selfShotArmed()) void runSelfShot(m as unknown as Parameters<typeof runSelfShot>[0]);
-      /* 🧪 App 自拍（`?selfshot=1`）：这是 **WebGL 路**的触发点（降级路的在 `fallback2d` 末尾） */
-      maybeAppSelfShot("webgl");
-      /* 🕹 标尺的**兜底量法**：极少数情况下建图那一刻容器还没排版（0×0 ⇒ `project`/`unproject`
-         会给出非有限值），`joyCalibrate()` 会如实退回 `null`（⇒ 只有相机走、角色不动）。
-         `load` 时版面已经有了 ⇒ 在这里补量一次。**只在还没量到时**才调（正常路径 0 次调用），
-         而且同样**不在帧里** —— "移动中 0 次投影"那条红线不受影响。 */
-      if (joyGate.value.show && !scaleNow()) {
-        joyCalibrate();
-        /* 🧱 S5（M5）：`joyOrigin` / `joyMove` 是摇杆会话自己的状态（已搬进 `wsJoystickStage.ts`）
-           ⇒ 这里经那两个出口**现读**（`o0` 与 `moveNow()` 都是同一刻的值，与原实现逐字同序）。 */
-        const o0 = originNow();
-        if (o0) roamStore.write(o0.lng, o0.lat, moveNow().headingDeg);
-        joyApplyRoam(moveNow());
-      }
-    });
+    /* ⑤ movestart / move / click → wsStageEvents.registerCameraMotion */
+    registerCameraMotion(m);
 
-    /* 🏷🗺 **名字层的相机联动**（`DESIGN-MG-MOTION.md` §4.0/§4.2 —— 这一段的每一条都是红线）
-       · `movestart`：容器加 `is-camera-moving`（**一次 class + 一次 opacity**，整层 1 → 0.25）；
-       · `move`（每帧）：**只写 1 个容器**的 `translate3d`（跟手），N 个节点一个字都不写；
-       · `moveend`：容器归零 + 节点位置**批量重排一次**（在 `refreshNames` 里）；
-       · `click`：点楼体 ⇒ 与点名字**同一张卡**（`queryRenderedFeatures` 拿不到时走"最近已画楼"降级）。 */
-    /* 🕹 **摇杆期间四个 handler 一律早退**（`joyActive` = 自持标志，见 `onJoyDrive` 那段）：
-       `panBy({duration:0})` 每帧都会发一轮 movestart/move/moveend，不早退就是"每帧重投影 +
-       每帧起一条 600ms 去抖 + 每帧重排标签"。跟手由 `joyNamesFollow()` 自己写**一个容器**，
-       松手由 `onJoyHalt()` **恰好一次**重算 —— 判据 3/4/5/6 都钉在这里。 */
-    m.on("movestart", () => { if (joyActive) return; onMoveStart(); });
-    m.on("move", () => { if (joyActive) return; onMove(); });
-    /* 移动中点击**丢弃**（不排队、不 `queryRenderedFeatures`）：相机在动，射线命中的楼已经移走，
-       "点中"本身没意义；排队又会在松手时弹卡（判据 5）。 */
-    m.on("click", (e: unknown) => {
-      if (joyActive) return;
-      onMapClick(e as { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number } });
-    });
+    /* ⑥ moveend → wsStageEvents.registerViewMoveEnd */
+    registerViewMoveEnd(m);
+    /* ⑦ zoomend → wsStageEvents.registerViewZoomEnd */
+    registerViewZoomEnd(m);
 
-    /* 视野变化 → 按需补数据（去抖 600ms，避免拖动时把后端/磁盘打爆）。
-       · **默认**：只补**离线格**（静态文件 ⇒ 不打 Overpass；换视野要素数**不减**：并进累积仓库）；
-       · `?live=1`：另外走现场取数（楼/路各一条），失败照旧**可见**。 */
-    m.on("moveend", () => {
-      /* 🕹 摇杆推着的时候这一发是**每帧都有**的（`panBy({duration:0})` 每次都走完一轮 ease）
-         ⇒ 必须早退：不早退就会"每帧重投影 + 每帧起一条 600ms 去抖 + 每帧重取离线包"。
-         松手那一次重算归 `onJoyHalt()`（**恰好一次**）。 */
-      if (joyActive) return;
-      /* 🔴 容器位移**必须**在这里归零：节点自身马上要被写成新位置，容器再留着旧位移就是"错位"
-         （机主真机报过的「名字显示是滑动刷新一次，不能跟随，**错位严重**」就是这一层没对齐）。 */
-      onMoveEndNames();
-      /* 🆕 2026-10-01 **就地重投影**（治机主说的"松手卡一下/弹回"）：
-         容器刚归零，而节点还钉在**上一台相机**的坐标上 —— 原来要等 600ms 去抖 + 取包之后才重排，
-         那 600ms 里整层是错位的（真因是"重投影排在了重排后面"，不是算得慢）。
-         现在：`reproject()` **只重投影、不重排**（O(N)，N ≤ 26；集合/避让/上限/batch 一律不动）
-         ⇒ 同一 tick 内 Vue 就把 transform 落下去（微任务先于下一帧绘制）⇒ 看不到跳变。
-         ⚠️ 它**不替代** `refreshNames`：600ms 后那一轮仍照跑（该重算时重算、该增删时增删）。 */
-      reprojectNow();
-      if (bldTimer) window.clearTimeout(bldTimer);
-      bldTimer = window.setTimeout(() => {
-        bldTimer = 0;
-        void refreshBundles("move").then(() => (alive ? refreshNames("move") : undefined));
-        if (bldLive.live) void loadBuildingsForView(m as unknown as BldMapLike);
-        if (roadsLive.live) void loadRoadsForView(m as unknown as BldMapLike);
-      }, 600);
-    });
-    /* 缩放结束也要重排：zoom 变了 ⇒ 避让网格的候选/撞掉**全变**（区名模式的迟滞信号就是它）
-       🔴 2026-10-03 第三轮**必须加这一句早退**：摇杆拉近期间宿主每帧写一次 `easeTo({zoom})`
-       （`onJoyDrive`），而 `duration: 0` 的 ease 会**同步**发一轮 zoomstart/zoom/zoomend
-       （与 `panBy` 同一族，vendored 源码见判据 ⑧）⇒ 不早退的话，拉近的每一帧都会在这里
-       跑一次 `reprojectNow()`（重投影）+ 起一个 160ms 的 `refreshNames("zoom")` + 可能一次
-       `bldTierCrossedFlush()`（重挑楼）—— 正是判据 3/6 的"移动期间 0 次重投影 / 0 次重挑"那条红线。
-       收尾那**一次**重算仍由 `onJoyHalt()` 在画面停稳之后做（那时 zoom 已经回到出发值）。 */
-    m.on("zoomend", () => {
-      if (joyActive) return;
-      onMoveEndNames();
-      /* 🆕 同 `moveend`：先**就地重投影**（缩放不是刚体平移，容器跟手只是近似），
-         160ms 后那一轮 `refreshNames("zoom")` 照旧（跨档才重算，档内复用 —— 见 `wsNameLayer`）。 */
-      reprojectNow();
-      if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
-      zoomNameTimer = window.setTimeout(() => { zoomNameTimer = 0; if (alive) void refreshNames("zoom"); }, 160);
-      /* 🌆 **跨过足迹/立体分界线 ⇒ 重挑一次**（走既有的 `bldFlush` 通路，见 `bldTierCrossedFlush`）：
-         分界线两边画法与栋数上限都不同，不重挑就会一直按旧档画到下一次 `moveend`。 */
-      bldTierCrossedFlush();
-    });
-
-    /* ══ 📍 **屏外方向指示**的相机钩子（2026-10-04 第七条）════════════════════════════════
-       为什么是**单独一组监听**而不是塞进上面那五个 handler：那五个是摇杆红线的判据对象
-       （`ws_joystick_selftest.mjs` ⑦ 逐字钉着它们的形状），把新功能混进去会让"改一处、红一片"；
-       单独注册一条，**早退条件与它们逐字相同**（`if (joyActive) return;`）⇒ 时点也完全相同。
-       时点 = **相机事件**（不是 rAF、不是每帧循环）；写点数与开关见 `pinEdgeSync` 上方那段说明。
-       ⚠️ 只挂 `move` / `moveend` / `zoom` 三个（`zoomend` **故意不挂** —— 它是摇杆那条"唯一入口"
-         判据的对象，且 `zoom` 已经在跟了；多挂一条就是给那条红线添一个新的解释空间）。 */
-    m.on("move", () => { if (joyActive) return; pinEdgeSync(); });
-    m.on("moveend", () => { if (joyActive) return; pinEdgeSync(); });
-    m.on("zoom", () => { if (joyActive) return; pinEdgeSync(); });
+    /* ⑧ 屏外指示 move / moveend / zoom → wsStageEvents.registerPinEdge */
+    registerPinEdge(m);
 
     /* fps 计数已提到 `startFps()`（在"分渲染路"之前启动，降级路也有数） */
   });

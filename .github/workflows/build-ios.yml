@@ -1,6 +1,18 @@
 name: iOS 无签名 IPA 构建
 
 on:
+  # 2026-10-05：加一条 push 触发（当前开发分支）—— 原来只有 workflow_dispatch，
+  # 而 API 触发属于「禁止的写操作」⇒ fork 上这份 iOS 构建永远不会为我们的提交跑。
+  # `paths` 限定在真会影响构建的目录，改文档/别的 workflow 不会白跑一次 macOS runner。
+  push:
+    branches: ["feat/worldsim"]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/build-ios.yml'
   workflow_dispatch:
     inputs:
       compression:

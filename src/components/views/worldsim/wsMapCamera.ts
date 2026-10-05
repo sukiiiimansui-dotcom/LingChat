@@ -4,7 +4,9 @@
  * 从宿主 `WsDistrictMapLibre.vue` **整块搬出来**的那些"相机这一层"（锚点 = 函数名，不按行号）：
  *   · 近景那一套的几何：`joyGate`（分流**唯一判据**）/ `basePitch` / `joyVh` / `joyMeasureVh` /
  *     `initPitch` / `joyVars`（摇杆几何 → CSS 变量）
- *   · 相机动作：`zoomOnce`（150ms 节流）/ `fitDistrict`（全区）/ `zoomBy`（按钮缩放）
+ *   · （S9b2 已删）相机动作：`zoomOnce`（150ms 节流）/ `fitDistrict`（全区）/ `zoomBy`（按钮缩放）
+ *     —— 三个都没有调用点（模板里 `＋ / － / 全区` 三个按钮早已整块移除），S9b2 把那 42 行
+ *     连同私有的 `lastZoomAt` 一起删掉（判据跟着改成"这三个名字在宿主 ∪ 模块里都不再定义"）
  *   · 名字层跟手：`onMoveStart` / `onMove` / `onMoveEndNames`（+ 它们私有的 `panAnchor`）
  *   · 浏览器手势兜底：`guardGestures` / `lockPageGestures` / `unlockPageGestures`（+ 私有的 `htmlTouchBackup`）
  *
@@ -24,7 +26,7 @@
  * 把形参默认值写成 `map = ctx.mapNow()` —— 默认值在**每次调用时**求值 ⇒ 读到的就是**当时**那个 map，
  * 与原实现读它的时刻完全一致（同一个同步点）。
  * ⚠️ 副作用是"签名行多一个形参"（§2.4 明确允许：搬迁 = 移动 + 加签名）；**函数体一个字都没动**。
- * ⚠️ 宿主调用点因此也一个字都不用改（`onMoveStart()` / `zoomBy(1)` / `refreshBundles("joy")` 照旧）——
+ * ⚠️ 宿主调用点因此也一个字都不用改（`onMoveStart()` / `refreshBundles("joy")` 照旧）——
  *    这一点是硬要求：`ws_joystick_selftest` 的 ⑦/⑰ 用**逐字正则**钉着那几个调用点。
  *
  * ## 本片**没搬**的（照实留痕）
@@ -32,11 +34,11 @@
  *   `guardGestures()` 的返回句柄，宿主是它唯一的消费者。
  * · 摇杆会话那条线（`joyActive` / `joyReadCam` / `joyEnter` / `joyExit` / `onJoyDrive` / `onJoyHalt`）
  *   属于 **M5**（§2.1 的 `wsJoystickStage.ts`），不在本片。
- * · 🔴 `zoomOnce` / `fitDistrict` / `zoomBy` 三个**当前没有任何调用点**（2026-10-04 实查：
- *   `grep -n` 全文件只有定义处 —— 模板里 `＋ / － / 全区` 三个按钮早已整块移除，
- *   见模板第 54 行那句注释）。它们是死代码这件事**不在本片处理**（§3 把删死代码排在 S9），
- *   本片照样整块搬过来、一个字没改。
- */
+ * · （S9b2 已删）`zoomOnce` / `fitDistrict` / `zoomBy` + 私有的 `lastZoomAt`：S3 搬过来时就
+ *   **没有任何调用点**（2026-10-04 实查：`grep -n` 全文件只有定义处 —— 模板里 `＋ / － / 全区`
+ *   三个按钮早已整块移除）。2026-10-05 复核仍是零消费者 ⇒ 连同 return 里的三行一起删掉，
+ *   本喵不留第二份壳：这里的判据（"搬走的名字全 stage 只定义一次"）跟着改成"这三个名字
+ *   在宿主 ∪ 模块里一处定义都没有"。 */
 
 import { computed, ref } from "vue";
 import {
@@ -99,49 +101,6 @@ export function createMapCamera(ctx: MapCameraCtx) {
       "--ws-joy-h": joyGate.value.show ? `${JOY_HUD_LIFT_PX}px` : "0px",
     };
   });
-
-  /** 节流：`click` 与 `pointerup` 都可能触发同一动作（双保险），150ms 内只认第一次 */
-  let lastZoomAt = 0;
-  function zoomOnce(delta: number): void {
-    const now = Date.now();
-    if (now - lastZoomAt < 150) return;
-    lastZoomAt = now;
-    zoomBy(delta);
-  }
-
-  /** 「全区」：铺满整个区县（这个缩放下不取楼栋——楼只是几个像素点，Overpass 也扛不住大半径） */
-  function fitDistrict(map = ctx.mapNow()): void {
-    const b = bboxRef.value;
-    const m = map as unknown as { fitBounds(x: unknown, o?: unknown): void; setPitch?(v: number): void } | null;
-    if (!b || !m) return;
-    try {
-      m.fitBounds(
-        [
-          [b[0], b[1]],
-          [b[2], b[3]],
-        ],
-        { padding: 16, pitch: props.pitch, duration: 500 }
-      );
-      /* 不赌库的默认值：整区铺满之后**显式**把倾角摆回来（2.5D 的观感全靠它） */
-      m.setPitch?.(props.pitch);
-      stats.mode = "全区视野（区县边界）";
-      stats.view = "全区视野";
-      stats.note = "全区视野：放大到街区后自动加载楼房";
-    } catch {
-      /* 收不了相机就算了 */
-    }
-  }
-
-  /** 按钮缩放：走地图库的 zoomTo（带一点动画，手感比瞬移好） */
-  function zoomBy(delta: number, map = ctx.mapNow()): void {
-    const m = map as unknown as { getZoom(): number; zoomTo(z: number, o?: unknown): void } | null;
-    if (!m) return;
-    try {
-      m.zoomTo(Math.max(1, Math.min(18, m.getZoom() + delta)), { duration: 420 });
-    } catch {
-      /* 缩不动就算了，不影响别的 */
-    }
-  }
 
   /* ── 跟手（§4.0）：相机运动期间**只写容器**；节点位置一个字都不写 ─────────────────
      算法：`movestart` 时记下"第一个节点的锚点此刻在屏幕上的位置"，
@@ -232,9 +191,6 @@ export function createMapCamera(ctx: MapCameraCtx) {
     joyMeasureVh,
     initPitch,
     joyVars,
-    zoomOnce,
-    fitDistrict,
-    zoomBy,
     onMoveStart,
     onMove,
     onMoveEndNames,

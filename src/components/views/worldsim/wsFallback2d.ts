@@ -4,7 +4,7 @@
  * 从宿主 `WsDistrictMapLibre.vue` **整块搬出来**的那条路（锚点 = 函数名，不按行号）：
  *   · `ALLOW_2D`（默认不自动降级；`?wsfallback=1` 与自动化环境是仅有的两个入口）
  *   · `styleNow` / `bboxOfGeometry` / `classify` / `dressBld` / `rampColor`
- *   · `draw2d`（Canvas2D 自绘俯视图）/ `drawContours`（DEM 等高线）
+ *   · `draw2d`（Canvas2D 自绘俯视图）
  *   · `fallback2d`（三条路共用的那个兜底：无 WebGL / 地图库加载失败 / `load` 一直不来）
  *
  * ## 搬迁纪律（这一片**零行为变化**）
@@ -28,8 +28,11 @@
  *    **当时**的 `map` 递进来 —— 与原实现读到的时刻**完全一致**（同一个同步点）。
  *
  * ## S2 没搬的（照实留痕）
- * · `drawContours` 目前**没有任何调用点**（宿主里只有定义处 + 一处注释提到它）；
- *   本片照样整块搬过来，一个字没改 —— 它是死代码这件事**不在本片处理**（§3 把删死代码排在 S9）。
+ * · （S9b2 已删）`drawContours`：搬过来之前就**没有任何调用点**（宿主里只有定义处 + 一处注释提到它），
+ *   S2 按"只搬不改"整块搬了过来；2026-10-05 复核 src 侧仍是零消费者 ⇒ 连同它独用的那 7 个
+ *   `@/composables/wsContour` 导入与 return 里的一处一起删掉。**活的等高线层在另一条路上**
+ *   （`useWsMapLibre.ts` 的 `ML_CONTOUR_LAYER = "ws-ml-contour-l"`），与这里那个 `dem-line` 不是同一个 id
+ *   —— 契约读数因此会少 1，闸里按"集合差恰好是 `dem-line`"如实申报，不是放松。
  * · `renderKind` / `fallbackWhy` / `fallbackKind` 这些**状态**仍留在宿主（M8/M9 的地盘），
  *   本模块只读它们、不改它们的所有权。
  */
@@ -37,15 +40,6 @@
 import { aiFeatures } from "./wsAiLayers";
 import { decorateBuildings, renderHeight } from "./wsBuildingLook";
 import { districtStyleOf, dressBase } from "./wsDistrictScene";
-import {
-  DEM_TILE_SIZE,
-  DEM_TILE_Z,
-  contourFeatureCollection,
-  demTileUrl,
-  lngLatToTile,
-  readDemGrid,
-  tileContours,
-} from "@/composables/wsContour";
 import type { BldFeature } from "./wsBuildingSources";
 import type { BldMapLike, Fallback2dCtx } from "./wsStageTypes";
 
@@ -372,77 +366,6 @@ export function createFallback2d(ctx: Fallback2dCtx) {
   }
 
   /**
-   * 取中心那张 DEM 瓦片 → 算等高线 → 挂成一层线（放在楼房**之下**，不抢主体）。
-   * ⚠️ 失败一律如实写进 HUD 的 note，**不画假等高线**；`stats.contour` 记 -1。
-   */
-  async function drawContours(m: {
-    getCenter(): { lng: number; lat: number };
-    getSource(id: string): { setData(d: unknown): void } | undefined;
-    getLayer(id: string): unknown;
-    addSource(id: string, spec: Record<string, unknown>): void;
-    addLayer(spec: Record<string, unknown>, beforeId?: string): void;
-  }): Promise<void> {
-    try {
-      const c = m.getCenter();
-      const t = lngLatToTile(c.lng, c.lat, DEM_TILE_Z);
-      const tx = Math.floor(t.x);
-      const ty = Math.floor(t.y);
-      const grid = await readDemGrid(demTileUrl(DEM_TILE_Z, tx, ty));
-      const feats = tileContours({
-        grid,
-        w: DEM_TILE_SIZE,
-        h: DEM_TILE_SIZE,
-        z: DEM_TILE_Z,
-        tx,
-        ty,
-        interval: 20,
-        maxLevels: 40,
-      });
-      if (!feats.length) {
-        stats.contour = 0;
-        return;
-      }
-      const data = contourFeatureCollection(feats);
-      const src = m.getSource("dem");
-      if (src) {
-        src.setData(data);
-      } else {
-        m.addSource("dem", { type: "geojson", data });
-        /* ⚠️ `addLayer(spec, beforeId)` 里的 beforeId **不存在会直接抛**
-           （`Layer with id "bld-ext" does not exist`）。
-           而"这一带没有楼房"时 `bld-ext` 根本不会被建出来（涪陵实测 400m 就是 0 栋）
-           ⇒ 等高线会连带整层失败、HUD 只显示"等高线不可用"。
-           所以这里**逐级回退**：楼 → 注记层 → 直接追加。 */
-        const before = m.getLayer("bld-ext") ? "bld-ext" : m.getLayer("ref") ? "ref" : undefined;
-        m.addLayer(
-          {
-            id: "dem-line",
-            type: "line",
-            source: "dem",
-            paint: {
-              /* 每整 100m 计曲线加粗提亮（地形图惯例：一眼读数） */
-              "line-color": [
-                "case",
-                ["==", ["%", ["get", "ele"], 100], 0],
-                "#ffd28a",
-                "rgba(121, 217, 255, 0.55)",
-              ],
-              "line-width": ["case", ["==", ["%", ["get", "ele"], 100], 0], 1.2, 0.5],
-              "line-opacity": 0.8,
-            },
-          },
-          before
-        );
-      }
-      stats.contour = feats.length;
-    } catch (e) {
-      stats.contour = -1;
-      const why = String((e as Error)?.message || e).slice(0, 24);
-      stats.note = stats.note ? `${stats.note} · 等高线取不到` : `等高线取不到（${why}）`;
-    }
-  }
-
-  /**
    * 兜底：放弃地图库，改用 Canvas2D 画俯视图 + DOM 钉子画人。
    *
    * **三条路共用一份**（无 WebGL / 地图库加载失败 / **地图库起来了但 `load` 一直不来**）：
@@ -532,5 +455,5 @@ export function createFallback2d(ctx: Fallback2dCtx) {
     maybeAppSelfShot("fallback2d", why || "未说明原因");
   }
 
-  return { ALLOW_2D, styleNow, bboxOfGeometry, classify, dressBld, draw2d, drawContours, fallback2d };
+  return { ALLOW_2D, styleNow, bboxOfGeometry, classify, dressBld, draw2d, fallback2d };
 }

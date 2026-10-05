@@ -1,0 +1,98 @@
+name: 世界模拟·轻量检查
+
+# 这份工作流只回答一个问题：**我们的代码能不能编译**。
+#   · 类型：`vue-tsc --noEmit --skipLibCheck`（本地每次改动都会跑，但 CI 是干净环境）
+#   · 前端产物：`vite build`
+#   · Rust：`cargo check --all-targets`（含测试目标 ⇒ 测试代码也一起过一遍类型/借用检查）
+# 刻意**不碰 Android SDK / NDK / Gradle**：那套在一台干净的 runner 上要几分钟装、还依赖上游 action
+# 是否跟上 runner 镜像（2026-10-05 就栽过一次：`android-actions/setup-android` 默认要装 `tools`，
+# 而新镜像的 SDK 仓库已经没有这个包 ⇒ 那一步失败、整条 APK 构建被 skip）。要真产物看 `map-apk.yml`。
+#
+# 触发：push 到开发分支 / 手动。`paths` 只放在会影响的目录上，改文档不会白跑一次。
+on:
+  push:
+    branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'public/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.*'
+      - 'tsconfig*.json'
+      - '.github/workflows/world-map-check.yml'
+  workflow_dispatch:
+
+# 同一分支连推时只保留最后一次，省 runner
+concurrency:
+  group: world-map-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 不拉 LFS：这一步只做编译检查，素材真不真不影响 `vue-tsc` / `vite build` / `cargo check`
+          # （要真素材的构建走 map-apk.yml，那边有 `lfs: true` 和"确认 LFS 素材是真的"那一步）
+          lfs: false
+
+      # 必须用 `pnpm/setup@v1`：仓库 `package.json` 里写了 `packageManager: pnpm@11.21.0`，
+      # 再给别的 action 指定版本会报「Multiple versions of pnpm specified」直接挂。
+      # 它顺带把 Node 也装好（与官方工作流一致）。
+      - uses: pnpm/setup@v1
+        with:
+          runtime: node@26
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: 安装 Linux 依赖（Tauri 的 cargo check 需要）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libpipewire-0.3-dev \
+            libspa-0.2-dev \
+            libgbm-dev \
+            libegl1-mesa-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxtst-dev \
+            libwayland-dev \
+            patchelf
+
+      - name: 装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查（vue-tsc）
+        run: npx vue-tsc --noEmit --skipLibCheck
+
+      - name: 前端打包（vite build）
+        run: npx vite build
+
+      - name: Rust 类型/借用检查（含测试目标）
+        run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml

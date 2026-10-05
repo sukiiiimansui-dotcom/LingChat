@@ -137,7 +137,15 @@ jobs:
           distribution: zulu
           java-version: '21'
 
+      # ⚠️ 2026-10-05：**必须显式覆盖 `packages`**。该 action 的默认值是
+      # `tools platform-tools`，而新 runner 镜像（ubuntu24/20260927.320）的 SDK 仓库里
+      # **已经没有 `tools` 这个包** ⇒ `sdkmanager --install tools` 报
+      # `Warning: Failed to find package 'tools'` ⇒ action 退出码 1，后面 11~20 步
+      # （含「构建 APK」）**全被 skip**（run 37302533531 就是这么挂的；09-13 能过是因为旧镜像还认它）。
+      # 我们本来就有自己的 `sdkmanager "ndk;28.2.13676358"` 步骤，`tools` 不是必需品。
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       # ── NDK 缓存：每次要下 ~1GB，官方工作流都没缓存 ──────────────────────
       - name: 缓存 NDK

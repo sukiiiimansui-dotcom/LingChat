@@ -59,7 +59,7 @@ import type { WsMapTheme } from "./wsMapTheme";
 /* S3（M8/M1）的注入面要用到的形状 —— **只 import type**（编译后不留运行时痕迹 ⇒ 不拉依赖） */
 import type { BundleBuildingFeature, BundleFeed, BundleFeedFacts, BundlePlaceFeature, BundleRoadFeature, BundleFetch } from "./wsOfflineFeed";
 import type { GwLayer } from "./wsGwLayer";
-import type { joyGateOf } from "./wsJoystick";
+import type { JoyCamSnapshot, JoyMotion, JoyPxScale, RoamStore, joyGateOf } from "./wsJoystick";
 import type { NameLayer, NameRenderNode } from "./wsNameLayer";
 /* S7（M7）的注入面要用到的形状 —— 同上（只 import type）：`WsDistrictPin` 是
    `pinEl` / `props.markers` 的元素形状（真源 `wsActors`）。 */
@@ -71,6 +71,8 @@ import type { FeatureStore } from "./wsFeatureStore";
    `RoadSeg`（路的吸附段）、`BldFeature`（上妆那两个函数的入参形状）。 */
 import type { ThemeTier } from "./wsDistrictScene";
 import type { RoadSeg } from "./wsSnap";
+/* S11：`scene-ready` 的 payload 里那个取名点取值器（真源 `wsDaily`，宿主就是从那 import 的）。 */
+import type { PlacePoint } from "./wsDaily";
 import type { BldFeature } from "./wsBuildingSources";
 
 /** 宿主 `stats`（`reactive({…})`）里 M6 读写的那些字段 —— **只列用到的**。
@@ -625,4 +627,113 @@ export interface EngineGuardCtx {
   setRecoverTimer(v: number): void;
   /** 🔴 宿主那面 `sawRender` 旗（`m.on("render")` 在写；看门狗"别只看时间"就靠它） */
   sawRenderNow(): boolean;
+}
+
+/* ══ S11（`wsStageEvents`）的注入面 ═══════════════════════════════════════════════════════
+ * 与 S2~S7 同一套落法（宿主构造 ctx → 工厂里解构一次 ⇒ 回调体除别名之外一个字节都不用动）。
+ * 本片消费的是**宿主 `onMounted` 里那一串地图事件接线**，形状上有一处别处没有的特点：
+ * `fc` / `seat` / `districtBbox` / `districtFeat` / `maplibregl` 是 `onMounted` 的局部量
+ * （setup 作用域够不到）⇒ 装配点在 `onMounted` 里，而且它们按**值**递进来 —— 都是那个 `try`
+ * 之后**定稿**的量；走取值器会让 `if (fc?.features?.length)` 那处的 TS 窄化丢掉（TS18047），
+ * 就得往被搬走的正文里加一行 `const fc = fcNow();`。理由逐条写在 `wsStageEvents.ts` 文件头。
+ * 别名逐类可数（处数也在那边）：`alive` / `joyActive` / `watchdog` → 取值器；
+ * `sawRender` → 写入器；`bldTimer` / `zoomNameTimer` → 取值器 + 写入器。
+ * ⚠️ 字段只许按"真实调用点倒逼"增加（与 S1~S7 同一条纪律）。
+ */
+
+/** S11（地图事件接线）要用的宿主状态与函数。 */
+export interface StageEventsCtx {
+  /** 只用到 `joy`（`load` 里填"没有摇杆时的机位"快照与建摇杆会话的判据） */
+  props: { joy: boolean };
+  /** HUD（错误原文写 `note`；`mode` / `view` 那两格也在 `load` 里写） */
+  stats: StageStats;
+  /** 装载阶段（`load` 收尾写 `done`；真源仍在宿主） */
+  phase: Ref<string>;
+  /** `scene-ready` 的出口（把地图与真楼栋交给外层；签名与宿主 `defineEmits` 逐字一致） */
+  emit(e: "scene-ready", payload: { map: unknown; buildings: { features?: unknown[] } | null; places?: () => readonly PlacePoint[] }): void;
+  /** 地图库错误原文（**共享数组**：那条"只记不改"的 `error` 监听在 push） */
+  mapErrs: string[];
+  /** 本次取楼结果（`try` 里定稿、装配点之后再没人改 ⇒ 按值递进来） */
+  fc: { features?: BldFeature[]; error?: string } | null;
+  /** 行政区驻地（同上） */
+  seat: { lng: number; lat: number } | null;
+  /** 区县 bbox（同上） */
+  districtBbox: [number, number, number, number] | null;
+  /** 区县几何（同上；`load` 里那段已停用的边界图层在判空） */
+  districtFeat: { geometry?: { type?: string; coordinates?: unknown }; properties?: Record<string, unknown> } | null;
+  /** 动态 import 到的地图库本体（`load` 里要它的 `LngLatBounds`；`mlMod` 那份真源仍在宿主） */
+  maplibregl: any;
+  /** 初始俯角（`fitBounds` / `jumpTo` 用；真源在 M1） */
+  initPitch: ComputedRef<number>;
+  /** 没有摇杆时该有的俯角（填还原快照用） */
+  basePitch: ComputedRef<number>;
+  /** 近景分流判据（`load` 里决定要不要把漫游会话建起来） */
+  joyGate: ComputedRef<ReturnType<typeof joyGateOf>>;
+  /** 侧视角护栏（真源 `wsScene`；`pitch` 每变一次重设一次） */
+  applyPitchGuard(m: any): void;
+  /** M1 的三个相机 handler（`movestart` / `move` / `moveend`） */
+  onMoveStart(): void;
+  onMove(): void;
+  onMoveEndNames(): void;
+  /** M7 的点选入口（`click`） */
+  onMapClick(e: { point?: { x: number; y: number }; lngLat?: { lng: number; lat: number }; features?: unknown[] }): void;
+  /** M4 的名字层出口（`moveend` / `zoomend` 各一次） */
+  reprojectNow(): void;
+  refreshNames(why?: string): Promise<void>;
+  /** M8 的离线包补格（`load` / `moveend`） */
+  refreshBundles(why?: string): Promise<void>;
+  /** M8 的进度条（`load` 里收尾） */
+  stopTimer(): void;
+  /** M7 的钉子总同步（`load` 收尾一次） */
+  syncPins(): void;
+  /** 📍 屏外指示（`load` 里量一次几何；三个相机钩子各同步一次） */
+  pinEdgeMeasure(): void;
+  pinEdgeSync(): void;
+  /** M2 的按视野取数（`load` 与 `moveend`） */
+  loadBuildingsForView(m: BldMapLike): Promise<void>;
+  loadRoadsForView(m: BldMapLike): Promise<void>;
+  loadFacilities(m: BldMapLike): Promise<void>;
+  /** 署名（ODbL）随数据一起显示 */
+  loadBundleAttribution(): Promise<void>;
+  /** M3 的累积仓库与落图通路（`load` 把 live 首批并进去） */
+  bldStore: FeatureStore<BundleBuildingFeature>;
+  bldFlush(why: string): void;
+  /** 跨过立体/足迹分界线 ⇒ 重挑一次（`zoomend`） */
+  bldTierCrossedFlush(): void;
+  /** offline-first 的结论（`moveend` 决定要不要现场取数） */
+  bldLive: { live: boolean };
+  roadsLive: { live: boolean };
+  /** 🏠「我的家」的取名点取值器（随 `scene-ready` 一起递出去） */
+  placesGetter(): readonly PlacePoint[];
+  /** 代拍 / App 自拍（`load` 里各一次） */
+  selfShotArmed(): boolean;
+  runSelfShot(m: any): void;
+  maybeAppSelfShot(kind: "webgl" | "fallback2d", why?: string): void;
+  /** M5 的摇杆会话（`load` 里量标尺、写位置真源） */
+  joyCalibrate(): void;
+  joyApplyRoam(mv: JoyMotion): void;
+  joyReadCam(): JoyCamSnapshot | null;
+  prevCamNow(): JoyCamSnapshot | null;
+  setPrevCam(cam: JoyCamSnapshot | null): void;
+  originNow(): { lng: number; lat: number } | null;
+  moveNow(): JoyMotion;
+  /** 屏幕 px → 经纬度那把尺子（`null` = 还没量到 ⇒ `load` 里补量一次；判据是 `!scaleNow()`） */
+  scaleNow(): JoyPxScale | null;
+  roamStore: RoamStore;
+  /** M1 的底盘尺寸（建图那一刻量一次） */
+  joyMeasureVh(): void;
+  /** 🔴 宿主那面 `alive` 旗的取值器（卸载后异步路要早退；每处现读，不许冻在入口） */
+  aliveNow(): boolean;
+  /** 🔴 宿主那个 `let joyActive` 的取值器（摇杆自持标志；8 处早退每处现读） */
+  joyActiveNow(): boolean;
+  /** 🔴 宿主那面 `sawRender` 旗的**写入器**（`m.on("render")` 是它唯一的写者） */
+  setSawRender(v: boolean): void;
+  /** 🔴 宿主那个 `let watchdog` 的取值器（`load` 里 `clearTimeout` 要读**当时**那一份） */
+  watchdogNow(): number;
+  /** 🔴 宿主那个 `let bldTimer`（`onBeforeUnmount` 要 clearTimeout）—— 取值器 + 写入器 */
+  bldTimerNow(): number;
+  setBldTimer(v: number): void;
+  /** 🔴 宿主那个 `let zoomNameTimer`（同上）—— 取值器 + 写入器 */
+  zoomNameTimerNow(): number;
+  setZoomNameTimer(v: number): void;
 }

@@ -94,5 +94,13 @@ jobs:
       - name: 前端打包（vite build）
         run: npx vite build
 
+      - name: 生成 Tauri 桌面前置资源
+        # `src-tauri/.bundled_resources/` 是 gitignore 的构建产物，平时由 `tauri.conf.json` 的
+        # `beforeBuildCommand` 生成 —— 而**纯 `cargo check` 不会跑它**。少了它，Tauri 的 build script
+        # 会直接失败（实测：`resource path '.bundled_resources/data_manifest.json' doesn't exist`
+        # ⇒ `failed to run custom build command for ling_chat v0.5.2` ⇒ 退出码 101）。
+        # 本地也是这么跑的（`package.json` 的 `init` 脚本里就有这一步）。
+        run: node scripts/prepare-desktop-resources.mjs
+
       - name: Rust 类型/借用检查（含测试目标）
         run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml

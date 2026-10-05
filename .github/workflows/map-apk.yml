@@ -49,7 +49,10 @@ on:
   # ② `workflow_dispatch`：等这个文件随 PR 进了 `dev`/`main` 之后就能手动触发了
   #    （那时也能用 `profile` 选 fast / release）。现在留着不碍事。
   push:
-    branches: ['feat/world-map', 'feat/world-map-**']
+    # 2026-10-05：开发线早就搬到 `feat/worldsim`（fork 的默认分支）了，而这里只认
+    # `feat/world-map*` ⇒ 从 S1 到 S13 十几个提交一次构建都没触发过（实测 runs 里最新还是 09-13）。
+    # 把当前开发分支加进来：推送即构建，别再让代码只靠本地 `vue-tsc` / `vite build` 兜着。
+    branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
     paths:
       - 'src/**'
       - 'src-tauri/**'

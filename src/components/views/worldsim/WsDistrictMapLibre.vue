@@ -322,6 +322,12 @@
      `onMounted` 局部量；注册点与顺序**逐字留在原地**，理由在模块文件头）。
      ⚠️ 宿主里空出来的 import 按 §3 第 5 条一行都不删，清理归 S9。 */
   import { createStageEvents } from "./wsStageEvents";
+  /* 🧱 重构切片 S13：**屏外角色箭头**那一族（量容器几何 + 安全区探针 / 躲三块禁区 /
+     每颗钉子算一次屏幕点 / 只在变了才写 DOM）整块搬到了 `wsPinEdgeStage.ts`
+     （装配点在 `roadLayerSpecsForMap` 之后 —— ctx 要按值收 `host` 与 `pins`，理由写在那一段）。
+     ⚠️ 纯函数 `wsPinEdge.ts` 仍是算术的**唯一真源**（新模块只 import，不抄第二份）；
+     宿主里因此空出来的 import 按 §3 第 5 条**一行都不删**，清理归 S9。 */
+  import { createPinEdgeStage } from "./wsPinEdgeStage";
   /* ⚠️ 上面这几条 import 里有 9 个名字**在本切片之后暂时没有消费者了**（它们的唯一用途跟着 M2 走了）：
      `facilitiesAuto` · `mergeBuildingSources` · `shouldAskSecondSource` · `hash32` · `roadStatsLine` ·
      `toXY` · `toLngLat` · `fetchRadiusLadder` · `WS_FETCH_R_BACKEND_MAX`。
@@ -1157,167 +1163,23 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     return roadLayerSpecs(theme.value.road);
   }
 
-  /* ══════════ 📍 **屏外方向指示**（2026-10-04 第七条）══════════════════════════════════
-     机主原话：「**为什么其他角色不见了喵**，放大到最大后楼就没了喵」（前半句归本段）；他自己点的方案：
-     「**屏外加方向指示（小箭头 + 距离）**」。病根：角色钉子走地图库 `Marker` ⇒ **出了视口就是真的没有**。
-
-     ## 三个"只在变了才写"（与 `joyAimWrite` 同款；写点数**可数**，写在这里备查）
-       · 一颗钉子从"屏内"翻到"屏外"（或翻回来）⇒ **1 次 class 写**（`is-off`），显隐交给 CSS 过渡；
-       · 屏外时每轮：**≤2 次 `transform`**（容器位移 + 箭头 `rotate`）+ **≤1 次 `textContent`**（距离文案）；
-         三者的合成串（`edgeKey`）**没变就一次都不写** —— 相机不动时稳态是 **0 次/轮**。
-       · 屏内时：**0 次**（只有翻转那一轮那 1 次 class）。
-     ## 时点：跟着**相机事件**走（`move` / `moveend` / `zoom`），**不在 rAF 里**（红线：不进每帧循环）
-       · 摇杆推着的时候与其它 handler 一样**早退**（`joyActive`）—— 拉近期间整层都在早退，
-         收尾由 `onJoyHalt()` 那**恰好一次**重算带上（与名字层同一套时点，判据 3/6 的红线）；
-       · 新钉子建出来时（`syncPins` 末尾）与容器尺寸变化时（resize）各补一次。
-     ## 几何：**只在挂载 / resize 量一次**（读 `clientWidth` 是强制布局，红线）
-       · 安全区（刘海/手势条）用 `env(safe-area-inset-*)` 探针量一次 ⇒ 折成一个**内缩后的子矩形**，
-         再把结果平移回去（纯函数只认一个标量 margin ⇒ 这里做的是仿射平移，**不是第二份几何**）；
-       · 三块禁区（HUD 让位带 / 📱 / 🔬）用摇杆那一份 `joyHomeBoxesOf()`（**同一份矩形、同一个间距**
-         `PIN_EDGE_MIN_GAP_PX = JOY_GAP_PX`）⇒ 箭头绝不会压在 HUD 上。 */
-  /** 📍 开关（**默认开**）：唯一的关法是 `?edge=0`（与 `?names=0`/`?joy=0` 同一族写法） */
-  const pinEdgeOn = ref(!/[?&]edge=0\b/.test(String(typeof location !== "undefined" ? location.search : "")));
-  /** 量一次就缓存：容器 CSS 尺寸 + 四边安全区（`measured=false` ⇒ 数不出来，一颗箭头都不写） */
-  const pinEdgeGeom = { w: 0, h: 0, l: 0, t: 0, r: 0, b: 0, measured: false };
-  /** `env(safe-area-inset-*)` 探针：读**一次**就拆掉（量不到 ⇒ 四边 0，与"没有刘海"同义） */
-  function pinEdgeInsetsOf(): { l: number; t: number; r: number; b: number } {
-    const zero = { l: 0, t: 0, r: 0, b: 0 };
-    try {
-      const probe = document.createElement("div");
-      probe.style.cssText =
-        "position:absolute;left:-9999px;top:0;width:0;height:0;visibility:hidden;" +
-        "padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);";
-      (host.value || document.body).appendChild(probe);
-      const cs = getComputedStyle(probe);
-      const v = {
-        t: parseFloat(cs.paddingTop) || 0,
-        r: parseFloat(cs.paddingRight) || 0,
-        b: parseFloat(cs.paddingBottom) || 0,
-        l: parseFloat(cs.paddingLeft) || 0,
-      };
-      probe.remove();
-      return v;
-    } catch {
-      return zero;   /* 读不出来 ⇒ 当"没有安全区"（**不改**任何其它判定；不是把"数不出来"写成别的数） */
-    }
-  }
-  function pinEdgeMeasure(): void {
-    const el = host.value;
-    const w = el?.clientWidth || 0;
-    const h = el?.clientHeight || 0;
-    if (w <= 0 || h <= 0) return;             /* 量不到 ⇒ 保持 `measured=false`（数不出来，不编坐标） */
-    const ins = pinEdgeInsetsOf();
-    pinEdgeGeom.w = w;
-    pinEdgeGeom.h = h;
-    pinEdgeGeom.l = ins.l;
-    pinEdgeGeom.t = ins.t;
-    pinEdgeGeom.r = ins.r;
-    pinEdgeGeom.b = ins.b;
-    pinEdgeGeom.measured = true;
-  }
-  /**
-   * 把一个点从三块禁区里**往上推**出去（与摇杆的"家"同一套矩形、同一个间距 ⇒ 不会打架）。
-   * 为什么是"往上推"：三块禁区全部贴在**下缘**（HUD / 📱 / 🔬），推一次就走开。
-   * 推完仍夹回安全矩形 —— 返回的点一定在屏内（含边）。
-   */
-  function pinEdgeAvoid(x: number, y: number): { x: number; y: number } {
-    const G = pinEdgeGeom;
-    const loX = G.l + PIN_EDGE_MARGIN_PX, hiX = G.w - G.r - PIN_EDGE_MARGIN_PX;
-    const loY = G.t + PIN_EDGE_MARGIN_PX, hiY = G.h - G.b - PIN_EDGE_MARGIN_PX;
-    let px = Math.max(loX, Math.min(hiX, x));
-    let py = Math.max(loY, Math.min(hiY, y));
-    const boxes = joyHomeBoxesOf(G.w, G.h);
-    for (let pass = 0; pass < 4; pass++) {
-      let hit = false;
-      for (const b of boxes) {
-        const inside = px > b.l - PIN_EDGE_MIN_GAP_PX && px < b.r + PIN_EDGE_MIN_GAP_PX &&
-          py > b.t - PIN_EDGE_MIN_GAP_PX && py < b.b + PIN_EDGE_MIN_GAP_PX;
-        if (!inside) continue;
-        py = b.t - PIN_EDGE_MIN_GAP_PX;
-        hit = true;
-      }
-      if (!hit) break;
-      py = Math.max(loY, Math.min(hiY, py));
-    }
-    return { x: px, y: py };
-  }
-  /**
-   * 📍 **一轮**：每颗"别人"的钉子算一次屏幕点 ⇒ 屏外画边缘箭头 + 距离，回到屏内就藏起来。
-   * 规则（夹取/角度/文案）全在纯函数 `wsPinEdge.ts`；这里只做三件事：投影、写 DOM、**只在变了才写**。
-   */
-  function pinEdgeSync(): void {
-    if (!pinEdgeOn.value) return;
-    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
-    if (!m || typeof m.project !== "function") return;
-    if (!pinEdgeGeom.measured) return;        /* 容器还没量过 ⇒ 数不出来（不编坐标、不写 DOM） */
-    const G = pinEdgeGeom;
-    const vw = G.w - G.l - G.r;
-    const vh = G.h - G.t - G.b;
-    /* 相机中心**一轮读一次**（距离那一行要用它；不是每颗钉子读一次相机） */
-    let cLng = NaN, cLat = NaN;
-    try {
-      const c = (map as unknown as { getCenter?: () => { lng: number; lat: number } } | null)?.getCenter?.();
-      cLng = Number(c?.lng);
-      cLat = Number(c?.lat);
-    } catch {
-      cLng = NaN; cLat = NaN;
-    }
-    for (const p of pins) {
-      const edge = p.edge;
-      /* 「我」那颗钉子**没有这三个节点**（相机跟着他，"屏外"对他没意义 —— 机主点的是"其他角色"） */
-      if (!edge || !p.edgeArrow || !p.edgeDist) continue;
-      let px = NaN, py = NaN, lng = NaN, lat = NaN;
-      try {
-        const ll = p.mk.getLngLat ? p.mk.getLngLat() : null;
-        lng = Number(ll?.lng);
-        lat = Number(ll?.lat);
-        const q = m.project([lng, lat]);
-        px = Number(q?.x);
-        py = Number(q?.y);
-      } catch {
-        px = NaN; py = NaN;
-      }
-      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;   /* 数不出来 ⇒ 这一颗本轮一个字都不写 */
-      /* 折算进"安全子矩形"再交给纯函数（仿射平移：先减左上安全区，算完再加回去） */
-      const r = pinEdgeOf({ x: px - G.l, y: py - G.t }, { w: vw, h: vh });
-      if (r.note) continue;
-      if (!r.off) {
-        /* 屏内：**只翻转一次 class**（显隐交给 CSS 过渡），位置/角度一个字都不写 */
-        if (p.edgeKey !== "off") {
-          p.edgeKey = "off";
-          edge.classList.remove("is-off");
-        }
-        continue;
-      }
-      const at = pinEdgeAvoid(r.ex + G.l, r.ey + G.t);
-      const rot = pinEdgeRotateDegOf(r.angleDeg);
-      const text = pinDistText(pinEdgeMetersOf(lng, lat, cLng, cLat));
-      const key = "1|" + at.x.toFixed(1) + "|" + at.y.toFixed(1) + "|" + rot.toFixed(1) + "|" + text;
-      if (key === p.edgeKey) continue;         /* 三个写点全都一样 ⇒ 这一轮 **0 次** DOM 写 */
-      p.edgeKey = key;
-      edge.classList.add("is-off");
-      edge.style.transform =
-        `translate3d(${(at.x - px).toFixed(1)}px, ${(at.y - py).toFixed(1)}px, 0) translate(-50%, -50%)`;
-      p.edgeArrow.style.transform = `rotate(${rot}deg)`;
-      if (p.edgeDist.textContent !== text) p.edgeDist.textContent = text;
-    }
-  }
-  /**
-   * 📏 **"离我多远"**：相机中心 → 这一颗钉子的**地面米数**（纯算术，与挑楼那把尺子同一对常数
-   * `111320·cos(lat)` / `110540`；**一次投影都不做** —— 两个点本来就是经纬度）。
-   *
-   * 口径：相机锁着「我」（近景那条口径）⇒ 中心就是「我」；两者不重合时以**相机中心**为准
-   *   —— 这行字答的是"屏幕上那颗箭头指的那个人，离你现在看的地方多远"。
-   * 三态：任一输入不是有限数 ⇒ `null` ⇒ 文案写「—」（**不许**写 `0 m` 冒充"就在我脚下"）。
-   */
-  function pinEdgeMetersOf(lng: number, lat: number, cLng: number, cLat: number): number | null {
-    if (![lng, lat, cLng, cLat].every((v) => Number.isFinite(v))) return null;
-    const lat0 = (lat + cLat) / 2;
-    const dx = (lng - cLng) * 111320 * Math.cos((lat0 * Math.PI) / 180);
-    const dy = (lat - cLat) * 110540;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    return Number.isFinite(d) ? d : null;
-  }
+  /* ══ 🧱 重构切片 S13：**屏外角色箭头**那一族的装配 ═══════════════════════════════════
+     实现整块在 `wsPinEdgeStage.ts`（锚点 = 函数名，不按行号；机制的逐条注释在那边）。
+     为什么装配点就在这儿：它要 `host`（:733 的 ref）与 `pins`（:1004 的 `let`），两者在上面都已声明；
+     本工厂**只定义函数、装配那一刻一次都不调** ⇒ `map` 此刻是不是 null 与本处无关
+     （`mapNow()` 是取值器，真调用发生在建图之后）。
+     ⚠️ 宿主那面 `pins` / `map` 是 `let`（新增/移除钉子、建图/销毁都会重写）⇒ 一律给**取值器**，
+     真源仍只有宿主那一份（与 S6 的 `setRoadSegs` / S7 的取值器同一条落法）。
+     🔴 `pinEdgeMeasure` / `pinEdgeSync` 现在是 **M7 / M9 / M11 / M5 的 ctx 的一部分** ——
+     下面解构出来的就是**同一个函数**（本模块是唯一实现，没有第二份），再往下传给它们。 */
+  const pinEdgeStage = createPinEdgeStage({
+    host,
+    pinsNow: () => pins,
+    mapNow: () => map,
+  });
+  /* 解构名与原闭包变量**同名** ⇒ 宿主里所有调用点（`syncPins` 末尾 / resize 自证 / 四个下游 ctx）
+     一个字都没改。 */
+  const { pinEdgeInsetsOf, pinEdgeMeasure, pinEdgeAvoid, pinEdgeSync, pinEdgeMetersOf } = pinEdgeStage;
 
   /* 人变了就同步一次（`placed` 每次 load 会换新数组，浅层 watch 就够） */
   watch(

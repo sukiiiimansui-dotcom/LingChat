@@ -737,3 +737,25 @@ export interface StageEventsCtx {
   zoomNameTimerNow(): number;
   setZoomNameTimer(v: number): void;
 }
+
+/* ══ S13（`wsPinEdgeStage`）的注入面 ═══════════════════════════════════════════════════
+ * 📍 屏外角色箭头那一族（`pinEdgeOn` / `pinEdgeGeom` / `pinEdgeInsetsOf` / `pinEdgeMeasure` /
+ * `pinEdgeAvoid` / `pinEdgeSync` / `pinEdgeMetersOf`）要用的宿主状态。与 S2~S11 同一套落法：
+ * 宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体除两处别名外**一个字节都不动**（对拍闸守着）。
+ *
+ * ⚠️ 三条纪律（与上面几片同源）：
+ * ① **形状的说明书，不是第二份实现**：`pins` 的真源永远是宿主那个 `let`（M7 会重新赋值）；
+ * ② **字段只许按"真实调用点倒逼"增加**；
+ * ③ `pinEdgeOn`（`?edge=0` 开关）与 `pinEdgeGeom`（量一次就缓存的几何）**不在这里** ——
+ *    它们只有这一族读写（宿主一个读者都没有）⇒ 连声明一起搬进模块，不是第二份真源。
+ */
+export interface PinEdgeStageCtx {
+  /** 底板元素（唯一的几何来源：`clientWidth/clientHeight` 与安全区探针的挂点；容器节点是同一个，
+   *  `ref` 本身按值递进来，宿主不会换掉它） */
+  host: Ref<HTMLElement | null>;
+  /** 🔴 宿主那个 `let pins` 的**取值器**（新增/移除钉子都会重写它 ⇒ 不许解构快照；
+   *  `pinEdgeSync` 函数体首行现读一次，全程同步 ⇒ 与逐处现读逐条等价） */
+  pinsNow(): StagePin[];
+  /** 🔴 宿主那个 `let map` 的**取值器**（同上；`pinEdgeSync` 体首现读一次） */
+  mapNow(): unknown;
+}

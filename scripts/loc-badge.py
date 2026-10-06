@@ -196,16 +196,35 @@ README_END = "<!-- LOC-BADGE:END -->"
 
 
 def readme_block(per_lang, upstream=None):
-    """首页里那段静态数字（取代原来的 shields 实时徽章）。"""
+    """首页里那段（取代原来的 shields 实时徽章）：一张小表格。
+
+    有官方那棵树时给三列（本仓 / 官方 dev / 净增）；没有就给四列（代码 / 注释 / 空行 / 文件）。
+    """
     total = total_of(per_lang)
-    rust = lang_of(per_lang, "Rust")
-    frontend = lang_of(per_lang, "TypeScript", "Vue")
-    line = (f"**代码量**（不含空行与整行注释）　本仓 **{human(total)}** "
-            f"（Rust {human(rust)} · 前端 TS+Vue {human(frontend)} · 其它 {human(total - rust - frontend)}）")
+
+    def n(x):
+        return f"{x:,}"
+
     if upstream is not None:
-        up = total_of(upstream)
-        line += f"　·　官方 dev **{human(up)}**　·　**净增 {human(total - up)}**"
-    return line
+        up_total = total_of(upstream)
+        langs = sorted(set(per_lang) | set(upstream),
+                       key=lambda k: -max(per_lang.get(k, {}).get("code", 0), upstream.get(k, {}).get("code", 0)))
+        lines = [
+            "| 代码量（不含空行与整行注释） | 本仓 | 官方 `dev` | 净增 |",
+            "|---|---:|---:|---:|",
+        ]
+        for lang in langs:
+            mine = per_lang.get(lang, {}).get("code", 0)
+            up = upstream.get(lang, {}).get("code", 0)
+            lines.append(f"| {lang} | {n(mine)} | {n(up)} | {mine - up:+,} |")
+        lines.append(f"| **合计** | **{n(total)}**（{human(total)}） | **{n(up_total)}**（{human(up_total)}） | **{total - up_total:+,}** |")
+        return "\n".join(lines)
+
+    lines = ["| 代码量（不含空行与整行注释） | 代码 | 注释 | 空行 | 文件 |", "|---|---:|---:|---:|---:|"]
+    for lang, v in sorted(per_lang.items(), key=lambda kv: -kv[1]["code"]):
+        lines.append(f"| {lang} | {n(v['code'])} | {n(v['comment'])} | {n(v['blank'])} | {n(v['files'])} |")
+    lines.append(f"| **合计** | **{n(total)}**（{human(total)}） | | | |")
+    return "\n".join(lines)
 
 
 def write_readme(path, per_lang, upstream=None):

@@ -8,11 +8,21 @@
 [![开发分支](https://img.shields.io/badge/开发分支-feat%2Fworldsim-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
 [![状态](https://img.shields.io/badge/状态-实验性%20·%20尚不完善-orange?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat/issues/858)
 
-<!-- LOC-BADGE:BEGIN（这段由 .github/workflows/loc-badge.yml 每天重写，别手改） -->
-**代码量**（不含空行与整行注释）　本仓 **18.8 万行** （Rust 7.1 万行 · 前端 TS+Vue 9.7 万行 · 其它 2.1 万行）　·　官方 dev **13.3 万行**　·　**净增 5.5 万行**
-<!-- LOC-BADGE:END -->
-
 </div>
+
+<!-- LOC-BADGE:BEGIN（这段由 .github/workflows/loc-badge.yml 每天重写，别手改） -->
+| 代码量（不含空行与整行注释） | 本仓 | 官方 `dev` | 净增 |
+|---|---:|---:|---:|
+| Rust | 70,589 | 55,085 | +15,504 |
+| TypeScript | 48,751 | 31,132 | +17,619 |
+| Vue | 48,273 | 42,136 | +6,137 |
+| HTML | 9,665 | 247 | +9,418 |
+| JavaScript | 5,663 | 924 | +4,739 |
+| CSS | 4,758 | 3,002 | +1,756 |
+| Python | 442 | 461 | -19 |
+| Shell | 84 | 98 | -14 |
+| **合计** | **188,225**（18.8 万行） | **133,085**（13.3 万行） | **+55,140** |
+<!-- LOC-BADGE:END -->
 
 ---
 
@@ -50,9 +60,9 @@ LingChat 的个人实验分支：想给聊天加一层「世界」，让角色�
 
 ## 代码量
 
-上面那行数字由 [`代码量徽章`](.github/workflows/loc-badge.yml) 这个工作流**每天 02:20（UTC+8）重写一次**
+上面那张表由 [`代码量徽章`](.github/workflows/loc-badge.yml) 这个工作流**每天 02:20（UTC+8）重写一次**
 （也可以手动触发）：它用 [`scripts/loc-badge.py`](scripts/loc-badge.py) 数一遍本仓，同时浅克隆官方 `dev` 数一遍官方那份，
-把结果写回上面那段（标记之间，别手改）。想看分语言明细就本地跑：
+把结果写回上面那张表（标记之间，别手改）。想自己复算就本地跑：
 
 ```bash
 python3 scripts/loc-badge.py --upstream <官方仓库的本地路径>   # 不给 --upstream 就只数本仓

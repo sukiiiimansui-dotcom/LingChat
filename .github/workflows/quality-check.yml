@@ -7,17 +7,10 @@ name: 世界模拟·质量报告
 # 触发：push 到开发分支（只认源码路径，改文档/工具不触发）+ 手动。
 # ⚠️ `paths` 里**故意不含** `.ci-reports/**`（如果将来把报告提交回仓，别造成自我循环）。
 on:
-  push:
-    branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
-    paths:
-      - 'src/**'
-      - 'src-tauri/**'
-      - 'crates/**'            # 上游对齐后 Rust 业务模块的新家
-      - 'public/**'
-      - 'scripts/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - '.github/workflows/quality-check.yml'
+  # 2026-10-05：**不吃 push**（主人：「你加的质量报告触发了一半 ci」）—— 质量报告不需要每推必跑，
+  # 改成**每天定时一次 + 手动**。
+  schedule:
+    - cron: '45 17 * * *'   # 每天 01:45（UTC+8）
   workflow_dispatch:
 
 permissions:

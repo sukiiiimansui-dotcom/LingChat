@@ -25,7 +25,8 @@
  *   node scripts/gen-locale-version.mjs --print   只打印算出来的值（JSON，给自检读）
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -41,26 +42,74 @@ const LOCALE_ENTRIES = [
 ];
 
 /**
- * 找 esbuild 可执行文件。
- * 实测（Termux，pnpm 布局）：`node_modules/.bin/esbuild` 与 `npx esbuild` 都不可用，
- * 真的存在的是 pnpm 隐藏提升目录下那一个。
+ * 拿一个**真能跑起来**的 esbuild。
+ *
+ * 🔴 2026-10-06 的教训（三条原生构建在 CI 上一起红，本地却全绿）：
+ * 这里原来 spawn 的是 `node_modules/.pnpm/node_modules/.bin/esbuild` —— 那只是 pnpm 的
+ * **shell 垫片**，它内部是 `node <平台原生二进制>`。本地那份 `esbuild/bin/esbuild` 还是 JS
+ * 垫片（postinstall 没跑），所以"看着能用"；CI 上 postinstall 把它换成了 ELF / Mach-O，
+ * 于是 node 去解析二进制 → `SyntaxError: Invalid or unexpected token`；
+ * Windows 上那个无扩展名垫片**根本不存在** → ENOENT。
+ *
+ * 所以：优先用 esbuild 的 **JS API**（它自己会按平台解析正确的二进制），
+ * 只有在实在 import 不到时才退回「**直接** spawn 平台原生二进制」—— 那是真的可执行文件，
+ * 不是垫片。四条路依次试，全失败就把试过什么原样报出来（下次别再靠猜）。
  */
-function findEsbuild() {
-  const candidates = [
-    path.join(ROOT, "node_modules/.pnpm/node_modules/.bin/esbuild"),
-    path.join(ROOT, "node_modules/.bin/esbuild"),
-  ];
-  for (const c of candidates) if (existsSync(c)) return c;
+async function loadEsbuild() {
+  const tried = [];
+  const rootRequire = createRequire(path.join(ROOT, "scripts", "gen-locale-version.mjs"));
+
+  // ① 依赖被提升到根 node_modules 时最省事
+  try {
+    return { kind: "api", mod: await import("esbuild") };
+  } catch (e) {
+    tried.push(`import("esbuild") → ${e.code || e.message}`);
+  }
+  // ② 按 Node 解析规则从仓库根找包入口
+  try {
+    const entry = rootRequire.resolve("esbuild");
+    return { kind: "api", mod: await import(pathToFileURL(entry).href) };
+  } catch (e) {
+    tried.push(`从仓库根 resolve → ${e.code || e.message}`);
+  }
+  // ③ 借 vite 的位置解析：pnpm 严格布局下 esbuild 是 vite 的依赖，根 node_modules 里没有它
+  try {
+    const entry = createRequire(rootRequire.resolve("vite")).resolve("esbuild");
+    return { kind: "api", mod: await import(pathToFileURL(entry).href) };
+  } catch (e) {
+    tried.push(`借 vite 的位置 resolve → ${e.code || e.message}`);
+  }
+  // ④ 兜底：pnpm 虚拟存储里的平台原生二进制（Windows 上是 esbuild.exe）
+  const bin = findPlatformBinary();
+  if (bin) return { kind: "bin", file: bin };
+
   throw new Error(
-    "找不到 esbuild 可执行文件（试过：\n  " +
-      candidates.join("\n  ") +
-      "\n先 pnpm install，或改本脚本的候选路径）"
+    "找不到可用的 esbuild（依次试过：\n  " +
+      tried.join("\n  ") +
+      "\n  pnpm 虚拟存储里也没有 @esbuild/*/bin/esbuild）\n先 pnpm install 再跑本脚本。"
   );
 }
 
+/** pnpm 虚拟存储里的平台原生二进制（`node_modules/.pnpm/@esbuild+<平台>@<版本>/…`） */
+function findPlatformBinary() {
+  const store = path.join(ROOT, "node_modules/.pnpm");
+  if (!existsSync(store)) return null;
+  const exe = process.platform === "win32" ? "esbuild.exe" : "esbuild";
+  for (const dir of readdirSync(store)) {
+    if (!dir.startsWith("@esbuild+")) continue;
+    const inner = path.join(store, dir, "node_modules", "@esbuild");
+    if (!existsSync(inner)) continue;
+    for (const pkg of readdirSync(inner)) {
+      const p = path.join(inner, pkg, "bin", exe);
+      if (existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
 /** 用 esbuild 打包 + node 实跑，算出与改动前完全同源的版本值 */
-function computeVersion() {
-  const esbuild = findEsbuild();
+async function computeVersion() {
+  const esbuild = await loadEsbuild();
   // /tmp 在 Termux 上不可写 ⇒ 临时文件放 node_modules/.cache（既在仓库内、又不会进 git）
   const tmp = path.join(ROOT, "node_modules/.cache/locale-version");
   rmSync(tmp, { recursive: true, force: true });
@@ -84,10 +133,25 @@ process.stdout.write(JSON.stringify({ version: h.toString(36), chars: s.length }
     "utf8"
   );
 
-  execFileSync(esbuild, [entry, "--bundle", "--format=esm", "--platform=node", `--outfile=${bundle}`, "--log-level=warning"], {
-    cwd: ROOT,
-    stdio: ["ignore", "inherit", "inherit"],
-  });
+  if (esbuild.kind === "api") {
+    // JS API：跨平台不用管垫片/扩展名那套
+    await esbuild.mod.build({
+      entryPoints: [entry],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      outfile: bundle,
+      logLevel: "warning",
+      absWorkingDir: ROOT,
+    });
+  } else {
+    // 兜底路：spawn 的是平台原生二进制本身（不是 .bin 垫片）
+    execFileSync(
+      esbuild.file,
+      [entry, "--bundle", "--format=esm", "--platform=node", `--outfile=${bundle}`, "--log-level=warning"],
+      { cwd: ROOT, stdio: ["ignore", "inherit", "inherit"] }
+    );
+  }
   const out = execFileSync(process.execPath, [bundle], { cwd: ROOT, encoding: "utf8" });
   const parsed = JSON.parse(out);
   rmSync(tmp, { recursive: true, force: true });
@@ -110,7 +174,7 @@ function readCommitted() {
 }
 
 const argv = process.argv.slice(2);
-const { version, chars } = computeVersion();
+const { version, chars } = await computeVersion();
 const committed = readCommitted();
 
 if (argv.includes("--print")) {

@@ -755,7 +755,7 @@ export function buildWorld(city, optsIn = {}) {
     const near = c.near.empty() ? null : c.near.finish();
     if (mid) { midTris += mid.triangleCount; byBucket['chunk.mid'] = (byBucket['chunk.mid'] || 0) + mid.triangleCount; }
     if (near) { nearTris += near.triangleCount; byBucket['chunk.near'] = (byBucket['chunk.near'] || 0) + near.triangleCount; }
-    chunkOut.push({ key: c.key, cx: c.cx, cz: c.cz, mid, near, buildings: c.buildings });
+    chunkOut.push({ key: c.key, i: c.i, j: c.j, cx: c.cx, cz: c.cz, mid, near, buildings: c.buildings });
   }
   const manholeTris = manholes.length * 6;
   const treeTris = trees.reduce((s, t) => s + (t.species === 0 ? 36 : 28), 0);

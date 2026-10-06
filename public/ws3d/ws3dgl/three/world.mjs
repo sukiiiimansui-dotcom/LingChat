@@ -1,7 +1,8 @@
 // world.mjs —— 几何缓冲 → three 对象（材质 / 网格 / 实例化 / LOD 分块）。
 //
 // 分工：build.mjs 只出平铺数组，这里把它变成 BufferGeometry + 材质并挂进场景。
-// **draw call 是这一层的头号 KPI**：每个材质桶一个网格（常显 11 个），细节按 256m 分块（只有近处那几格可见）。
+// **draw call 是这一层的头号 KPI**：每个材质桶一个网格（常显 11 个），细节按"格"分块
+// （格边长取 build.mjs 的真实值 `opts.cell`，默认 256m；只有玩家附近那几格可见，带滞后带）。
 import {
   BufferGeometry, BufferAttribute, Mesh, InstancedMesh, Matrix4, Quaternion, Vector3, Color, Group,
   MeshStandardMaterial, MeshBasicMaterial, PointsMaterial, Points, DoubleSide, FrontSide,
@@ -11,6 +12,76 @@ import {
 } from '../vendor/three.min.js';
 import { buildTextureSet, TILE } from './textures.mjs';
 import { TIERS, GROUND, ACCENT, toRgb, shade } from './palette.mjs';
+
+/**
+ * 分块显隐的**滞后带**（hysteresis）：进用阈值 T，出用 T*hys。
+ * 为什么是 1.12：一个格子 256m，站在阈值线上（真机上就是贴着一条看不见的圈走）时，
+ * 0.35m/帧的抖动会把 T 两侧来回跨 —— 没有滞后就是"一块一块地闪"。12% 的带子在近档
+ * （270m）上是 32m、在中档（640m）上是 77m，够盖住走位的抖动，又不至于"该消失的还赖着"。
+ */
+export const LOD_HYSTERESIS = 1.12;
+
+/**
+ * 分块记录：meshData.chunks（build.mjs 的产物）→ 带 AABB 与可见状态的记录。
+ * **格边长取真的**：`opts.cell` 显式优先，其次读 `buildWorld` 写进 `stats.opts.cell` 的那个数。
+ * （以前这里硬编码 256：build 那边一换 cell，距离这把尺子就悄悄错了，画面上只会看到"开关位置不对"。）
+ * 纯逻辑、不 import three ⇒ `selftest_shimmer.mjs` 能直接在 node 里量翻转次数。
+ */
+export function resolveChunkRecords(meshData, opts = {}) {
+  const fromStats = meshData && meshData.stats && meshData.stats.opts ? Number(meshData.stats.opts.cell) : NaN;
+  const cell = Number(opts.cell) > 0 ? Number(opts.cell) : (fromStats > 0 ? fromStats : 256);
+  const chunks = ((meshData && meshData.chunks) || []).map((c) => {
+    let i = Number.isFinite(c.i) ? c.i : null;
+    let j = Number.isFinite(c.j) ? c.j : null;
+    if (i === null || j === null) {                       // 记录里没带 i/j：退回解析 key（形如 "-2_3"）
+      const m = /^(-?\d+)_(-?\d+)$/.exec(String(c.key));
+      if (m) { i = Number(m[1]); j = Number(m[2]); }
+    }
+    if (i === null || j === null) { i = Math.floor(c.cx / cell); j = Math.floor(c.cz / cell); }
+    return {
+      key: c.key, i, j, cx: c.cx, cz: c.cz,
+      x0: i * cell, z0: j * cell, x1: (i + 1) * cell, z1: (j + 1) * cell,
+      buildings: c.buildings, src: c,
+      mid: null, near: null, midVisible: false, nearVisible: false,
+      wasNear: false, wasMid: false,
+    };
+  });
+  return { cell, chunks };
+}
+
+/** 格子上离这个点最近的那个点（AABB 的 clamp；点在格子里就是它自己） */
+export function closestPointOnChunk(c, px, pz) {
+  return [Math.min(Math.max(px, c.x0), c.x1), Math.min(Math.max(pz, c.z0), c.z1)];
+}
+
+/** 到格子 **AABB** 的距离（点在格子里 = 0）——比"中心距离减 0.707*边长"准：那个是拿对角线钝角当距离用 */
+export function chunkDistanceXZ(c, px, pz) {
+  const q = closestPointOnChunk(c, px, pz);
+  const dx = px - q[0], dz = pz - q[1];
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+/**
+ * 每帧的整格显隐（纯逻辑，不碰 three ⇒ node 里能直接量"翻转次数"）。
+ * 滞回：**进**用 lodNear/lodMid，**出**用 lodNear*hys / lodMid*hys ⇒ 站在阈值线上来回走不再反复开关。
+ * 返回的三档仍然是**楼数**（HUD `#h-lod` 的口径不许变）。
+ */
+export function lodPlan(chunks, px, pz, lodNear, lodMid, detail, out = { near: 0, mid: 0, far: 0 }, hys = LOD_HYSTERESIS) {
+  out.near = 0; out.mid = 0; out.far = 0;
+  for (const c of chunks) {
+    const d = chunkDistanceXZ(c, px, pz);
+    const inNear = !!(detail && d < (c.wasNear ? lodNear * hys : lodNear));
+    const inMid = d < (c.wasMid ? lodMid * hys : lodMid) || inNear;   // "近 ⇒ 中"这条不变式照旧
+    c.wasNear = inNear; c.wasMid = inMid;
+    c.nearVisible = inNear; c.midVisible = inMid;
+    if (c.near) c.near.visible = inNear;
+    if (c.mid) c.mid.visible = inMid;
+    if (inNear) out.near += c.buildings;
+    else if (inMid) out.mid += c.buildings;
+    else out.far += c.buildings;
+  }
+  return out;
+}
 
 /** 几何缓冲 → BufferGeometry（顶点色是必须的：一整条街的色差全靠它） */
 export function toGeometry(buf) {
@@ -178,41 +249,27 @@ export function createWorld(meshData, opts = {}) {
   }
 
   // ── 细节分块（LOD 靠整格显隐）─────────────────────────────────────────────
-  const chunks = [];
-  for (const c of meshData.chunks) {
-    const rec = { key: c.key, cx: c.cx, cz: c.cz, buildings: c.buildings, mid: null, near: null };
-    if (c.mid) {
-      const m = new Mesh(toGeometry(c.mid), materials.prop);
+  const { cell, chunks } = resolveChunkRecords(meshData, opts);
+  for (const c of chunks) {
+    if (c.src.mid) {
+      const m = new Mesh(toGeometry(c.src.mid), materials.prop);
       m.castShadow = true; m.receiveShadow = true; m.matrixAutoUpdate = false; m.updateMatrix();
-      rec.mid = m;
+      c.mid = m;
     }
-    if (c.near) {
-      const m = new Mesh(toGeometry(c.near), materials.prop);
+    if (c.src.near) {
+      const m = new Mesh(toGeometry(c.src.near), materials.prop);
       m.castShadow = true; m.receiveShadow = true; m.matrixAutoUpdate = false; m.updateMatrix();
-      rec.near = m;
+      c.near = m;
     }
-    chunks.push(rec);
   }
 
   const all = [...meshes, ...instanced, ...(glowPoints ? [glowPoints] : []),
     ...chunks.flatMap((c) => [c.mid, c.near].filter(Boolean))];
 
-  /** 每帧：按到玩家的距离整格显隐（不重建几何），并统计三档楼数 */
+  /** 每帧：按到格子的距离整格显隐（不重建几何），并统计三档楼数 */
   const lodStats = { near: 0, mid: 0, far: 0 };
-  const update = (px, pz, lodNear, lodMid, detail) => {
-    lodStats.near = 0; lodStats.mid = 0; lodStats.far = 0;
-    for (const c of chunks) {
-      const d = Math.hypot(c.cx - px, c.cz - pz) - Math.SQRT1_2 * 256;   // 到格子最近角的距离
-      const inNear = detail && d < lodNear;
-      const inMid = d < lodMid;
-      if (c.near) c.near.visible = inNear;
-      if (c.mid) c.mid.visible = inMid;
-      if (inNear) lodStats.near += c.buildings;
-      else if (inMid) lodStats.mid += c.buildings;
-      else lodStats.far += c.buildings;
-    }
-    return lodStats;
-  };
+  const hys = Number(opts.lodHysteresis) >= 1 ? Number(opts.lodHysteresis) : LOD_HYSTERESIS;
+  const update = (px, pz, lodNear, lodMid, detail) => lodPlan(chunks, px, pz, lodNear, lodMid, detail, lodStats, hys);
 
   /** 切风格：只改材质/光照参数，几何一根线都不动 */
   const setStyle = (style) => {
@@ -237,7 +294,7 @@ export function createWorld(meshData, opts = {}) {
   const drawEstimate = () => meshes.length + instanced.length + (glowPoints ? 1 : 0) + chunks.length * 2;
 
   group.add(...all);
-  return { group, meshes, instanced, chunks, glowPoints, materials, textures: tex, update, setStyle, dispose, lodStats, drawEstimate, tune };
+  return { group, meshes, instanced, chunks, cell, glowPoints, materials, textures: tex, update, setStyle, dispose, lodStats, drawEstimate, tune };
 }
 
 export { TILE, toRgb, shade, MathUtils };

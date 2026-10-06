@@ -14,6 +14,7 @@ import { styleCity } from './style.mjs';
 import { buildWorld } from './build.mjs';
 import { createWorld } from './world.mjs';
 import { createSky, buildEnvironment } from './sky.mjs';
+import { snapShadowLight } from './shadowsnap.mjs';
 import { createCharacter, CHARACTERS } from './character.mjs';
 import { validateLayout, sanitizeLayout, walkTest } from './validate.mjs';
 import { STYLES, GROUND } from './palette.mjs';
@@ -50,6 +51,7 @@ export const state = {
   layout: null, walk: null, gen: {},
   lod: { near: 0, mid: 0, far: 0 }, draws: 0,
   glLostCount: 0, autoShadowOff: false,
+  shadowSnap: null,
 };
 
 window.addEventListener('error', (e) => state.errors.push(String(e.message || e)));
@@ -137,6 +139,8 @@ async function retryLocationInBackground() {
 // ── 渲染器 ───────────────────────────────────────────────────────────────────
 let renderer = null, composer = null, bloomPass = null, scene = null, camera = null;
 let sun = null, hemi = null, amb = null, sky = null, envRT = null, world = null;
+let shadowArea = 150;                 // `?shadowArea`：阴影相机半宽（纹素尺寸 = 2*area/mapSize，吸附要靠它）
+const shadowSnap = flag('snap', true); // `?snap=0` = 关掉纹素吸附（真机 A/B 用；默认开）
 
 /** 先自己探一次 WebGL2：拿不到就**不建** WebGLRenderer（three 建失败的 console.error 会污染控制台） */
 export function probeWebGL2() {
@@ -267,9 +271,12 @@ function setupScene() {
   sun = new THREE.DirectionalLight(0xffffff, 3);
   sun.castShadow = true;
   const A = num('shadowArea', 150);                    // 阴影相机只罩住玩家周围（别罩 1km！）
+  shadowArea = A;
   sun.shadow.camera.left = -A; sun.shadow.camera.right = A;
   sun.shadow.camera.top = A; sun.shadow.camera.bottom = -A;
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 700;
+  // bias / normalBias 这一轮**刻意没动**：它们是"跟画面观感绑死"的两个数（本机无 GPU，看不到实际长啥样），
+  // 改它们等于闭着眼睛调参 —— 这轮只治"纹素网格每帧滑动"这一条（见 shadowsnap.mjs 的说明）。
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.5;
   scene.add(sun);
@@ -295,7 +302,12 @@ function setupScene() {
 
 function mountWorld(mesh, city) {
   if (world) { for (const m of world.group.children) scene.remove(m); world.dispose(); }
-  world = createWorld(mesh, { maxAniso: renderer ? renderer.capabilities.getMaxAnisotropy() : 1 });
+  // 格边长**不从这里传**：它必须跟 build.mjs 真正用的那个数一致（records 里带着），
+  // 这里只允许覆盖滞后带（`?lodHys=1` = 关掉滞后，真机 A/B 用）
+  world = createWorld(mesh, {
+    maxAniso: renderer ? renderer.capabilities.getMaxAnisotropy() : 1,
+    lodHysteresis: num('lodHys', undefined),
+  });
   world.group.name = 'city';
   scene.add(world.group);
   applyStyle();
@@ -501,10 +513,20 @@ function tick(dt, now) {
     updateStick();
   }
   if (sun && char) {
+    // 光源跟着角色走，但**在光空间里吸到阴影纹素网格上**（shadowsnap.mjs）：
+    // 连续平移会让同一个地面点每帧落在纹素里的不同位置 ⇒ 阴影边缘"爬/沸"，吸住才是固定点阵。
     const d = STYLES[state.style].sunDir;
-    sun.position.set(char.pos.x + d[0] * 260, d[1] * 260, char.pos.z + d[2] * 260);
-    sun.target.position.set(char.pos.x, 0, char.pos.z);
+    const sn = snapShadowLight({
+      px: char.pos.x, pz: char.pos.z, sunDir: d, distance: 260,
+      area: shadowArea, mapSize: sun.shadow.mapSize.x, enabled: shadowSnap,
+    });
+    sun.position.set(sn.position[0], sn.position[1], sn.position[2]);
+    sun.target.position.set(sn.target[0], sn.target[1], sn.target[2]);
     sun.target.updateMatrixWorld();
+    // 读数只给快照/探针看（每帧原地改，别在渲染循环里造垃圾）
+    const ss = state.shadowSnap || (state.shadowSnap = { on: true, texel: 0, area: 0, res: 0, offset: [0, 0] });
+    ss.on = sn.snapped; ss.texel = sn.texel; ss.area = shadowArea; ss.res = sun.shadow.mapSize.x;
+    ss.offset[0] = sn.offset[0]; ss.offset[1] = sn.offset[1];
   }
   if (world && char) {
     const L = level();
@@ -762,6 +784,7 @@ function buildSnapshot() {
       rawBox: r.charState.rawBox, heading: +(+(r.charState.heading || 0)).toFixed(2),
     } : {}) : null,
     shadows: r.shadows, detail: r.detail, variety: r.variety, glEverOk: !!r.glEverOk,
+    shadow: r.shadowSnap,
     pick: r.pickTried || null, centerShift: r.centerShift,
   };
 }

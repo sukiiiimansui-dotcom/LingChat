@@ -104,9 +104,25 @@ jobs:
             JSCPD="$(grep -oE '[0-9.]+% duplicated lines' ci-reports/jscpd.txt | tail -1 || true)"
             [ -z "$JSCPD" ] && JSCPD="未测出（日志里没有百分比行）"
           fi
-          KNIP="未测出（见 artifact）"
-          if [ -s ci-reports/knip.json ]; then
-            KNIP="$(python3 -c "import json;d=json.load(open('ci-reports/knip.json'));print(sum(len(v) for v in d.values() if isinstance(v,list)),'条')" 2>/dev/null || echo '未测出（json 解析失败）')"
+          KNIP_FILES="未测出（见 artifact）"
+          KNIP_EXPORTS="未测出（见 artifact）"
+          # knip 的 json 是 {files: [...], issues: [{file, exports, types, …}]} ——
+          # 别再把所有 list 字段加起来（那是 files 84 + issues 138 = 222，没有任何解释力）。
+          # 分开写：未用文件 = files 条数 · 未用导出/类型 = issues 里各类之和。
+          KNIP_LINE="$(python3 -c "
+          import json
+          d = json.load(open('ci-reports/knip.json'))
+          agg = {}
+          for it in (d.get('issues') or []):
+              for k, v in it.items():
+                  if isinstance(v, list):
+                      agg[k] = agg.get(k, 0) + len(v)
+          print(len(d.get('files') or []), agg.get('exports', 0), agg.get('types', 0))
+          " 2>/dev/null || true)"
+          if [ -n "$KNIP_LINE" ]; then
+            set -- $KNIP_LINE
+            KNIP_FILES="$1 个 ⚠️含 vendor/页面通路盲区"
+            KNIP_EXPORTS="$2 导出 / $3 类型（同上，含 vendor 入口的 re-export）"
           fi
           MADGE="未测出（madge 退出码 $(cat ci-reports/madge.exit 2>/dev/null || echo '?')，见 artifact）"
           if [ "$(cat ci-reports/madge.exit 2>/dev/null)" = "0" ]; then
@@ -126,12 +142,16 @@ jobs:
             echo "| 检查 | 结果 |"
             echo "|---|---|"
             echo "| jscpd 重复率 | $JSCPD |"
-            echo "| knip 未用导出/文件 | $KNIP |"
+            echo "| knip 未用文件 | $KNIP_FILES |"
+            echo "| knip 未用导出/类型 | $KNIP_EXPORTS |"
             echo "| madge 环 | $MADGE |"
             echo "| prettier 漂移 | $PRETTIER |"
             echo ""
             echo "⚠️ 本 job 全部 \`continue-on-error\`：**只出数字、不判红**。"
             echo "⚠️ 写「未测出」= 工具没跑成，**不是 0**。"
+            echo "⚠️ knip 只看 TS/Vue 的 import 图：**这份未用清单不能直接照着删** ——"
+            echo "\`wsPageVendor.ts\` → \`public/vendor/wsScene.mjs\`（代拍页/App 页的 \`<script>\` 通路）、"
+            echo "\`public/world_map/*.js\`、\`public/vendor/*\` 都在它视野外。逐条判据见 \`world_map/QUALITY-BASELINE.md\`。"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

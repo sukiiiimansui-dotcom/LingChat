@@ -315,10 +315,6 @@
   /* 「是不是真壳」只有这一份判据（`api/services/worldMap.isTauriRuntime`，`useWorldTrips` 用的也是它）——
      本页再加一个 `"__TAURI_INTERNALS__" in window` 就等于第二份实现。 */
   import { isTauriRuntime } from "@/api/services/worldMap";
-  /* 🏙 「天际线」入口要的那两份（都不是新造的东西）：
-     · `roamStore` = 漫游期间「我」的位置真源（`wsJoystick.ts:1234`，`wsPickInteract` 读的同一份）；
-     · `ROAM_PIN_ID` = 那颗钉子的 id（`wsJoystick.ts:1188`，写死 "me" 就等于第二份口径）。 */
-  import { ROAM_PIN_ID, roamStore } from "./wsJoystick";
   /* 📨 发消息走**既有**命令（不是新协议）：`send_chat_message`（`api/chat.rs:31`，`lib.rs:836` 注册）。
      ⚠️ 它**没有角色参数** ⇒ 发给的是当前对话角色；目标对不上时本页**不发**（见 `chatCanSend`）。 */
   import { invoke } from "@tauri-apps/api/core";
@@ -399,17 +395,22 @@
 
   /* ══ 🏙 2026-10-06 · 「天际线」入口（顶栏第四颗；**只是打开一页**，不是第二个地图实现）═════════════
      点它 = **整页**同源跳转 `public/ws3d/index.html`（three 版 3D 城市）。这一屏只负责回答一个问题：
-     **"从哪儿看"**。三条规矩都写在这一段里（本页是唯一实现，别处不许再算一份）：
+     **"从哪儿看"**。规矩都写在这一段里（本页是唯一实现，别处不许再算一份）：
 
        ① **看谁**：角色面板开着 ⇒ 面板对着的那个人；否则 App 自己的"当前角色"
           （`gameStore.currentInteractRoleId ?? mainRoleId`，与本文件 `currentRoleId` 同一份口径）；
-          再退回地图上第一个真角色；最后才轮到「我」。
+          再退回地图上第一个真角色。
        ② **网格 → 经纬度**：与地图上那批钉子**同一个式子**（`wsPickInteract.ts:85-92`：
           `w + (gx+0.5)/28*(e-w)` / `n - (gy+0.5)/28*(n-s)`），锚点也是同一份"建图时兜底抓一次、
           之后不再变"的视野 bbox（`wsPickInteract.ts:404-421` 的口径）—— 不这么办就会与地图上
           看见的那颗钉子**不是同一个点**（拖动过地图之后尤其明显）。
-       ③ 「我」在漫游期间的位置真源是 `roamStore`（`wsPickInteract.ts:439-447`：那期间谁都不许挪它）。
-       三条都拿不到 ⇒ **退回地图当前中心**（`dailyMap.getCenter()`，与"三件事"用的是同一个调用）；
+       ③ 🔴 **「我」这颗钉子本页不碰**：漫游期间「我」的位置真源是摇杆那份 `roamStore`
+          （`wsJoystick.ts:1234`，`wsPickInteract.ts:439-447` 明写"那期间谁都不许把它挪走"），
+          而 `ws_joystick_selftest.mjs:767-768` 有一条**红判据**钉着这一屏里不许出现那个标识符
+          （原话：这一屏本来就不推 me，也不许顺手加）。本页确实不需要它：真的一个角色钉子都
+          拿不到时**直接退到地图当前中心** —— 漫游时相机本来就从那份位置派生，地图中心 ≈ 你脚下，
+          比拿格子坐标冒充要准。
+       以上都拿不到 ⇒ **退回地图当前中心**（`dailyMap.getCenter()`，与"三件事"用的是同一个调用）；
        连地图都还没到位 ⇒ **不带坐标参数**（那一页会用它自己的默认中心，绝不编一个坐标）。
 
      ⚠️ 这一颗**没有状态**：半径由那一页自己管（主人拍板默认 300 m，页面上还能加减），所以这里
@@ -431,7 +432,7 @@
     }
   }
 
-  /** 「从哪儿看」的那个人（顺序见上 ①）；一个角色都没有 ⇒ `null` */
+  /** 「从哪儿看」的那个人（顺序见上 ①）；**一个真角色都没有 ⇒ `null`**（「我」不算，见上 ③） */
   function skyPinOf(): WsDistrictPin | null {
     const pins = mapPins.value || [];
     if (panelOpen.value && panelTargetId.value && panelTargetId.value !== "me") {
@@ -443,32 +444,22 @@
       const hit = pins.find((p) => p.id === want);
       if (hit) return hit;
     }
-    const real = pins.find(
-      (p) => !p.isMe && p.name && Number.isFinite(Number(p.gx)) && Number.isFinite(Number(p.gy))
+    return (
+      pins.find((p) => !p.isMe && p.name && Number.isFinite(Number(p.gx)) && Number.isFinite(Number(p.gy))) || null
     );
-    if (real) return real;
-    return pins.find((p) => p.isMe) || null;
   }
 
   /** 中心 + **这个中心是从哪来的**（后者只用来写 title；位置本身绝不冒充"真经纬度"） */
   function skyCenter(): { lng: number; lat: number; src: string } | null {
     const pin = skyPinOf();
-    if (pin) {
-      if (pin.isMe || pin.id === ROAM_PIN_ID) {
-        const roam = roamStore.get();
-        if (roam && Number.isFinite(roam.lng) && Number.isFinite(roam.lat)) {
-          return { lng: roam.lng, lat: roam.lat, src: "漫游中的我" };
-        }
-      }
-      const b = pinBBox;
-      if (b) {
-        const g = 28;
-        const [w, s0, e, n] = b;
-        const lng = w + ((Number(pin.gx) + 0.5) / g) * (e - w);
-        const lat = n - ((Number(pin.gy) + 0.5) / g) * (n - s0);
-        if (Number.isFinite(lng) && Number.isFinite(lat)) {
-          return { lng, lat, src: `角色「${pin.name || pin.id}」` };
-        }
+    const b = pinBBox;
+    if (pin && b) {
+      const g = 28;
+      const [w, s0, e, n] = b;
+      const lng = w + ((Number(pin.gx) + 0.5) / g) * (e - w);
+      const lat = n - ((Number(pin.gy) + 0.5) / g) * (n - s0);
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        return { lng, lat, src: `角色「${pin.name || pin.id}」` };
       }
     }
     const c = dailyCenter();

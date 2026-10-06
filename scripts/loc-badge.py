@@ -31,7 +31,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.dirname(HERE)
 
 # 要数的目录（相对树根）
-SCAN = ["src", "src-tauri/src", "crates", "scripts", "public", "wsbench"]
+# ⚠️ 不要加 `wsbench/`：那是**本机测试台**，不进 git（`.git/info/exclude`），
+#    数它会让"本地复算"和"CI 复算"对不上（2026-10-06 实测差 1.4 万行，就是它）。
+#    徽章要反映的是**仓库里真有的东西**。
+SCAN = ["src", "src-tauri/src", "crates", "scripts", "public"]
 
 # 另外还要数树根目录下的自用页面（wsfx.html / wsgame.html 那些）
 ROOT_GLOBS = ["*.html"]

@@ -230,15 +230,29 @@ jobs:
         if: always()
         run: |
           # 三态：有读数 / 0 / **未测出**
+          #
+          # 🔴 2026-10-06 两个"假数字"的修法（都拿真 artifact 验过）：
+          #   ① clippy 那两格原来数 `^warning` / `^error` —— 而 CI 上 clippy 输出**带 ANSI 颜色码**
+          #      （`\x1b[33mwarning\x1b[0m:`），行首根本不是 "warning" ⇒ 恒算 **0**（235 条警告被写成 0）。
+          #      现在先剥 ANSI，再从 cargo 自己的汇总行 `generated N warnings` 求和。
+          #   ② rustfmt 那格数 `^Diff in` —— 那是**每个 diff 块**一行，不是每个文件
+          #      （实测 628 块 / 31 文件，直接写成"628 个文件"会大 20 倍）⇒ 现在按**去重文件数**给，
+          #      括号里另附块数。
           CLIPPY_W="未测出（见 artifact）"
           CLIPPY_E="未测出（见 artifact）"
           if [ -s ci-reports/clippy.txt ]; then
-            CLIPPY_W="$(grep -cE '^warning' ci-reports/clippy.txt || true) 条"
-            CLIPPY_E="$(grep -cE '^error' ci-reports/clippy.txt || true) 条"
+            sed -e 's/\x1b\[[0-9;]*m//g' ci-reports/clippy.txt > ci-reports/clippy.noansi.txt
+            W_SUM="$(grep -oE 'generated [0-9]+ warnings' ci-reports/clippy.noansi.txt | awk '{s+=$2} END{print s+0}')"
+            FIX_SUM="$(grep -oE 'to apply [0-9]+ suggestions' ci-reports/clippy.noansi.txt | awk '{s+=$3} END{print s+0}')"
+            E_CNT="$(grep -cE '(^|: )error(\[E[0-9]+\])?: ' ci-reports/clippy.noansi.txt || true)"
+            CLIPPY_W="$W_SUM 条（其中 $FIX_SUM 条可 --fix 自动修）"
+            CLIPPY_E="$E_CNT 条"
           fi
           FMT="未测出（见 artifact）"
-          if [ -s ci-reports/rustfmt.txt ] || [ "$(cat ci-reports/rustfmt.exit 2>/dev/null)" = "0" ]; then
-            FMT="$(grep -cE '^Diff in' ci-reports/rustfmt.txt || true) 个文件"
+          if [ -s ci-reports/rustfmt.txt ]; then
+            F_FILES="$(grep -oE '^Diff in [^:]+:[0-9]+:' ci-reports/rustfmt.txt | sed 's/:[0-9]*:$//' | sort -u | wc -l | tr -d ' ')"
+            F_BLOCKS="$(grep -cE '^Diff in' ci-reports/rustfmt.txt || true)"
+            FMT="$F_FILES 个文件（$F_BLOCKS 个 diff 块）"
           fi
           {
             echo "## 世界模拟·质量报告（Rust）"
@@ -251,6 +265,7 @@ jobs:
             echo ""
             echo "⚠️ 本 job 全部 \`continue-on-error\`：**只出数字、不判红**。"
             echo "⚠️ 写「未测出」= 工具没跑成，**不是 0**。"
+            echo "⚠️ 口径：rustfmt 漂移按**去重文件数**算（rustfmt 每个 diff 块打一行 \`Diff in\`，块数≈20 倍文件数）。"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

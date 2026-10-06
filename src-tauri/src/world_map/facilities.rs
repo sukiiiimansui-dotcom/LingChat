@@ -603,7 +603,7 @@ fn bit_grid(kind: &[u8], bit: u8) -> Vec<bool> {
 /// 把 layout 归一化成生成器状态 —— 对应 `_build_state`。
 /// `layout` 不是对象/字段缺失/类型不对都退化取值，绝不 panic。
 fn build_state(layout: &Value) -> State {
-    let size = (nz(layout, "size", 20.0) as i64).max(4).min(MAX_SIZE);
+    let size = (nz(layout, "size", 20.0) as i64).clamp(4, MAX_SIZE);
     let mpc = mpc_of(layout);
     let n = (size * size) as usize;
     let mut st = State {
@@ -2417,6 +2417,6 @@ mod tests {
             pack["stats"]["total"]
         );
         println!("[5] generate_all: 生活 {} + 交通 {} = {}", life.len(), both.len() - life.len(), both.len());
-        assert_eq!(cx.iter().filter(|&&x| x < 0 || x >= 24).count(), 0, "所有坐标都在网格内");
+        assert_eq!(cx.iter().filter(|&&x| !(0..24).contains(&x)).count(), 0, "所有坐标都在网格内");
     }
 }

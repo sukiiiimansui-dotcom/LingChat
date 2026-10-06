@@ -636,7 +636,7 @@ impl EventTable {
                 None => problems.push(format!("{} 的 id 前缀不是已知类别", e.id)),
                 _ => {}
             }
-            if !(e.weight > 0.0) || !e.weight.is_finite() {
+            if !(e.weight.is_finite() && e.weight > 0.0) {
                 problems.push(format!("{} 的 weight 不是正数：{}", e.id, e.weight));
             }
             if e.cooldown_secs <= 0 {
@@ -978,7 +978,7 @@ pub fn weight_for(def: &EventDef, ctx: &EventContext, now_secs: i64) -> f64 {
     if cooldown_active(def, ctx, now_secs) {
         return 0.0;
     }
-    if !(def.weight > 0.0) || !def.weight.is_finite() {
+    if !(def.weight.is_finite() && def.weight > 0.0) {
         return 0.0;
     }
 
@@ -1120,7 +1120,7 @@ pub fn plan_event(
         return None;
     }
     let total: f64 = picks.iter().map(|(_, w)| *w).sum();
-    if !(total > 0.0) || !total.is_finite() {
+    if !(total.is_finite() && total > 0.0) {
         // 全部权重 ≤ 0（或出现 inf/NaN）→ 没有可发生的
         return None;
     }

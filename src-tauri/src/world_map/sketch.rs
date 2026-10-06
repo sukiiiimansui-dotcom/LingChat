@@ -210,8 +210,8 @@ pub fn make_sketch(area_name: &str, size: i32, seed: Option<u64>, osm: Option<&O
         let mut tries = 0;
         while placed < per_block_cap && tries < 14 {
             tries += 1;
-            let w = rng.gen_range(2..=bw.saturating_sub(1).max(2).min(4));
-            let h = rng.gen_range(1..=bh.saturating_sub(1).max(1).min(3));
+            let w = rng.gen_range(2..=bw.saturating_sub(1).clamp(2, 4));
+            let h = rng.gen_range(1..=bh.saturating_sub(1).clamp(1, 3));
             if bw - w < 1 || bh - h < 1 {
                 continue;
             }

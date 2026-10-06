@@ -315,7 +315,7 @@ fn fmt_g(x: f64) -> String {
         return "0".to_string();
     }
     let exp = x.abs().log10().floor() as i32;
-    if exp < -4 || exp >= 6 {
+    if !(-4..6).contains(&exp) {
         // 科学计数法：Python 输出 "1.23457e+06"，Rust 的 {:e} 是 "1.234567e6"（最短往返），
         // 所以固定 5 位小数凑够 6 位有效数字，再补成 Python 的 e±NN 形状
         let s = format!("{:.5e}", x);
@@ -436,7 +436,7 @@ fn offset_point(a: (f64, f64), b: (f64, f64), dist_m: f64) -> (f64, f64) {
     let dx = (b.0 - a.0) * mlng;
     let dy = (b.1 - a.1) * METERS_PER_DEG_LAT;
     let l = (dx * dx + dy * dy).sqrt();
-    if !(l >= 1e-6) {
+    if l.is_nan() || l < 1e-6 {
         // 起终点重合（或坐标非法）→ 原地不动，等价于 Python 的 `if L < 1e-6`
         return a;
     }

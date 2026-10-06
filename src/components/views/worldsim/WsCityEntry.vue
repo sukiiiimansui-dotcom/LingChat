@@ -164,6 +164,18 @@
       >
         {{ bldChipText }}
       </button>
+      <!-- 🏙 2026-10-06 · **天际线**入口（顶栏第四件；机主：「3D 城市 = App 里一个独立页 + 一个入口按钮」）。
+           它**不是**第二个地图实现：点一下整页打开 `public/ws3d/index.html`（three 版 3D 城市，
+           路网用 App 自己的 `public/roadsbundle/`、不再需要 8790 —— 口径与验证见 `world_map/WS3D-IN-APP.md`）。
+           取中心的规矩、fallback、返回方式全在 script 里 `openSkyline()` 那一段（一行都不在模板里）。 -->
+      <button
+        class="wsce__btn wsce__btn--sky"
+        type="button"
+        :title="skyChipTitle"
+        @click="openSkyline"
+      >
+        🏙 天际线
+      </button>
     </header>
 
     <!-- 没装过城市数据时的**常驻提示**（点了就开引导）——"少了一整座城市的楼房"这种事
@@ -303,6 +315,10 @@
   /* 「是不是真壳」只有这一份判据（`api/services/worldMap.isTauriRuntime`，`useWorldTrips` 用的也是它）——
      本页再加一个 `"__TAURI_INTERNALS__" in window` 就等于第二份实现。 */
   import { isTauriRuntime } from "@/api/services/worldMap";
+  /* 🏙 「天际线」入口要的那两份（都不是新造的东西）：
+     · `roamStore` = 漫游期间「我」的位置真源（`wsJoystick.ts:1234`，`wsPickInteract` 读的同一份）；
+     · `ROAM_PIN_ID` = 那颗钉子的 id（`wsJoystick.ts:1188`，写死 "me" 就等于第二份口径）。 */
+  import { ROAM_PIN_ID, roamStore } from "./wsJoystick";
   /* 📨 发消息走**既有**命令（不是新协议）：`send_chat_message`（`api/chat.rs:31`，`lib.rs:836` 注册）。
      ⚠️ 它**没有角色参数** ⇒ 发给的是当前对话角色；目标对不上时本页**不发**（见 `chatCanSend`）。 */
   import { invoke } from "@tauri-apps/api/core";
@@ -380,6 +396,108 @@
       ? t("worldsim.bld.manyTitle", { m: bldMaxDrawnOf(WS_BLD_MODE_MANY) })
       : t("worldsim.bld.leanTitle", { n: bldMaxDrawnOf("lean") })
   );
+
+  /* ══ 🏙 2026-10-06 · 「天际线」入口（顶栏第四颗；**只是打开一页**，不是第二个地图实现）═════════════
+     点它 = **整页**同源跳转 `public/ws3d/index.html`（three 版 3D 城市）。这一屏只负责回答一个问题：
+     **"从哪儿看"**。三条规矩都写在这一段里（本页是唯一实现，别处不许再算一份）：
+
+       ① **看谁**：角色面板开着 ⇒ 面板对着的那个人；否则 App 自己的"当前角色"
+          （`gameStore.currentInteractRoleId ?? mainRoleId`，与本文件 `currentRoleId` 同一份口径）；
+          再退回地图上第一个真角色；最后才轮到「我」。
+       ② **网格 → 经纬度**：与地图上那批钉子**同一个式子**（`wsPickInteract.ts:85-92`：
+          `w + (gx+0.5)/28*(e-w)` / `n - (gy+0.5)/28*(n-s)`），锚点也是同一份"建图时兜底抓一次、
+          之后不再变"的视野 bbox（`wsPickInteract.ts:404-421` 的口径）—— 不这么办就会与地图上
+          看见的那颗钉子**不是同一个点**（拖动过地图之后尤其明显）。
+       ③ 「我」在漫游期间的位置真源是 `roamStore`（`wsPickInteract.ts:439-447`：那期间谁都不许挪它）。
+       三条都拿不到 ⇒ **退回地图当前中心**（`dailyMap.getCenter()`，与"三件事"用的是同一个调用）；
+       连地图都还没到位 ⇒ **不带坐标参数**（那一页会用它自己的默认中心，绝不编一个坐标）。
+
+     ⚠️ 这一颗**没有状态**：半径由那一页自己管（主人拍板默认 300 m，页面上还能加减），所以这里
+        没有 `localStorage` 键 —— `wsm:v1:skymode` 那种开关是 O2（地图里叠三层）才需要的。
+     ⚠️ i18n：本片只允许改这一个文件 ⇒ 文案先写死中文（下一轮再收进 `worldsim.*`）。 */
+  /** 钉子的视野锚点：抓一次就固定（与 `wsPickInteract.ensurePinAnchor` 同一口径，见上 ②） */
+  let pinBBox: [number, number, number, number] | null = null;
+  function capturePinBBox(m: DailyMapLike | null): void {
+    if (pinBBox || !m) return;
+    try {
+      const bb = m.getBounds?.();
+      const w = Number(bb?.getWest());
+      const s0 = Number(bb?.getSouth());
+      const e = Number(bb?.getEast());
+      const n = Number(bb?.getNorth());
+      if ([w, s0, e, n].every((v) => Number.isFinite(v)) && e > w && n > s0) pinBBox = [w, s0, e, n];
+    } catch {
+      /* 拿不到就少一条路：`skyCenter()` 会如实退到地图中心 */
+    }
+  }
+
+  /** 「从哪儿看」的那个人（顺序见上 ①）；一个角色都没有 ⇒ `null` */
+  function skyPinOf(): WsDistrictPin | null {
+    const pins = mapPins.value || [];
+    if (panelOpen.value && panelTargetId.value && panelTargetId.value !== "me") {
+      const hit = pins.find((p) => p.id === panelTargetId.value);
+      if (hit) return hit;
+    }
+    const want = currentRoleId.value ? `r${currentRoleId.value}` : "";
+    if (want) {
+      const hit = pins.find((p) => p.id === want);
+      if (hit) return hit;
+    }
+    const real = pins.find(
+      (p) => !p.isMe && p.name && Number.isFinite(Number(p.gx)) && Number.isFinite(Number(p.gy))
+    );
+    if (real) return real;
+    return pins.find((p) => p.isMe) || null;
+  }
+
+  /** 中心 + **这个中心是从哪来的**（后者只用来写 title；位置本身绝不冒充"真经纬度"） */
+  function skyCenter(): { lng: number; lat: number; src: string } | null {
+    const pin = skyPinOf();
+    if (pin) {
+      if (pin.isMe || pin.id === ROAM_PIN_ID) {
+        const roam = roamStore.get();
+        if (roam && Number.isFinite(roam.lng) && Number.isFinite(roam.lat)) {
+          return { lng: roam.lng, lat: roam.lat, src: "漫游中的我" };
+        }
+      }
+      const b = pinBBox;
+      if (b) {
+        const g = 28;
+        const [w, s0, e, n] = b;
+        const lng = w + ((Number(pin.gx) + 0.5) / g) * (e - w);
+        const lat = n - ((Number(pin.gy) + 0.5) / g) * (n - s0);
+        if (Number.isFinite(lng) && Number.isFinite(lat)) {
+          return { lng, lat, src: `角色「${pin.name || pin.id}」` };
+        }
+      }
+    }
+    const c = dailyCenter();
+    return c ? { lng: c.lng, lat: c.lat, src: "地图当前中心" } : null;
+  }
+
+  /** 悬停/长按能看懂的一句话：中心是谁、有没有坐标、半径多大 */
+  const skyChipTitle = computed(() => {
+    const c = skyCenter();
+    const where = c ? `${c.src}（${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}）` : "没有坐标 ⇒ 用页面默认中心";
+    return `打开 3D 城市（天际线）：中心 = ${where} · 半径 300 米`;
+  });
+
+  /**
+   * 打开那一页。**同源整页跳转**（不是 `window.open`）：Tauri 的 webview 里新开窗要权限，
+   * 而整页跳转天然留下一条历史 ⇒ 页面上那颗「← 返回」= `history.back()` 就回到这一屏。
+   */
+  function openSkyline(): void {
+    const url = new URL("/ws3d/index.html", location.href);
+    url.searchParams.set("r", "300"); // 主人拍板：默认半径 300 m（那一页里还能自己加减）
+    const pin = skyPinOf();
+    if (pin?.name) url.searchParams.set("name", pin.name);
+    const c = skyCenter();
+    if (c) {
+      url.searchParams.set("lat", c.lat.toFixed(6));
+      url.searchParams.set("lng", c.lng.toFixed(6));
+    }
+    location.href = url.toString();
+  }
 
   /* ── 🧑‍🤝‍🧑 角色（M1-1）────────────────────────────────────────────────────────
      🔴 **列表驱动 + 数量可变**：一个 id、一个名字都不写死。
@@ -551,6 +669,8 @@
   /** 地图（只为 `getCenter()` 与 `moveend` 两个用途；图层/相机一概不经手） */
   type DailyMapLike = {
     getCenter?: () => { lng: number; lat: number };
+    /** 钉子的视野锚点（`capturePinBBox` 用；与 `wsPickInteract.ensurePinAnchor` 同款兜底） */
+    getBounds?: () => { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number };
     on?: (ev: string, cb: () => void) => void;
   };
   let dailyMap: DailyMapLike | null = null;
@@ -691,6 +811,9 @@
       }
     }
     dailyMap = m;
+    /* 🏙 「天际线」入口的锚点：地图一到位就抓一次视野（与地图自己抓钉子的锚点同一个时机 ——
+       本机实测地图建图后**没有任何相机动画**，所以两边抓到的是同一份视野）。 */
+    capturePinBBox(m);
     kickDaily();
   }
 
@@ -1433,5 +1556,16 @@
     white-space: nowrap;
     border-color: rgba(255, 207, 138, 0.42);
     color: #ffcf8a;
+  }
+  /* 🏙 2026-10-06 · 顶栏第四颗（「天际线」入口）。理由与取舍同上一条（第三条之后本来就挤，
+     所以它同样 `flex: 0 1 auto` + 省略号；换一个冷色，与「楼房」那颗一眼分得开）。 */
+  .wsce__btn--sky {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-color: rgba(121, 217, 255, 0.42);
+    color: #9fd8ef;
   }
 </style>

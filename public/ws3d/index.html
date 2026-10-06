@@ -1,0 +1,184 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<link rel="icon" href="data:,"><!-- 免得 404 favicon 在控制台里冒充 error -->
+<title>L-SYuki · 天际线（3D 城市）</title>
+<style>
+  :root{
+    /* 明确的一套配色：暖砖 / 冷混凝土 / 蓝绿玻璃 / 抹灰涂料 / 沥青冷灰 / 铺装暖灰 */
+    --ink:#eaf2ff; --dim:#9db2cc; --accent:#79d9ff; --accent2:#ffc46b;
+    --panel:rgba(10,16,26,.72); --line:rgba(121,217,255,.22);
+    --tap:46px;                       /* 触控目标下限（主人要求 ≥44px） */
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0a1018;color:var(--ink);
+    font-family:system-ui,'PingFang SC',sans-serif;-webkit-user-select:none;user-select:none}
+  #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;
+    background:linear-gradient(180deg,#12203a 0%,#1b2a3f 55%,#0e1522 100%)}
+  .panel{position:fixed;background:var(--panel);backdrop-filter:blur(9px);
+    border:1px solid var(--line);border-radius:12px;padding:8px 10px;font-size:12px;line-height:1.5}
+  /* ── 左上：精简 HUD（默认只三行，其余折叠）──────────────────────────── */
+  #hud{top:8px;left:8px;min-width:200px;max-width:min(62vw,300px);pointer-events:auto}
+  #hud h1{margin:0 0 4px;font-size:12.5px;font-weight:600;letter-spacing:.2px;display:flex;
+    justify-content:space-between;gap:8px;align-items:center}
+  #hud h1 span{color:var(--accent)}
+  .kv{display:flex;justify-content:space-between;gap:10px;font-size:11.5px}
+  .kv b{color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
+  .kv em{color:var(--dim);font-style:normal}
+  #hud-more{display:none}
+  #hud.open #hud-more{display:block}
+  .sec{margin-top:5px;padding-top:5px;border-top:1px dashed rgba(121,217,255,.16);
+    font-size:10.5px;color:var(--dim)}
+  .sec i{color:var(--accent2);font-style:normal}
+  .mini{background:rgba(121,217,255,.12);border:1px solid var(--line);border-radius:8px;
+    color:var(--ink);font-family:inherit;font-size:11px;padding:3px 8px;min-height:30px}
+  /* 画质档位：一眼看出"是机器在降质还是本来就慢" */
+  #qual{color:var(--accent2)}
+  /* ── 右上：操作面板（默认隐藏）────────────────────────────────────── */
+  #help{right:8px;top:8px;max-width:min(60vw,320px);display:none;max-height:62vh;overflow:auto}
+  #help.show{display:block}
+  #help h2{margin:0 0 4px;font-size:12.5px;display:flex;justify-content:space-between;align-items:center}
+  #help kbd{background:rgba(121,217,255,.16);border:1px solid var(--line);border-radius:5px;
+    padding:0 5px;font-family:inherit;font-size:11px;color:#dff1ff}
+  #help div{font-size:11px;color:#cfe0f5}
+  /* ── 底部按钮条：每个功能都有按钮，按钮上写当前档位 ────────────────── */
+  #btns{left:50%;transform:translateX(-50%);bottom:calc(8px + env(safe-area-inset-bottom,0px));
+    display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:min(96vw,720px);
+    padding:6px 8px}
+  button.btn{min-height:var(--tap);min-width:var(--tap);padding:5px 10px;font-size:11.5px;
+    font-family:inherit;color:var(--ink);background:rgba(121,217,255,.12);
+    border:1px solid var(--line);border-radius:10px;line-height:1.25;text-align:center}
+  button.btn:active{background:rgba(121,217,255,.32)}
+  button.btn b{display:block;font-size:10.5px;color:var(--accent);font-weight:600}
+  /* ── 摇杆（左半屏）：平时半透明杵着，一摸就实体化跟着走 ─────────────── */
+  #stick{position:fixed;left:calc(18px + env(safe-area-inset-left,0px));
+    bottom:calc(84px + env(safe-area-inset-bottom,0px));width:124px;height:124px;
+    border-radius:50%;border:2px solid rgba(121,217,255,.30);background:rgba(10,16,26,.22);
+    opacity:.42;transition:opacity .15s;pointer-events:none;z-index:20}
+  #stick.on{opacity:.95;background:rgba(10,16,26,.4)}
+  #knob{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;
+    border-radius:50%;background:radial-gradient(circle at 35% 30%,#bfe9ff,#4aa6d8);
+    border:1px solid rgba(255,255,255,.5);box-shadow:0 2px 10px rgba(0,0,0,.35)}
+  #stick .lbl{position:absolute;left:0;right:0;bottom:-18px;text-align:center;font-size:10px;
+    color:var(--dim)}
+  #boot{bottom:calc(8px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);
+    color:var(--dim);font-size:11px;background:rgba(10,16,26,.5);border-color:transparent;
+    max-width:92vw;text-align:center;pointer-events:none}
+  /* ── 无 GPU 诊断（不白屏：数据照样摆出来）────────────────────────── */
+  #diag{display:none;left:50%;top:50%;transform:translate(-50%,-50%);
+    max-width:min(94vw,760px);max-height:80vh;overflow:auto;z-index:60;background:rgba(9,14,22,.95)}
+  #diag h3{margin:0 0 8px;font-size:14px;color:var(--accent2)}
+  #diag table{border-collapse:collapse;width:100%;font-size:12px}
+  #diag th{text-align:left;color:var(--dim);font-weight:500;white-space:nowrap;
+    padding:3px 10px 3px 0;vertical-align:top;width:38%}
+  #diag td{padding:3px 0;word-break:break-all}
+  #diag .hint{color:var(--dim);font-size:11.5px;margin:9px 0 0}
+  @media (max-width:680px){
+    #hud{font-size:11px;max-width:56vw}
+    #btns{gap:5px;max-width:98vw;padding:5px 6px}
+    button.btn{padding:4px 8px;font-size:11px}
+  }
+  /* 横屏手机：面板都往边上靠，中间那条"角色+街道"必须留出来 */
+  @media (max-height:520px){
+    #hud{max-height:44vh;overflow:auto}
+    #btns{bottom:4px}
+    #stick{width:104px;height:104px;bottom:64px}
+    #knob{width:44px;height:44px;margin:-22px 0 0 -22px}
+  }
+</style></head><body>
+<canvas id="cv"></canvas>
+
+<div id="hud" class="panel" data-ui>
+  <h1>3D 原型 · Three.js <span id="h-style">写实白天</span>
+    <button class="mini" id="b-more" data-act="more">更多</button></h1>
+  <div class="kv"><em>FPS</em><b id="h-fps">—</b></div>
+  <div class="kv"><em>半径内楼数</em><b id="h-buildings">—</b></div>
+  <div class="kv"><em>画质档</em><b id="qual">—</b></div>
+  <div id="hud-more">
+    <div class="kv"><em>帧耗时</em><b id="h-ms">—</b></div>
+    <div class="kv"><em>三角形</em><b id="h-tris">—</b></div>
+    <div class="kv"><em>draw call</em><b id="h-draws">—</b></div>
+    <div class="kv"><em>半径</em><b id="h-radius">—</b></div>
+    <div class="kv"><em>LOD 近/中/远</em><b id="h-lod">—</b></div>
+    <div class="kv"><em>视角</em><b id="h-view">—</b></div>
+    <div class="kv"><em>阴影</em><b id="h-shadow">—</b></div>
+    <div class="kv"><em>所在</em><b id="h-pos">—</b></div>
+    <div class="sec">
+      <div>街区：<i id="h-blocks">—</i></div>
+      <div>路网：<i id="h-roads">—</i></div>
+      <div>数据：8790 API + 8788 静态真路网</div>
+    </div>
+    <div class="sec">
+      <div>定位：<i id="h-area">—</i></div>
+      <div>时间：<i id="h-clock">—</i></div>
+      <div>角色：<i id="h-sched">—</i></div>
+    </div>
+    <div class="sec">
+      <div>耗时：<i id="h-gen">—</i></div>
+      <div>渲染：<i id="h-render">—</i></div>
+    </div>
+  </div>
+</div>
+
+<div id="help" class="panel" data-ui>
+  <h2>操作（手指 / 键盘都行）<button class="mini" data-act="help">收起</button></h2>
+  <div><b>走</b>：左下摇杆拖动 · 键盘 <kbd>WASD</kbd>/方向键 · <kbd>Shift</kbd> 跑</div>
+  <div><b>看</b>：右半屏拖动转视角 · 鼠标拖动 · 滚轮/捏合远近</div>
+  <div><b>视角</b>：按钮「视角」 · <kbd>V</kbd> 第一/第三人称</div>
+  <div><b>昼夜</b>：按钮「昼夜」 · <kbd>N</kbd> 写实白天 ⇄ 黄昏霓虹</div>
+  <div><b>阴影</b>：按钮「阴影」 · <kbd>P</kbd>；<b>细节</b>：按钮 · <kbd>L</kbd></div>
+  <div><b>半径</b>：按钮「半径−/＋」 · <kbd>[</kbd> <kbd>]</kbd>（300m~2000m）</div>
+  <div><b>换城</b>：按钮「换一座城」 · <kbd>R</kbd>；<b>泛光</b>：按钮 · <kbd>B</kbd></div>
+  <div><b>角色</b>：按钮「角色」 · <kbd>C</kbd> 在 DeepSeek / 诺一钦灵 / 风雪 之间轮换</div>
+  <div><b>面板</b>：按钮「面板」 · <kbd>H</kbd> 收起/展开这个说明</div>
+  <div class="sec">无 GPU/无 WebGL2 时会出诊断面板，数据照样取完（不会白屏）。</div>
+</div>
+
+<div id="stick"><div id="knob"></div><div class="lbl">走</div></div>
+
+<div id="btns" class="panel" data-ui>
+  <button class="btn" data-act="view">视角<b id="b-view">第三人称</b></button>
+  <button class="btn" data-act="style">昼夜<b id="b-style">写实白天</b></button>
+  <button class="btn" data-act="shadow">阴影<b id="b-shadow">开</b></button>
+  <button class="btn" data-act="detail">细节<b id="b-detail">开</b></button>
+  <button class="btn" data-act="radius-">半径−<b id="b-radius">1000m</b></button>
+  <button class="btn" data-act="radius+">半径＋<b id="b-radius2">—</b></button>
+  <button class="btn" data-act="seed">换城<b id="b-seed">换一座城</b></button>
+  <button class="btn" data-act="bloom">泛光<b id="b-bloom">跟昼夜</b></button>
+  <button class="btn" data-act="char">角色<b id="b-char">DeepSeek</b></button>
+  <button class="btn" data-act="help">面板<b id="b-help">操作说明</b></button>
+</div>
+
+<div id="boot" class="panel">启动中…</div>
+
+<div id="diag" class="panel" data-ui></div>
+
+<!-- ⬇️ 本页专有的一段（原型那份 `world_map/ws3dgl-three.html` 里没有）：一个返回按钮 + 胶水层。
+     除这一整段与上面 <title> 那一行、下面那一行 import 之外，本文件与原型**逐字节相同** —— 口径见
+     `world_map/WS3D-IN-APP.md`（"再拷一次"就是再拷一遍，然后照这三处补回来）。 -->
+<button id="ws3d-back" data-ui type="button">← 返回</button>
+<style>
+  #ws3d-back{position:fixed;z-index:70;left:50%;top:8px;transform:translateX(-50%);
+    min-height:44px;padding:6px 16px;font:600 12.5px/1.2 system-ui,'PingFang SC',sans-serif;
+    color:var(--ink);background:rgba(10,16,26,.72);border:1px solid var(--line);border-radius:10px;
+    backdrop-filter:blur(9px)}
+  #ws3d-back:active{background:rgba(121,217,255,.32)}
+</style>
+<script>
+  /* 返回：先走浏览器历史（本页是从 App 那一屏点进来的）；历史为空就硬回 /worldsim。
+     ⚠️ 真机上的 **Tauri 返回键**不归这里管（系统键走 Rust 侧），本按钮是"一定出得去"的那条兜底。 */
+  document.getElementById('ws3d-back').addEventListener('click', function () {
+    if (history.length > 1) history.back(); else location.href = '/worldsim';
+  });
+</script>
+
+<script type="module">
+  import './local-roads.mjs';                 // ⬅️ 必须排在 main.mjs 之前：它要在 main 求值前装好 fetch 钩子
+  import { boot } from './ws3dgl/three/main.mjs';
+  boot().catch((e) => {
+    const el = document.getElementById('boot');
+    if (el) el.textContent = '❌ 启动失败：' + (e && e.message ? e.message : e);
+    const d = document.getElementById('diag');
+    if (d) { d.style.display = 'block'; d.innerHTML = '<h3>启动异常</h3><pre>' + String(e && e.stack || e) + '</pre>'; }
+  });
+</script>
+</body></html>

@@ -8,12 +8,12 @@
 [![开发分支](https://img.shields.io/badge/开发分支-feat%2Fworldsim-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
 [![状态](https://img.shields.io/badge/状态-实验性%20·%20尚不完善-orange?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat/issues/858)
 
-[![代码行数](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
-[![Rust](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-rust.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
-[![前端 TS + Vue](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-frontend.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
-[![其它语言](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-other.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
-[![官方代码行数](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-upstream.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
-[![我们净增](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-added.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
+[![代码行数](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc.json&style=flat-square)](#代码量)
+[![Rust](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-rust.json&style=flat-square)](#代码量)
+[![前端 TS + Vue](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-frontend.json&style=flat-square)](#代码量)
+[![其它语言](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-other.json&style=flat-square)](#代码量)
+[![官方代码行数](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-upstream.json&style=flat-square)](#代码量)
+[![我们净增](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-added.json&style=flat-square)](#代码量)
 
 </div>
 
@@ -55,8 +55,8 @@ LingChat 的个人实验分支：想给聊天加一层「世界」，让角色�
 
 徽章上的数字是**实时的**：每次推源码，[`代码量徽章`](.github/workflows/loc-badge.yml) 这个工作流会用
 [`scripts/loc-badge.py`](scripts/loc-badge.py) 重新数一遍（同时浅克隆官方 `dev` 数一遍官方那份），
-结果推到 [`badges`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/badges) 分支，首页徽章直接读它
-（点徽章能看到分语言的明细表）。
+结果推到 **`badges` 分支**（机器维护的孤儿分支，只有几个徽章 JSON + 一张明细表），首页徽章直接读它。
+点徽章只会滚到下面这张说明，**不会把你切到那个分支去** —— 那个分支平时不用看。
 
 三个数分别是：
 

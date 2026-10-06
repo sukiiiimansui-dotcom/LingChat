@@ -6,7 +6,45 @@
  * ⚠️ **本次是纯搬运、零行为变化**：函数体/常量/注释一字未改；`ML_*` 常量组一并搬来，
  *   原文件**import 回去**继续用（`export *` 不建本地绑定 —— 漏了这步就编译不过，量过的坑）。
  */
-import { THEME_DARK, THEME_LIGHT, type GeoTheme } from "@/components/views/worldsim/wsGeoMap";
+/* ── 🎨 主题色（2026-10-06 从 `wsGeoMap.ts` **原样搬入**，纯搬运、零行为变化）────────
+ * 为什么搬：底图 style 是**唯一真源**，却要向一个已退役的 Canvas2D 渲染器借主题常量 ——
+ * 那个渲染器（`wsGeoMap.ts` 的 `WsGeoMap` 类）随下钻死簇一起删了，所以把这三个符号
+ * 落到它唯一的活消费者这里。下面这段与 `wsGeoMap.ts` 里的原文**逐字节相同**。 */
+export interface GeoTheme {
+  /** 陆地填充 */
+  land: string;
+  /** 陆地描边（行政边界） */
+  line: string;
+  /** 高亮填充（选中/下钻目标）—— 用 LingChat 主色 */
+  accent: string;
+  /** 高亮描边 */
+  accentLine: string;
+  /** 标注文字 */
+  label: string;
+  /** 标注描边（压在图上也要读得清） */
+  labelHalo: string;
+  /** 海/底 */
+  sea: string;
+}
+
+export const THEME_DARK: GeoTheme = {
+  sea: "#0b1017",
+  land: "#1e2937",
+  line: "rgba(255,255,255,0.30)",
+  accent: "rgba(121,217,255,0.34)",
+  accentLine: "#79d9ff",
+  label: "rgba(255,255,255,0.92)",
+  labelHalo: "rgba(0,0,0,0.55)",
+};
+export const THEME_LIGHT: GeoTheme = {
+  sea: "#d7e5f0",
+  land: "#ffffff",
+  line: "rgba(28,48,68,0.45)",
+  accent: "rgba(41,150,200,0.26)",
+  accentLine: "#1f7fb8",
+  label: "rgba(22,34,46,0.92)",
+  labelHalo: "rgba(255,255,255,0.75)",
+};
 import { lodPlan, PRERENDER_LAYER_ID, PRERENDER_SOURCE_ID } from "@/components/views/worldsim/wsScene";
 
 /**

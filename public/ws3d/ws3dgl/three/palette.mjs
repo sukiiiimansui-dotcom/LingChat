@@ -48,9 +48,12 @@ export const GROUND = {
 };
 
 /**
- * 两档风格：**共用同一套几何与材质**，只切光照/雾/天空/窗自发光/曝光/bloom。
+ * 三档风格：**共用同一套几何**，只切光照/雾/天空/窗自发光/曝光/bloom（+ 半卡通材质与干净贴图）。
  * 字段含义与 v1 的 gl.mjs STYLES 对齐（名字也照抄，方便 A/B 对色），
  * 多出来的是 three 特有的：exposure 之外还有 env（环境光强）、bloom、shadow。
+ * 🔴 顺序 = HUD 的循环顺序（main.mjs 遍历 Object.keys(STYLES)）：day → anime → dusk。
+ * 🔴 `day` / `dusk` 两档**必须保持原样**（写实基线，A/B 就靠它们）：新档只加字段，
+ *    不要往老档里塞 `toon`/`clean` —— 读的时候用 `!!st.xxx`，缺字段就是 false，老路径一个字节不变。
  */
 export const STYLES = {
   day: {
@@ -64,6 +67,26 @@ export const STYLES = {
     windowEmissive: 0.0, lampGlow: 0.0, stars: 0.0,
     exposure: 1.0, bloom: false, bloomStrength: 0.0, sunSize: 0.045,
   },
+  /**
+   * 二次元 · 日式动画的白天（口径见 ART-PLAN-ANIME.md §1，颜色跟 App 2D 那档 `themes.anime` 同调）。
+   * 两个自有的布尔档位（写实两档没有这两个字段 ⇒ 读到 undefined ⇒ 走老路径）：
+   *   · `clean`：贴图走"干净鲜艳档"（textures.mjs 去掉雨痕/脏污/裂缝/补丁，提亮加饱和、窗框加粗）；
+   *   · `toon` ：楼体五个桶（wall0..3 + shop）换 MeshToonMaterial + 4 级渐变图（半卡通）；
+   *   · `outline`：楼体五个桶挂 OutlineEffect 描边（深藏青，与 App 2D 那档同色）。
+   * 太阳方向**与写实白天同向**（阴影方向不变 ⇒ 两档能直接 A/B）。
+   */
+  anime: {
+    key: 'anime', name: '二次元白天',
+    zenith: '#2e9bea', horizon: '#dff4ff', skyGround: '#8fb7c9',
+    sunDir: [0.42, 0.72, 0.55], sunColor: '#fff8e7', sunIntensity: 2.6, sunDisc: '#ffffff',
+    hemiSky: '#cfe9ff', hemiGround: '#c9b79a', hemiIntensity: 1.15,
+    ambient: '#bfd9f2', ambientIntensity: 0.45,
+    envIntensity: 0.7,
+    fogColor: '#d8efff', fogDensity: 0.00055,
+    windowEmissive: 0.0, lampGlow: 0.0, stars: 0.0,
+    exposure: 1.06, bloom: false, bloomStrength: 0.25, sunSize: 0.05,
+    clean: true, toon: true, outline: true,
+  },
   dusk: {
     key: 'dusk', name: '黄昏→夜晚霓虹',
     zenith: '#080e26', horizon: '#3a2a46', skyGround: '#191d2c',
@@ -76,6 +99,48 @@ export const STYLES = {
     exposure: 1.15, bloom: true, bloomStrength: 0.6, sunSize: 0.075,
   },
 };
+
+/** HUD 的循环顺序（Object.keys(STYLES) 的插入序就是它；selftest 拿它断言"顺序稳定"） */
+export const STYLE_ORDER = Object.keys(STYLES);
+
+/** 描边色：与 App 2D 那档 `themes.anime` 的 outline.color 同色（ART-PLAN-ANIME.md §4） */
+export const OUTLINE = { color: '#1b3550', thickness: 0.0025 };
+
+/**
+ * 半卡通的**渐变图**（MeshToonMaterial 的 gradientMap）：4 级色阶 0 → 0.45 → 0.72 → 1.0。
+ * "半卡通"= 有色阶但不硬边 ⇒ 每一级之间留 `soft` 宽度的平滑过渡（默认 8%，落在 6~10% 这一档）。
+ * 纯数据 + 纯函数：node 里能直接断言"级数对不对、过渡软不软"，不用开 GPU。
+ */
+export const TOON = { levels: [0, 0.45, 0.72, 1.0], soft: 0.08, size: 256 };
+
+/**
+ * 生成渐变图的像素（length = n，值 0..255）；x 轴 = 光照点积（0..1）。
+ * 每一级的形状 = **平台段 + 平台前一段 `soft` 宽的平滑过渡**（smoothstep，默认 8%）：
+ *   · 中间两级（0.45 / 0.72）的平台正好从该级的位置开始；
+ *   · 最上面那一级（1.0）在 t=1 处，若照搬会只剩 1 个纹素 ⇒ 把它压到 `1-soft/2` 起平台，
+ *     这样"最亮那一级"也有 4% 的宽度（n=256 时 10 个纹素），过渡仍然 8% 宽。
+ */
+export function toonGradientData({ levels = TOON.levels, soft = TOON.soft, n = TOON.size } = {}) {
+  const out = new Uint8Array(n);
+  const last = levels.length - 1;
+  const edge = (t, a, b, c) => {
+    const k = Math.max(0, Math.min(1, (t - (c - soft)) / (soft || 1e-6)));
+    return a + (b - a) * (k * k * (3 - 2 * k));
+  };
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    let v = levels[0];
+    for (let k = 1; k < levels.length; k++) {
+      const b = levels[k];
+      const c = k === last ? Math.min(b, 1 - soft / 2) : b;      // 顶级的平台起点（见函数注释）
+      if (t >= c) { v = b; continue; }
+      if (t > c - soft) { v = edge(t, levels[k - 1], b, c); continue; }
+      break;
+    }
+    out[i] = Math.round(Math.max(0, Math.min(1, v)) * 255);
+  }
+  return out;
+}
 
 /** 风格里所有颜色字段的名（selftest 用它确保每档都齐） */
 export const STYLE_COLOR_KEYS = ['zenith', 'horizon', 'skyGround', 'sunColor', 'hemiSky', 'hemiGround', 'ambient', 'fogColor', 'sunDisc'];
@@ -108,4 +173,46 @@ export function hex(c) {
   const [r, g, b] = toRgb(c);
   const h = (v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0');
   return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+/** 两个颜色按 k 混合（k=0 取 a，k=1 取 b），回 '#rrggbb' */
+export function mix(a, b, k = 0.5) {
+  const [r1, g1, b1] = toRgb(a);
+  const [r2, g2, b2] = toRgb(b);
+  const t = Math.max(0, Math.min(1, k));
+  return hex([r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t]);
+}
+
+/** 感知亮度（0..1）——自检用它断言"干净档确实更亮" */
+export function lumaOf(c) {
+  const [r, g, b] = toRgb(c);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** 彩度（max-min，0..1）：比 HSV 饱和度更适合表达"颜色更艳" —— 提亮会压低 HSV 饱和度、但不压彩度 */
+export function chromaOf(c) {
+  const [r, g, b] = toRgb(c);
+  return Math.max(r, g, b) - Math.min(r, g, b);
+}
+
+/** HSV 饱和度（0..1；max=0 时算 0）——自检用它断言"干净档仍带色相（不是纯灰）" */
+export function satOf(c) {
+  const [r, g, b] = toRgb(c);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  return mx <= 0 ? 0 : (mx - mn) / mx;
+}
+
+/**
+ * 提亮 + 加饱和（"干净鲜艳档"的基色变换）：先绕亮度轴把颜色拉开，再整体往白提。
+ * 日式动画的墙 = 米白/奶油/浅灰蓝 ⇒ 靠这两个旋钮 + 一点点色相偏移就够，
+ * **不要去堆贴图细节**（BA 的口径：质感最小化、颜色说话）。
+ * @param {string|number[]} c 基色
+ * @param {{sat?:number,lift?:number}} o sat>1 更艳、lift>0 更亮（都 clamp 到 0..1）
+ */
+export function vivid(c, { sat = 1.5, lift = 0.22 } = {}) {
+  const [r, g, b] = toRgb(c);
+  const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const s = (v) => Math.max(0, Math.min(1, v + (v - l) * (sat - 1)));
+  const f = (v) => Math.max(0, Math.min(1, v + (1 - v) * lift));
+  return hex([f(s(r)), f(s(g)), f(s(b))]);
 }

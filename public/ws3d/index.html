@@ -128,6 +128,9 @@
   <div><b>阴影</b>：按钮「阴影」 · <kbd>P</kbd>；<b>细节</b>：按钮 · <kbd>L</kbd></div>
   <div><b>半径</b>：按钮「半径−/＋」 · <kbd>[</kbd> <kbd>]</kbd>（300m~2000m）</div>
   <div><b>换城</b>：按钮「换一座城」 · <kbd>R</kbd>；<b>泛光</b>：按钮 · <kbd>B</kbd></div>
+  <div><b>描边</b>：按钮「描边」 · <kbd>O</kbd>（二次元档默认开，写实两档默认关）</div>
+  <div><b>清晰度</b>：按钮「清晰度」在 3× / 2× / 1.5× / 1× 之间轮换（默认 3×）</div>
+  <div><b>抗锯齿</b>：按钮「抗锯齿」在 关 / 2× / 4× 之间轮换（默认关，dpr 3 本身就是超采样）</div>
   <div><b>角色</b>：按钮「角色」 · <kbd>C</kbd> 在 DeepSeek / 诺一钦灵 / 风雪 之间轮换</div>
   <div><b>面板</b>：按钮「面板」 · <kbd>H</kbd> 收起/展开这个说明</div>
   <div class="sec">无 GPU/无 WebGL2 时会出诊断面板，数据照样取完（不会白屏）。</div>
@@ -144,6 +147,9 @@
   <button class="btn" data-act="radius+">半径＋<b id="b-radius2">—</b></button>
   <button class="btn" data-act="seed">换城<b id="b-seed">换一座城</b></button>
   <button class="btn" data-act="bloom">泛光<b id="b-bloom">跟昼夜</b></button>
+  <button class="btn" data-act="outline">描边<b id="b-outline">跟风格</b></button>
+  <button class="btn" data-act="dpr">清晰度<b id="b-dpr">3×</b></button>
+  <button class="btn" data-act="msaa">抗锯齿<b id="b-msaa">关</b></button>
   <button class="btn" data-act="char">角色<b id="b-char">DeepSeek</b></button>
   <button class="btn" data-act="help">面板<b id="b-help">操作说明</b></button>
 </div>

@@ -54,11 +54,20 @@ on:
     # 把当前开发分支加进来：推送即构建，别再让代码只靠本地 `vue-tsc` / `vite build` 兜着。
     branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
     paths:
-      - 'src/**'
+      # 2026-10-05 收窄（主人原话「干什么都会触发 ci」）：这一份是**原生侧**验证 ⇒ 只有 Rust/原生相关
+      # 改动才自动跑。前端（`src/**`、`public/**`）由「轻量检查」每次推都验；原生构建另有**每天定时一次**
+      # （下面的 `schedule`）+ 手动触发（`workflow_dispatch`）兜底。
       - 'src-tauri/**'
-      - 'crates/**'          # 上游对齐后 Rust 业务模块的新家（dev 的 workspace 重构）；master 现在还没有这个目录，先占位
-      - 'public/world_map/**'
+      - 'crates/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.cargo/**'
       - '.github/workflows/map-apk.yml'
+
+  # 每天 01:30（UTC+8）跑一次，保证"全平台"不会因为收窄触发而长期没人验
+  schedule:
+    - cron: '30 17 * * *'
 
   workflow_dispatch:
     inputs:

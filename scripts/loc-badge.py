@@ -24,6 +24,7 @@ import argparse
 import glob
 import json
 import os
+import pathlib
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -186,12 +187,42 @@ def write_badges(out, per_lang, upstream=None):
     return badges
 
 
+
+README_BEGIN = "<!-- LOC-BADGE:BEGIN（这段由 .github/workflows/loc-badge.yml 每天重写，别手改） -->"
+README_END = "<!-- LOC-BADGE:END -->"
+
+
+def readme_block(per_lang, upstream=None):
+    """首页里那段静态数字（取代原来的 shields 实时徽章）。"""
+    total = total_of(per_lang)
+    rust = lang_of(per_lang, "Rust")
+    frontend = lang_of(per_lang, "TypeScript", "Vue")
+    line = (f"**代码量**（不含空行与整行注释）　本仓 **{human(total)}** "
+            f"（Rust {human(rust)} · 前端 TS+Vue {human(frontend)} · 其它 {human(total - rust - frontend)}）")
+    if upstream is not None:
+        up = total_of(upstream)
+        line += f"　·　官方 dev **{human(up)}**　·　**净增 {human(total - up)}**"
+    return line
+
+
+def write_readme(path, per_lang, upstream=None):
+    """只重写 BEGIN/END 之间那一行；标记不在就报错（不猜、不新建）。"""
+    p = pathlib.Path(path)
+    t = p.read_text(encoding="utf-8")
+    i, j = t.find(README_BEGIN), t.find(README_END)
+    if i < 0 or j < 0 or j < i:
+        raise SystemExit(f"❌ {path} 里找不到 LOC-BADGE 标记（BEGIN/END），拒绝改写")
+    new = f"{README_BEGIN}\n{readme_block(per_lang, upstream)}\n{README_END}"
+    p.write_text(t[:i] + new + t[j + len(README_END):], encoding="utf-8")
+    return readme_block(per_lang, upstream)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=DEFAULT_ROOT, help="要数的树（默认本仓库）")
     ap.add_argument("--upstream", help="官方那棵树；给了就同时出「官方」与「净增」徽章")
     ap.add_argument("--out", help="写徽章 JSON 的目录（不存在就建）")
     ap.add_argument("--json", action="store_true", help="打印机器可读结果")
+    ap.add_argument("--readme", help="把首页里 LOC-BADGE 标记之间那段重写成静态数字")
     args = ap.parse_args()
 
     per_lang = count_tree(args.root)
@@ -229,6 +260,10 @@ def main():
             else:
                 v = per_lang[lang]
                 print(f"  {lang:<12s} {v['code']:>9d} {v['comment']:>9d} {v['blank']:>9d} {v['files']:>6d}")
+
+    if args.readme:
+        line = write_readme(args.readme, per_lang, upstream)
+        print(f"\n已重写 {args.readme} 的代码量段：\n  {line}")
 
     if args.out:
         write_badges(args.out, per_lang, upstream)

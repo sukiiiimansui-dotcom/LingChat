@@ -16,18 +16,10 @@ name: 代码量徽章
 #
 # 触发：推源码时跑一次（**推送即更新**，约 20 秒）+ 每天兜底一次 + 手动。改这份 workflow 自己也会跑。
 on:
-  push:
-    branches: ['feat/worldsim', 'feat/world-map-**']
-    paths:
-      - 'src/**'
-      - 'src-tauri/src/**'
-      - 'crates/**'
-      - 'scripts/**'
-      - 'public/**'
-      - 'wsbench/**'
-      - '*.html'
-      - 'scripts/loc-badge.py'
-      - '.github/workflows/loc-badge.yml'
+  # 2026-10-06 改：**不再每次推源码都更新**。理由是它每次都往 `badges` 分支写一条机器提交，
+  # 一天几十条会把仓库的提交流/通知刷得全是"更新代码量徽章"，还容易让人误点进那条分支
+  # （机主："我点仓库任何地方然后返回首页都自动跳转 badges"）。
+  # 现在只在每天 02:20（UTC+8）与手动触发时更新 —— 徽章仍然够"实时"，但不再刷屏。
   schedule:
     - cron: '20 18 * * *'   # 每天 02:20（UTC+8）兜底
   workflow_dispatch:

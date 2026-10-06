@@ -18,9 +18,10 @@ import { snapShadowLight } from './shadowsnap.mjs';
 import { createCharacter, CHARACTERS } from './character.mjs';
 import { validateLayout, sanitizeLayout, walkTest } from './validate.mjs';
 import { STYLES, STYLE_ORDER, GROUND, OUTLINE, toRgb } from './palette.mjs';
+import { outlineSpecFor } from './toon.mjs';
 import {
   LEVELS, DPR_MAX, DPR_PRESETS, MSAA_MODES, SHADOW_AREA, SHADOW_EVERY,
-  pickDpr, pickMsaa, pickShadowRes, adaptiveStep, renderPath,
+  pickDpr, pickMsaa, pickShadowRes, adaptiveStep, renderPath, dprLabel,
 } from './quality.mjs';
 
 const $ = (s) => document.querySelector(s);
@@ -56,6 +57,8 @@ export const state = {
   autoQuality: flag('auto', true),
   quality: 0, qualityWhy: '未测',
   outline: Q.has('outline') ? Q.get('outline') !== '0' : null,   // null = 跟风格档（二次元档默认开）；?outline=0/1 覆盖
+  // 描边粗细的现场覆盖（`?outlineW=0.004`）：风格档给的是默认值，真机上想细调不用重发页面
+  outlineW: Q.has('outlineW') ? parseFloat(Q.get('outlineW')) : null,
   outlineOn: false, outlineCompiled: false,
   errors: [], ready: false,
   layout: null, walk: null, gen: {},
@@ -148,6 +151,8 @@ async function retryLocationInBackground() {
 
 // ── 渲染器 ───────────────────────────────────────────────────────────────────
 let renderer = null, composer = null, bloomPass = null, sharpenPass = null, scene = null, camera = null, outline = null;
+// 每帧要用的临时量（不在渲染循环里 new，免得每帧造垃圾）
+const _toonV = new THREE.Vector3(), _toonQ = new THREE.Quaternion();
 
 /**
  * 锐化 pass（`?sharp=1`）：4 抽头 unsharp。**只在"渲染分辨率低于原生"时才有意义** ——
@@ -259,7 +264,11 @@ function level() { return LEVELS[Math.min(state.quality, LEVELS.length - 1)]; }
 function sizeRenderer() {
   if (!renderer) return;
   // 🔴 dpr 只由 查询串 / 页面开关 / 默认满档 三者决定，**画质档与自适应都不参与**
-  const dpr = pickDpr({ devicePixelRatio: window.devicePixelRatio || 1, query: state.dprQuery, ui: state.dprUi });
+  const native = window.devicePixelRatio || 1;
+  const dpr = pickDpr({ devicePixelRatio: native, query: state.dprQuery, ui: state.dprUi });
+  // 原生 dpr 原值单独留一份：HUD 上要跟"实际生效的 dpr"并排显示（浏览器报 1.5 时一眼看出是页面缩放而不是手机就这样）。
+  // 只读不参与任何计算 —— pickDpr 的取档逻辑一个字都没动。
+  state.dprNative = native;
   state.dpr = dpr;
   renderer.setPixelRatio(dpr);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -314,7 +323,11 @@ function applyStyle() {
   requestShadow();
   // 描边：显式 ?outline= 优先，否则跟风格档（day/dusk 没有这字段 ⇒ 关）
   const wantOutline = state.outline === null ? !!st.outline : !!state.outline;
-  if (world && world.setOutline) world.setOutline(wantOutline && !!outline);
+  // 粗细与颜色**从风格档取**（不是硬编码）：anime 档在 palette 里写死了 outlineThickness / outlineColor，
+  // `?outlineW=` 覆盖粗细 —— 真机上想现场调粗细不必重发页面。
+  const ospec = outlineSpecFor(st, { width: state.outlineW });
+  state.outlineThickness = ospec.thickness; state.outlineColor = ospec.color; state.outlineWUsed = state.outlineW;
+  if (world && world.setOutline) world.setOutline(wantOutline && !!outline, ospec);
   state.outlineOn = !!(wantOutline && outline);
   hud();
 }
@@ -454,7 +467,9 @@ function hud(now) {
   set('#h-gen', r.gen.cityMs !== undefined ? `城 ${r.gen.cityMs}ms · 风格 ${r.gen.styleMs}ms · 几何 ${r.gen.buildMs}ms · 启动 ${r.bootMs}ms` : '—');
   set('#h-render', r.renderName ? String(r.renderName).slice(0, 44) : '—');
   const L = level();
-  set('#qual', `${r.quality}/${LEVELS.length - 1} ${L.name} · dpr ${(r.dpr || 0).toFixed(2)} · 阴影 ${r.shadowSize || 0}² · ${r.qualityWhy}`);
+  // 括号里的"原生"是浏览器报的 devicePixelRatio **原值**：它是 1.5 就说明是页面缩放/桌面模式把 dpr 除下去了，
+  // 不是手机天生只有 1.5（pickDpr 一个字没动，这里只是把它读出来给人看）。
+  set('#qual', `${r.quality}/${LEVELS.length - 1} ${L.name} · ${dprLabel(r.dpr, r.dprNative)} · 阴影 ${r.shadowSize || 0}² · ${r.qualityWhy}`);
   // 按钮上直接写当前档位（主人要求：不要只写快捷键）
   set('#b-view', r.third ? '第三人称' : '第一人称');
   set('#b-style', STYLES[r.style].name);
@@ -677,6 +692,15 @@ function tick(dt, now) {
     const lodNear = Q.has('lodNear') ? parseFloat(Q.get('lodNear')) : L.near;
     const lodMid = Q.has('lodMid') ? parseFloat(Q.get('lodMid')) : L.mid;
     state.lod = world.update(char.pos.x, char.pos.z, lodNear, lodMid, state.detail);
+  }
+  // 二次元档的分色染色要算"受光比"：着色器里要的是 **view space** 的太阳方向
+  // （跟 three 的 `directLight.direction` 同一个空间，不然明暗阶与色阶会对不上）。
+  // 相机每帧都在转 ⇒ 每帧转一个向量，代价可忽略；写实两档也照转，只是那边的材质根本不读它。
+  if (world && world.setToonSunDirView && camera) {
+    const sd = STYLES[state.style].sunDir;
+    _toonQ.copy(camera.quaternion).invert();
+    _toonV.set(sd[0], sd[1], sd[2]).applyQuaternion(_toonQ).normalize();
+    world.setToonSunDirView([_toonV.x, _toonV.y, _toonV.z]);
   }
   // 上下文丢了就别再画（three 自己也会 early-return，但那样会把 draws 读数刷成 0）
   const glLost = renderer && renderer.getContext().isContextLost && renderer.getContext().isContextLost();
@@ -931,6 +955,8 @@ export function snapshot() {
 
 function buildSnapshot() {
   const r = state;
+  // 描边参数：世界建好就问它要（那才是真正生效的），没建好时退到 palette 的兜底默认值
+  const outlineNow = () => ((world && world.outlineSpec) ? world.outlineSpec() : { thickness: OUTLINE.thickness, color: OUTLINE.color });
   return {
     ready: r.ready, errors: r.errors, diag: r.diag,
     gl: r.gl ? { ok: r.gl.ok, reason: r.gl.reason || null, renderer: r.gl.renderer || null, lost: r.glLostCount > 0, lostCount: r.glLostCount, autoShadowOff: !!r.autoShadowOff } : null,
@@ -940,8 +966,10 @@ function buildSnapshot() {
     dens: r.city ? densityReport((r.styled && r.styled.buildings) || [], r.radius) : null,
     mesh: r.mesh ? { tris: r.mesh.stats.trisTotal, verts: r.mesh.stats.verts, stats: r.mesh.stats } : null,
     perf: { fps: r.fps, frameMs: +r.frameMs.toFixed(2), bootMs: r.bootMs, gen: r.gen, draws: r.draws, path: r.path || null, outline: r.outlineOn,
-      outlineExplicit: r.outline, outlineThickness: OUTLINE.thickness, outlineColor: OUTLINE.color,
-      msaa: r.msaa, msaaUi: r.msaaUi, msaaQuery: r.msaaQuery, dprUi: r.dprUi, dprQuery: r.dprQuery,
+      // 描边的粗细/颜色报**当前实际生效的那份**（来自风格档，world.outlineSpec()），不是 palette 里的兜底常量
+      outlineExplicit: r.outline, outlineThickness: outlineNow().thickness, outlineColor: outlineNow().color, outlineWQuery: r.outlineW,
+      toonFx: world && world.toonFx ? world.toonFx() : null,
+      msaa: r.msaa, msaaUi: r.msaaUi, msaaQuery: r.msaaQuery, dprUi: r.dprUi, dprQuery: r.dprQuery, dprNative: r.dprNative,
       firstFrame: r.firstFrame || null, outlineDraws: r.outlineDraws === undefined ? null : r.outlineDraws,
       programsOutlineOk: r.programsOutlineOk === undefined ? null : r.programsOutlineOk,
       programsOutline: r.programsOutline ? r.programsOutline.length : null, programsOutlineSkipped: r.programsOutlineSkipped || null,

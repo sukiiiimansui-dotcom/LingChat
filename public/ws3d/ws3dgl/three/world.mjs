@@ -13,6 +13,7 @@ import {
 } from '../vendor/three.min.js';
 import { buildTextureSet, TILE } from './textures.mjs';
 import { TIERS, GROUND, ACCENT, toRgb, shade, TOON, toonGradientData, OUTLINE } from './palette.mjs';
+import { patchToonFragment, toonUniformValues } from './toon.mjs';
 
 /** 半卡通只给"楼体"这五个桶：地面/屋面/道具保持 Standard（大面积色阶容易显脏，量完再说） */
 export const TOON_BUCKETS = ['wall0', 'wall1', 'wall2', 'wall3', 'shop'];
@@ -37,8 +38,30 @@ export function makeToonGradientMap({ levels = TOON.levels, soft = TOON.soft, si
 }
 
 /**
+ * 半卡通材质的 uniform（**每个材质一套**，所以在按 uuid 缓存程序之后改值仍然生效）。
+ * 全部是只在 MeshToonMaterial 上编译进去的东西：写实那两档用的是 MeshStandardMaterial，
+ * 连这段 GLSL 都不会被编译 —— "写实档一个字节不变"是从这里开始的。
+ */
+export function makeToonUniforms() {
+  const v3 = (x, y, z) => new Vector3(x, y, z);
+  return {
+    uToonOn: { value: 0 },
+    uToonSunDirView: { value: v3(0, 1, 0) },        // 太阳方向（view space），每帧由 main 更新
+    uToonLitTint: { value: v3(1, 1, 1) }, uToonLitStrength: { value: 0 },
+    uToonShadowTint: { value: v3(1, 1, 1) }, uToonShadowStrength: { value: 0 },
+    uToonAmbientTint: { value: v3(1, 1, 1) }, uToonAmbientStrength: { value: 0 },
+    uToonRimColor: { value: v3(1, 1, 1) }, uToonRimThreshold: { value: 1 },
+    uToonRimStrength: { value: 0 }, uToonRimPower: { value: 1 },
+  };
+}
+
+/**
  * 建一个桶的材质（**运行时用的就是这个工厂**，自检拿它断言 instanceof 是哪种）。
  * toon 保留 map / emissiveMap / vertexColors（每栋色偏），但不吃 roughness/metalness（Toon 没有这两项）。
+ *
+ * toon 这一支额外挂 `onBeforeCompile`：把分色染色与边缘光**补进 three 自己的 toon 片元着色器**
+ * （不换 ShaderMaterial ⇒ 光照/阴影/雾/环境贴图/顶点色全都照旧，只多一段算式；
+ * 补丁本身在 toon.mjs 里，是纯字符串函数，node 里能断言）。
  */
 export function makeBucketMaterial(kind, spec = {}) {
   const base = { map: spec.map || null, vertexColors: true };
@@ -47,7 +70,21 @@ export function makeBucketMaterial(kind, spec = {}) {
     base.emissive = new Color(1, 1, 1);
     base.emissiveIntensity = spec.emissiveIntensity || 0;
   }
-  if (kind === 'toon') return new MeshToonMaterial(Object.assign(base, { gradientMap: spec.gradientMap || null }));
+  if (kind === 'toon') {
+    const m = new MeshToonMaterial(Object.assign(base, { gradientMap: spec.gradientMap || null }));
+    const uniforms = makeToonUniforms();
+    m.userData.toonUniforms = uniforms;
+    m.onBeforeCompile = (shader) => {
+      const r = patchToonFragment(shader.fragmentShader);
+      // 锚点没找到就**明着记下来**：three 升级换了 chunk 名时，画面上只会"染色悄悄没了"
+      if (!r.ok) m.userData.toonPatchMissing = r.missing;
+      shader.fragmentShader = r.src;
+      Object.assign(shader.uniforms, uniforms);
+    };
+    // 补丁的开关只跟 uniform 走（不换源码）⇒ 程序缓存键不用带它，但带上更稳妥
+    m.customProgramCacheKey = () => 'wsToon';
+    return m;
+  }
   return new MeshStandardMaterial(Object.assign(base, {
     roughness: spec.roughness === undefined ? 0.9 : spec.roughness,
     metalness: spec.metalness === undefined ? 0 : spec.metalness,
@@ -372,9 +409,54 @@ export function createWorld(meshData, opts = {}) {
     }
   };
 
+  /**
+   * 分色染色 / 边缘光的参数：**全部从风格档取**（`toonUniformValues` 是纯函数，自检直接断言它）。
+   * 写实两档没有 `toonTint`/`toonRim` ⇒ `on=0` ⇒ 着色器里是恒等变换（乘 1、加 0）。
+   */
+  const applyToonParams = (style) => {
+    const v = toonUniformValues(style);
+    for (const m of Object.values(toonMats)) {
+      const u = m.userData.toonUniforms;
+      if (!u) continue;
+      u.uToonOn.value = v.on;
+      u.uToonLitTint.value.set(v.litTint[0], v.litTint[1], v.litTint[2]);
+      u.uToonLitStrength.value = v.litStrength;
+      u.uToonShadowTint.value.set(v.shadowTint[0], v.shadowTint[1], v.shadowTint[2]);
+      u.uToonShadowStrength.value = v.shadowStrength;
+      u.uToonAmbientTint.value.set(v.ambientTint[0], v.ambientTint[1], v.ambientTint[2]);
+      u.uToonAmbientStrength.value = v.ambientStrength;
+      u.uToonRimColor.value.set(v.rimColor[0], v.rimColor[1], v.rimColor[2]);
+      u.uToonRimThreshold.value = v.rimThreshold;
+      u.uToonRimStrength.value = v.rimStrength;
+      u.uToonRimPower.value = v.rimPower;
+    }
+  };
+  /** 太阳方向（view space）：着色器里的受光比得跟 three 的 `directLight.direction` 同一个空间，所以每帧更新 */
+  const setToonSunDirView = (v) => {
+    for (const m of Object.values(toonMats)) {
+      const u = m.userData.toonUniforms;
+      if (u) u.uToonSunDirView.value.set(v[0], v[1], v[2]);
+    }
+  };
+  /** 动画感三件的读数（纯读）：染色/边缘光开没开、强度多少、补丁锚点是不是还在 */
+  const toonFx = () => {
+    const mats = Object.values(toonMats).filter(Boolean);
+    const u0 = mats.length && mats[0].userData.toonUniforms;
+    return {
+      on: !!(u0 && u0.uToonOn.value > 0), toon: toonNow,
+      patchMissing: (mats.map((m) => m.userData.toonPatchMissing).find((x) => x)) || null,
+      litStrength: u0 ? u0.uToonLitStrength.value : null,
+      shadowStrength: u0 ? u0.uToonShadowStrength.value : null,
+      ambientStrength: u0 ? u0.uToonAmbientStrength.value : null,
+      rimStrength: u0 ? u0.uToonRimStrength.value : null,
+      rimThreshold: u0 ? u0.uToonRimThreshold.value : null,
+    };
+  };
+
   /** 切风格：只改材质/光照参数与贴图指针，几何一根线都不动 */
   const setStyle = (style) => {
     applyBucketKind(style);
+    applyToonParams(style);
     const wantClean = !!style.clean;
     if (wantClean !== texClean) {
       const t0 = tTex();
@@ -416,22 +498,43 @@ export function createWorld(meshData, opts = {}) {
   for (const m of Object.values(materials)) {
     if (!m.userData.outlineParameters) m.userData.outlineParameters = { visible: false };
   }
-  /** 描边开关：只翻楼体五个桶的 outlineParameters.visible（两套材质一起翻），几何与贴图都不动 */
+  /**
+   * 描边开关 + **参数**：只翻/改楼体五个桶的 `outlineParameters`（两套材质一起改），几何与贴图都不动。
+   * 粗细与颜色由调用方从风格档算好传进来（`toon.mjs` 的 `outlineSpecFor()`）：
+   * OutlineEffect 每帧在 onBeforeRender 里读这三个值写 uniform ⇒ 切风格当场变，不重建材质。
+   * 不传 spec 时退到 palette.OUTLINE（老调用点 `setOutline(true)` 的行为逐字不变）。
+   */
   let outlineOn = false;
-  const setOutline = (on) => {
+  // 描边当前实际生效的那份参数（探针/HUD 读它，证明"粗细颜色真的来自风格档"）
+  let outlineSpec = { thickness: OUTLINE.thickness, color: OUTLINE.color, alpha: 1 };
+  const setOutline = (on, spec = null) => {
     outlineOn = !!on;
+    const s = spec || {};
+    const thickness = Number.isFinite(Number(s.thickness)) && Number(s.thickness) > 0 ? Number(s.thickness) : OUTLINE.thickness;
+    const color = Array.isArray(s.color) ? s.color.slice(0, 3) : toRgb(s.color || OUTLINE.color);
+    const alpha = Number.isFinite(Number(s.alpha)) ? Number(s.alpha) : 1;
     for (const bucket of TOON_BUCKETS) {
       for (const set2 of [stdMats, toonMats]) {
         const m = set2[bucket];
-        if (m && m.userData.outlineParameters) m.userData.outlineParameters.visible = outlineOn;
+        if (m && m.userData.outlineParameters) {
+          m.userData.outlineParameters.visible = outlineOn;
+          m.userData.outlineParameters.thickness = thickness;
+          m.userData.outlineParameters.color = color;
+          m.userData.outlineParameters.alpha = alpha;
+        }
       }
     }
+    outlineSpec = { thickness, color: '#' + color.map((c) => Math.round(Math.max(0, Math.min(1, c)) * 255).toString(16).padStart(2, '0')).join(''), alpha };
     return outlineOn;
   };
 
   return {
     group, meshes, instanced, chunks, cell, glowPoints, materials, textures: tex, update, setStyle, dispose, lodStats, drawEstimate, tune,
     setOutline, isOutline: () => outlineOn,
+    outlineSpec: () => ({ ...outlineSpec, on: outlineOn }),
+    setToonSunDirView, applyToonParams,
+    // 动画感三件的读数（探针/HUD 读）：染色边缘光开没开、补丁锚点找到了没有
+    toonFx: () => toonFx(),
     isClean: () => texClean, texMs: () => texMs, applyTextures,
     // 半卡通读数（探针/自检读）：当前是不是 toon、五个桶各自用的哪种材质
     isToon: () => toonNow,

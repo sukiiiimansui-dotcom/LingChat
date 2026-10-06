@@ -109,3 +109,22 @@ export function renderPath({ hasComposer = false, bloomOn = false, sharpOn = fal
 
 /** 描边参数（与 App 2D 那档同色；thickness 见 ART-PLAN-ANIME.md §4） */
 export function outlineParams() { return { color: OUTLINE.color, thickness: OUTLINE.thickness }; }
+
+/**
+ * dpr 的**显示写法**：1.5 就写 1.5、3 就写 3（不补零）。
+ * 纯函数放这里是为了自检能断言（main.mjs 一 import 就碰 window，node 里进不去）。
+ */
+export function fmtDpr(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n.toFixed(2).replace(/\.?0+$/, '') : '?';
+}
+
+/**
+ * HUD 上"画质档"那一行里的 dpr 段：**实际生效值 + 浏览器报的原生值**。
+ * 为什么要并排显示：主人真机上看到 dpr 1.50，但按 `min(devicePixelRatio,3)` 手机本该报 3 ——
+ * 只有把 `window.devicePixelRatio` 的原值摆出来，才能一眼看出是"浏览器被缩放/桌面模式"而不是手机只有 1.5。
+ * ⚠️ 这里**只负责显示**，取档逻辑一个字都没动（还是 pickDpr）。
+ */
+export function dprLabel(dpr, native) {
+  return `dpr ${(Number.isFinite(Number(dpr)) ? Number(dpr) : 0).toFixed(2)} (原生 ${fmtDpr(native)})`;
+}

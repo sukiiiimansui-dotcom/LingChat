@@ -1926,7 +1926,7 @@ mod tests {
         let r = plan_route(GUANGZHOU, SHENZHEN, Some("传送门"), Some(false), None, "随便", None);
         assert!(r.get("mode").is_some(), "未知 prefer 应退回自动推荐");
         let unknown = build_route("hoverboard", (0.0, 0.0), (1.0, 1.0), None, false, "", None);
-        assert!(unknown["steps"].as_array().unwrap().len() >= 1, "未知方式退化成 walk 而不是 panic");
+        assert!(!unknown["steps"].as_array().unwrap().is_empty(), "未知方式退化成 walk 而不是 panic");
         let _ = fare_of("hoverboard", 10.0);
         let _ = ride_minutes("hoverboard", 10_000.0);
         // 未知 key 混进 only：跳过（Python 会 KeyError）
@@ -2045,7 +2045,7 @@ mod tests {
             auto_r["cost"]
         );
         assert!(cheap["reason"].as_str().unwrap().starts_with("最便宜"));
-        assert!(cheap["options"].as_array().unwrap().len() >= 1);
+        assert!(!cheap["options"].as_array().unwrap().is_empty());
         let pub_r = plan_route(GUANGZHOU, SHENZHEN, Some("公共交通"), Some(false), Some(true), "balanced", None);
         assert!(
             PUBLIC_MODES.contains(&pub_r["mode"].as_str().unwrap()),
@@ -2095,8 +2095,8 @@ mod tests {
         assert!((trip["progress"].as_f64().unwrap() - 1.0).abs() < 1e-9);
         assert_eq!(trip["remaining_min"], json!(0.0));
         let pl = trip_polyline(&trip);
-        assert!(pl["done"].as_array().unwrap().len() >= 1);
-        assert!(pl["remain"].as_array().unwrap().len() >= 1);
+        assert!(!pl["done"].as_array().unwrap().is_empty());
+        assert!(!pl["remain"].as_array().unwrap().is_empty());
         assert_eq!(pl["remain"][0], route["to"]);
 
         // t=0 在起点、t=中点夹在起终点之间
@@ -2208,7 +2208,7 @@ mod tests {
         assert_eq!(res["route"]["mode"], json!("train"));
         assert!(res["route"]["duration_text"].as_str().unwrap().ends_with("分")
             || res["route"]["duration_text"].as_str().unwrap().ends_with("小时"));
-        assert!(res["options"].as_array().unwrap().len() >= 1);
+        assert!(!res["options"].as_array().unwrap().is_empty());
         assert_eq!(res["modes"].as_array().unwrap().len(), 9);
         // 普通 {k:v} 也认
         let kv = api_plan(&json!({

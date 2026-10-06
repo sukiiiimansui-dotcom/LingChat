@@ -307,7 +307,7 @@ mod tests {
         let r = v["roads"].as_array().unwrap();
         assert!(b.len() >= 10, "至少要有十几栋楼，实际 {}", b.len());
         assert!(r.len() >= 4, "至少要有骨架路网，实际 {}", r.len());
-        assert!(v["parks"].as_array().unwrap().len() >= 1, "应有中心绿地");
+        assert!(!v["parks"].as_array().unwrap().is_empty(), "应有中心绿地");
         // 建筑必须落在网格内
         for it in b {
             let (x, y, w, h) = (

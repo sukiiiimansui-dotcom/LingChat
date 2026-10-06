@@ -1046,7 +1046,7 @@ fn type_id_key(f: &Value) -> (String, String) {
 
 /// 按 `(type, id)` 排序（稳定排序，等价于 Python 的 list.sort）
 fn sort_by_type_id(v: &mut [Value]) {
-    v.sort_by(|a, b| type_id_key(a).cmp(&type_id_key(b)));
+    v.sort_by_key(type_id_key);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

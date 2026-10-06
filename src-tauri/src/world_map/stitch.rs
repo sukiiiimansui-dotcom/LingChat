@@ -1204,9 +1204,8 @@ pub fn stitch(inp: &StitchInput) -> Result<StitchOut, String> {
         let tk = tile_key(t, &o.style, t.hi || o.detail, o.seed);
         let rel = format!("{prefix}/tiles/{tk}.svg");
         let body = if !inp.refresh {
-            load_svg(inp.lib, &rel).map(|svg| {
+            load_svg(inp.lib, &rel).inspect(|_| {
                 reused += 1;
-                svg
             })
         } else {
             None

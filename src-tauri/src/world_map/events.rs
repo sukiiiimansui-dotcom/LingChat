@@ -1219,8 +1219,7 @@ fn placeholder_value(key: &str, ctx: &EventContext, rng: &mut impl FnMut() -> f6
                 .area
                 .split('·')
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .next_back()
+                .rfind(|s| !s.is_empty())
                 .unwrap_or("");
             if tail.is_empty() {
                 "附近".to_string()

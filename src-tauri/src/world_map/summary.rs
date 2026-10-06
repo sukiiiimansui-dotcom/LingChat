@@ -532,7 +532,7 @@ pub fn memory_block(lines: &[&str], recent: Option<&str>, limit: usize) -> (Stri
             continue;
         }
         // ② 队列内部重复：第一条已经交付过 → 这一条也算交付
-        if seen.iter().any(|s| *s == key) {
+        if seen.contains(&key) {
             delivered.push(i);
             continue;
         }

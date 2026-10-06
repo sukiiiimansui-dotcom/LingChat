@@ -219,7 +219,7 @@ pub fn type_series(st: &Value) -> Vec<(String, String, u32, f64)> {
                 .collect()
         })
         .unwrap_or_default();
-    rows.sort_by(|a, b| b.2.cmp(&a.2));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.2));
     rows
 }
 

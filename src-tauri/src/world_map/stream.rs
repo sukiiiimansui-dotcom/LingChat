@@ -141,9 +141,8 @@ pub fn extract_scalar(buf: &str, key: &str) -> Option<Value> {
         if let Some(stripped) = rest.strip_prefix('"') {
             // 字符串：找到未转义的收尾引号
             let mut out = String::new();
-            let mut chars = stripped.chars();
             let mut escaped = false;
-            while let Some(c) = chars.next() {
+            for c in stripped.chars() {
                 if escaped {
                     out.push(c);
                     escaped = false;

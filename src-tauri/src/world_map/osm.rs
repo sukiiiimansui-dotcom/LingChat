@@ -924,7 +924,7 @@ fn top(counts: &HashMap<String, u32>, order: &[String], n: usize) -> Vec<Value> 
         .iter()
         .filter_map(|k| counts.get(k).map(|c| (k, *c)))
         .collect();
-    items.sort_by(|a, b| b.1.cmp(&a.1)); // 稳定排序：同数保持插入顺序
+    items.sort_by_key(|a| std::cmp::Reverse(a.1)); // 稳定排序：同数保持插入顺序
     items
         .into_iter()
         .take(n)

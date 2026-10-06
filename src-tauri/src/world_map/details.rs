@@ -36,13 +36,13 @@ fn rng_of(layout: &Value) -> StdRng {
 fn rects_of(layout: &Value) -> Vec<Rect> {
     arr(layout, "buildings")
         .iter()
-        .filter_map(|b| {
-            Some((
+        .map(|b| {
+            (
                 num(b, "x", 0.0),
                 num(b, "y", 0.0),
                 num(b, "w", 1.0),
                 num(b, "h", 1.0),
-            ))
+            )
         })
         .collect()
 }
@@ -126,7 +126,7 @@ pub fn build(layout: &Value) -> Value {
     let mut rng = rng_of(layout);
     let size = num(layout, "size", 20.0);
     let roads = arr(layout, "roads");
-    let paved: Vec<Value> = roads.iter().cloned().filter(is_paved).collect();
+    let paved: Vec<Value> = roads.iter().filter(|&x| is_paved(x)).cloned().collect();
     let main_roads: Vec<Value> = roads
         .iter()
         .filter(|r| r.get("type").and_then(|v| v.as_str()) == Some("main"))

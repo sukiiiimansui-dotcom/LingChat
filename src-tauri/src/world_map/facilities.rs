@@ -7,7 +7,7 @@
 //!   2. [`generate_transport_nodes`]：7 类交通设施（公交站/地铁站/停车场/加油站/机场/火车站/码头）。
 //!      按社区/区县/城市三级 `LEVEL_PLAN` 出不同组合：地铁从区县级起、机场只在城市级、码头必须有水体；
 //!   3. [`generate_all`]：一次出齐生活 + 交通，附 [`facility_stats`] 统计。
-//! 另配查询（[`find_facilities`] / [`facility_at`]）与前端元数据表（[`types_payload`]，与 `facilities.js` 同源）。
+//!      另配查询（[`find_facilities`] / [`facility_at`]）与前端元数据表（[`types_payload`]，与 `facilities.js` 同源）。
 //!
 //! ## 为什么这么设计
 //! · **打分而不是撒点**：原型把「城市怎么长」的直觉写成了权重表——临路 `w_road`、同类成组
@@ -35,12 +35,12 @@
 //!     可见差异；`_seg_cells` 里的 `int(round(v))` 也吃这个语义（银行家舍入，.5 取偶）。
 //!   - 浮点 `sum()` 用 Neumaier 补偿求和（[`py_sum`]），因为 Python 3.12+ 的 `sum()` 就是它，
 //!     朴素累加会差 1e-14 级。全文件只有 [`alloc`] 里那一处浮点求和（名额分摊的总权重）。
-//! · **不 panic**：原型靠异常暴露调用方 bug（KeyError / TypeError / ValueError），Rust 版对缺失字段、
-//!   类型不对、越界一律退化取值（默认值 / 跳过该条 / `FAR`），因为游戏主循环里一次 panic 就是整局崩。
-//!   唯一的例外是给 `size` 与线段采样数各加了一个安全上限（[`MAX_SIZE`] / [`MAX_SEG_SAMPLES`]），
-//!   防止畸形输入把内存打爆或让栅格化循环跑到天荒地老——正常输入永远碰不到它们。
-//! · **不依赖 `coord`**：原型 `facilities.py` 只 import math/random/hashlib（PIL 只用于可选出图），
-//!   不碰地理换算，所以本模块也不依赖兄弟模块，可以单独编译、单独测试。
+//!     · **不 panic**：原型靠异常暴露调用方 bug（KeyError / TypeError / ValueError），Rust 版对缺失字段、
+//!     类型不对、越界一律退化取值（默认值 / 跳过该条 / `FAR`），因为游戏主循环里一次 panic 就是整局崩。
+//!     唯一的例外是给 `size` 与线段采样数各加了一个安全上限（[`MAX_SIZE`] / [`MAX_SEG_SAMPLES`]），
+//!     防止畸形输入把内存打爆或让栅格化循环跑到天荒地老——正常输入永远碰不到它们。
+//!     · **不依赖 `coord`**：原型 `facilities.py` 只 import math/random/hashlib（PIL 只用于可选出图），
+//!     不碰地理换算，所以本模块也不依赖兄弟模块，可以单独编译、单独测试。
 //!
 //! ## 与 Python 原型的对应关系（函数级）
 //! | Python | Rust |

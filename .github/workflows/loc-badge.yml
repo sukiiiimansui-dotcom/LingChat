@@ -46,12 +46,28 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: mine
+
+      - name: 拉官方树（只为数行数：浅克隆 dev、不拉 LFS）
+        # 「我们净增」必须用**同一份脚本、同一口径**数两棵树才敢相减。
+        # 拿官方 `dev`（开发主线）当基准；克隆失败不算错 —— 那就只出本仓的徽章。
+        run: |
+          export GIT_LFS_SKIP_SMUDGE=1
+          git clone --depth 1 --branch dev https://github.com/SlimeBoyOwO/LingChat.git upstream \
+            || echo "⚠️ 官方树没拉下来，本轮只出本仓徽章"
+          du -sh upstream 2>/dev/null || true
 
       - name: 数行数 + 生成徽章 JSON
         run: |
-          python3 scripts/loc-badge.py --out badges
+          cd mine
+          if [ -d ../upstream/.git ]; then
+            python3 scripts/loc-badge.py --upstream ../upstream --out ../badges
+          else
+            python3 scripts/loc-badge.py --out ../badges
+          fi
           echo "--- 生成的文件 ---"
-          ls -la badges/
+          ls -la ../badges/
 
       - name: 推到 badges 分支
         run: |

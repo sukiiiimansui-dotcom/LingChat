@@ -558,7 +558,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* 🎨 MapLibre 的**样式表**注入（`link[data-ws-ml-css]`）：本组件直接 import 引擎，
      所以必须自己补这一下 —— 少了它 `.maplibregl-marker` 不是 absolute，角色钉子会掉进文档流
      （2026-10-01 机主报的「人物位置错位」就是它；证据 `~/chk/_mlcss_probe.mjs`）。 */
-  import { injectCss as ensureMlCss } from "@/composables/useWsMapLibre";
+  import { injectCss as ensureMlCss } from "@/composables/wsMapLibreCss";
   /* 🧑 切片②（2026-10-01）：面板的开关状态（模块级单例，与宿主 `WsCityEntry.vue` 读的是同一份）。
      这里只为了**一句早退**：面板开着时点地图空处先关面板（见 `onMapClick`），
      **不新开第二条 click 监听**、也不在这里开面板/画面板（PR 门禁 C1）。 */

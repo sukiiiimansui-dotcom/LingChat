@@ -1,8 +1,8 @@
 name: 世界模拟·轻量检查
 
 # 这份工作流只回答一个问题：**我们的代码能不能编译**。
-#   · 类型：`vue-tsc --noEmit --skipLibCheck`（本地每次改动都会跑，但 CI 是干净环境）
-#   · 前端产物：`vite build`
+#   · 前端构建：`pnpm build`（= 生成语言包版本值 → `vue-tsc --noEmit --skipLibCheck` → `vite build`）
+#     —— 与三条原生构建的 `beforeBuildCommand` **同一条命令**，不再各跑各的
 #   · Rust：`cargo check --all-targets`（含测试目标 ⇒ 测试代码也一起过一遍类型/借用检查）
 # 刻意**不碰 Android SDK / NDK / Gradle**：那套在一台干净的 runner 上要几分钟装、还依赖上游 action
 # 是否跟上 runner 镜像（2026-10-05 就栽过一次：`android-actions/setup-android` 默认要装 `tools`，
@@ -17,6 +17,7 @@ on:
       - 'src-tauri/**'
       - 'crates/**'          # 上游对齐后 Rust 业务模块的新家（dev 的 workspace 重构）；master 现在还没有这个目录，先占位
       - 'public/**'
+      - 'scripts/**'         # 构建脚本（prepare-desktop-resources / gen-locale-version …）也是构建输入
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'vite.config.*'
@@ -89,11 +90,13 @@ jobs:
       - name: 装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 类型检查（vue-tsc）
-        run: npx vue-tsc --noEmit --skipLibCheck
-
-      - name: 前端打包（vite build）
-        run: npx vite build
+      # 🔴 2026-10-06：这里原来是 `npx vue-tsc` + `npx vite build` 两步，与三条原生构建**实际跑的
+      # 那条命令**（`src-tauri/tauri.conf.json` 的 `beforeBuildCommand` → `pnpm build`）**不等价**：
+      # `pnpm build` 里还多一步 `node scripts/gen-locale-version.mjs`。结果那个脚本的 esbuild 调用
+      # 只在 CI 上炸（本地 Termux 布局不同 ⇒ 一直没暴露），轻量检查全绿、APK / iOS / 四平台全红。
+      # 现在直接跑**同一条命令**：这类"只在打包路径上才炸"的问题在这个 ~10 分钟的闸里就能拦住。
+      - name: 前端构建（与原生构建同一条命令）
+        run: pnpm build
 
       - name: 创建占位文件 / 生成图标 / 桌面前置资源
         # 这一整块的配方**照抄上游 `dev-build-full.yml` 的「创建占位文件和初始化」**，原因是两条实测：

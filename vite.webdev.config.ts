@@ -52,7 +52,6 @@ export default defineConfig({
         wsux: path.resolve(__dirname, "wsux.html"),       // HUD 风格板（3 套候选）
         wsgame: path.resolve(__dirname, "wsgame.html"),   // 游戏化界面 v1（全国地图，机主已指出概念不对）
         wslife: path.resolve(__dirname, "wslife.html"),   // 游戏化界面 v2：角色为主 + 街区 + 同屏对话
-        wsgeo: path.resolve(__dirname, "wsgeo.html"),
       },
     },
   },

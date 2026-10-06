@@ -204,10 +204,9 @@
    它当时排除了"无限动画"（低档 `.ws-loading *` 已经把动画全关了），剩下的就是这个。
 
    ⇒ 低档必须**显式**写 `none`。三处声明 backdrop-filter 的地方一个都不能漏
-     （`.ws-card` / `.ws-btn` / `.ws-zoomctl`；`.ws-prog` 本身带 `.ws-card`，被第一条覆盖）。 */
+     （`.ws-card` / `.ws-btn`；`.ws-zoomctl` 已随老视图退役、`.ws-prog` 本身带 `.ws-card`，被第一条覆盖）。 */
 .ws-root.ws-perf-low .ws-card,
-.ws-root.ws-perf-low .ws-btn,
-.ws-root.ws-perf-low .ws-zoomctl {
+.ws-root.ws-perf-low .ws-btn {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -248,11 +247,6 @@
 .ws-root.ws-perf-low .ws-anim-breathe {
   animation: ws-breathe 2.6s ease-in-out infinite;
 }
-/* 低端机上把「悬停时过渡 filter / box-shadow」也停掉：那是交互瞬间一次全屏重画 */
-.ws-root.ws-perf-low .ws-geo .geo-region {
-  transition: fill 0.18s ease;
-}
-
 /* 老 WebView 不支持 backdrop-filter：毛玻璃退化成纯色卡片，可读性优先 */
 @supports not (backdrop-filter: blur(1px)) {
   .ws-root {

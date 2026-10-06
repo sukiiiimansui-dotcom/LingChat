@@ -213,6 +213,27 @@ impl GeoSource {
     }
 }
 
+/// 下级区划列表（给前端的结构）：`{ adcode, level, count, children:[{name, adcode}] }`。
+///
+/// 与调试服务 8791 的 `/api/geo/children` **同形**（那边在独立工程的 `main.rs` 里自己拼），
+/// 前端 `geoChildren()` 两个分支吃同一份形状 —— 形状收在这儿一份，别再各拼各的。
+///
+/// ⚠️ 这里吃的是**已经拿到手的** FeatureCollection，不是 `GeoSource::children_of()`：
+/// 后者只读本地缓存，手机上新装的区县没有缓存 ⇒ 直接调它只会得到一份空列表
+/// （界面上就成了"拿不到目的地列表"）。取数据（缓存优先、缺失才联网）由调用方做。
+pub fn children_json(fc: &Value, adcode: &str) -> Value {
+    let kids: Vec<Value> = features(fc, Some(adcode))
+        .into_iter()
+        .map(|f| serde_json::json!({ "name": f.name, "adcode": f.adcode }))
+        .collect();
+    serde_json::json!({
+        "adcode": adcode,
+        "level": level_of(adcode),
+        "count": kids.len(),
+        "children": kids,
+    })
+}
+
 /// 远处块（给前端的结构）
 #[derive(Debug, Clone)]
 pub struct RemoteBlock {
@@ -455,6 +476,18 @@ mod tests {
                  "geometry":{"type":"Polygon","coordinates":[[[113.30,23.10],[113.35,23.10],[113.35,23.15],[113.30,23.15],[113.30,23.10]]]}}
             ]
         })
+    }
+
+    #[test]
+    fn children_json_shape_matches_debug_service() {
+        // 与 8791 调试服务 `/api/geo/children` 同形：{adcode, level, count, children:[{name,adcode}]}
+        let v = children_json(&fc(), "440100");
+        assert_eq!(v["adcode"], "440100");
+        assert_eq!(v["level"], "city");
+        assert_eq!(v["count"], 2, "没名字的那个不该进列表");
+        assert_eq!(v["children"][0]["name"], "甲区");
+        assert_eq!(v["children"][0]["adcode"], "440103");
+        assert_eq!(v["children"][1]["adcode"], "440104");
     }
 
     #[test]

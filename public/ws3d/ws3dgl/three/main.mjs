@@ -17,21 +17,20 @@ import { createSky, buildEnvironment } from './sky.mjs';
 import { snapShadowLight } from './shadowsnap.mjs';
 import { createCharacter, CHARACTERS } from './character.mjs';
 import { validateLayout, sanitizeLayout, walkTest } from './validate.mjs';
-import { STYLES, GROUND } from './palette.mjs';
+import { STYLES, STYLE_ORDER, GROUND, OUTLINE, toRgb } from './palette.mjs';
+import {
+  LEVELS, DPR_MAX, DPR_PRESETS, MSAA_MODES, SHADOW_AREA, SHADOW_EVERY,
+  pickDpr, pickMsaa, pickShadowRes, adaptiveStep, renderPath,
+} from './quality.mjs';
 
 const $ = (s) => document.querySelector(s);
 const Q = new URLSearchParams(location.search);
 const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
 const flag = (k, d) => (Q.has(k) ? Q.get(k) !== '0' : d);
 
-/** 画质档：dpr → 阴影 → LOD，一档一档往下退（主人的真机实测：dpr 2 → 30fps，dpr 1.5 → 60fps） */
-export const LEVELS = [
-  { name: '满档', dpr: 1.5, shadow: 2048, near: 270, mid: 640, bloom: true },
-  { name: '降 dpr', dpr: 1.25, shadow: 2048, near: 250, mid: 600, bloom: true },
-  { name: '降 dpr+阴影', dpr: 1.0, shadow: 1024, near: 220, mid: 520, bloom: true },
-  { name: '降 LOD+泛光', dpr: 0.85, shadow: 1024, near: 180, mid: 430, bloom: false },
-  { name: '最低', dpr: 0.7, shadow: 0, near: 150, mid: 340, bloom: false },
-];
+// 画质策略（dpr / MSAA / 阴影 / LOD / 渲染路径）全在 quality.mjs 里，**纯逻辑、node 可测**：
+// 梯子只有 阴影 / LOD / bloom 三项，没有 dpr —— 自适应没法把清晰度降掉（主人要的就是 dpr 3）。
+export { LEVELS, DPR_MAX, DPR_PRESETS, MSAA_MODES, SHADOW_AREA } from './quality.mjs';
 
 export const state = {
   t0: Date.now(),
@@ -40,13 +39,24 @@ export const state = {
   api: {}, data: {}, diag: [],
   gl: null, city: null, world: null, mesh: null,
   fps: 0, frameMs: 0, frames: 0,
-  style: Q.get('style') === 'dusk' ? 'dusk' : 'day',
+  style: STYLE_ORDER.includes(Q.get('style')) ? Q.get('style') : 'day',
   shadows: flag('shadow', true),
+  // 清晰度：默认 min(devicePixelRatio, 3)；`?dpr=` 覆盖；页面开关只改 state.dprUi（自适应永远不碰它）
+  dprQuery: Q.has('dpr') ? parseFloat(Q.get('dpr')) : null,
+  dprUi: null,
+  // 抗锯齿默认 0（dpr 3 本身就是超采样）；`?msaa=` 保留
+  msaaQuery: Q.has('msaa') ? parseFloat(Q.get('msaa')) : null,
+  msaaUi: null, msaa: 0,
+  shadowEvery: Math.max(1, Math.round(num('shadowEvery', SHADOW_EVERY))),
+  sharp: flag('sharp', false),          // `?sharp=1`：渲染分辨率低于原生时才需要，dpr 3 下默认不做
+  path: null,
   detail: flag('detail', true),
   bloom: flag('bloom', true),
   variety: num('variety', 1),
   autoQuality: flag('auto', true),
   quality: 0, qualityWhy: '未测',
+  outline: Q.has('outline') ? Q.get('outline') !== '0' : null,   // null = 跟风格档（二次元档默认开）；?outline=0/1 覆盖
+  outlineOn: false, outlineCompiled: false,
   errors: [], ready: false,
   layout: null, walk: null, gen: {},
   lod: { near: 0, mid: 0, far: 0 }, draws: 0,
@@ -137,9 +147,28 @@ async function retryLocationInBackground() {
 }
 
 // ── 渲染器 ───────────────────────────────────────────────────────────────────
-let renderer = null, composer = null, bloomPass = null, scene = null, camera = null;
+let renderer = null, composer = null, bloomPass = null, sharpenPass = null, scene = null, camera = null, outline = null;
+
+/**
+ * 锐化 pass（`?sharp=1`）：4 抽头 unsharp。**只在"渲染分辨率低于原生"时才有意义** ——
+ * dpr 3 已经是原生分辨率（手机上 devicePixelRatio 通常就是 3）⇒ 默认不做，省掉一次全屏。
+ * 真机上如果哪天把清晰度降到 2×/1.5×，这个开关就是补清晰度最便宜的一招。
+ */
+const SharpenShader = {
+  uniforms: { tDiffuse: { value: null }, uAmount: { value: 0.6 }, uTexel: { value: new THREE.Vector2(1 / 1920, 1 / 1080) } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: [
+    'uniform sampler2D tDiffuse; uniform float uAmount; uniform vec2 uTexel; varying vec2 vUv;',
+    'void main() {',
+    '  vec4 c = texture2D(tDiffuse, vUv);',
+    '  vec3 blur = (texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).rgb + texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).rgb',
+    '             + texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).rgb + texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).rgb) * 0.25;',
+    '  gl_FragColor = vec4(c.rgb + (c.rgb - blur) * uAmount, c.a);',
+    '}',
+  ].join('\n'),
+};
 let sun = null, hemi = null, amb = null, sky = null, envRT = null, world = null;
-let shadowArea = 150;                 // `?shadowArea`：阴影相机半宽（纹素尺寸 = 2*area/mapSize，吸附要靠它）
+let shadowArea = SHADOW_AREA;         // `?shadowArea`：阴影相机半宽（纹素尺寸 = 2*area/mapSize，吸附要靠它）
 const shadowSnap = flag('snap', true); // `?snap=0` = 关掉纹素吸附（真机 A/B 用；默认开）
 
 /** 先自己探一次 WebGL2：拿不到就**不建** WebGLRenderer（three 建失败的 console.error 会污染控制台） */
@@ -166,9 +195,13 @@ function mountRenderer(withShadows) {
   }
   const pre = probeWebGL2();
   if (!pre.ok) { renderer = null; return pre; }
+  // ⚠️ 画布 antialias 只在**建渲染器这一下**能定，之后就改不了了；而且只要走 EffectComposer
+  //（夜景 bloom / ?sharp=1），画面来自 composer 的 RT ⇒ 画布这一项**被架空**，真正生效的是
+  // composer RT 的 `samples`（见 setupScene）。所以默认关：dpr 3 本身就是超采样，MSAA 那笔最贵。
+  state.msaa = pickMsaa({ query: state.msaaQuery });
   try {
     renderer = new THREE.WebGLRenderer({
-      canvas, antialias: Q.get('msaa') !== '0',
+      canvas, antialias: state.msaa >= 2,
       preserveDrawingBuffer: Q.get('shot') === '1' || Q.get('preserve') === '1' || navigator.webdriver === true,
       powerPreference: 'high-performance',
     });
@@ -180,6 +213,18 @@ function mountRenderer(withShadows) {
   if (!gl) return { ok: false, reason: 'WebGLRenderer 建起来了但拿不到 context' };
   renderer.shadowMap.enabled = !!withShadows;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // 阴影贴图**不再每帧重算**：默认隔帧（`?shadowEvery=1` 回到每帧），人站着不动时一次都不算。
+  // 点这个开关的地方：setShadowSize / applyStyle / mountWorld，以及下面循环里"光源真的挪了"那一下。
+  renderer.shadowMap.autoUpdate = false;
+  state.shadowDirty = true; state.shadowWait = 0;
+  // 着色器编译错的**原文**自己收下来（three 的官方钩子）。为什么不用 info.programs 的 diagnostics：
+  // 那个只在"第一次真的画"时才挂上，而且上下文一丢，所有程序的 LINK_STATUS 都会读成 false ⇒
+  // 光看 diagnostics 分不清"编不过"和"没上下文"。这里拿到的是驱动给的日志原文。
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    const txt = [gl.getProgramInfoLog(program), gl.getShaderInfoLog(vs), gl.getShaderInfoLog(fs)]
+      .map((x) => String(x || '').trim()).filter(Boolean).join(' | ');
+    (state.shaderErrors || (state.shaderErrors = [])).push(String(txt || '(驱动没给日志)').slice(0, 300));
+  };
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = STYLES[state.style].exposure;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -213,15 +258,20 @@ function level() { return LEVELS[Math.min(state.quality, LEVELS.length - 1)]; }
 
 function sizeRenderer() {
   if (!renderer) return;
-  const L = level();
-  const fixedDpr = Q.has('dpr') ? parseFloat(Q.get('dpr')) : null;
-  const dpr = Math.min(window.devicePixelRatio || 1, fixedDpr !== null ? fixedDpr : L.dpr);
+  // 🔴 dpr 只由 查询串 / 页面开关 / 默认满档 三者决定，**画质档与自适应都不参与**
+  const dpr = pickDpr({ devicePixelRatio: window.devicePixelRatio || 1, query: state.dprQuery, ui: state.dprUi });
   state.dpr = dpr;
   renderer.setPixelRatio(dpr);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   if (composer) composer.setSize(window.innerWidth, window.innerHeight);
   if (bloomPass) bloomPass.resolution.set(Math.max(64, window.innerWidth / 4), Math.max(64, window.innerHeight / 4));
+  if (sharpenPass && sharpenPass.uniforms.uTexel) {
+    sharpenPass.uniforms.uTexel.value.set(1 / Math.max(1, window.innerWidth * dpr), 1 / Math.max(1, window.innerHeight * dpr));
+  }
 }
+
+/** 请求下一帧重算阴影贴图（贴图尺寸变了、光照变了、换城了都要） */
+function requestShadow() { state.shadowDirty = true; state.shadowWait = state.shadowEvery; }
 
 function setShadowSize(px) {
   if (!renderer || !sun) return;
@@ -232,6 +282,7 @@ function setShadowSize(px) {
     sun.shadow.mapSize.set(px, px);
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   }
+  requestShadow();
 }
 
 function applyStyle() {
@@ -252,13 +303,19 @@ function applyStyle() {
   if (amb) { amb.color.set(st.ambient); amb.intensity = st.ambientIntensity; }
   if (scene) scene.environmentIntensity = st.envIntensity;
   if (sky) sky.setStyle(st, st.sunDir);
-  if (world) world.setStyle(st);
+  if (world) { world.setStyle(st); state.texMs = world.texMs ? world.texMs() : null; state.texClean = world.isClean ? world.isClean() : null; }
   const wantBloom = state.bloom && st.bloom && level().bloom;
   if (composer && bloomPass) {
     bloomPass.strength = wantBloom ? st.bloomStrength : 0;
     bloomPass.enabled = wantBloom;
   }
   state.bloomOn = wantBloom;
+  if (sharpenPass) sharpenPass.enabled = !!state.sharp;
+  requestShadow();
+  // 描边：显式 ?outline= 优先，否则跟风格档（day/dusk 没有这字段 ⇒ 关）
+  const wantOutline = state.outline === null ? !!st.outline : !!state.outline;
+  if (world && world.setOutline) world.setOutline(wantOutline && !!outline);
+  state.outlineOn = !!(wantOutline && outline);
   hud();
 }
 
@@ -270,7 +327,7 @@ function setupScene() {
   scene.add(sky.mesh);
   sun = new THREE.DirectionalLight(0xffffff, 3);
   sun.castShadow = true;
-  const A = num('shadowArea', 150);                    // 阴影相机只罩住玩家周围（别罩 1km！）
+  const A = num('shadowArea', SHADOW_AREA);            // 阴影相机只罩住玩家周围（90m ⇒ 2048 贴图下 8.8cm/纹素）
   shadowArea = A;
   sun.shadow.camera.left = -A; sun.shadow.camera.right = A;
   sun.shadow.camera.top = A; sun.shadow.camera.bottom = -A;
@@ -287,17 +344,61 @@ function setupScene() {
   scene.add(amb);
   envRT = buildEnvironment(renderer, sky);
   if (envRT) scene.environment = envRT;
+  // 描边：二次元档的"动画感"。它只在**没有后处理**那条直渲路径上用（夜景 bloom 走 composer，
+  // RenderPass 直接调 renderer.render，绕不过去）—— 二次元档本身不开 bloom，所以正好覆盖到。
+  try {
+    outline = new THREE.OutlineEffect(renderer, { defaultThickness: OUTLINE.thickness, defaultColor: toRgb(OUTLINE.color) });
+  } catch (e) { outline = null; state.diag.push('描边不可用（' + e.message + '）'); }
   // 后处理：夜景 bloom（四分一分辨率，手机上这笔最贵，降质第 4 档会关掉）
   try {
-    composer = new THREE.EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: Q.get('msaa') !== '0' ? 2 : 0 }));
+    composer = new THREE.EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { samples: state.msaa }));
     composer.addPass(new THREE.RenderPass(scene, camera));
     bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(256, 256), STYLES.dusk.bloomStrength, 0.55, 0.82);
     composer.addPass(bloomPass);
+    sharpenPass = new THREE.ShaderPass(SharpenShader);
+    sharpenPass.enabled = !!state.sharp;
+    composer.addPass(sharpenPass);
     composer.addPass(new THREE.OutputPass());
   } catch (e) {
-    composer = null; bloomPass = null;
+    composer = null; bloomPass = null; sharpenPass = null;
     state.diag.push('后处理不可用（' + e.message + '）⇒ 直接渲染（夜里少了泛光）');
   }
+}
+
+/** 把当前全部着色器程序的编译诊断抓下来（首帧、以及描边首帧各抓一次） */
+function capturePrograms(slot = 'programs') {
+  if (!renderer) return;
+  // 上下文丢了之后拿到的诊断全是 "failed"（那是"没上下文"的余波，不是着色器的问题）⇒ 不覆盖首帧的读数
+  const ctx = renderer.getContext();
+  if (ctx && ctx.isContextLost && ctx.isContextLost()) { state[slot + 'Skipped'] = '上下文已丢失'; return; }
+  try {
+    state[slot] = (renderer.info.programs || []).map((p) => ({
+      name: p.name || 'unnamed', type: p.shaderType || '',
+      // ⚠️ 这里**不要**把空的 programLog 写成 "failed"：three 只在 (runnable=false 或 programLog 非空) 时才挂 diagnostics，
+      // 而 programLog 可能只是一条警告。空日志就照实记 'runnable'，别自己造一个失败出来。
+      runnable: p.diagnostics ? !!p.diagnostics.runnable : true,
+      diag: p.diagnostics ? String(p.diagnostics.programLog || '(空日志)').slice(0, 400) : null,
+    }));
+    state[slot + 'Ok'] = state[slot].every((p) => p.runnable && (!p.diag || p.diag === '(空日志)'));
+  } catch (e) { state[slot] = []; state[slot + 'Ok'] = false; state[slot + 'Error'] = String(e.message || e); }
+}
+
+/**
+ * 描边只给楼体五个桶：OutlineEffect 的默认行为是"遍历到的每个材质都描一圈"，
+ * 所以天空球 / 角色 / 道具这些必须显式打上 `visible:false`（world.mjs 已经给城市那批打好了）。
+ * 角色是懒建材质的（换角色/换图层会新建）⇒ 每帧扫一遍，但按材质 uuid 记忆，重复的只查一次。
+ */
+const outlineMarked = new Set();
+function markOutlineExcluded(root) {
+  if (!root) return;
+  root.traverse((o) => {
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) {
+      if (!m || outlineMarked.has(m.uuid)) continue;
+      outlineMarked.add(m.uuid);
+      if (m.userData.outlineParameters === undefined) m.userData.outlineParameters = { visible: false };
+    }
+  });
 }
 
 function mountWorld(mesh, city) {
@@ -307,10 +408,13 @@ function mountWorld(mesh, city) {
   world = createWorld(mesh, {
     maxAniso: renderer ? renderer.capabilities.getMaxAnisotropy() : 1,
     lodHysteresis: num('lodHys', undefined),
+    // 起手就按当前风格建对应那一档贴图（否则 ?style=anime 会先建写实档再重建一次，白花一份时间）
+    clean: !!STYLES[state.style].clean,
   });
   world.group.name = 'city';
   scene.add(world.group);
   applyStyle();
+  requestShadow();
 }
 
 // ── 角色 / 输入 / 相机 ───────────────────────────────────────────────────────
@@ -359,6 +463,9 @@ function hud(now) {
   set('#b-radius', (r.radius / 1000).toFixed(1) + 'km');
   set('#b-radius2', (r.radius / 1000).toFixed(1) + 'km');
   set('#b-bloom', r.bloomOn ? '开' : '关');
+  set('#b-outline', r.outlineOn ? '开' : (r.outline === false ? '关' : '跟风格'));
+  set('#b-dpr', (r.dpr || 0).toFixed(2).replace(/\.00$/, '') + '×' + (r.dprUi === null ? '' : ' ·手'));
+  set('#b-msaa', r.msaa ? r.msaa + '×' : '关');
   // 骨骼角色在按钮上多带一个当前动画名（纸片人下这段是空串 ⇒ 按钮文字与以前逐字相同）
   const clipTag = r.charState && r.charState.kind === 'skinned' && r.charState.clip ? ' · ' + r.charState.clip : '';
   set('#b-char', (r.charName || (CHARACTERS[0] && CHARACTERS[0].name) || '—') + clipTag);
@@ -371,18 +478,14 @@ function adaptive(now) {
   if (!state.autoQuality || !renderer) return;
   frameHist.push(state.frameMs);
   if (frameHist.length > 90) frameHist.shift();
-  if (now - lastQualChange < 2500 || frameHist.length < 40) return;
-  const recent = frameHist.slice(-30).slice().sort((a, b) => a - b);
-  const med = recent[recent.length >> 1];
-  const ok = frameHist.slice(-90).every((v) => v < 14.5);
-  if (med > 19.5 && state.quality < LEVELS.length - 1) {
-    state.quality++; state.qualityWhy = `帧耗时中位 ${med.toFixed(1)}ms ⇒ 自动降档`;
-    lastQualChange = now; applyQuality();
-  } else if (ok && frameHist.length >= 85 && state.quality > 0) {
-    state.quality--; state.qualityWhy = `稳定 60fps ⇒ 升回一档`;
-    lastQualChange = now; applyQuality();
-  } else {
-    state.qualityWhy = `帧耗时中位 ${med.toFixed(1)}ms`;
+  // 判断本身在 quality.mjs 的 adaptiveStep 里（纯函数、node 可测）；这里只管把结果落到实处。
+  // 🔴 它返回的只有 quality：阴影 / LOD / bloom 会变，dpr 一次都不会变（那是主人的清晰度）。
+  const step = adaptiveStep({ frameMs: frameHist, quality: state.quality, sinceLastChangeMs: now - lastQualChange, levels: LEVELS });
+  if (step.why) state.qualityWhy = step.why;
+  if (step.changed) {
+    state.quality = step.quality;
+    lastQualChange = now;
+    applyQuality();
   }
 }
 function applyQuality() {
@@ -390,7 +493,7 @@ function applyQuality() {
   if (Q.has('lodNear')) L.near = parseFloat(Q.get('lodNear'));
   if (Q.has('lodMid')) L.mid = parseFloat(Q.get('lodMid'));
   sizeRenderer();
-  setShadowSize(state.shadows ? (Q.has('shadowRes') && state.quality === 0 ? parseFloat(Q.get('shadowRes')) : L.shadow) : 0);
+  setShadowSize(state.shadows ? pickShadowRes({ quality: state.quality, levels: LEVELS, query: Q.has('shadowRes') ? parseFloat(Q.get('shadowRes')) : null }) : 0);
   applyStyle();
 }
 
@@ -422,19 +525,47 @@ function updateStick() {
 }
 
 // ── 热键 / 按钮 ──────────────────────────────────────────────────────────────
+/** 下一档风格：**遍历 STYLES 的键**（顺序 = palette.mjs 里的插入序 day → anime → dusk）。
+ *  以前这里是 `state.style === 'day' ? 'dusk' : 'day'` 的两档硬编码 ⇒ 加第三档时按一下按钮
+ *  会在这两档之间来回跳、新档永远轮不到（HUD 的 #h-style 也会一直显示旧名字）。 */
+function nextStyleKey() {
+  const i = STYLE_ORDER.indexOf(state.style);
+  return STYLE_ORDER[(i + 1) % STYLE_ORDER.length];
+}
 function onHotkey(key) {
   const k = key.toLowerCase();
   if (k === 'v') { state.third = !state.third; }
-  else if (k === 'n') { setStyle(state.style === 'day' ? 'dusk' : 'day'); }
+  else if (k === 'n') { setStyle(nextStyleKey()); }
   else if (k === 'p') { state.shadows = !state.shadows; setShadowSize(state.shadows ? level().shadow : 0); }
   else if (k === 'l') { state.detail = !state.detail; }
   else if (k === 'b') { state.bloom = !state.bloom; applyStyle(); }
+  else if (k === 'o') { state.outline = !state.outlineOn; applyStyle(); }
+  else if (k === 'k') { doAction('dpr'); }
+  else if (k === 'm') { doAction('msaa'); }
   else if (k === 'c') { nextCharacter(); }
   else if (k === 'h') { $('#help') && $('#help').classList.toggle('show'); }
   else if (k === '[') setRadius(Math.max(300, state.radius - 300));
   else if (k === ']') setRadius(Math.min(2000, state.radius + 300));
   else if (k === 'r') { state.seedStr = 'ws3dgl-three-' + Math.floor(Math.random() * 1e6); regenerate(); }
   hud();
+}
+
+/**
+ * 改 MSAA。**只有 composer 那个 RT 能在线改**（画布 antialias 是建渲染器时定的，改不了 ——
+ * 而且走 composer 时画布那项本来就被架空）。改完 dispose 让它按新 samples 重建。
+ */
+export function setMsaa(n) {
+  const v = pickMsaa({ query: n });
+  state.msaaUi = v;
+  state.msaa = v;
+  if (composer) {
+    for (const rt of [composer.renderTarget1, composer.renderTarget2]) {
+      if (rt && rt.samples !== v) { rt.samples = v; rt.dispose(); }
+    }
+    sizeRenderer();
+  }
+  hud();
+  return v;
 }
 
 export function setStyle(s) { state.style = s; applyStyle(); }
@@ -527,6 +658,19 @@ function tick(dt, now) {
     const ss = state.shadowSnap || (state.shadowSnap = { on: true, texel: 0, area: 0, res: 0, offset: [0, 0] });
     ss.on = sn.snapped; ss.texel = sn.texel; ss.area = shadowArea; ss.res = sun.shadow.mapSize.x;
     ss.offset[0] = sn.offset[0]; ss.offset[1] = sn.offset[1];
+    // 阴影贴图节流：光源（吸附后的）位置没变就一次都不重算；变了也最多每 shadowEvery 帧算一次。
+    if (renderer.shadowMap.enabled && state.shadowSize > 0) {
+      const key = sn.position[0].toFixed(3) + ',' + sn.position[1].toFixed(3) + ',' + sn.position[2].toFixed(3);
+      if (key !== state.shadowKey) { state.shadowKey = key; state.shadowDirty = true; state.shadowWait = 0; }
+      if (state.shadowDirty) {
+        state.shadowWait = (state.shadowWait || 0) + 1;
+        if (state.shadowWait >= state.shadowEvery) {
+          renderer.shadowMap.needsUpdate = true;
+          state.shadowDirty = false; state.shadowWait = 0;
+          state.shadowUpdates = (state.shadowUpdates || 0) + 1;
+        }
+      }
+    }
   }
   if (world && char) {
     const L = level();
@@ -534,10 +678,29 @@ function tick(dt, now) {
     const lodMid = Q.has('lodMid') ? parseFloat(Q.get('lodMid')) : L.mid;
     state.lod = world.update(char.pos.x, char.pos.z, lodNear, lodMid, state.detail);
   }
-  if (renderer && camera && scene) {
-    const usePost = composer && bloomPass && bloomPass.enabled;
-    if (usePost) composer.render(); else renderer.render(scene, camera);
-    state.draws = renderer.info.render.calls;
+  // 上下文丢了就别再画（three 自己也会 early-return，但那样会把 draws 读数刷成 0）
+  const glLost = renderer && renderer.getContext().isContextLost && renderer.getContext().isContextLost();
+  if (renderer && camera && scene && !glLost) {
+    // 走哪条路由 quality.mjs 的纯函数定：没有 bloom/锐化就**绝不**进 composer（省一次全屏 blit + 一张 3× RT）
+    const bloomOn = !!(composer && bloomPass && bloomPass.enabled);
+    const sharpOn = !!(composer && sharpenPass && sharpenPass.enabled);
+    const path = renderPath({ hasComposer: !!composer, bloomOn, sharpOn, outlineOn: state.outlineOn && !!outline });
+    state.path = path;
+    if (path === 'composer') { composer.render(); state.draws = renderer.info.render.calls; }
+    else if (path === 'outline') {
+      markOutlineExcluded(scene);
+      // ⚠️ 读数口径：renderer.info 每调一次 renderer.render 就会重置 ⇒ 直接数"描边那一遍"会丢掉主渲染。
+      // 拆成两半自己调（`OutlineEffect.render` 内部就是这两句），两遍的 calls 相加 = 这一帧的总数，
+      // 与不开描边那条路的"一帧总数"同口径，才谈得上 before→after。
+      renderer.render(scene, camera);
+      const mainDraws = renderer.info.render.calls;
+      outline.renderOutline(scene, camera);
+      state.outlineDraws = renderer.info.render.calls;
+      state.draws = mainDraws + state.outlineDraws;
+      state.outlineCompiled = true;               // 着色器已经在 boot 里编过并留了读数（programsOutline）
+    } else { renderer.render(scene, camera); state.draws = renderer.info.render.calls; }
+    // 首帧读数单独留一份：无头第 2 帧就丢上下文，后面的 draws 全是 0/旧值，只有这一份可信
+    if (!state.firstFrame && state.draws > 0) state.firstFrame = { draws: state.draws, path, dpr: state.dpr, msaa: state.msaa, shadowSize: state.shadowSize || 0 };
   }
   const ms = performance.now() - t0;
   state.frameMs = state.frameMs ? state.frameMs * 0.8 + ms * 0.2 : ms;
@@ -700,14 +863,11 @@ export async function boot() {
     sizeRenderer();
     // 首帧前把着色器全编一遍并**把结果记下来**：本机无头第 2 帧就丢上下文，
     // 后面的 shader 报错全是"上下文没了"的余波 ⇒ 只有这一步的读数能证明我们的着色器本身没问题。
-    try {
-      renderer.compile(scene, camera);
-      state.programs = (renderer.info.programs || []).map((p) => ({
-        name: p.name || 'unnamed', type: p.shaderType || '',
-        diag: p.diagnostics ? String(p.diagnostics.programLog || 'failed').slice(0, 200) : null,
-      }));
-      state.programsOk = state.programs.every((p) => !p.diag);
-    } catch (e) { state.programs = []; state.programsOk = false; state.programsError = String(e.message || e); }
+    try { renderer.compile(scene, camera); capturePrograms(); }
+    catch (e) { state.programs = []; state.programsOk = false; state.programsError = String(e.message || e); }
+    // ⚠️ 这里**故意不**为了"先编一遍描边着色器"多跑一次渲染：本喵试过，在无头 SwiftShader 上
+    // 那一下正好把上下文搞丢（丢一次就重建渲染器，读数全乱）。描边材质的编译错由
+    // `renderer.debug.onShaderError` 收原文（见 mountRenderer），不靠额外渲染。
     window.addEventListener('resize', () => { sizeRenderer(); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); });
     if (Q.get('once') === '1') {
       tick(1 / 60, performance.now());
@@ -726,13 +886,26 @@ export async function boot() {
 function doAction(act) {
   if (act === 'more') { const h = $('#hud'); if (h) h.classList.toggle('open'); return; }
   if (act === 'view') { view.third = !view.third; state.third = view.third; }
-  else if (act === 'style') setStyle(state.style === 'day' ? 'dusk' : 'day');
+  else if (act === 'style') setStyle(nextStyleKey());
   else if (act === 'shadow') { state.shadows = !state.shadows; setShadowSize(state.shadows ? level().shadow : 0); }
   else if (act === 'detail') state.detail = !state.detail;
   else if (act === 'radius-') setRadius(Math.max(300, state.radius - 300));
   else if (act === 'radius+') setRadius(Math.min(2000, state.radius + 300));
   else if (act === 'seed') { state.seedStr = 'ws3dgl-three-' + Math.floor(Math.random() * 1e6); regenerate(); }
   else if (act === 'bloom') { state.bloom = !state.bloom; applyStyle(); }
+  else if (act === 'outline') { state.outline = !state.outlineOn; applyStyle(); }
+  else if (act === 'dpr') {
+    // 页面开关：在 3× / 2× / 1.5× / 1× 之间轮换（自适应永远不会自己动这个值）
+    const cur = state.dprUi === null ? pickDpr({ devicePixelRatio: window.devicePixelRatio || 1, query: state.dprQuery }) : state.dprUi;
+    const i = DPR_PRESETS.findIndex((v) => v <= cur + 1e-6);
+    state.dprUi = DPR_PRESETS[(i + 1) % DPR_PRESETS.length];
+    sizeRenderer();
+  }
+  else if (act === 'msaa') {
+    const cur = state.msaaUi === null ? state.msaa : state.msaaUi;
+    const i = MSAA_MODES.indexOf(cur);
+    setMsaa(MSAA_MODES[(i + 1) % MSAA_MODES.length]);
+  }
   else if (act === 'char') nextCharacter();
   else if (act === 'help') $('#help') && $('#help').classList.toggle('show');
   hud();
@@ -766,8 +939,16 @@ function buildSnapshot() {
     city: r.city ? r.city.stats : null,
     dens: r.city ? densityReport((r.styled && r.styled.buildings) || [], r.radius) : null,
     mesh: r.mesh ? { tris: r.mesh.stats.trisTotal, verts: r.mesh.stats.verts, stats: r.mesh.stats } : null,
-    perf: { fps: r.fps, frameMs: +r.frameMs.toFixed(2), bootMs: r.bootMs, gen: r.gen, draws: r.draws, quality: r.quality, qualityWhy: r.qualityWhy, level: level().name, dpr: r.dpr, shadowSize: r.shadowSize, stepOver: STEP_OVER, stuck: r.char ? r.char.stuck : null, escapes: r.char ? (r.char.escapes || 0) : null },
+    perf: { fps: r.fps, frameMs: +r.frameMs.toFixed(2), bootMs: r.bootMs, gen: r.gen, draws: r.draws, path: r.path || null, outline: r.outlineOn,
+      outlineExplicit: r.outline, outlineThickness: OUTLINE.thickness, outlineColor: OUTLINE.color,
+      msaa: r.msaa, msaaUi: r.msaaUi, msaaQuery: r.msaaQuery, dprUi: r.dprUi, dprQuery: r.dprQuery,
+      firstFrame: r.firstFrame || null, outlineDraws: r.outlineDraws === undefined ? null : r.outlineDraws,
+      programsOutlineOk: r.programsOutlineOk === undefined ? null : r.programsOutlineOk,
+      programsOutline: r.programsOutline ? r.programsOutline.length : null, programsOutlineSkipped: r.programsOutlineSkipped || null,
+      shadowEvery: r.shadowEvery, shadowUpdates: r.shadowUpdates || 0, shadowArea, sharp: !!r.sharp,
+      shadowTexel: +(2 * shadowArea / Math.max(1, (r.shadowSize || 1))).toFixed(4), quality: r.quality, qualityWhy: r.qualityWhy, level: level().name, dpr: r.dpr, shadowSize: r.shadowSize, texMs: r.texMs === undefined ? null : r.texMs, texClean: r.texClean === undefined ? null : r.texClean, stepOver: STEP_OVER, stuck: r.char ? r.char.stuck : null, escapes: r.char ? (r.char.escapes || 0) : null },
     programs: r.programs || null, programsOk: r.programsOk === undefined ? null : r.programsOk, programsError: r.programsError || null,
+    shaderErrors: r.shaderErrors || [],
     layout: r.layout, walk: r.walk, sanitize: r.sanitize ? { removed: r.sanitize.removed, shrunk: r.sanitize.shrunk, gapFixed: r.sanitize.gapFixed } : null,
     lod: r.lod, once: Q.get('once') === '1', oneShot: r.oneShot || null,
     view: { style: r.style, third: r.third, bloom: r.bloomOn, pos: r.char ? [+r.char.pos.x.toFixed(1), +r.char.pos.z.toFixed(1)] : null, spawn: r.spawn, heading: r.char ? +((r.char.bodyYaw !== undefined ? r.char.bodyYaw : r.char.yaw) || 0).toFixed(2) : null },
@@ -816,8 +997,8 @@ export function sample() {
 
 if (typeof window !== 'undefined') {
   window.__WS3DTHREE__ = {
-    state, snapshot, boot, setStyle, setRadius, regenerate, sample, setQuality,
-    LEVELS,
+    state, snapshot, boot, setStyle, setRadius, regenerate, sample, setQuality, setMsaa,
+    LEVELS, STYLE_ORDER, DPR_PRESETS, MSAA_MODES,
     help: () => $('#help') && $('#help').classList.add('show'),
   };
 }

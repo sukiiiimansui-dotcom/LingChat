@@ -5,13 +5,54 @@
 // （格边长取 build.mjs 的真实值 `opts.cell`，默认 256m；只有玩家附近那几格可见，带滞后带）。
 import {
   BufferGeometry, BufferAttribute, Mesh, InstancedMesh, Matrix4, Quaternion, Vector3, Color, Group,
-  MeshStandardMaterial, MeshBasicMaterial, PointsMaterial, Points, DoubleSide, FrontSide,
-  AdditiveBlending, CanvasTexture, SRGBColorSpace, RepeatWrapping, LinearMipmapLinearFilter,
+  MeshStandardMaterial, MeshToonMaterial, MeshBasicMaterial, PointsMaterial, Points, DoubleSide, FrontSide,
+  AdditiveBlending, CanvasTexture, DataTexture, SRGBColorSpace, RepeatWrapping, LinearFilter,
+  LinearMipmapLinearFilter, RedFormat, UnsignedByteType,
   CylinderGeometry, IcosahedronGeometry, ConeGeometry, BoxGeometry, CircleGeometry, PlaneGeometry,
   MathUtils,
 } from '../vendor/three.min.js';
 import { buildTextureSet, TILE } from './textures.mjs';
-import { TIERS, GROUND, ACCENT, toRgb, shade } from './palette.mjs';
+import { TIERS, GROUND, ACCENT, toRgb, shade, TOON, toonGradientData, OUTLINE } from './palette.mjs';
+
+/** 半卡通只给"楼体"这五个桶：地面/屋面/道具保持 Standard（大面积色阶容易显脏，量完再说） */
+export const TOON_BUCKETS = ['wall0', 'wall1', 'wall2', 'wall3', 'shop'];
+
+/**
+ * 桶 × 风格 → 材质种类。**纯函数**：自检直接在 node 里断言（不需要 GPU、不需要贴图）。
+ * 只有风格档显式写了 `toon:true`（= 二次元档）且桶在楼体那五个里，才走 MeshToonMaterial。
+ */
+export function bucketKindFor(bucket, style) {
+  return (style && style.toon && TOON_BUCKETS.includes(bucket)) ? 'toon' : 'standard';
+}
+
+/** 4 级渐变图（64×1 的 DataTexture）：MeshToonMaterial 靠它出"有色阶但不硬边"的半卡通 */
+export function makeToonGradientMap({ levels = TOON.levels, soft = TOON.soft, size = TOON.size } = {}) {
+  const data = toonGradientData({ levels, soft, n: size });
+  const t = new DataTexture(data, data.length, 1, RedFormat, UnsignedByteType);
+  t.minFilter = LinearFilter;
+  t.magFilter = LinearFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
+ * 建一个桶的材质（**运行时用的就是这个工厂**，自检拿它断言 instanceof 是哪种）。
+ * toon 保留 map / emissiveMap / vertexColors（每栋色偏），但不吃 roughness/metalness（Toon 没有这两项）。
+ */
+export function makeBucketMaterial(kind, spec = {}) {
+  const base = { map: spec.map || null, vertexColors: true };
+  if (spec.emissiveMap) {
+    base.emissiveMap = spec.emissiveMap;
+    base.emissive = new Color(1, 1, 1);
+    base.emissiveIntensity = spec.emissiveIntensity || 0;
+  }
+  if (kind === 'toon') return new MeshToonMaterial(Object.assign(base, { gradientMap: spec.gradientMap || null }));
+  return new MeshStandardMaterial(Object.assign(base, {
+    roughness: spec.roughness === undefined ? 0.9 : spec.roughness,
+    metalness: spec.metalness === undefined ? 0 : spec.metalness,
+  }));
+}
 
 /**
  * 分块显隐的**滞后带**（hysteresis）：进用阈值 T，出用 T*hys。
@@ -113,24 +154,37 @@ function tune(t, maxAniso = 4) {
  */
 export function createWorld(meshData, opts = {}) {
   const maxAniso = opts.maxAniso || 4;
-  const tex = buildTextureSet();
-  for (const f of tex.facades) { tune(f.map, maxAniso); tune(f.emissiveMap, maxAniso); }
-  tune(tex.shop.map, maxAniso); tune(tex.shop.emissiveMap, maxAniso);
-  for (const k of ['roof', 'asphalt', 'asphaltWide', 'sidewalk', 'ground', 'bark']) tune(tex[k], maxAniso);
-  tex.glow.colorSpace = SRGBColorSpace;
+  let texClean = !!opts.clean;          // 当前贴图是哪一档（写实 / 干净鲜艳）；切风格时按需重建
+  let texMs = 0;
+  const tTex = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+  let tex = buildTextureSet({ clean: texClean });
 
   const materials = {};
+  // 楼体五个桶各备**两套材质**（标准 / 半卡通），切风格时只换 mesh.material 指针：
+  // 两套都建出来只是几个对象，省掉了"切档时重建材质 + 重编译着色器"的那一下卡顿。
+  const gradientMap = makeToonGradientMap();
+  const stdMats = {}, toonMats = {};
   // 楼体四档：贴图 + 自发光贴图（夜里同一张贴图的"亮窗层"被推上来）
   tex.facades.forEach((f, i) => {
-    materials['wall' + i] = new MeshStandardMaterial({
-      map: f.map, emissiveMap: f.emissiveMap, emissive: new Color(1, 1, 1), emissiveIntensity: 0,
-      vertexColors: true, roughness: TIERS[i].roughness, metalness: TIERS[i].metalness,
-    });
+    const spec = { map: f.map, emissiveMap: f.emissiveMap, roughness: TIERS[i].roughness, metalness: TIERS[i].metalness, gradientMap };
+    stdMats['wall' + i] = makeBucketMaterial('standard', spec);
+    toonMats['wall' + i] = makeBucketMaterial('toon', spec);
   });
-  materials.shop = new MeshStandardMaterial({
-    map: tex.shop.map, emissiveMap: tex.shop.emissiveMap, emissive: new Color(1, 1, 1),
-    emissiveIntensity: 0, vertexColors: true, roughness: 0.7, metalness: 0.05,
-  });
+  {
+    const spec = { map: tex.shop.map, emissiveMap: tex.shop.emissiveMap, roughness: 0.7, metalness: 0.05, gradientMap };
+    stdMats.shop = makeBucketMaterial('standard', spec);
+    toonMats.shop = makeBucketMaterial('toon', spec);
+  }
+  Object.assign(materials, stdMats);
+  /**
+   * 描边（OutlineEffect）只给楼体五个桶：
+   * 它的默认行为是"遍历到的每个材质都描一圈"，所以其余材质必须显式打上 `visible:false`，
+   * 否则天空球、树、路灯、地面全会描边。开不开由 setOutline() 翻 `visible`。
+   */
+  const outlineParams = (visible) => ({ visible, thickness: OUTLINE.thickness, color: toRgb(OUTLINE.color), alpha: 1 });
+  for (const bucket of TOON_BUCKETS) {
+    for (const set2 of [stdMats, toonMats]) if (set2[bucket]) set2[bucket].userData.outlineParameters = outlineParams(false);
+  }
   materials.roof = new MeshStandardMaterial({ map: tex.roof, vertexColors: true, roughness: 0.95, metalness: 0.0 });
   materials.asphalt = new MeshStandardMaterial({ map: tex.asphalt, vertexColors: true, roughness: 0.96, metalness: 0.0 });
   materials.asphaltWide = new MeshStandardMaterial({ map: tex.asphaltWide, vertexColors: true, roughness: 0.96, metalness: 0.0 });
@@ -158,16 +212,48 @@ export function createWorld(meshData, opts = {}) {
     blending: AdditiveBlending, depthWrite: false, color: new Color(ACCENT.lamp),
   });
 
-  const group = new Group();
-  const meshes = [];
+  /**
+   * 把某一档贴图接到全部材质上（写实 ↔ 干净鲜艳两档之间切）。
+   * 建世界时调一次；之后**只在切到另一档风格时**才调 —— 干净档的贴图是懒生成的，
+   * 从没切过去就一个字节都不建（手机内存只留当前这一档）。
+   */
+  const applyTextures = (set) => {
+    for (const f of set.facades) { tune(f.map, maxAniso); tune(f.emissiveMap, maxAniso); }
+    tune(set.shop.map, maxAniso); tune(set.shop.emissiveMap, maxAniso);
+    for (const k of ['roof', 'asphalt', 'asphaltWide', 'sidewalk', 'ground', 'bark']) tune(set[k], maxAniso);
+    set.glow.colorSpace = SRGBColorSpace;
+    for (const bucket of TOON_BUCKETS) {                       // 楼体五个桶：两套材质都要换贴图
+      const i = bucket === 'shop' ? -1 : Number(bucket.slice(4));
+      const src = bucket === 'shop' ? set.shop : set.facades[i];
+      for (const set2 of [stdMats, toonMats]) {
+        const m = set2[bucket];
+        if (!m) continue;
+        m.map = src.map; m.emissiveMap = src.emissiveMap; m.needsUpdate = true;
+      }
+    }
+    const pairs = [['roof', 'roof'], ['asphalt', 'asphalt'], ['asphaltWide', 'asphaltWide'],
+      ['sidewalk', 'sidewalk'], ['ground', 'ground'], ['bark', 'bark'], ['glow', 'glow']];
+    for (const [bucket, key] of pairs) {
+      const m = materials[bucket];
+      if (!m) continue;
+      m.map = set[key];
+      m.needsUpdate = true;
+    }
+  };
+  applyTextures(tex);
+
   const casters = new Set(['wall0', 'wall1', 'wall2', 'wall3', 'shop', 'roof', 'prop']);
   const receivers = new Set(['wall0', 'wall1', 'wall2', 'wall3', 'shop', 'roof', 'prop', 'asphalt', 'asphaltWide', 'sidewalk', 'ground', 'paint']);
 
+  const group = new Group();
+  const meshes = [];
+  const meshByBucket = new Map();
   for (const [bucket, buf] of Object.entries(meshData.base)) {
     const mat = materials[bucket];
     if (!mat) continue;
     const m = new Mesh(toGeometry(buf), mat);
     m.name = bucket;
+    meshByBucket.set(bucket, m);
     m.castShadow = casters.has(bucket);
     m.receiveShadow = receivers.has(bucket);
     m.matrixAutoUpdate = false;
@@ -271,8 +357,38 @@ export function createWorld(meshData, opts = {}) {
   const hys = Number(opts.lodHysteresis) >= 1 ? Number(opts.lodHysteresis) : LOD_HYSTERESIS;
   const update = (px, pz, lodNear, lodMid, detail) => lodPlan(chunks, px, pz, lodNear, lodMid, detail, lodStats, hys);
 
-  /** 切风格：只改材质/光照参数，几何一根线都不动 */
+  /** 切"半卡通"：把楼体五个桶的 mesh.material 换成另一套（几何一根线都不动） */
+  let toonNow = false;
+  const applyBucketKind = (style) => {
+    const useToon = TOON_BUCKETS.some((b) => bucketKindFor(b, style) === 'toon');
+    if (useToon === toonNow) return;
+    toonNow = useToon;
+    for (const bucket of TOON_BUCKETS) {
+      const m2 = useToon ? toonMats[bucket] : stdMats[bucket];
+      if (!m2) continue;
+      materials[bucket] = m2;
+      const mesh = meshByBucket.get(bucket);
+      if (mesh) mesh.material = m2;
+    }
+  };
+
+  /** 切风格：只改材质/光照参数与贴图指针，几何一根线都不动 */
   const setStyle = (style) => {
+    applyBucketKind(style);
+    const wantClean = !!style.clean;
+    if (wantClean !== texClean) {
+      const t0 = tTex();
+      const next = buildTextureSet({ clean: wantClean });
+      const old = tex;
+      tex = next; texClean = wantClean;
+      applyTextures(next);
+      texMs = +(tTex() - t0).toFixed(1);
+      // 换掉的贴图必须 dispose（512² 的四张立面 + 立面自发光 ≈ 十几 MB，手机上不能留着）
+      for (const t of Object.values(old)) {
+        if (t && t.isTexture) t.dispose();
+        else if (t && t.map && t.map.isTexture) { t.map.dispose(); t.emissiveMap.dispose(); }
+      }
+    }
     for (let i = 0; i < 4; i++) if (materials['wall' + i]) materials['wall' + i].emissiveIntensity = style.windowEmissive;
     materials.shop.emissiveIntensity = style.windowEmissive * 1.15;
     materials.lampHead.emissiveIntensity = style.lampGlow;
@@ -284,9 +400,11 @@ export function createWorld(meshData, opts = {}) {
   const dispose = () => {
     for (const m of all) { if (m.geometry) m.geometry.dispose(); }
     for (const m of Object.values(materials)) m.dispose();
+    for (const set2 of [stdMats, toonMats]) for (const m of Object.values(set2)) if (!Object.values(materials).includes(m)) m.dispose();
+    if (gradientMap) gradientMap.dispose();
     for (const t of Object.values(tex)) {
       if (t && t.isTexture) t.dispose();
-      else if (t && t.map) { t.map.dispose(); t.emissiveMap.dispose(); }
+      else if (t && t.map && t.map.isTexture) { t.map.dispose(); t.emissiveMap.dispose(); }
     }
   };
 
@@ -294,7 +412,32 @@ export function createWorld(meshData, opts = {}) {
   const drawEstimate = () => meshes.length + instanced.length + (glowPoints ? 1 : 0) + chunks.length * 2;
 
   group.add(...all);
-  return { group, meshes, instanced, chunks, cell, glowPoints, materials, textures: tex, update, setStyle, dispose, lodStats, drawEstimate, tune };
+  // 楼体五个桶之外的材质（屋面/路面/道具/实例化/辉光）一律不描边
+  for (const m of Object.values(materials)) {
+    if (!m.userData.outlineParameters) m.userData.outlineParameters = { visible: false };
+  }
+  /** 描边开关：只翻楼体五个桶的 outlineParameters.visible（两套材质一起翻），几何与贴图都不动 */
+  let outlineOn = false;
+  const setOutline = (on) => {
+    outlineOn = !!on;
+    for (const bucket of TOON_BUCKETS) {
+      for (const set2 of [stdMats, toonMats]) {
+        const m = set2[bucket];
+        if (m && m.userData.outlineParameters) m.userData.outlineParameters.visible = outlineOn;
+      }
+    }
+    return outlineOn;
+  };
+
+  return {
+    group, meshes, instanced, chunks, cell, glowPoints, materials, textures: tex, update, setStyle, dispose, lodStats, drawEstimate, tune,
+    setOutline, isOutline: () => outlineOn,
+    isClean: () => texClean, texMs: () => texMs, applyTextures,
+    // 半卡通读数（探针/自检读）：当前是不是 toon、五个桶各自用的哪种材质
+    isToon: () => toonNow,
+    bucketKinds: () => Object.fromEntries(TOON_BUCKETS.map((b) => [b, materials[b] && materials[b].isMeshToonMaterial ? 'toon' : 'standard'])),
+    materialOf: (b) => materials[b],
+  };
 }
 
 export { TILE, toRgb, shade, MathUtils };

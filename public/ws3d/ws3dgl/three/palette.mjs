@@ -40,6 +40,26 @@ export const TIERS = [
 /** 强调色：白天用暖橙（招牌/遮阳棚），夜里用霓虹青/品红 */
 export const ACCENT = { warm: '#ffb454', neon: '#42e8ff', neon2: '#ff4d8d', lamp: '#ffd9a0' };
 
+/**
+ * 二次元档的**三色染色**（受光 / 阴影 / 环境 + 各自强度）—— 现在是"只有明暗阶"，
+ * 这三路才让它变成"受光偏暖、背光偏冷、环境染色打底"的动画感。
+ * 口径：受光与阴影的强度**相等**（0.70），两边加起来都是 1.0 上下 ⇒ **只换色相、不整体压暗**
+ *      （ART-PLAN-ANIME.md §1 要的"暗部亮而不脏"）；环境那一路 0.30 是打底的中性偏冷。
+ * 真机观感（暖到什么程度、冷到什么程度）**本机没有 GPU，一个像素都没看过** ⇒ 只能靠主人 A/B 再调这几个数。
+ */
+export const TOON_TINT = {
+  lit: '#fff6e6', litStrength: 0.70,
+  shadow: '#b9d4ef', shadowStrength: 0.70,
+  ambient: '#f5faff', ambientStrength: 0.30,
+};
+
+/**
+ * 二次元档的**边缘光**（日式动画的"逆光边"）：`e = 1 - |法线·视线|`，`e` 不到 `threshold` 一点都不加。
+ * threshold 0.70 ⇒ 只有与视线夹角大于约 73° 的面才亮起来（不至于把整面侧墙都点亮）；
+ * power 是收边指数（1 = 线性），strength 是加多少（加到自发光那一项，不受阴影影响）。
+ */
+export const TOON_RIM = { color: '#eaf6ff', threshold: 0.70, strength: 0.35, power: 1.0 };
+
 /** 地面与配景 */
 export const GROUND = {
   soil: '#5f5a4f', asphalt: '#3c3f44', sidewalk: '#a09a90', curb: '#c3bdb3',
@@ -86,6 +106,9 @@ export const STYLES = {
     windowEmissive: 0.0, lampGlow: 0.0, stars: 0.0,
     exposure: 1.06, bloom: false, bloomStrength: 0.25, sunSize: 0.05,
     clean: true, toon: true, outline: true,
+    // 动画感三件（用完即弃的老路径不受影响：写实两档没有下面这四个字段）
+    toonTint: { ...TOON_TINT }, toonRim: { ...TOON_RIM },
+    outlineThickness: 0.0025, outlineColor: '#1b3550',
   },
   dusk: {
     key: 'dusk', name: '黄昏→夜晚霓虹',
@@ -103,8 +126,12 @@ export const STYLES = {
 /** HUD 的循环顺序（Object.keys(STYLES) 的插入序就是它；selftest 拿它断言"顺序稳定"） */
 export const STYLE_ORDER = Object.keys(STYLES);
 
-/** 描边色：与 App 2D 那档 `themes.anime` 的 outline.color 同色（ART-PLAN-ANIME.md §4） */
-export const OUTLINE = { color: '#1b3550', thickness: 0.0025 };
+/**
+ * 描边的**兜底默认值**（描边色与 App 2D 那档 `themes.anime` 的 outline.color 同色，ART-PLAN-ANIME.md §4）。
+ * 真正生效的那一份由风格档决定（`anime` 档的 `outlineThickness` / `outlineColor`），
+ * 取参一律走 `toon.mjs` 的 `outlineSpecFor()`；`?outlineW=` 能覆盖粗细（真机上现场调）。
+ */
+export const OUTLINE = { color: '#1b3550', thickness: 0.0025, alpha: 1 };
 
 /**
  * 半卡通的**渐变图**（MeshToonMaterial 的 gradientMap）：4 级色阶 0 → 0.45 → 0.72 → 1.0。

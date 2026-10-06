@@ -122,7 +122,7 @@ async fn build(
     stitch::stitch(&inp)
 }
 
-/// **城市级拼接大图**（返回裸 SVG 文本，与 `world_map_render` 一致）
+/// **城市级拼接大图**（返回裸 SVG 文本，与 `world_map_render_svg` 的返回形状一致）
 ///
 /// 把 `ad` 这个市下辖的每个区县各自的**街区图**，按经纬度排布拼成一张连续大图。
 /// 与 `world_map_geo_svg`（行政区划总览）是两件事：那边画区县轮廓，这边每块都是街区图。

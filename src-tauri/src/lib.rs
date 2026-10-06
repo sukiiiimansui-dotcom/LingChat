@@ -702,7 +702,10 @@ pub fn run() {
             world_map::world_map_push_events,
             world_map::world_map_recent_events,
             // ── 真源 world_map_rs 模块搬入后新暴露的命令 ──
-            world_map::world_map_render,
+            // 🗄 2026-10-06（S9b6 批 B）：原先这里注册着 `world_map::world_map_render`。
+            //    它前端 0 个 `invoke`（两处提及都是退役注释），S9b5-A 退 `DistrictViz.vue` 时漏掉了它
+            //    ⇒ 注册行与 `mod.rs` 的命令体同批删。⚠️ **HTTP 侧 `/api/render/probe` 没动**
+            //    （8791 调试首页与 `world_map_rs/src/demo.html` 还在用它）。
             world_map::world_map_geo_svg,
             // 几何数据（GeoJSON）与下级区划：前端 `geoJson()` / `geoChildren()` 的双通路真壳端。
             // 2026-10-06 补注册 —— 此前只有调试服务 8791 有孪生路由，真壳里这两条 invoke 直接 reject

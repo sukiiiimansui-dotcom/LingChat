@@ -523,46 +523,13 @@ pub async fn world_map_recent_events(app: AppHandle, limit: Option<usize>) -> Re
 //  `from_lng` → `fromLng`。每个命令的注释里都标了。
 // ═══════════════════════════════════════════════════════════════════
 
-/// 小区 SVG（`sketch` + `details` + `render`）
-///
-/// 取 layout 的优先级：`layout`（前端给，通常是 AI 流式生成的结果）→ `key`（地图库布局缓存）
-/// → `area`+`size`+`seed`（本地规则草图，确定性随机）。
-/// 返回**裸 SVG 文本**（与老 `world_map_render_svg`、以及 HTTP 版 `/api/render` 一致）。
-///
-/// `mode` 支持 `2d` / `3d`；`charts=true` 会画角落的数据卡片；`zoom`/`layers` 只影响
-/// SVG 里的类名与 `data-zoom`，显隐交给前端 CSS。
-#[tauri::command]
-pub async fn world_map_render(
-    app: AppHandle,
-    layout: Option<Value>,
-    key: Option<String>,
-    area: Option<String>,
-    size: Option<i32>,
-    seed: Option<u64>,
-    style: Option<String>,
-    mode: Option<String>,
-    zoom: Option<i32>,
-    charts: Option<bool>,
-    animate: Option<bool>,
-    layers: Option<bool>,
-    width: Option<f64>,
-    height: Option<f64>,
-    pad: Option<f64>,
-) -> Result<String, String> {
-    let lay = resolve_layout(&app, layout, key, area, size, seed)?;
-    let opts = render::Opts {
-        style: style.unwrap_or_else(|| "gaode".to_string()),
-        width: width.unwrap_or(900.0),
-        height: height.unwrap_or(900.0),
-        pad: pad.unwrap_or(48.0),
-        zoom: zoom.unwrap_or(3),
-        animate: animate.unwrap_or(true),
-        layers: layers.unwrap_or(true),
-        mode: mode.unwrap_or_else(|| "2d".to_string()),
-        charts: charts.unwrap_or(false),
-    };
-    Ok(render::render_svg(&lay, &opts))
-}
+// 🗄 2026-10-06（S9b6 批 B）：这里原本是 Tauri 命令 `world_map_render`（小区 SVG：`sketch` +
+//   `details` + `render`）。它前端 0 个 `invoke`（`worldMap.ts` 里两处提及都是退役注释），
+//   属 S9b5-A 退 `DistrictViz.vue` 时没做完的那一半 ⇒ 命令体与 `lib.rs` 的注册行同批删。
+//   ⚠️ 它用到的两样东西**都没退**、都还有别的活消费者，别顺手牵连：
+//     · `resolve_layout()`（本文件）—— `world_map_stats` 与设施那条链仍在调；
+//     · `render::render_svg` / `render::Opts` —— `stitch.rs` 的城市级拼接仍在调。
+//   同一批**没动** `/api/render/probe`（那是 8791 调试服务自己的路由，`demo.html` 在 fetch 它）。
 
 /// 行政区划 SVG（`render_geo`）：全国 (`100000`) / 省 / 市 / 区县，区划带 adcode 可点击下钻
 ///
@@ -645,7 +612,7 @@ pub async fn world_map_geo_children(app: AppHandle, ad: Option<String>) -> Resul
 
 /// 小区统计指标（`stats.rs` + `details.rs`）
 ///
-/// 取 layout 的方式与 `world_map_render` 相同（`layout` / `key` / `area`+`size`+`seed`）。
+/// 取 layout 的方式走同一条降级链（`resolve_layout`：`layout` / `key` / `area`+`size`+`seed`）。
 /// 返回 `{ detail, stats, series }`：
 ///   · `detail` = 街道细节计数（树/车位/路灯/人行道…，来自 `details::stats`）
 ///   · `stats`  = 建筑/道路/公园/水域的数量、面积、层数、人口估算（`stats::compute`）
@@ -950,7 +917,7 @@ fn transit_context(app: &AppHandle, o: TransitOpts) -> Option<TransitCtx> {
     } else {
         (None, None, "none")
     };
-    // 布局来源（与 world_map_render 同一条链：layout → 地图库 key → 本地草图）
+    // 布局来源（与其它取布局的命令同一条链：layout → 地图库 key → 本地草图）
     let source = if o.layout.is_some() {
         "layout"
     } else if o.key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
@@ -1491,7 +1458,7 @@ fn facilities_payload(lay: &Value, area: &str, level: &str, seed: Option<i64>, s
 
 /// 生成/返回设施清单（生活 + 交通）。
 ///
-/// 取布局的优先级与 `world_map_render` 完全一致（`resolve_layout`）：
+/// 取布局的优先级与其它取布局的命令完全一致（`resolve_layout`）：
 /// `layout` → 地图库布局缓存 `key` → 本地规则草图 `area`+`size`+`seed`。
 /// 传 `key`（地图库里那份 AI 精绘布局）时，设施会落在**玩家实际看到的那张图**的空地上；
 /// 只给 `area/size/seed` 时落在本地草图上（网格相同，但 AI 精绘后建筑可能不同）。

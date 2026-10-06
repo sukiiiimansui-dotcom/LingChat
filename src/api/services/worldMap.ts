@@ -87,46 +87,12 @@ export function unwrapBuildingsGeo(raw: unknown): BuildingsGeo | null {
 }
 
 // ── 类型 ──
-export interface BlockEdge {
-  x: number;
-  y: number;
-}
-
-export interface MainBlock {
-  adcode: string;
-  name: string;
-  center: [number, number];
-  bbox_lng: [number, number];
-  bbox_lat: [number, number];
-  radius_km: number;
-  img: string;
-  img_url: string;
-}
-
-export interface RemoteBlock {
-  adcode: string;
-  name: string;
-  center: [number, number];
-  bearing: number;
-  dir: string;
-  distance_km: number;
-  edge: BlockEdge;
-  in_main: boolean;
-  radius_km: number;
-  img: string;
-}
-
-export interface BlocksPayload {
-  ok: boolean;
-  error?: string;
-  hint?: string;
-  style: string;
-  located?: boolean;
-  locSource?: string | null;
-  auto: boolean;
-  main: MainBlock;
-  remotes: RemoteBlock[];
-}
+// 🗄 2026-10-06（S9b6 批 A）：这一组 4 个类型（`BlockEdge` / `MainBlock` / `RemoteBlock` /
+//   `BlocksPayload`）原本只服务于 `worldMapApi.blocks()` / `.blocksByLatLng()` 那一对前端包装，
+//   包装退役后全仓 0 消费者 ⇒ 同批删（本喵逐个 grep 过 `src/` 与 `public/`，确实只剩包装自己在用；
+//   留着一个没人用的结构体只会让人以为还有这条通路）。
+//   ⚠️ 对端**没退**：Python 侧车 `/api/blocks`（`hier_api.py`）与调试页 `world_map/blocks.html`
+//   还在真用这条数据，Rust 侧 `world_map_blocks` / `_at` 与 `lib.rs` 的注册也原样保留。
 
 export interface WorldLocation {
   lat: number;
@@ -270,10 +236,6 @@ function transitCtxQuery(ctx?: TransitPlanCtx): Record<string, string | number |
 
 // ── 接口（HTTP 版）──
 const http = {
-  blocks: (ad?: string, style = "gaode", limit = 6) =>
-    httpGet<BlocksPayload>("/api/blocks", { ad, style, limit }),
-  blocksByLatLng: (lat: number, lng: number, style = "gaode", limit = 6) =>
-    httpGet<BlocksPayload>("/api/blocks", { lat, lng, style, limit }),
   location: (opts?: { force?: boolean; fast?: boolean; lat?: number; lng?: number }) =>
     httpGet<WorldLocation>("/api/location", {
       force: opts?.force ? 1 : undefined,
@@ -336,9 +298,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 //
 // 现状（已核对 src-tauri/src/lib.rs 的 generate_handler 注册表）：
 //   `world_map_location` 与 `world_map_weather` **两个命令都还没实现**。
-//   Rust 侧目前有的是：blocks / blocks_at / render / render_svg / geo_svg / geo_status /
-//   coord_selftest / stats / maplib_* / schedule / transport_plan / osm_summary / time /
-//   push_events / recent_events / district_stream(_cancel)。
+//   Rust 侧目前有的是：render_svg / geo_svg / geo_status / coord_selftest / stats / maplib_* /
+//   schedule / transport_plan / osm_summary / time / push_events / recent_events
+//   （另有 `blocks` / `blocks_at`：**注册仍在**，但前端出口已于 2026-10-06 的 S9b6 批 A 退役，
+//     只剩侧车 `/api/blocks` 与调试页在用；`render` 与 `district_stream(_cancel)` 已先后退役，
+//     不再列 —— 这一行是照 `lib.rs` 的 `generate_handler` 现状写的，改注册表时请同步改它）。
 //   所以真壳里直接 invoke 这两个名字 → 命令不存在 → reject；
 //   若没人接住，页面就只剩一句报错（甚至白屏）。
 //
@@ -398,23 +362,6 @@ export const worldMapApi = {
     const res = await fetch(`${OVERTURE_BASE}/api/overture/buildings?${q}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`Overture 接口返回 ${res.status}`);
     return unwrapBuildingsGeo(await res.json());
-  },
-  blocks: async (ad?: string, style = "gaode", limit = 6): Promise<BlocksPayload> => {
-    if (isTauriRuntime()) {
-      return invoke<BlocksPayload>("world_map_blocks", { ad, style, limit });
-    }
-    return http.blocks(ad, style, limit);
-  },
-  blocksByLatLng: async (
-    lat: number,
-    lng: number,
-    style = "gaode",
-    limit = 6
-  ): Promise<BlocksPayload> => {
-    if (isTauriRuntime()) {
-      return invoke<BlocksPayload>("world_map_blocks_at", { lat, lng, style, limit });
-    }
-    return http.blocksByLatLng(lat, lng, style, limit);
   },
   // ── 定位：Rust 侧**还没有** `world_map_location` 命令（降级原因见上方整段说明）──
   location: async (opts?: {
@@ -532,10 +479,14 @@ export const worldMapApi = {
       });
     return http.transportPlan(a, b, prefer, ctx);
   },
-  // 下面三个是**死代码**（全仓 grep 无调用方，仅为兼容保留）：
-  // mapImg → `/api/map`、bigmapImg → `/api/bigmap_img` 都是 Python 侧车（8790）时代的路由，
-  // Rust 服务（8791）与打包后的应用内**都没有**这两条路由（实测 404）。
-  // 新代码请用文件末尾的 `mapSvgUrl()`（双通路）。
+  // 下面三项**都不是"死代码"三个字能概括的**（2026-10-06 S9b6 批 ⑤ 更正过一次口径，
+  // 老注释写「三项全是死代码（全仓 grep 无调用方）」，对第三项是错的）：
+  //   · `mapImg` → `/api/map`、`bigmapImg` → `/api/bigmap_img`：页面级消费者 0 个，
+  //     这两条 HTTP 路由在 Rust 服务（8791）与打包后的应用内**都没有**（实测 404）——
+  //     但 Rust 侧仍在**生成**这两串路径（`geo.rs` 的 `img` / `img_url`、`mod.rs` 的 `remotes[].img`）
+  //     ⇒ 留着是为了两端口径对得上。新代码请用文件末尾的 `mapSvgUrl()`（双通路）。
+  //   · `maplibFile`：**有**消费者 —— 本文件末尾的 `maplibFileUrl(id)` 就在调它；
+  //     只是 `maplibFileUrl` 自己 0 个消费者（"死导出的死导出"），要连带退属于另一笔。
   mapImg: http.mapImg,
   bigmapImg: http.bigmapImg,
   maplibFile: http.maplibFile,
@@ -585,8 +536,11 @@ export const worldMapApi = {
 
 // 🗄 2026-10-06（S9b5-A）：渲染探针整段退役（`RenderProbeOpts` / `renderProbeUrl()` / `renderProbeSvg()`）。
 // 唯一消费者是 `DistrictViz.vue`（`/world/district-viz`，手输 URL 才到得了）经 `districtRenderSvg()`
-// 的浏览器分支；页面与路由同批删。HTTP 路由 `/api/render/probe` 与 Tauri 命令 `world_map_render`
-// **本轮不动**（后端仍有调试服务的其它用途，要退是另一笔）。
+// 的浏览器分支；页面与路由同批删。
+// 🗄 2026-10-06（S9b6 批 B）补完 S9b5-A 漏掉的那半：Tauri 命令 `world_map_render` 已退役
+// （注册行从 `lib.rs` 摘掉、命令体从 `world_map/mod.rs` 删掉；前端本来就 0 个 invoke）。
+// ⚠️ HTTP 路由 `/api/render/probe` **仍然保留、不是死路** —— 8791 调试服务自己的路由，
+//    `world_map_rs/src/main.rs` 首页有入口、`world_map_rs/src/demo.html` 在真 fetch 它。
 // ── 地图库（/api/maplib/*）──
 
 export interface MapLibMeta {
@@ -866,6 +820,7 @@ export default worldMapApi;
 
 // 🗄 2026-10-06（S9b5-A）：`districtRenderSvg()`（小区渲染 / `world_map_render` 命令的
 //   前端出口）已退役 —— 唯一消费者是 `DistrictViz.vue`，页面与路由同批删。
+//   命令本体随后由 S9b6 批 B 一并退掉（见上面那条补记）。
 
 /**
  * 地图库列表（含容量统计）：真壳 invoke，浏览器 HTTP。

@@ -5,6 +5,14 @@
  * 而它原来长在 `useWsMapLibre.ts`（1200 行的 composable）里 ⇒ 别的渲染路想复用只能抄一份。
  * ⚠️ **本次是纯搬运、零行为变化**：函数体/常量/注释一字未改；`ML_*` 常量组一并搬来，
  *   原文件**import 回去**继续用（`export *` 不建本地绑定 —— 漏了这步就编译不过，量过的坑）。
+ *
+ * 🔴 **现状（2026-10-06，S9b7 批 D 之后）**：那个"原文件"（`useWsMapLibre.ts`）已整份删除，
+ *   本模块**唯一的活出口是 `assetUrl`**（`src/composables/wsMapLibreCss.ts:11` → 现役宿主
+ *   `WsDistrictMapLibre.vue` 的 `injectCss`）。其余导出里：8 个孤立符号已退役（墓碑见文件末），
+ *   `styleFor` / `THEME_*` / `ML_*` 目前只剩闸在读（`ws_base_maxzoom_selftest.mjs` 等）——
+ *   **不是活路**，只是本批不动它们（另立候选）。现役 App 的 style 走
+ *   `WsDistrictMapLibre.vue → wsFallback2d.styleNow() → wsDistrictScene.districtStyleOf()`
+ *   → `wsMapTheme.themeStyleParts()`，与这里的 `styleFor` 是两条路。
  */
 /* ── 🎨 主题色（2026-10-06 从 `wsGeoMap.ts` **原样搬入**，纯搬运、零行为变化）────────
  * 为什么搬：底图 style 是**唯一真源**，却要向一个已退役的 Canvas2D 渲染器借主题常量 ——
@@ -45,7 +53,10 @@ export const THEME_LIGHT: GeoTheme = {
   label: "rgba(22,34,46,0.92)",
   labelHalo: "rgba(255,255,255,0.75)",
 };
-import { lodPlan, PRERENDER_LAYER_ID, PRERENDER_SOURCE_ID } from "@/components/views/worldsim/wsScene";
+/* 🗄 2026-10-06（S9b7 批 D）：这里原来 import 了 `wsScene` 的 `lodPlan` /
+   `PRERENDER_LAYER_ID` / `PRERENDER_SOURCE_ID` —— 它们**只**喂下面那个
+   `prerenderStyleSpecs()`（同一批退役）。样式真源不该反向依赖场景装配；现役 LOD 层由
+   代拍页自己按 `public/vendor/wsScene.mjs` 的 `lodPlan()` 装配（`ws3dshow.html:2511`）。 */
 
 /**
  * 把 public 资源解析成**页面源**下的绝对 URL。
@@ -62,6 +73,10 @@ export function assetUrl(path: string): string {
 
 /* ══════════════════════════════════════════════════════════════════════════
    图层 / 数据源 id（外部（验证页、后续图层）要按 id 找图层，所以导出）
+   ⚠️ 2026-10-06（S9b7 批 D）照实记：`ML_SRC` / `ML_LAND` / `ML_LINE` / `ML_HI` / `ML_HI_LINE`
+   这五个**已经没有任何消费者**了 —— 唯一铺它们的是刚退役的 `layersFor`（全仓零引用）。
+   本批**不动**它们（审计候选 ④ 的清单里没有这五个，不在授权范围）⇒ 另立候选，别当成"还有人在用"。
+   仍在用的：`ML_BG` / `ML_BASE` / `ML_BASE_LAYER`（`styleFor` 内部）与闸里的 `ML.ML_BASE`。
    ══════════════════════════════════════════════════════════════════════════ */
 export const ML_SRC = "ws-ml-src";
 export const ML_BG = "ws-ml-bg";
@@ -82,7 +97,9 @@ export const ML_BASE_LAYER = "ws-ml-base-l";
  * 机主一眼就说"只有白底/不像地图"。这里按主题给暗/亮两套，随 `setDark()` 切。
  * ⚠️ 纪律：**只挂实测能取到的源**（带等高线的 opentopomap / Esri 地形从本机网络超时，不写进来）。
  */
-export function basemapTiles(dark: boolean): string[] {
+/* 🗄 2026-10-06（S9b7 批 D）：`basemapTiles` 去掉 `export` —— 它唯一的消费者是本文件的
+   `styleFor`（下面 `tiles: basemapTiles(dark)` 那一处）。外部没人用过（全仓 grep 只命中定义处）。 */
+function basemapTiles(dark: boolean): string[] {
   /* 🔴 **不要用 Carto**（2026-09-19 实测确认）：不带 key 时它返回的是**带水印的正常图片** ——
      HTTP 200、不 403、不报错，图面却是整幅斜字 `API KEY REQUIRED`（我下载瓦片用原生识图看过了）。
      机主看到的「除中国外全世界都有那行字」就是它：我们自绘的省/市/区多边形**不透明**，正好盖住中国区的水印。
@@ -130,6 +147,9 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom
          `WsMapTheme`/`WsMapLookSpec`（`wsMapTheme.ts`，也就是主题 JSON 的 `themes[*].baseFade`：
          `night` 是 `null`、`anime` 才有值）⇒ 所以收口值由**调用方**用可选的 `opts.baseMaxZoom` 递进来
          （`useWsMapLibre.ts` 建图那条：`stageThemeParts()` → `wsMapTheme.baseMaxZoomFor()`）。
+         ⚠️ 2026-10-06（S9b7 批 D）：那条调用点已随 `useWsMapLibre.ts` 删除，`styleForStage` 也已退役
+         ⇒ 现在**读这个参数的只剩闸**（`ws_base_maxzoom_selftest.mjs` ①②段）。上面那半句留原样，
+         是为了记住"默认值为什么必须是 20"。
          🔴 2026-10-04 语义收窄：那个函数现在**同时**夹一层"主题自己声明的 `sources.base.maxzoom`"
          （只收口、不放大）—— 起因是机主推翻「地面太糊」之后，二次元的淡出终点抬到 18，
          若把 18 原样写进这里，地图库到 z17 就会去要 Esri 那张 **2521B 占位图**
@@ -176,144 +196,44 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom
   };
 }
 
-/** 主色：与现有两套主题共用同一个 `accentLine`（深色下就是 `--accent-color` 冰蓝 #79d9ff） */
-export function layersFor(theme: GeoTheme): Array<Record<string, unknown>> {
-  return [
-    {
-      id: ML_LAND,
-      type: "fill",
-      source: ML_SRC,
-      /* 半透明：底图要能透上来（原来是不透明色块 ⇒ 接上底图也会被整块盖住，白接） */
-      paint: { "fill-color": theme.land, "fill-opacity": theme.sea === THEME_DARK.sea ? 0.55 : 0.45 },
-    },
-    {
-      id: ML_LINE,
-      type: "line",
-      source: ML_SRC,
-      layout: { "line-join": "round", "line-cap": "round" },
-      // 0.8px 与 Canvas2D 版逐字一致（那边是 `lineWidth = 0.8 / k`，屏幕像素恒定）
-      paint: { "line-color": theme.line, "line-width": 0.8 },
-    },
-    {
-      id: ML_HI,
-      type: "fill",
-      source: ML_SRC,
-      filter: NO_HIGHLIGHT_FILTER,
-      paint: { "fill-color": theme.accent, "fill-opacity": 1 },
-    },
-    {
-      id: ML_HI_LINE,
-      type: "line",
-      source: ML_SRC,
-      filter: NO_HIGHLIGHT_FILTER,
-      layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": theme.accentLine, "line-width": 1.6 },
-    },
-  ];
-}
+/* 🗄 2026-10-06（S9b7 批 D）退役：`layersFor` / `paintUpdatesFor` / `NO_HIGHLIGHT_FILTER`
+   三个符号原来长在这里（`layersFor` 铺 `ws-ml-*` 数据层、`paintUpdatesFor` 是换主题的三元组、
+   `NO_HIGHLIGHT_FILTER` 是 `layersFor` 里那两条高亮层的 `filter:`）。
+   依据：`layersFor` / `paintUpdatesFor` 在**全仓（含本文件）零引用** —— 它们唯一的调用方是
+   `useWsMapLibre.ts`（2026-10-06 整份删除）；`NO_HIGHLIGHT_FILTER` 的**唯一**消费者就是
+   `layersFor`（`:201` / `:208` 两处 `filter:`），先删 `layersFor` 它就成了零消费者死常量
+   （审计口径是"只去 export"，去完 export 仍是死的 —— 所以这里连本体一起退，别骗下一个人）。
+   原文：`git log -p -- src/components/views/worldsim/wsMapStyle.ts`（或 `REMOVED-CODE.md` 的 S9b7 条）。
+   守卫（可执行）：`ws_base_maxzoom_selftest.mjs` ⑦ 段。 */
 
-/** 换主题时要改的 (图层, 属性, 值) 三元组 —— 与 `layersFor`/`styleFor` 一一对应 */
-export function paintUpdatesFor(theme: GeoTheme): Array<[string, string, unknown]> {
-  return [
-    [ML_BG, "background-color", theme.sea],
-    [ML_LAND, "fill-color", theme.land],
-    [ML_LINE, "line-color", theme.line],
-    [ML_HI, "fill-color", theme.accent],
-    [ML_HI_LINE, "line-color", theme.accentLine],
-  ];
-}
+/* 🗄 2026-10-06（S9b7 批 D）退役：`WS_MAP_STYLE_SOURCE` / `wsMapStyleLayerIds` 原来长在这里。
+   · `WS_MAP_STYLE_SOURCE` 是"样式实现自报家门"的字符串 —— 但**全仓零 import**：
+     面板 `wsVerifyChecks.ts:415-418` 判的是**字面量** `c.styleSource === "wsMapStyle.ts"`，
+     从没读过这个常量；而且现役代码里**没有任何一处产出 `styleSource` 字段**
+     （唯一的生产者 `prerenderStyleSpecs()` 自己也随本批退役）⇒ 退役它对运行期零影响。
+     ⚠️ 若将来要给那条面板行接线，锚点该是现役路的产物（`wsDistrictScene.districtStyleOf`），
+        不是这里。
+   · `wsMapStyleLayerIds` 报的是 `layersFor` 那批 `ws-ml-*` 图层 id ⇒ 随 `layersFor` 一起失去对象。
+   守卫：`ws_transport_selftest.mjs` ⑬ 段（模块面 + 源码级）。 */
 
-/** 「谁也匹配不上」的过滤器：高亮层初始就用它，等价于不可见。 */
-export const NO_HIGHLIGHT_FILTER: unknown[] = ["==", ["get", "adcode"], "\u0000ws-none"];
+/* 🗄 2026-10-06（S9b7 批 D）退役：`prerenderStyleSpecs` / `WS_LOD_STYLE_SOURCE` 原来长在这里。
+   依据：`src`/`public` 零 import，全仓只有 `ws_lod_selftest.mjs:527` 在调（App 侧**本轮没接线**，
+   同闸 `:1528` 的反手判据盯着两页不许用）；它的自证常量只被这个函数自用。
+   现役的预渲染层是代拍页自己按 `wsScene.lodPlan()` 装配的（`ws3dshow.html:2511`），
+   与这个模块级入口不是同一条路 —— **换不了锚点**（换了就是换被测对象）。
+   守卫：`ws_lod_selftest.mjs` ④ 段（含"样式真源里不许有第二份 LOD 装配/阈值"那条换锚点判据）。
+   原文：`git log -p -- src/components/views/worldsim/wsMapStyle.ts`。 */
 
-/**
- * 🔎 **"同一份真源"的自证标记**（对齐清单 B 用）。
- *
- * 为什么要有它：B 的目标是"**各级都调同一份实现**"，而"有没有真的调到"以前只能靠读代码。
- * ⇒ 让样式构建方**自报家门**：谁产出这张图的 style，谁的名字就写进 `info.styleSource`，
- * 面板（五级都能开）会显示「样式真源 = …」⇒ 换源有没有生效，**在页面上一眼可见**，不必猜。
- */
-export const WS_MAP_STYLE_SOURCE = "wsMapStyle.ts";
-
-/** 本模块产出的图层 id（面板/自检用它断言"图层确实来自这一份"） */
-export function wsMapStyleLayerIds(): string[] {
-  return [ML_BG, ML_BASE_LAYER, ML_LAND, ML_LINE, ML_HI_LINE];
-}
-
-/**
- * 🛰 **LOD 第 1 步：预渲染栅格层的样式入口**（2026-09-24，机主：「近距离渲染 / 远距离预渲染」）。
- *
- * 为什么在这里再包一层：`wsScene.lodPlan()` 是**结构与阈值**的唯一真源
- * （层 id / before 锚点 / zoom 阈值 / 不透明度表达式 / 瓦片路径都在那边），
- * 而"往一份 style 里放什么"属于本文件的职责（`wsMapStyle.ts` = 样式的唯一真源）。
- * ⇒ 这里**一个数字都不写**，只是把计划取出来、顺手标上真源（防"两份装配"）。
- *
- * 🔴 **颜色不在这一层**：着色在**瓦片像素**里（骨架阶段由
- * `world_map/make_prerender_tiles.mjs` 用 `wsMapTheme.wsPrerenderPalette()` 画），
- * 本层只有一条 `raster-opacity`。改主题 ⇒ 重跑那个脚本 ⇒ 瓦片跟着变
- * （`ws_lod_selftest.mjs` 用清单里的指纹盯着这件事，不是靠嘴说）。
- *
- * ⚠️ **默认不加**：App 侧这一轮**不接线**（原型先定稿）—— 谁调它，谁自己负责
- * `?lod`/开关；没开的时候图层压根不该存在（否则会去要一批不存在的瓦片）。
- */
-export function prerenderStyleSpecs(): {
-  sourceId: string;
-  layerId: string;
-  /** 插到哪个图层之前（来自 `SCENE_LAYER_ORDER`，预渲染层必须在矢量层之上） */
-  beforeId: string | null;
-  source: Record<string, unknown>;
-  layer: Record<string, unknown>;
-  /** 自证：这份 spec 来自哪一份真源（页面/面板可读） */
-  styleSource: string;
-} {
-  const p = lodPlan();
-  return {
-    sourceId: PRERENDER_SOURCE_ID,
-    layerId: PRERENDER_LAYER_ID,
-    beforeId: p.beforeId,
-    source: { ...p.source },
-    layer: { ...p.layer },
-    styleSource: `${WS_LOD_STYLE_SOURCE}(${p.far}→${p.near})`,
-  };
-}
-
-/** LOD 那份 spec 的"自报家门"标记（与 `WS_MAP_STYLE_SOURCE` 同一个用法） */
-export const WS_LOD_STYLE_SOURCE = "wsMapStyle.ts/wsScene.lodPlan";
-
-/**
- * 🎨 **舞台样式（对齐清单 B · 区县级换源，2026-09-22 机主选 A）**
- *
- * 目标：区县级的**外观**（背景/底图/色罩/天空）改吃 `wsMapTheme.themeStyleParts`（**与小区级同一份真源**），
- * 而**数据层**（`ML_SRC` 上的面/线/高亮）仍是舞台自己的 —— 那批是**交互的载体**
- * （点击下钻靠 `queryRenderedFeatures({layers:[ML_LAND]})`、`fitBounds` 靠它算 bbox）⇒ **一层都不能动**。
- *
- * ⇒ 组合式：`[主题的 bg/base/tint/ref]` + `[舞台的 land/line/hi]`，**顺序即绘制序**（数据层在最上）。
- * ⚠️ 纪律：**零手改数值** —— 主题那几个图层的 paint 原样搬过来（机主拍板选 A，不为好看微调）。
- * ⚠️ 主题解析失败（拿不到 `themeStyleParts`）⇒ **回退到 `styleFor`**（老路），不让整级地图没掉。
- */
-export function styleForStage(
-  theme: GeoTheme,
-  opts: { basemap?: boolean; themeId?: "anime" | "night"; low?: boolean; nightFadeMs?: number; baseMaxZoom?: number; parts?: { sky?: unknown; sources: Record<string, unknown>; layers: Array<Record<string, unknown>> } | null } = {}
-): Record<string, unknown> {
-  /* ⚠️ `baseMaxZoom` **原样透传**给 `styleFor`（本函数自己不用它）：
-     底图 source 是 `styleFor` 建的，兜底路（`parts` 为 null 时 `return {...base}`）与正常路
-     都必须拿到同一个上限 —— 只传一半就会出现"换主题后上限不一样"的幽灵差异。
-     不传（`undefined`）⇒ `styleFor` 里 `?? 20` ⇒ 与改动前逐字一致。 */
-  const base = styleFor(theme, { basemap: opts.basemap, baseMaxZoom: opts.baseMaxZoom });
-  const parts = opts.parts;
-  if (!parts || !parts.layers || !parts.layers.length) {
-    return { ...base, __styleSource: "wsMapStyle.ts/fallback(styleFor)" }; // 兜底如实标注
-  }
-  /* 主题的外观层 + 舞台的数据层（后者引用 ML_SRC，由调用方 addSource/ addLayer 负责） */
-  const baseLayers = (base.layers || []) as Array<Record<string, unknown>>;
-  /* 数据层 = 舞台自己在 `ML_SRC` 上建的那几条（id 以 `ws-ml-` 开头）—— 它们是**交互载体**，原样保留 */
-  const dataLayers = baseLayers.filter((l) => String(l.id || "").startsWith("ws-ml-"));
-  return {
-    version: 8,
-    name: `ws-stage-${opts.themeId || "anime"}`,
-    ...(parts.sky ? { sky: parts.sky } : {}),
-    sources: { ...(parts.sources as Record<string, unknown>), ...(base.sources as Record<string, unknown>) },
-    layers: [...(parts.layers as Array<Record<string, unknown>>), ...dataLayers],
-    __styleSource: `${WS_MAP_STYLE_SOURCE}/theme(${opts.themeId || "anime"})`,
-  };
-}
+/* 🗄 2026-10-06（S9b7 批 D）退役：`styleForStage` 原来长在这里（区县级"主题外观 + 舞台数据层"
+   的组合式 style，2026-09-22 机主选 A）。
+   逐条退役理由：
+     ① **不在现役路上**：App 的 style 由 `WsDistrictMapLibre.vue` 的 `style: styleNow()` →
+        `wsFallback2d.ts` 的 `styleNow()` → `wsDistrictScene.districtStyleOf()` →
+        `wsMapTheme.themeStyleParts()` 产出；`src`/`public` 里对本符号零引用。
+     ② **唯一调用点早已退役**：它服务的"区县级建图"那条路长在 `useWsMapLibre.ts`（2026-10-06 删除）。
+     ③ **换不了锚点**：它守的"区县级调用点与兜底路拿到同一个 `baseMaxZoom`"没有第二个通路可比；
+        现役那条路的底图上限由 `themeStyleParts()` 一处收口，由 `ws_base_maxzoom_selftest.mjs`
+        的 ⑤/⑥ 段单独守着。
+   ⇒ 代价照实记：退掉它 = 放弃「底图源上限双通路一致」那条守卫（现役路不受影响）。
+   守卫：`ws_base_maxzoom_selftest.mjs` ③ 段（对象不许回来 / 现役路仍走 `districtStyleOf`）。
+   原文：`git log -p -- src/components/views/worldsim/wsMapStyle.ts`。 */

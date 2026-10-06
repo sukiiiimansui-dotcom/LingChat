@@ -2,8 +2,8 @@
   WsPhone.vue —— 「悬浮手机」的**入口外壳**（T5-1）
 
   ## 为什么需要它
-  `worldmap/PhoneOverlay.vue`（861 行）是**全屏预览页**：`position:fixed; inset:0; z-index:50`，
-  还依赖 `useRouter` / `useWorldMapLayer`。它是"形态预览"，**不是能随手掏出来的手机**。
+  历史上有个 `worldmap/PhoneOverlay.vue`（全屏预览页）用来摆形态，它已在 2026-10-06
+  随「AI 实时生成街区」管线退役（S9b5-A）—— 本组件现在就是手机界面的唯一入口。
   八项功能（T5-2~T5-8）也还没有入口 —— 本组件补的就是这个入口，并把 8 个位置留出来。
 
   ## 形态（按任务卡的"建议 b+c"）

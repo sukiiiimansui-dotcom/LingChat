@@ -154,8 +154,9 @@
      取 12.2 而不是更小：中文小字低于 12px 在手机屏上开始难认，
      「像浏览桌面版」要的是**布局不变**，不是把字缩到看不清。 */
   --ws-fs: clamp(12.2px, 0.45vw + 10.6px, 15px);
-  /* 与既有的地图整页 WorldMap.vue 用同一套定位（position: fixed + inset:0 + 高 z-index），
-     这样「整页路由」在全屏 WebView 里怎么表现，两个页面是一致的。
+  /* 用整页路由那套定位（position: fixed + inset:0 + 高 z-index）——
+     原来的整页地图 WorldMap.vue 已于 2026-10-06（S9b5-B）退役；这里保留同一套写法，
+     是为了本页将来若也走整页路由时行为一致。
      层级对照（机主给的层叠表 + 本仓库实测）：
        背景 -2 ／ 立绘 1 ／ 地图叠加背景层 1（pointer-events:none）／ 本页 50
        ／ 地图角落小窗 60 ／ 主菜单 1000 ／ 悬浮窗 9998+ ／ 全局弹窗 10000
@@ -217,8 +218,9 @@
  *   ① 选择器必须**真的能命中**。本文件是全局 CSS、这些组件是 `scoped`，
  *      但`.ws-root.ws-perf-low X` 是祖先链选择器，作用域属性只加在链尾元素上，
  *      所以**跨组件照样生效** —— `.ws-trip`（WsTripCard.vue，`:scoped`）实测就是停住的。
- *      反过来，`.ws-perf-low` 只打在 worldsim 那棵树上，**别处（PhoneOverlay /
- *      WorldMapLayer 是独立路由）根本拿不到这个类**，那些地方写降级规则是死代码。
+ *      反过来，`.ws-perf-low` 只打在 worldsim 那棵树上，**别处（独立路由的页面）
+ *      根本拿不到这个类**，那些地方写降级规则是死代码
+ *      （原举例的 PhoneOverlay / WorldMapLayer 已于 2026-10-06 随 S9b5 退役）。
  *   ② 名单里每加一个**都要用浏览器实测**「高档在动 / 低档停了」两条都成立 ——
  *      P5-6 就是这么发现 `.ws-empty__ico` 和 `.ws-confirm__emoji` 漏了的：
  *      它俩一个在 worldsim.css 自己的 `.ws-empty__ico` 规则里（`:874`），

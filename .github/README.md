@@ -8,6 +8,11 @@
 [![开发分支](https://img.shields.io/badge/开发分支-feat%2Fworldsim-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
 [![状态](https://img.shields.io/badge/状态-实验性%20·%20尚不完善-orange?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat/issues/858)
 
+[![代码行数](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
+[![Rust](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-rust.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
+[![前端 TS + Vue](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-frontend.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
+[![其它语言](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsukiiiimansui-dotcom%2FLingChat%2Fbadges%2Floc-other.json&style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/blob/badges/README.md)
+
 </div>
 
 ---
@@ -43,6 +48,20 @@ LingChat 的个人实验分支：想给聊天加一层「世界」，让角色�
 - 准确性：建筑高度大部分是按规则推断的（数据源里带真实高度的比例很低，画面上会区分）；片区名与 POI 有示意成分，真数据都带来源署名。
 - 稳定性：帧率、内存占用与长时间拖动缩放尚未系统验证。
 - 这条分支**没有安装包、没有下载、也没有公开的试用入口**。只有稳定、能玩的版本才会更新到 [issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)；暂时不会往上游提 PR。
+
+## 代码量
+
+徽章上的数字是**实时的**：每次推源码，[`代码量徽章`](.github/workflows/loc-badge.yml) 这个工作流会用
+[`scripts/loc-badge.py`](scripts/loc-badge.py) 重新数一遍，结果推到 [`badges`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/badges)
+分支，首页的徽章直接读它（点徽章能看到分语言的明细表）。
+
+统计口径（脚本就是真源，谁都能本地复算 `python3 scripts/loc-badge.py`）：
+
+- 数这几个地方：`src/` · `src-tauri/src/` · `crates/` · `scripts/` · `public/` · `wsbench/` ＋ 仓库根目录的自用页面；
+- **不含空行、不含整行注释**（行内注释算代码）；
+- 排除依赖与产物：`node_modules/` · `dist*` · `target/` · `public/vendor/`（那是打包产物）· `gen/` · `temp/`。
+
+> 所以这个数**不是**「仓库有多大」，而是「我们自己写了多少行」——第三方依赖、字体素材、离线数据包都不算。
 
 ## 分支说明
 

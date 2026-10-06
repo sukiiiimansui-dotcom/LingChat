@@ -1,0 +1,69 @@
+name: 代码量徽章
+
+# 给仓库首页（`.github/README.md`）的代码量徽章供数。
+#
+# 做法：CI 跑 `scripts/loc-badge.py` 数一遍行数 → 写成 shields.io 的 endpoint JSON
+# → 推到**专门的 `badges` 分支**（orphan 分支，只有徽章文件）。
+# 这样既不往开发分支的历史里塞机器提交，也不会打扰正在改的分支。
+#
+# 徽章 URL（README 里用的就是它）：
+#   https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/<owner>/<repo>/badges/loc.json
+#
+# 口径（README 里也写着同一份，脚本 `scripts/loc-badge.py` 是可复算的真源）：
+#   · 数这些目录：src / src-tauri/src / crates / scripts / public / wsbench + 根目录的自用页面
+#   · 不含空行、不含整行注释（行内注释算代码）
+#   · 排除依赖与产物：node_modules / dist* / target / public/vendor / gen / temp
+#
+# 触发：推源码时跑一次（**推送即更新**，约 20 秒）+ 每天兜底一次 + 手动。改这份 workflow 自己也会跑。
+on:
+  push:
+    branches: ['feat/worldsim', 'feat/world-map-**']
+    paths:
+      - 'src/**'
+      - 'src-tauri/src/**'
+      - 'crates/**'
+      - 'scripts/**'
+      - 'public/**'
+      - 'wsbench/**'
+      - '*.html'
+      - 'scripts/loc-badge.py'
+      - '.github/workflows/loc-badge.yml'
+  schedule:
+    - cron: '20 18 * * *'   # 每天 02:20（UTC+8）兜底
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 同一时刻只留一次（连推时旧的取消掉，省得两次推徽章分支打架）
+concurrency:
+  group: loc-badge
+  cancel-in-progress: true
+
+jobs:
+  loc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 数行数 + 生成徽章 JSON
+        run: |
+          python3 scripts/loc-badge.py --out badges
+          echo "--- 生成的文件 ---"
+          ls -la badges/
+
+      - name: 推到 badges 分支
+        run: |
+          set -e
+          cd badges
+          git init -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "chore: 更新代码量徽章（自动生成）"
+          # 徽章分支是机器自己维护的，force 推没有丢东西的风险（每次都是全量重算）
+          git push -q --force \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            badges
+          echo "✅ 已更新 badges 分支"

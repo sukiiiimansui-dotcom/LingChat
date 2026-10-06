@@ -704,6 +704,11 @@ pub fn run() {
             // ── 真源 world_map_rs 模块搬入后新暴露的命令 ──
             world_map::world_map_render,
             world_map::world_map_geo_svg,
+            // 几何数据（GeoJSON）与下级区划：前端 `geoJson()` / `geoChildren()` 的双通路真壳端。
+            // 2026-10-06 补注册 —— 此前只有调试服务 8791 有孪生路由，真壳里这两条 invoke 直接 reject
+            // （手机导航的目的地列表、2.5D 主图的“整区视野”快路径都因此静默降级走慢路）。
+            world_map::world_map_geo_json,
+            world_map::world_map_geo_children,
             world_map::world_map_stats,
             world_map::world_map_maplib_stats,
             world_map::world_map_maplib_list,
@@ -726,9 +731,10 @@ pub fn run() {
             //    真壳走这条命令。⚠️ 数据质量实测：OSM 楼高覆盖率只有 13~18%，其余回落默认 8m
             //    （见 world_map/PROJECT-STATE.md 的覆盖率表；要真实天际线需引 Overture/Cesium）。──
             world_map::world_map_buildings,
-            // ── 应用内实时绘制（Channel 版；浏览器/调试服务的 SSE 路并存）──
-            world_map::bridge::world_map_district_stream,
-            world_map::bridge::world_map_district_stream_cancel,
+            // 🗄 2026-10-06（S9b5-A）：原先这里注册着两条「应用内实时绘制（Channel 版）」命令 ——
+            //    `world_map::bridge::world_map_district_stream` 与 `..._cancel`。
+            //    「AI 实时生成街区」这个玩法主人已裁定不要，前端页面/路由与 Rust 侧 `bridge.rs` /
+            //    `stream.rs` / `layout_clean.rs` 同批退役 ⇒ 注册行一并删（模块不在，留着会 E0433）。
             // ── 实时数据：定位 / 天气（前端 worldMapApi.location / .weather）──
             world_map::live::world_map_location,
             world_map::live::world_map_weather,

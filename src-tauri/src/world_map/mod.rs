@@ -6,11 +6,9 @@
 //!   2. 真源 `main.rs` 的 axum 路由**没有**搬 —— 那是独立调试 HTTP 服务的入口，不是 Tauri 的东西
 //!
 //! 分层：coord（坐标/几何） · geo（地理数据与区块） · sketch/details/render（小区生成与渲染）
-//!      · render_geo（行政区划渲染） · stats（统计） · stream（流式生成） · maplib（地图库）
+//!      · render_geo（行政区划渲染） · stats（统计） · maplib（地图库）
 //!      · osm（Overpass 真实地物） · transport（交通） · schedule（日程 → 地图位置）
 //! 前端通过 `world_map_*` 命令调用；Python 侧车仍可并存（前端 `USE_RUST` 决定走哪边）。
-// 应用内实时绘制通路（Tauri 命令 + Channel）—— 只做「搬运」，生成逻辑仍复用 `stream`
-pub mod bridge;
 pub mod coord;
 pub mod details;
 // P4-1：AI 位置指令（⟦wm:{…}⟧）的剥离器。纯函数 + 流式状态机，不依赖 tauri，
@@ -37,9 +35,6 @@ pub mod geo;
 // 真实水系图层（河流/湖泊，Natural Earth 1:50m 内嵌）。纯函数模块、不碰网络，
 // 被 `render_geo` 消费，用来把「全国级真实地理」画进行政区划图。
 pub mod hydro;
-// AI 精绘布局的几何净化（剔重叠 / 夹越界 / 丢退化）。纯函数模块，
-// 挂在 `stream::assemble_layout` 出口，补上「提示词要求了但没人执行」的那道闸。
-pub mod layout_clean;
 // 实时数据通路：定位（world_map_location）+ 天气（world_map_weather）。
 // 同样要按**完整路径**注册：world_map::live::world_map_location —— 命令宏在定义处
 // （本文件的子模块 live.rs）生成，写 world_map::world_map_location 会 E0433。
@@ -57,7 +52,7 @@ pub mod maplib;
 //        所以能脱离工程单独 `rustc --test` 跑单测（手机上没有编译预算）。
 //   · `move_cmd` —— Tauri 命令层 + 派发胶水（读 MapRuntime 快照 → 起行程 → 落事件）。
 //     四条命令注册时必须带 `world_map::move_cmd::` 前缀（命令宏在定义处生成，
-//     理由同下面的 bridge/live/state，写短了会 E0433）：
+//     理由同下面的 live/state，写短了会 E0433）：
 //     `world_map_trip_status` / `world_map_trip_start` /
 //     `world_map_trip_cancel` / `world_map_trip_speedup`
 pub mod r#move;
@@ -86,7 +81,6 @@ pub mod stats;
 //                     （命令宏在定义处生成，写短了会 E0433 —— 本项目踩过）。
 pub mod stitch;
 pub mod stitch_cmd;
-pub mod stream;
 pub mod summary;
 pub mod transport;
 
@@ -100,14 +94,13 @@ pub mod transport;
 pub mod bookmark;
 pub mod offline;
 
-// 注意：`bridge` 里的两个命令要按**完整路径**注册进 lib.rs 的 invoke_handler：
-//   world_map::bridge::world_map_district_stream / ..._cancel
-// 不能写 `world_map::world_map_district_stream` —— 命令宏除了函数本体，还会在
-// **定义它的模块里**生成 `pub use {__cmd__xxx, __tauri_command_name_xxx}`（见
-// tauri-macros/src/command/wrapper.rs 末尾「allow the macro to be resolved with the
-// same path as the command function」），generate_handler 就是拿这条路径去找宏的。
-// 在 mod.rs 里 `pub use bridge::world_map_district_stream;` **只导出函数、不导出宏**，
-// 那样写编译期直接 E0433（已用 rustc 复现验证）。
+// 🗄 2026-10-06（S9b5-A）：`bridge` / `stream` / `layout_clean` 三个模块已退役。
+//   `bridge.rs` 里只有 `world_map_district_stream` / `..._cancel` 两个命令（Channel 版实时绘制），
+//   生成逻辑全在 `stream.rs`（AI 边吐 JSON 边解析成绘制事件），几何净化在 `layout_clean.rs`
+//   （挂在 `stream::assemble_layout` 出口）。三者与前端 `/world/district-live`（`DistrictLive.vue`）
+//   是同一条「AI 实时生成街区」管线 —— 该玩法主人已裁定不要，页面与路由同批删。
+//   原先那段「命令要按 `world_map::bridge::…` 完整路径注册」的说明随注册一起删（见 lib.rs）。
+//   要回退请看 git 历史。
 
 use chrono::{Datelike, Timelike};
 use serde_json::{json, Value};
@@ -615,6 +608,39 @@ pub async fn world_map_geo_svg(
         show_stats: stats.unwrap_or(false),
     };
     render_geo::render_geo_svg(&fc, &opts)
+}
+
+/// 某个 adcode 的 GeoJSON（FeatureCollection），原样吐出。
+///
+/// 为什么需要它：`world_map_geo_svg` 给的是**画好的 SVG 字符串**，前端拿不到几何数据；
+/// 而手机里的「地图/导航」「打车」「公交地铁」要算目的地的**面积质心**当坐标，
+/// 现役 2.5D 主图还要拿区县轮廓算「整区视野」的 bbox —— 这两件事都必须吃到 GeoJSON 本身。
+///
+/// 数据源与 `world_map_geo_svg` 完全一致（同一份缓存 + 同一套兜底），
+/// 与调试服务 8791 的 `/api/geo_json` 孪生（那边在独立工程的 `main.rs` 里）。
+/// ⚠️ 2026-10-06 之前这条命令**根本不存在**：前端 `geoJson()` 走真壳分支时 invoke 直接 reject，
+/// 只有浏览器预览能用 —— 真机上手机导航的目的地列表恒空、2.5D 主图退回「IP 定位 + 现问 Overpass」
+/// 的慢路径，而且前端是 `catch {}` 静默降级，页面上看不出来。补上它，两条路才真的同形。
+#[tauri::command]
+pub async fn world_map_geo_json(app: AppHandle, ad: Option<String>) -> Result<Value, String> {
+    let ad = ad.unwrap_or_else(|| "100000".to_string());
+    make_source(&app).fetch(&ad).await
+}
+
+/// 某个 adcode 的**下级区划**列表：`{ adcode, level, count, children:[{name, adcode}] }`。
+///
+/// 形状与调试服务 8791 的 `/api/geo/children` 逐字一致（前端 `geoChildren()` 两个分支吃同一份），
+/// 拼装收在 `geo::children_json()` 里（那边有单测钉形状，也能被本地 harness 真编译到）。
+/// ⚠️ `GeoSource::children_of()` 只读本地缓存 —— 手机上新装的区县大概率**没有**缓存，
+/// 直接调它会得到一份空列表（界面上就成了"拿不到目的地列表"）。所以这里跟调试服务不同、
+/// 先 `fetch()`（缓存优先、缺失才联网，走的是 Android 安全的 TLS 预配置客户端）把这份
+/// geojson 拿到手，再从中抽子级；`fetch` 失败就如实报错，不吞。
+#[tauri::command]
+pub async fn world_map_geo_children(app: AppHandle, ad: Option<String>) -> Result<Value, String> {
+    let ad = ad.unwrap_or_else(|| "100000".to_string());
+    let src = make_source(&app);
+    let fc = src.fetch(&ad).await?;
+    Ok(geo::children_json(&fc, &ad))
 }
 
 /// 小区统计指标（`stats.rs` + `details.rs`）
@@ -1237,7 +1263,8 @@ pub async fn world_map_osm_summary(
     if data.is_none() && force {
         // ⚠️ 必须注入预配置的 TLS 后端：reqwest 0.13 默认走 rustls-platform-verifier，
         // 而本仓从不初始化它 → 裸 builder 在 Android 上发请求时 panic（见 `src/utils/tls.rs`）。
-        // 与 `stream.rs` 那处是同一类漏配，两处一起补。
+        // （原先这里是「与 `stream.rs` 那处同一类漏配，两处一起补」—— `stream.rs` 已于
+        //   2026-10-06 S9b5-A 退役，这一处是该规矩**仅剩**的活样板；新加裸 reqwest 客户端照这里抄。）
         let tls = crate::utils::tls::build_tls_config()?;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(25))

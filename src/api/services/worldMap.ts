@@ -5,7 +5,7 @@
 //   · 纯浏览器预览 / 局域网调试：HTTP → Rust 调试服务（127.0.0.1:8791）
 // 两条通路的**分流是自动的**（见下面的 isTauriRuntime），不需要再手改常量：
 // 打包成 APK 之后手机上根本没有 8791 那个进程，写死 HTTP 必然显示「世界地图服务未启动」。
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * 当前是不是**真的**跑在 Tauri 壳里（而不是浏览器预览）。
@@ -535,7 +535,7 @@ export const worldMapApi = {
   // 下面三个是**死代码**（全仓 grep 无调用方，仅为兼容保留）：
   // mapImg → `/api/map`、bigmapImg → `/api/bigmap_img` 都是 Python 侧车（8790）时代的路由，
   // Rust 服务（8791）与打包后的应用内**都没有**这两条路由（实测 404）。
-  // 新代码请用文件末尾的 `mapSvgUrl()`（双通路）或 `bigmapSvgUrl()`（仅浏览器）。
+  // 新代码请用文件末尾的 `mapSvgUrl()`（双通路）。
   mapImg: http.mapImg,
   bigmapImg: http.bigmapImg,
   maplibFile: http.maplibFile,
@@ -543,234 +543,50 @@ export const worldMapApi = {
 };
 
 // ═══════════════════════════════════════════════════════════════════
-// 世界地图「新页面组」补充接口（src/components/views/worldmap/ 下的 4 个页面用）
+// 世界地图补充接口（地图库那条链在用）
 //
-// 约定：这一段**只追加**，不改上面任何既有导出 ——
-//   WorldMap.vue / useWorldMapLayer 取用的对象与函数签名保持原样。
+// 🗄 2026-10-06（S9b5-A）：原本这里还有"新页面组"（`views/worldmap/` 下四个页面）
+//   专用的 SSE 事件流与 SVG 探针出口，随「AI 实时生成街区」管线一起退役；
+//   现在只剩地图库这一组，消费者是 `WsDistrictMapLibre.vue` 一线。
 //
-// 为什么另起一组函数、而不是往 worldMapApi 里塞：
-//   ① 这些接口只有新页面用（SSE 事件流、SVG 探针、地图库），
+// 为什么仍然另起一组函数、而不是往 worldMapApi 里塞：
+//   ① 这些接口只有地图库这条链用（按需取 JS/CSS 的资产 URL），
 //      塞进公共出口会让老页面共享的类型跟着变，没必要担风险；
 //   ② SSE 是「取 URL 交给 EventSource」而不是「fetch JSON」，
 //      形状本来就和 worldMapApi 的其它成员不同。
 // ═══════════════════════════════════════════════════════════════════
 
-// ── AI 实时绘制小区（/api/district_stream，SSE）──
-
-/** 小区里的一栋建筑 / 一块绿地水域（后端逐条推的就是这个） */
-export interface DistrictItem {
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-  /** residential / office / commercial / shop / restaurant / cafe / school / hospital / civic / leisure */
-  type?: string;
-  name?: string;
-  /** 楼层：后端可能给数字也可能给字符串（AI 输出不稳定，两边都容忍） */
-  floors?: number | string;
-}
-
-/** 道路：两端点 + 等级 */
-export interface DistrictRoadItem {
-  x1?: number;
-  y1?: number;
-  x2?: number;
-  y2?: number;
-  /** main / secondary / path */
-  type?: string;
-  name?: string;
-}
-
-/** 完整布局（done 事件里那份，也是「保存到地图库」将来要 POST 的东西） */
-export interface DistrictLayout {
-  name?: string;
-  size?: number;
-  buildings?: DistrictItem[];
-  roads?: DistrictRoadItem[];
-  parks?: DistrictItem[];
-  water?: DistrictItem[];
-  details?: { stats?: Record<string, number> };
-  /** 后端标注：这份布局是流式攒出来的 */
-  _streamed?: boolean;
-  /**
-   * 后端标注：AI 布局**几何净化**的统计（剔了哪些图元、为什么）。
-   *
-   * 由 Rust `layout_clean::clean()` 在 `stream::assemble_layout` 出口写回。
-   * 提示词要求「建筑不要重叠」，但模型偶尔不遵守；净化就是补上那道闸。
-   *
-   * `removed > 0` 表示模型画的东西被**修正过** —— 排查「为什么这栋楼不见了」时看这里，
-   * 不用去猜。正常布局恒为 0（净化是保守的：宁可少剔，不可误删）。
-   */
-  _clean?: {
-    summary: string;
-    removed: number;
-    buildings: {
-      in: number;
-      out: number;
-      degenerate: number;
-      outOfBounds: number;
-      overlap: number;
-      clamped: number;
-    };
-    roads: { in: number; out: number; degenerate: number; clamped: number };
-    areas: { in: number; out: number };
-    sizeFixed: boolean;
-    overlapSkipped: boolean;
-  };
-}
-
-export interface DistrictCounts {
-  buildings: number;
-  roads: number;
-  parks: number;
-  water: number;
-}
-
-/** SSE 事件（每行 `data: <json>`；流结束是 `data: [DONE]`） */
-export interface DistrictStreamEvent {
-  type:
-    | "start"
-    | "meta"
-    | "size"
-    | "building"
-    | "road"
-    | "park"
-    | "water"
-    | "warn"
-    | "debug"
-    | "done"
-    | "error";
-  /** start */
-  area?: string;
-  size?: number;
-  model?: string;
-  /** meta，也用作 done.layout.name */
-  name?: string;
-  /** building / road / park / water */
-  item?: DistrictItem & DistrictRoadItem;
-  index?: number;
-  elapsed?: number;
-  /** warn / error */
-  message?: string;
-  /** debug */
-  stats?: { chunks?: number; chars?: number; lines?: number };
-  /**
-   * debug：本轮自动重试了几次（0 = 一次就成）。空输出兜底用（T3-1 step2）。
-   * 后端重试上限 1 次，所以这里是 0 或 1。
-   */
-  retries?: number;
-  /**
-   * debug：**模型原始输出**的前若干字符（空输出时是 `<空>`）。
-   * 用途：真机上一次失败就能分清「一个字没吐」「吐了半截」还是「吐了但格式不对」——
-   * 不用再重跑一轮去复现。见 Rust 侧 `stream::preview_of`。
-   */
-  preview?: string;
-  /** done */
-  layout?: DistrictLayout;
-  counts?: DistrictCounts;
-}
-
-export interface DistrictStreamOpts {
-  /** 区域名，如「广州市·越秀区」（后端只拿它写进提示词，不做地理换算） */
-  area?: string;
-  /** 剧情 / 风格提示，可选 */
-  context?: string;
-  /** 规模档位：0=20×20、1=28×28、2=36×36（后端 base = 20 + expand*8） */
-  expand?: number;
-}
-
-/**
- * 拼 SSE 地址给 `new EventSource(...)`。
- *
- * 为什么不在服务层直接开 EventSource：EventSource 是**长连接 + 多次回调**的东西，
- * 生命周期属于组件（组件卸载要 close，重画要先 close 再开），
- * 服务层只负责「URL 怎么拼」，不许持有连接，否则页面切走连接还在漏。
- */
-export function districtStreamUrl(opts: DistrictStreamOpts = {}): string {
-  const q = new URLSearchParams();
-  q.set("area", opts.area || "广州市·越秀区");
-  if (opts.context) q.set("context", opts.context);
-  if (opts.expand) q.set("expand", String(opts.expand));
-  return `${API_BASE}/api/district_stream?${q.toString()}`;
-}
-
-// ── 区域主图（/api/bigmap）──
+// ── 🗄 AI 实时绘制小区（/api/district_stream，SSE）—— 2026-10-06（S9b5-A）本段已整段退役 ──
 //
-// 注意：上面 worldMapApi 里的 mapImg/bigmapImg 指向 `/api/map`、`/api/bigmap_img`，
-// 那是 Python 侧车（8790）时代的路由，Rust 版（8791）实测 **404**
-// （全仓 grep 过，目前没有调用方，属于死代码；但既有导出按约定不动），
-// 所以这里补一个走 `/api/bigmap` 的正确地址给新页面用。
+// 主人裁定「AI 实时生成街区这个玩法不要了」⇒ 这条管线的前端半边一起删：
+//   · 类型 `DistrictItem` / `DistrictRoadItem` / `DistrictLayout` / `DistrictCounts` /
+//     `DistrictStreamEvent` / `DistrictStreamOpts`；
+//   · `districtStreamUrl()`（拼 SSE 地址）· `startDistrictStream()` 与它的两条通路
+//     （`startTauriDistrictStream` / `startHttpDistrictStream`）· `probeStreamError()`
+//     （这四者在下面「统一入口」那段，同批删）· `districtRenderSvg()`（文件末尾那段）。
+// 为什么整条删而不是留着：唯一消费者是 `/world/district-live`（`DistrictLive.vue`）与
+//   `/world/district-viz`（`DistrictViz.vue`），这两条路由**全仓 0 个导航来源**（只能手输
+//   URL），页面已随本笔一起删 ⇒ 留着就是一对"零消费者 + 没人能到"的死出口。
+// 对端（Rust `stream.rs` / `layout_clean.rs` + 两条 `world_map_district_stream*` 命令、
+//   Python 侧车 `/api/district_stream`）同批退役，判据见 `frontend_selftest_worldsim_p1.mjs`
+//   的【🗄 S9b5】那一段。
+
+// ── 区域主图（/api/bigmap）🗄 2026-10-06（S9b5-B）本段两个出口已退役 ──
 //
-// 注意②：这个函数拼的是**纯 HTTP 地址**，只适合「明确知道自己在浏览器里」的场景
-// （如 worldmap/PhoneOverlay.vue 的形态预览）。要图片在 **Tauri 应用内**也能出来，
-// 必须用文件末尾的 `mapSvgUrl()`（真壳走 invoke，不依赖任何本地端口）。
-export function bigmapSvgUrl(ad: string, style = "gaode", scale = 1): string {
-  const q = new URLSearchParams({ ad: ad || "", style, scale: String(scale) });
-  return `${API_BASE}/api/bigmap?${q.toString()}`;
-}
+// 机主裁定「角落世界地图不要了」⇒ 这条链上仅有的两个前端出口一起删了：
+//   · `bigmapSvgUrl()` —— 纯 HTTP 拼串，给 `PhoneOverlay.vue` 那种"明确知道自己在浏览器里"的场景；
+//   · `bigmapImgUrl()` —— 双通路（真壳 invoke `world_map_bigmap_svg` / 浏览器拼 URL），
+//     消费者只有 `views/WorldMap.vue`（角落小窗的「⛶ 打开世界地图」目标页），页面也一并删了。
+// 现役的 `mapSvgUrl()` 另有自己的 `/api/bigmap` 兜底（见上面那条 `catch`），不经过这里。
+//
+// ⚠️ 别把 `/api/bigmap` 与 Rust 的 `world_map_bigmap_svg` 当成已经没用的东西：
+//    前者仍被 `mapSvgUrl()` 的浏览器兜底路径用，后者的命令本身也还在 `stitch_cmd.rs` 里注册着 ——
+//    这一笔只退前端出口，不动对端（要退对端是另一笔、得先确认再没有别的消费者）。
 
-// ── 渲染探针（/api/render/probe，直接返回 SVG 文本）──
-export interface RenderProbeOpts {
-  style?: string;
-  /** 2d 平面 / 3d 伪立体（按楼层挤出，由后端渲染决定，所以切 3D 必须重新请求） */
-  mode?: "2d" | "3d";
-  zoom?: number;
-  /** 是否把「小区数据」卡片画进 SVG 角落 */
-  charts?: boolean;
-  size?: number;
-  seed?: number;
-  /**
-   * 区域名「广州市·越秀区」——⚠️ **它参与布局播种，不只是文案**。
-   *
-   * 后端 `sketch::seed_of(area, seed) = sha256("{area}|{seed}")`：区域名是种子的**一部分**。
-   * 所以「同一张草图」的身份 = (area, size, seed) 三元组；少传 `area`，
-   * 后端就用它自己的默认区名（`resolve_layout` 里是「广州市·越秀区」）
-   * → **与传了 area 的那次不是同一张布局**。
-   *
-   * 为什么现在补上这个字段：T2-1 的设施图层要把设施点摆到**页面正在显示的那张图**上，
-   * 就必须用与渲染完全相同的三元组去生成布局；而此前这个函数把 `area` 悄悄丢了
-   * （`WsDistrict` 也没传），于是「渲染用的布局」和「设施用的布局」天然是两张图。
-   * 这里补的是**通路**：调用方传了才带；不传时行为与本改动前逐字节一致（后端仍走默认区名）。
-   */
-  area?: string;
-}
-
-/** 拼 /api/render/probe 地址（也可直接给 <img> 或新窗口用） */
-export function renderProbeUrl(o: RenderProbeOpts = {}): string {
-  const q = new URLSearchParams();
-  q.set("style", o.style || "gaode");
-  q.set("mode", o.mode || "2d");
-  q.set("zoom", String(o.zoom ?? 3));
-  if (o.charts) q.set("charts", "1");
-  if (o.size) q.set("size", String(o.size));
-  if (o.seed !== undefined) q.set("seed", String(o.seed));
-  if (o.area) q.set("area", o.area);
-  return `${API_BASE}/api/render/probe?${q.toString()}`;
-}
-
-/**
- * 取 SVG 文本（给 v-html 用）。
- *
- * 为什么要判 `startsWith('<')`：后端出错时这个路由回的是 JSON 而不是 SVG，
- * 直接塞进 v-html 会渲染成一坨 JSON 文本 —— 这里提前翻译成可读错误。
- */
-export async function renderProbeSvg(o: RenderProbeOpts = {}): Promise<string> {
-  const res = await fetch(renderProbeUrl(o), { cache: "no-store" });
-  if (!res.ok) throw new Error(`渲染接口返回 ${res.status}`);
-  const text = await res.text();
-  if (!text.trimStart().startsWith("<")) {
-    let msg = text.slice(0, 200);
-    try {
-      const j = JSON.parse(text) as { error?: string };
-      if (j?.error) msg = j.error;
-    } catch {
-      /* 不是 JSON 就原样显示前 200 字 */
-    }
-    throw new Error(msg || "渲染失败");
-  }
-  return text;
-}
-
+// 🗄 2026-10-06（S9b5-A）：渲染探针整段退役（`RenderProbeOpts` / `renderProbeUrl()` / `renderProbeSvg()`）。
+// 唯一消费者是 `DistrictViz.vue`（`/world/district-viz`，手输 URL 才到得了）经 `districtRenderSvg()`
+// 的浏览器分支；页面与路由同批删。HTTP 路由 `/api/render/probe` 与 Tauri 命令 `world_map_render`
+// **本轮不动**（后端仍有调试服务的其它用途，要退是另一笔）。
 // ── 地图库（/api/maplib/*）──
 
 export interface MapLibMeta {
@@ -892,31 +708,16 @@ export function safeId(id: string): string {
   return String(id || "").replace(/[^\w:.-]/g, "_");
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// AI 实时绘制小区：**统一入口**（Tauri Channel / 浏览器 EventSource）
-//
-// 为什么需要它：DistrictLive 页面原来自己 `new EventSource(...)` 连
-// http://127.0.0.1:8791/api/district_stream —— 那是独立 Rust 调试服务的地址，
-// 打包成 APK 后手机上根本没有那个进程，那条路必然失败。应用内要走
-// 「Tauri 命令 + IPC Channel」：Rust 侧 `world_map_district_stream` 用 LingChat
-// 自己的 LLM 客户端（设置页里配的那个，支持热切换）流式生成，每抠出一个元素就
-// send 一条。事件形状与 SSE 的 data 行**逐字段一致**（Rust 侧同一个
-// `Event::to_json`），所以页面那套阶段条/日志/增量画/对账逻辑两条路都能用。
-//
-// 生命周期：返回「停止」函数，必须在组件卸载、重画、点「停止」时调用 ——
-// EventSource 是长连接，Tauri 那边是一个后台任务，不停掉的话页面切走了还在画。
-//
-// 注：这里**不另立** `DistrictStreamEvent` —— 上面（`districtStreamUrl` 附近）已经
-// 导出过它，两条通路的负载字段完全一致，直接复用；同名 interface 重复声明会
-// TS2300，也会让页面拿到两套互不相容的类型。
-// ═══════════════════════════════════════════════════════════════════
-
-/** 强制指定实时绘制通路（调试/录屏用）：`window.__WM_DISTRICT_TRANSPORT__ = 'tauri' | 'http'` */
-export type DistrictTransport = "tauri" | "http";
+// 🗄 2026-10-06（S9b5-A）：AI 实时绘制小区的**统一入口**已整段退役 ——
+//   `DistrictTransport` / `useTauriTransport()` / `startTauriDistrictStream()` /
+//   `startHttpDistrictStream()` / `probeStreamError()` / `startDistrictStream()`。
+// ⚠️ 同一个块里的 `errText()` **保留** —— `mapSvgUrl()`（现役，B 线那份）还在用它拼错误文案。
+// 唯一消费者是 `/world/district-live`（`DistrictLive.vue`），页面与路由同批删（见 `router/index.ts`）。
+// 对端同批退役：Rust `bridge.rs` 的两个 `world_map_district_stream*` 命令（Channel 版）、
+//   Python 侧车 `/api/district_stream`（SSE 版）。要回退请看 git 历史。
 
 declare global {
   interface Window {
-    __WM_DISTRICT_TRANSPORT__?: DistrictTransport;
     /** 纯 web 预览标记，由 src/web-mock.ts 打上 */
     __LINGCHAT_WEB_MOCK__?: boolean;
     /** Tauri 壳注入的运行时（真壳由 Rust 注入；web-mock 会伪造一份，见 isTauriRuntime） */
@@ -924,186 +725,11 @@ declare global {
   }
 }
 
-/**
- * 这一轮该走哪条通路。
- *
- * ① 先看显式开关（`__WM_DISTRICT_TRANSPORT__`），调试时可强制走某一条；
- * ② 其余交给 `isTauriRuntime()`（真壳 vs web-mock 的判别全在那一个函数里，别处别再抄一遍）。
- */
-function useTauriTransport(): boolean {
-  if (typeof window === "undefined") return false; // 非浏览器环境（SSR / 测试）兜底
-  const forced = window.__WM_DISTRICT_TRANSPORT__;
-  if (forced === "tauri") return true;
-  if (forced === "http") return false;
-  return isTauriRuntime();
-}
-
 /** invoke 的 reject 有的是 string（Rust 的 `Err(String)`），有的是 Error，统一成人话 */
 function errText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;
   return e ? String(e) : "未知错误";
-}
-
-/** Tauri 分支：命令 + Channel（应用内正路） */
-function startTauriDistrictStream(
-  opts: DistrictStreamOpts,
-  onEvent: (ev: DistrictStreamEvent) => void,
-  onDone?: () => void,
-  onError?: (msg: string) => void
-): () => void {
-  let stopped = false;
-  // 唯一 id：Rust 侧靠它把「停止」找回对应的后台任务（见 world_map_district_stream_cancel）。
-  // 时间戳 + 随机串足够：同一页面连点「重画」也不会撞。
-  const streamId = `district-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const channel = new Channel<DistrictStreamEvent>();
-  channel.onmessage = (ev) => {
-    if (stopped) return;
-    onEvent(ev);
-    // done = 这一轮正常收尾。放在 onEvent 之后，先让调用方把布局对账完再收摊。
-    if (ev.type === "done") {
-      stopped = true;
-      onDone?.();
-    }
-  };
-
-  // 注意：命令**立刻返回**，真正的生成在 Rust 后台任务里跑，事件全部走 channel ——
-  // 所以绝不能拿这个 invoke 的 resolve 当「画完了」（它只是「任务挂起来了」）。
-  invoke("world_map_district_stream", {
-    area: opts.area,
-    context: opts.context ?? null,
-    expand: opts.expand ?? 0,
-    streamId,
-    onEvent: channel,
-  }).catch((e) => {
-    if (stopped) return;
-    stopped = true;
-    // 命令本身失败（旧版 APK 没注册这个命令 / Channel 传参不被识别 / 参数反序列化失败…）：
-    // 转成可读文案交给页面，别让异常冒到控制台就没了
-    onError?.(`实时绘制命令调用失败：${errText(e)}`);
-  });
-
-  return () => {
-    if (stopped) return;
-    stopped = true;
-    // 先本地挂断（此后迟到的事件一律丢弃），再让 Rust 把这一轮停掉。
-    // 取消是「尽力而为」：任务可能刚好自己跑完了，失败不影响任何东西。
-    invoke("world_map_district_stream_cancel", { streamId }).catch(() => {});
-  };
-}
-
-/** 浏览器分支：沿用 EventSource（Rust 调试服务 8791 / 将来别的 HTTP 后端） */
-function startHttpDistrictStream(
-  opts: DistrictStreamOpts,
-  onEvent: (ev: DistrictStreamEvent) => void,
-  onDone?: () => void,
-  onError?: (msg: string) => void
-): () => void {
-  let es: EventSource;
-  try {
-    es = new EventSource(districtStreamUrl(opts));
-  } catch (e) {
-    onError?.(`无法打开实时连接：${errText(e)}`);
-    return () => {}; // 连都没连上，停止函数给个空的即可
-  }
-  let stopped = false;
-  let received = 0;
-  const close = () => {
-    try {
-      es.close();
-    } catch {
-      /* 已经关了就算了 */
-    }
-  };
-
-  es.onmessage = (e) => {
-    if (stopped) return;
-    const raw = String(e.data ?? "");
-    if (raw === "[DONE]") {
-      stopped = true;
-      close();
-      onDone?.();
-      return;
-    }
-    let ev: DistrictStreamEvent;
-    try {
-      ev = JSON.parse(raw) as DistrictStreamEvent;
-    } catch {
-      // 坏片段照旧只记一条日志（页面把它当 warn 显示），不打断整条流
-      onEvent({ type: "warn", message: "收到无法解析的流片段（已跳过）" });
-      return;
-    }
-    received++;
-    onEvent(ev);
-  };
-
-  es.onerror = () => {
-    if (stopped) return;
-    // 两种情况必须分开（原来在页面里判的，现在判完只交给调用方一句话）：
-    //   ① 后端没配 LLM 时这个路由回的是 **JSON**（不是 text/event-stream），
-    //      浏览器按规范把连接判死（readyState=CLOSED）→ 再 fetch 一次把 JSON 里的
-    //      error 读出来给用户看（这条路径后端不会调 LLM，不花钱）；
-    //   ② 网络/服务问题 → 浏览器会一直重连，必须我们主动 close，否则页面看起来卡死。
-    const wasClosed = es.readyState === EventSource.CLOSED;
-    const got = received;
-    stopped = true;
-    close();
-    if (got > 0) {
-      // 已经画出一部分了：交给调用方按「中断」收尾（保留已画的内容）
-      onError?.("连接中断");
-      return;
-    }
-    if (!wasClosed) {
-      onError?.(`连不上实时绘制服务（${API_BASE} 未启动或被拦）`);
-      return;
-    }
-    void probeStreamError(opts).then((reason) => onError?.(reason));
-  };
-
-  return () => {
-    if (stopped) return;
-    stopped = true;
-    close();
-  };
-}
-
-/**
- * 读「为什么开不了流」：只取 JSON 错误；如果拿到的其实是 SSE，
- * 立刻 abort —— 否则等于白白多跑一次生成（后端一进这个路由就会调 LLM）。
- */
-async function probeStreamError(opts: DistrictStreamOpts): Promise<string> {
-  try {
-    const ctrl = new AbortController();
-    const res = await fetch(districtStreamUrl(opts), { cache: "no-store", signal: ctrl.signal });
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.includes("json")) {
-      ctrl.abort();
-      return "后端拒绝了流式连接（返回内容不是 SSE）";
-    }
-    const j = (await res.json()) as { error?: string; hint?: string };
-    return j.error || j.hint || `后端返回 ${res.status}`;
-  } catch (e) {
-    return `读取失败原因时又出错：${errText(e)}`;
-  }
-}
-
-/**
- * 实时绘制小区：**统一入口**，页面只调这一个函数。
- *
- * @param opts    区域 / 剧情提示 / 规模档位（base = 20 + expand×8）
- * @param onEvent 每一条流事件（形状见 `DistrictStreamEvent`，两条通路一致）
- * @param onDone  流正常收尾（浏览器版是 `[DONE]`；Tauri 版是 `done` 事件之后）
- * @param onError 连不上 / 中途断了 / 命令调用失败，参数是给人看的一句话
- * @returns 停止函数（幂等）：组件卸载、重画、点「停止」时都要调
- */
-export function startDistrictStream(
-  opts: { area: string; context?: string; expand?: number },
-  onEvent: (ev: DistrictStreamEvent) => void,
-  onDone?: () => void,
-  onError?: (msg: string) => void
-): () => void {
-  if (useTauriTransport()) return startTauriDistrictStream(opts, onEvent, onDone, onError);
-  return startHttpDistrictStream(opts, onEvent, onDone, onError);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1219,46 +845,13 @@ export async function mapSvgUrl(
   }
 }
 
-/**
- * 「行政区划总览」底图（HTTP `/api/bigmap` ↔ Tauri 命令 `world_map_bigmap_svg`）的**双通路 URL**。
- *
- * 为什么必须走这层（与 `mapSvgUrl()` 同一个理由；**别让页面自己拼串**）：
- *   · **真壳（APK / 桌面）里没有 HTTP 服务** —— `src-tauri/src/world_map/mod.rs` 明写
- *     「真源 `main.rs` 的 axum 路由**没有**搬，那是独立调试 HTTP 服务的入口，不是 Tauri 的东西」；
- *     页面直接拼 `${API_BASE}/api/bigmap` 在手机上必然取不到图（`API_BASE` 默认 8791 = 本机调试服务）。
- *   · 浏览器 / 局域网调试：把 HTTP 地址直接交给 `<img>` —— 省一次往返，还能吃浏览器缓存与 `_t` 破缓存。
- *
- * Rust 侧签名（`src-tauri/src/world_map/stitch_cmd.rs`，已注册进 `lib.rs`）：
- *   pub async fn world_map_bigmap_svg(app, ad: String, style: Option<String>, max_tiles, width,
- *        height, page, detail, hi, grid, seed, zoom, max_mb, refresh) -> Result<String, String>
- * 这里只传 `ad` / `style`（其余走 Rust 默认值）；这两个形参都是单词，JS 侧同名即可。
- *
- * 失败一律 **throw**：调用方把 `src` 置空并走自己已有的错误提示，不留未捕获 rejection。
- */
-export async function bigmapImgUrl(ad: string, style = "gaode", tick?: number): Promise<string> {
-  const code = String(ad || "").trim();
-  if (!code) throw new Error("缺少 adcode，取不到底图");
-
-  // ── ① 真壳：Tauri 命令（返回 SVG 文本 ⇒ 转 data URL，`<img>` 才能直接吃）──
-  if (isTauriRuntime()) {
-    const svg = await invoke<string>("world_map_bigmap_svg", { ad: code, style });
-    return svgToDataUrl(svg);
-  }
-
-  // ── ② 浏览器 / 局域网调试：HTTP 地址原样给 `<img>` ──
-  return (
-    `${API_BASE}/api/bigmap?ad=${encodeURIComponent(code)}&style=${encodeURIComponent(style)}&scale=1` +
-    (tick ? `&_t=${tick}` : "")
-  );
-}
-
 export default worldMapApi;
 
 // ═══════════════════════════════════════════════════════════════════
-// 新页面（worldmap/*）剩下的三处 HTTP 依赖：双通路收口
+// 地图库（worldmap/* 页面用的那几处 HTTP 依赖）：双通路收口
 //
 // 为什么**追加在文件末尾**、而不去改上面那些同名老函数：
-//   `renderProbeSvg` / `maplibList` / `maplibStats` / `maplibCleanup` 是**纯 HTTP** 的历史出口，
+//   `maplibList` / `maplibStats` / `maplibCleanup` 是**纯 HTTP** 的历史出口，
 //   浏览器预览（vite dev + 8791 调试服务）还在用它们，改掉会牵连那条已验证的路；
 //   所以这里按 `mapSvgUrl()` 的同一个模式补一组「自动分流」版本，让组件不感知底层：
 //     真壳（APK / 桌面）→ `invoke` Rust 本地命令，完全不依赖本地端口；
@@ -1266,57 +859,13 @@ export default worldMapApi;
 //   每个分支都用 `isTauriRuntime()` **实时**判定（不读模块加载时的常量快照）。
 //
 // 参数名怎么定的：Rust 侧形参是 snake_case，Tauri 给 JS 侧转成 camelCase ——
-// 单词参数两侧同名（ad / style / mode / zoom / size / seed / charts / limit / sort / kind），
-// 多词参数 JS 必须写驼峰（`max_mb` → `maxMb`、`dry_run` → `dryRun`）。
+// 单词参数两侧同名（kind / ad / limit / sort），多词参数 JS 必须写驼峰
+// （`max_mb` → `maxMb`、`dry_run` → `dryRun`）。
 // 下面每个函数都把对应的 Rust 签名抄在注释里，改命令时对着核。
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * 小区渲染（DistrictViz 页：数据 / 图层 / 伪 3D 共用的一张图），返回**裸 SVG 文本**。
- *
- * Tauri 侧命令（src-tauri/src/world_map/mod.rs）：
- *   pub async fn world_map_render(
- *     app: AppHandle,
- *     layout: Option<Value>, key: Option<String>, area: Option<String>,
- *     size: Option<i32>, seed: Option<u64>,
- *     style: Option<String>, mode: Option<String>, zoom: Option<i32>,
- *     charts: Option<bool>, animate: Option<bool>, layers: Option<bool>,
- *     width: Option<f64>, height: Option<f64>, pad: Option<f64>,
- *   ) -> Result<String, String>
- * 返回的就是 SVG 文本，与 HTTP 版 `/api/render/probe` 同形（v-html 直接吃）。
- *
- * 取 layout 的优先级是 `layout` → `key` → `area`+`size`+`seed`：
- * 这里三个都不给（与 HTTP 探针的默认行为一致，Rust 侧走 sketch 的默认区域），
- * 只把「会影响画面」的 style / mode / zoom / size / seed / charts 传下去；
- * `width`/`height`/`pad`/`animate`/`layers` 留给 Rust 默认值 —— 页面是靠 CSS
- * （`.vz-stage :deep(svg) { max-width/height:100% }`）缩放的，传尺寸反而会两套排版。
- *
- * 失败一律 **throw**（空串 / 不是 SVG 也算失败）：调用方已有 `catch` → 顶部红条提示，
- * 绝不让空串进 v-html 变成一片白。
- */
-export async function districtRenderSvg(o: RenderProbeOpts = {}): Promise<string> {
-  // ── ② 浏览器 / 局域网调试：保持老通路（行为与改造前逐字节一致）──
-  if (!isTauriRuntime()) return renderProbeSvg(o);
-
-  // ── ① 真壳：Tauri 命令 ──
-  // 注意别传 `layout`/`key`/`area`：`layout: undefined` 会被 JSON 丢掉（等价于不传），
-  // 但显式传 null 在 Rust 侧是 `Some(Value::Null)` —— `normalize_layout` 认不出就会掉到
-  // 后面的分支，语义会变得难懂；干脆一个都不传。
-  const svg = await invoke<string>("world_map_render", {
-    style: o.style || "gaode",
-    mode: o.mode || "2d",
-    zoom: o.zoom ?? 3,
-    charts: !!o.charts,
-    size: o.size,
-    seed: o.seed,
-  });
-  // 双保险：命令注册错/参数名写错时 invoke 会 reject，但万一哪天回了空串，
-  // 这里也要翻译成人话，而不是把 "" 塞进 v-html（页面会白）。
-  if (!svg || !String(svg).trimStart().startsWith("<")) {
-    throw new Error("world_map_render 没返回 SVG 文本（命令签名或参数可能对不上）");
-  }
-  return svg;
-}
+// 🗄 2026-10-06（S9b5-A）：`districtRenderSvg()`（小区渲染 / `world_map_render` 命令的
+//   前端出口）已退役 —— 唯一消费者是 `DistrictViz.vue`，页面与路由同批删。
 
 /**
  * 地图库列表（含容量统计）：真壳 invoke，浏览器 HTTP。
@@ -1478,18 +1027,23 @@ export async function geoSvgText(
 // 为什么需要：手机里的「地图/导航」（T5-2）要**目的地坐标**才能调 `transport_plan`，
 // 而后端**没有「区县中心坐标」接口**（实测 `/api/blocks?ad=` 返回 `{ok:false}`、
 // `/api/location?ad=` 会忽略 ad）→ 只能拿该区县的 GeoJSON 自己算面积质心。
-// 目的地候选则来自 `/api/geo/children`。
+// 目的地候选则来自下级区划列表。
 //
-// 🔴 **真壳侧的命令还不存在**（`world_map_geo_json` / `world_map_geo_children` 未注册）。
-//    这与 wsenter 交付里指出的是同一个缺口。**在 Rust 补上之前，真壳里这两个调用会 reject**，
-//    所以调用方必须 catch 并**优雅降级**（提示"真实机需要补命令"，而不是卡住/白屏）。
-//    浏览器/调试通路是通的（8791 的孪生路由），所以网页预览能完整验证。
+// ✅ 2026-10-06（S9b5-B）**真壳那半补上了**：`world_map_geo_json` / `world_map_geo_children`
+//    现在注册在 `src-tauri/src/lib.rs` 的 `generate_handler!` 里，实现在 `world_map/mod.rs`
+//    （数据源与 `world_map_geo_svg` 同一份缓存 + 同一套兜底），与 8791 调试服务的
+//    `/api/geo_json`、`/api/geo/children` 孪生、同形。
+//
+//    🔴 补之前这里**只有浏览器通路能用**：真壳里两条 invoke 直接 reject，而调用方全是
+//    `catch {}` / `catch { return null }` 静默降级 —— 页面上一个字都看不出来，但
+//    ① 手机导航/打车/公交的目的地列表恒空；② 现役 2.5D 主图（`WsDistrictMapLibre.vue`）
+//    拿不到区县 bbox ⇒「整区视野」快路径失效、退回「IP 定位 + 现问 Overpass」的慢路径。
+//    ⇒ 口径：**失败一律 throw，调用方必须把原因显示给用户**，不许再留静默 reject 的调用。
 
 /** 取某个 adcode 的 GeoJSON（FeatureCollection）。失败一律 throw。 */
 export async function geoJson(ad: string): Promise<unknown> {
   const code = String(ad || "").trim() || "100000";
   if (isTauriRuntime()) {
-    // ⚠️ 待 Rust 侧补 `world_map_geo_json`（见上方说明）
     return await invoke("world_map_geo_json", { ad: code });
   }
   const r = await fetch(`${API_BASE}/api/geo_json?ad=${encodeURIComponent(code)}`);
@@ -1501,7 +1055,6 @@ export async function geoJson(ad: string): Promise<unknown> {
 export async function geoChildren(ad: string): Promise<Array<{ name: string; adcode: string }>> {
   const code = String(ad || "").trim() || "100000";
   if (isTauriRuntime()) {
-    // ⚠️ 待 Rust 侧补 `world_map_geo_children`（见上方说明）
     const d = (await invoke("world_map_geo_children", { ad: code })) as { children?: unknown };
     return Array.isArray(d?.children) ? (d.children as Array<{ name: string; adcode: string }>) : [];
   }

@@ -244,3 +244,6 @@ public/prerender-demo/
 
 # 私有预览输出目录（切片① 代理建的，366MB，不进 git）
 dist-namesverify/
+
+# 质量报告的落盘目录（工作流产物，不进仓）
+ci-reports/

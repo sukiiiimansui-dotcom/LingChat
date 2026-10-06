@@ -2,13 +2,23 @@ name: 世界模拟·质量报告
 
 # 这份工作流**只出数字，不判红**（每个检查都 `continue-on-error`）。
 # 目的：把"屎山有多少"从感觉变成可比的数字 —— 重复率 / 未用导出 / 循环依赖 / 格式漂移 / Rust lint。
-# 第一版先跑基线；等主人看过数字，再决定哪几条收紧成"红"（收紧点在下面每个 step 的注释里标了）。
 #
-# 触发：push 到开发分支（只认源码路径，改文档/工具不触发）+ 手动。
-# ⚠️ `paths` 里**故意不含** `.ci-reports/**`（如果将来把报告提交回仓，别造成自我循环）。
+# 🔴 2026-10-06 三处「数字不可信」的修法（第一版基线暴露的）：
+#   ① 报告目录**不能叫 `.ci-reports`** —— `upload-artifact@v4` 默认**不收隐藏目录**，
+#      所以 artifact 一直是空的（"No files were found with the provided path"）。改成 `ci-reports/`。
+#   ② prettier 原来 `| tail -30` ⇒ 摘要里的"漂移文件数"**上限恒为 30**（真值更大的时候看不出来）。
+#      现在整份落盘再数，不截断。
+#   ③ madge 崩了（@babel/parser 解析某个 JSX 文件报 SyntaxError）却被 `|| true` 吞掉，
+#      摘要里那一格会**冒充 0 个环**。现在记退出码、三态显示（N 个环 / 0 / **未测出**），
+#      并且主测只扫 `.ts`（`--extensions ts --ts-config tsconfig.json`）避开那个解析坑。
+#
+# 触发：**不吃普通 push**（主人：「你加的质量报告触发了一半 ci」）—— 每天定时一次 + 手动；
+# 另外**只认它自己的文件**：改了这份 workflow 会跑一次（自验），源码推送不会。
 on:
-  # 2026-10-05：**不吃 push**（主人：「你加的质量报告触发了一半 ci」）—— 质量报告不需要每推必跑，
-  # 改成**每天定时一次 + 手动**。
+  push:
+    branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
+    paths:
+      - '.github/workflows/quality-check.yml'
   schedule:
     - cron: '45 17 * * *'   # 每天 01:45（UTC+8）
   workflow_dispatch:
@@ -43,56 +53,94 @@ jobs:
         continue-on-error: true
         # 收紧点：等基线出来后可改成 `--threshold 1`（重复率 >1% 直接红）。
         run: |
-          mkdir -p .ci-reports
+          mkdir -p ci-reports
           npx --yes jscpd@4 src/components/views/worldsim public/ws3dshow.html \
             --min-lines 20 --min-tokens 120 \
-            --reporters console,json --output .ci-reports/jscpd --ignore "**/vendor/**" | tee .ci-reports/jscpd.txt
+            --reporters console,json --output ci-reports/jscpd --ignore "**/vendor/**" > ci-reports/jscpd.txt 2>&1
+          echo "exit=$?" > ci-reports/jscpd.exit
+          tail -25 ci-reports/jscpd.txt
 
       - name: 未使用导出/文件（knip）
         id: knip
         continue-on-error: true
         # knip 没有配置时用它的默认推断（vite + tsconfig）；第一版只把清单落盘。
         run: |
-          npx --yes knip@5 --reporter json > .ci-reports/knip.json 2> .ci-reports/knip.log || true
-          npx --yes knip@5 2>&1 | tail -40 | tee .ci-reports/knip.txt || true
+          mkdir -p ci-reports
+          npx --yes knip@5 --reporter json > ci-reports/knip.json 2> ci-reports/knip.log || true
+          npx --yes knip@5 > ci-reports/knip.txt 2>&1 || true
+          tail -40 ci-reports/knip.txt
 
-      - name: 循环依赖（madge）
+      - name: 循环依赖（madge，只扫 .ts 避开 .vue 解析崩）
         id: madge
         continue-on-error: true
         # 收紧点：基线出来后，如果环数 > 0 且都在我们自己的模块里，可改成"环数不许增加"。
+        # ⚠️ 第一版是 `--extensions ts,vue`，实测 @babel/parser 在某个带 JSX 的文件上炸
+        #    (`SyntaxError: Unexpected token (2:3)`) ⇒ 那一格其实**没有读数**却显示 0。
+        #    现在只扫 .ts（依赖图同样能覆盖我们的模块），并把退出码留给摘要判三态。
         run: |
-          npx --yes madge@8 --circular --extensions ts,vue \
+          mkdir -p ci-reports
+          npx --yes madge@8 --circular --extensions ts --ts-config tsconfig.json \
             src/components/views/worldsim src/components/views/worldmap src/api/services/worldMap.ts \
-            2>&1 | tee .ci-reports/madge.txt || true
-          grep -c "Found [0-9]* circular" .ci-reports/madge.txt >> .ci-reports/counts.txt 2>/dev/null || true
+            > ci-reports/madge.txt 2>&1
+          echo "$?" > ci-reports/madge.exit
+          cat ci-reports/madge.txt
 
       - name: 格式漂移（prettier，仓库自带配置）
         id: prettier
         continue-on-error: true
+        # ⚠️ 原来 `| tail -30` 会让摘要里的"漂移文件数"上限恒为 30 ⇒ 现在整份落盘再数。
         run: |
-          npx prettier --check "src/**/*.{ts,vue,css}" 2>&1 | tail -30 | tee .ci-reports/prettier.txt || true
+          mkdir -p ci-reports
+          npx prettier --check "src/**/*.{ts,vue,css}" > ci-reports/prettier.txt 2>&1 || true
+          echo "漂移文件数: $(grep -cE '^\[warn\]' ci-reports/prettier.txt || true)"
+          head -20 ci-reports/prettier.txt
 
       - name: 摘要（写进 job summary）
         if: always()
         run: |
+          # 三态：有读数 / 0 / **未测出** —— 别让坏掉的工具冒充 0
+          JSCPD="未测出（见 artifact）"
+          if [ -s ci-reports/jscpd.txt ]; then
+            JSCPD="$(grep -oE '[0-9.]+% duplicated lines' ci-reports/jscpd.txt | tail -1 || true)"
+            [ -z "$JSCPD" ] && JSCPD="未测出（日志里没有百分比行）"
+          fi
+          KNIP="未测出（见 artifact）"
+          if [ -s ci-reports/knip.json ]; then
+            KNIP="$(python3 -c "import json;d=json.load(open('ci-reports/knip.json'));print(sum(len(v) for v in d.values() if isinstance(v,list)),'条')" 2>/dev/null || echo '未测出（json 解析失败）')"
+          fi
+          MADGE="未测出（madge 退出码 $(cat ci-reports/madge.exit 2>/dev/null || echo '?')，见 artifact）"
+          if [ "$(cat ci-reports/madge.exit 2>/dev/null)" = "0" ]; then
+            if grep -q "No circular dependency found" ci-reports/madge.txt; then
+              MADGE="0（no circular dependency found）"
+            else
+              MADGE="$(grep -cE '^[0-9]+\) ' ci-reports/madge.txt || true) 个环"
+            fi
+          fi
+          PRETTIER="未测出（见 artifact）"
+          if [ -s ci-reports/prettier.txt ]; then
+            PRETTIER="$(grep -cE '^\[warn\]' ci-reports/prettier.txt || true) 个文件"
+          fi
           {
             echo "## 世界模拟·质量报告（前端）"
             echo ""
             echo "| 检查 | 结果 |"
             echo "|---|---|"
-            echo "| jscpd 重复率 | $(grep -oE 'Found [0-9]+ clones|[0-9.]+% duplicated lines' .ci-reports/jscpd.txt 2>/dev/null | head -2 | tr '\n' ' ') |"
-            echo "| knip 未用导出/文件 | $(python3 -c "import json;d=json.load(open('.ci-reports/knip.json'));print(sum(len(v) for v in d.values() if isinstance(v,list)))" 2>/dev/null || echo '见 artifact') |"
-            echo "| madge 环 | $(grep -cE '^[0-9]+\) ' .ci-reports/madge.txt 2>/dev/null || echo 0) |"
-            echo "| prettier 漂移 | $(grep -cE '^\[warn\]' .ci-reports/prettier.txt 2>/dev/null || echo 0) 个文件 |"
+            echo "| jscpd 重复率 | $JSCPD |"
+            echo "| knip 未用导出/文件 | $KNIP |"
+            echo "| madge 环 | $MADGE |"
+            echo "| prettier 漂移 | $PRETTIER |"
             echo ""
-            echo "⚠️ 本 job 全部 \`continue-on-error\`：**只出数字、不判红**（等主人看过基线再决定收紧哪条）。"
+            echo "⚠️ 本 job 全部 \`continue-on-error\`：**只出数字、不判红**。"
+            echo "⚠️ 写「未测出」= 工具没跑成，**不是 0**。"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: quality-js
-          path: .ci-reports/
+          # ⚠️ 目录**不能以点开头**：`upload-artifact@v4` 默认不收隐藏目录（第一版就是这么空掉的）
+          path: ci-reports/
+          if-no-files-found: warn
 
   # ── Rust：clippy + rustfmt ────────────────────────────────────────────────
   rust-quality:
@@ -142,33 +190,52 @@ jobs:
         continue-on-error: true
         # 收紧点：基线出来后，可改成 `-- -D warnings`（新增警告即红）。
         run: |
-          mkdir -p .ci-reports
+          mkdir -p ci-reports
           cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml --message-format short \
-            2>&1 | tee .ci-reports/clippy.txt | tail -40
+            > ci-reports/clippy.txt 2>&1
+          echo "$?" > ci-reports/clippy.exit
+          grep -E "^(warning|error)" ci-reports/clippy.txt | head -20 || true
+          tail -5 ci-reports/clippy.txt
 
       - name: rustfmt（只出数字）
         id: rustfmt
         continue-on-error: true
         run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check 2>&1 | tee .ci-reports/rustfmt.txt | tail -20 || true
+          mkdir -p ci-reports
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check > ci-reports/rustfmt.txt 2>&1
+          echo "$?" > ci-reports/rustfmt.exit
+          grep -E "^Diff in" ci-reports/rustfmt.txt || true
 
       - name: 摘要（写进 job summary）
         if: always()
         run: |
+          # 三态：有读数 / 0 / **未测出**
+          CLIPPY_W="未测出（见 artifact）"
+          CLIPPY_E="未测出（见 artifact）"
+          if [ -s ci-reports/clippy.txt ]; then
+            CLIPPY_W="$(grep -cE '^warning' ci-reports/clippy.txt || true) 条"
+            CLIPPY_E="$(grep -cE '^error' ci-reports/clippy.txt || true) 条"
+          fi
+          FMT="未测出（见 artifact）"
+          if [ -s ci-reports/rustfmt.txt ] || [ "$(cat ci-reports/rustfmt.exit 2>/dev/null)" = "0" ]; then
+            FMT="$(grep -cE '^Diff in' ci-reports/rustfmt.txt || true) 个文件"
+          fi
           {
             echo "## 世界模拟·质量报告（Rust）"
             echo ""
             echo "| 检查 | 结果 |"
             echo "|---|---|"
-            echo "| clippy 警告 | $(grep -cE '^warning' .ci-reports/clippy.txt 2>/dev/null || echo 0) |"
-            echo "| clippy 错误 | $(grep -cE '^error' .ci-reports/clippy.txt 2>/dev/null || echo 0) |"
-            echo "| rustfmt 漂移行 | $(grep -cE '^Diff in' .ci-reports/rustfmt.txt 2>/dev/null || echo 0) |"
+            echo "| clippy 警告 | $CLIPPY_W |"
+            echo "| clippy 错误 | $CLIPPY_E |"
+            echo "| rustfmt 漂移 | $FMT |"
             echo ""
             echo "⚠️ 本 job 全部 \`continue-on-error\`：**只出数字、不判红**。"
+            echo "⚠️ 写「未测出」= 工具没跑成，**不是 0**。"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: quality-rust
-          path: .ci-reports/
+          path: ci-reports/
+          if-no-files-found: warn

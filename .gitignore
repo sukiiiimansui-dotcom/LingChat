@@ -247,6 +247,3 @@ dist-namesverify/
 
 # 质量报告的落盘目录（工作流产物，不进仓）
 ci-reports/
-
-# 代码量徽章脚本的输出目录（由 CI 写进 badges 分支，不进开发分支）
-badges/

@@ -1,33 +1,31 @@
 name: 代码量徽章
 
-# 给仓库首页（`.github/README.md`）的代码量徽章供数。
+# 每天数一遍代码量，把结果重写进首页（`.github/README.md`）里 `LOC-BADGE` 标记之间的那段。
 #
-# 做法：CI 跑 `scripts/loc-badge.py` 数一遍行数 → 写成 shields.io 的 endpoint JSON
-# → 推到**专门的 `badges` 分支**（orphan 分支，只有徽章文件）。
-# 这样既不往开发分支的历史里塞机器提交，也不会打扰正在改的分支。
+# 🔴 2026-10-06 改法（机主报告的问题）：原来是「CI 把数字推到一条专门的 `badges` 分支，
+#    首页用 shields 的实时徽章去读它」。但 **GitHub 手机 App 会记住"这个仓库上次看的分支"** ——
+#    机主点过一次徽章之后，在仓库里怎么返回都会跳到 `badges` 那条分支去。
+#    于是改成：**数字直接写在首页里**（下面这段每天重写一次），`badges` 分支随之删除。
+#    少一条机器分支 ⇒ 不会再被带偏；提交流也不再被每天的机器提交刷屏。
 #
-# 徽章 URL（README 里用的就是它）：
-#   https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/<owner>/<repo>/badges/loc.json
-#
-# 口径（README 里也写着同一份，脚本 `scripts/loc-badge.py` 是可复算的真源）：
-#   · 数这些目录：src / src-tauri/src / crates / scripts / public / wsbench + 根目录的自用页面
-#   · 不含空行、不含整行注释（行内注释算代码）
+# 口径（脚本 `scripts/loc-badge.py` 是真源，谁都能本地复算）：
+#   · 数 src / src-tauri/src / crates / scripts / public + 仓库根目录的自用页面
+#   · 不含空行、不含整行注释
 #   · 排除依赖与产物：node_modules / dist* / target / public/vendor / gen / temp
-#
-# 触发：推源码时跑一次（**推送即更新**，约 20 秒）+ 每天兜底一次 + 手动。改这份 workflow 自己也会跑。
 on:
-  # 2026-10-06 改：**不再每次推源码都更新**。理由是它每次都往 `badges` 分支写一条机器提交，
-  # 一天几十条会把仓库的提交流/通知刷得全是"更新代码量徽章"，还容易让人误点进那条分支
-  # （机主："我点仓库任何地方然后返回首页都自动跳转 badges"）。
-  # 现在只在每天 02:20（UTC+8）与手动触发时更新 —— 徽章仍然够"实时"，但不再刷屏。
   schedule:
-    - cron: '20 18 * * *'   # 每天 02:20（UTC+8）兜底
+    - cron: '20 18 * * *'   # 每天 02:20（UTC+8）
   workflow_dispatch:
+  push:
+    branches: ['feat/worldsim', 'feat/world-map-**']
+    paths:
+      # 只认它自己这两个文件：改了它自验一次；**推源码不再触发**（免得每条推送都产生机器提交）
+      - 'scripts/loc-badge.py'
+      - '.github/workflows/loc-badge.yml'
 
 permissions:
   contents: write
 
-# 同一时刻只留一次（连推时旧的取消掉，省得两次推徽章分支打架）
 concurrency:
   group: loc-badge
   cancel-in-progress: true
@@ -35,43 +33,45 @@ concurrency:
 jobs:
   loc:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: mine
 
       - name: 拉官方树（只为数行数：浅克隆 dev、不拉 LFS）
-        # 「我们净增」必须用**同一份脚本、同一口径**数两棵树才敢相减。
-        # 拿官方 `dev`（开发主线）当基准；克隆失败不算错 —— 那就只出本仓的徽章。
+        # 「净增」必须用**同一份脚本、同一口径**数两棵树才敢相减。克隆失败不算错 —— 那就只数本仓。
         run: |
           export GIT_LFS_SKIP_SMUDGE=1
-          git clone --depth 1 --branch dev https://github.com/SlimeBoyOwO/LingChat.git upstream \
-            || echo "⚠️ 官方树没拉下来，本轮只出本仓徽章"
-          du -sh upstream 2>/dev/null || true
+          git clone --depth 1 --branch dev https://github.com/SlimeBoyOwO/LingChat.git /tmp/upstream \
+            || echo "⚠️ 官方树没拉下来，本轮只数本仓"
 
-      - name: 数行数 + 生成徽章 JSON
+      - name: 数行数 + 重写首页那段
         run: |
-          cd mine
-          if [ -d ../upstream/.git ]; then
-            python3 scripts/loc-badge.py --upstream ../upstream --out ../badges
+          if [ -d /tmp/upstream/.git ]; then
+            python3 scripts/loc-badge.py --upstream /tmp/upstream --readme .github/README.md
           else
-            python3 scripts/loc-badge.py --out ../badges
+            python3 scripts/loc-badge.py --readme .github/README.md
           fi
-          echo "--- 生成的文件 ---"
-          ls -la ../badges/
 
-      - name: 推到 badges 分支
+      - name: 数字变了才提交
         run: |
           set -e
-          cd badges
-          git init -q -b badges
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "chore: 更新代码量徽章（自动生成）"
-          # 徽章分支是机器自己维护的，force 推没有丢东西的风险（每次都是全量重算）
-          git push -q --force \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            badges
-          echo "✅ 已更新 badges 分支"
+          git add .github/README.md
+          if git diff --cached --quiet; then
+            echo "✅ 数字没变，不提交（这样不会天天产生空提交）"
+            exit 0
+          fi
+          git commit -q -m "docs: 更新首页的代码量数字（自动生成）"
+          # 机器提交可能和人的推送撞车 ⇒ rebase 后重试三次
+          for i in 1 2 3; do
+            if git pull --rebase --autostash -q origin "${GITHUB_REF_NAME}" \
+               && git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "✅ 已推送（第 $i 次尝试）"
+              exit 0
+            fi
+            echo "⚠️ 第 $i 次没推上去，等 10 秒重试"
+            sleep 10
+          done
+          echo "❌ 三次都没推上去"
+          exit 1

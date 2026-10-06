@@ -294,28 +294,29 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 为什么 `location` / `weather` 在 Tauri 下要**降级**而不是直接 invoke
+// `location` / `weather` 为什么**先 invoke、失败再降级**
 //
-// 现状（已核对 src-tauri/src/lib.rs 的 generate_handler 注册表）：
-//   `world_map_location` 与 `world_map_weather` **两个命令都还没实现**。
+// 现状（2026-10-06 复核 `src-tauri/src/lib.rs` 的 generate_handler **与命令本体**）：
+//   `world_map_location` 与 `world_map_weather` **两条都已经实现并注册** ——
+//   注册在 `src-tauri/src/lib.rs:742-743`，本体在 `src-tauri/src/world_map/live.rs:207` / `:516`。
+//   ⚠️ 这里原先写「两个命令都还没实现」⇒ **早已不成立**，本次照实更正
+//   （那句话与前端这份降级代码是同一个提交引进来的，从落地那天起就没对上过）。
 //   Rust 侧目前有的是：render_svg / geo_svg / geo_status / coord_selftest / stats / maplib_* /
 //   schedule / transport_plan / osm_summary / time / push_events / recent_events
 //   （另有 `blocks` / `blocks_at`：**注册仍在**，但前端出口已于 2026-10-06 的 S9b6 批 A 退役，
 //     只剩侧车 `/api/blocks` 与调试页在用；`render` 与 `district_stream(_cancel)` 已先后退役，
 //     不再列 —— 这一行是照 `lib.rs` 的 `generate_handler` 现状写的，改注册表时请同步改它）。
-//   所以真壳里直接 invoke 这两个名字 → 命令不存在 → reject；
-//   若没人接住，页面就只剩一句报错（甚至白屏）。
+//
+// 那降级还留不留？**留** —— 但理由不是"命令不存在"，而是**主路会运行期失败**：
+//   · 定位：Android 上系统定位权限被拒、或一直拿不到 fix ⇒ 6 秒超时（真机上很常见）；
+//   · 天气：后端要现问数据源（冷查询可达数十秒）⇒ 26 秒超时、或断网时直接 `Err`。
+//   主路一失败就往下走（HTTP 兜底 → 页面能读懂的兜底值），页面一行都不用改。
+//   「命令没注册」（比如谁把注册行摘了）同样会 reject 落到这里 —— 那是**保险丝**，
+//   不再是当初写这段时的默认情形。
 //
 // 因此这里做**数据层降级**（页面一行都不用改）：
-//   location：invoke（将来能用）→ HTTP 兜底 → `{error,hint}` 让页面走已有的「定位失败」路径
-//   weather ：invoke（将来能用）→ HTTP 兜底 → 空对象，顶栏少个标签而已
-//
-// 后续要补的（Rust 侧，不在本次前端改动范围内）：
-//   ① `world_map_location(opts)`：Android 走系统定位权限，桌面走系统 API；
-//      明确**不要**照搬 termux-location（那是 Termux:API 的东西，装进 APK 必然失败）；
-//   ② `world_map_weather(city)`：可以复用 Rust 侧的天气源，返回结构与 `/api/weather` 一致
-//      （`{current:{temp_c,desc}}` 这一层，见 WorldMap.vue 的 loadTimeWeather）。
-//   补完后前端**不用再改**：上面的 try 分支一命中，降级代码自然不再执行。
+//   location：invoke → HTTP 兜底 → `{error,hint}` 让页面走已有的「定位失败」路径
+//   weather ：invoke → HTTP 兜底 → 空对象，顶栏少个标签而已
 // ═══════════════════════════════════════════════════════════════════
 
 // ── 对外统一出口（真壳 / 浏览器在这里自动分流）──
@@ -363,7 +364,8 @@ export const worldMapApi = {
     if (!res.ok) throw new Error(`Overture 接口返回 ${res.status}`);
     return unwrapBuildingsGeo(await res.json());
   },
-  // ── 定位：Rust 侧**还没有** `world_map_location` 命令（降级原因见上方整段说明）──
+  // ── 定位：Rust 侧已有 `world_map_location`（`live.rs:207` / 注册 `lib.rs:742`）；
+  //    下面的降级是**运行期兜底**（超时/权限被拒），理由见上方整段说明 ──
   location: async (opts?: {
     force?: boolean;
     fast?: boolean;
@@ -371,7 +373,7 @@ export const worldMapApi = {
     lng?: number;
   }): Promise<WorldLocation> => {
     if (!isTauriRuntime()) return http.location(opts);
-    // ① 先试真命令：Rust 侧一旦补上 `world_map_location`，这里自动就通了，前端不用再改。
+    // ① 主路：真命令（已实现并注册，见上方整段）。reject / 超时才往下走降级。
     try {
       return await withTimeout(
         invoke<WorldLocation>("world_map_location", { ...opts }),
@@ -401,7 +403,8 @@ export const worldMapApi = {
   },
   time: async (): Promise<WorldTime> =>
     isTauriRuntime() ? invoke<WorldTime>("world_map_time") : http.time(),
-  // ── 天气：Rust 侧**还没有** `world_map_weather` 命令（降级原因见上方整段说明）──
+  // ── 天气：Rust 侧已有 `world_map_weather`（`live.rs:516` / 注册 `lib.rs:743`）；
+  //    下面的降级同样是**运行期兜底**（超时/断网），理由见上方整段说明 ──
   weather: async (city?: string): Promise<WorldWeather> => {
     if (!isTauriRuntime()) return http.weather(city);
     try {
@@ -485,8 +488,9 @@ export const worldMapApi = {
   //     这两条 HTTP 路由在 Rust 服务（8791）与打包后的应用内**都没有**（实测 404）——
   //     但 Rust 侧仍在**生成**这两串路径（`geo.rs` 的 `img` / `img_url`、`mod.rs` 的 `remotes[].img`）
   //     ⇒ 留着是为了两端口径对得上。新代码请用文件末尾的 `mapSvgUrl()`（双通路）。
-  //   · `maplibFile`：**有**消费者 —— 本文件末尾的 `maplibFileUrl(id)` 就在调它；
-  //     只是 `maplibFileUrl` 自己 0 个消费者（"死导出的死导出"），要连带退属于另一笔。
+  //   · `maplibFile`：**消费者已于 2026-10-06 的 S9b8 批 F 归零** —— 它唯一的调用者
+  //     `maplibFileUrl()` 自己也是 0 消费者（两条互为首尾），那一笔把 `maplibFileUrl` 退掉了
+  //     ⇒ 现在它是**死导出**，按项目惯例**留档不删**（对端 `/api/maplib/file` 仍在）。
   mapImg: http.mapImg,
   bigmapImg: http.bigmapImg,
   maplibFile: http.maplibFile,
@@ -635,8 +639,13 @@ export const maplibCleanup = (o: { maxMb?: number; dry: boolean }): Promise<MapL
     dry: o.dry ? 1 : 0,
   });
 
-/** 条目本体（图片 / JSON）：复用已有出口，避免两处拼 URL 走偏 */
-export const maplibFileUrl = (id: string): string => worldMapApi.maplibFile(id);
+// 🗄 2026-10-06（S9b8 批 F）退役：`maplibFileUrl(id)` 原来长在这里。
+// 依据（剥注释后扫 `src`/`public` + 闸目录全部 .mjs + Rust/Python 对端，自己复核过）：
+//   · 它自己 **0 个消费者**；而它的被调者 `worldMapApi.maplibFile(id)` 的**唯一**调用者又是它
+//     ⇒ 两条互为首尾成环、环外没人进（审计原话"死导出的死导出"）；
+//   · 对端**一个字没动**：`http.maplibFile` 仍拼 `/api/maplib/file`，Rust 侧同路由仍在。
+// 逐字墓碑：export const maplibFileUrl = (id: string): string => worldMapApi.maplibFile(id);
+// 守卫（可执行）：`frontend_selftest_worldsim_p1.mjs` 的 S9b8 段（"不许回来" + 三个纯 HTTP 出口的对照）。
 
 // ── 小工具（新页面共用，纯函数，不碰网络）──
 
@@ -802,84 +811,27 @@ export async function mapSvgUrl(
 export default worldMapApi;
 
 // ═══════════════════════════════════════════════════════════════════
-// 地图库（worldmap/* 页面用的那几处 HTTP 依赖）：双通路收口
+// 地图库（`/api/maplib/*`）：**只剩三个纯 HTTP 出口**（真壳那条「自动分流」已退役）
 //
-// 为什么**追加在文件末尾**、而不去改上面那些同名老函数：
-//   `maplibList` / `maplibStats` / `maplibCleanup` 是**纯 HTTP** 的历史出口，
-//   浏览器预览（vite dev + 8791 调试服务）还在用它们，改掉会牵连那条已验证的路；
-//   所以这里按 `mapSvgUrl()` 的同一个模式补一组「自动分流」版本，让组件不感知底层：
-//     真壳（APK / 桌面）→ `invoke` Rust 本地命令，完全不依赖本地端口；
-//     浏览器 / 局域网调试 → 原样调老函数走 HTTP。
-//   每个分支都用 `isTauriRuntime()` **实时**判定（不读模块加载时的常量快照）。
-//
-// 参数名怎么定的：Rust 侧形参是 snake_case，Tauri 给 JS 侧转成 camelCase ——
-// 单词参数两侧同名（kind / ad / limit / sort），多词参数 JS 必须写驼峰
-// （`max_mb` → `maxMb`、`dry_run` → `dryRun`）。
-// 下面每个函数都把对应的 Rust 签名抄在注释里，改命令时对着核。
+// 🗄 2026-10-06（S9b8 批 F）照实改口径 —— 上面这段原文写着"浏览器预览还在用它们"，
+//   那句话随 `views/worldmap/` 那批页面（S9b5 删除）一起失效了。现状：
+//     · `maplibList` / `maplibStats` / `maplibCleanup`（本文件上方那三个 `export const`）：
+//       `src`/`public` 里**已经没有页面级消费者**，按项目惯例**作为死导出留档**（不连删）；
+//     · 曾经追加在文件末尾的三个「自动分流」版本（`maplibListAuto` / `maplibStatsAuto` /
+//       `maplibCleanupAuto`：真壳 `invoke`、浏览器走 HTTP）**已退役** ——
+//       它们自己的消费者 0 个，留着等于给"地图库面板还活着"的错觉。
+//     · 🔴 **对端一个字没动**：Rust 侧三道命令仍在 `src-tauri/src/lib.rs:716-718` 注册着
+//       （`world_map_maplib_stats` / `_list` / `_cleanup`），侧车 `/api/maplib/*` 也仍在 ——
+//       前端退出口 ≠ 对端退命令。要退那三条命令是**另一笔**，得先确认再没有别的消费者
+//       （本轮复核：前端 0 个 invoke；8790/8791 的调试页仍按 HTTP 用那几条路由）。
+//   原文（含每条对应的 Rust 签名抄件）见 `git log -p -- src/api/services/worldMap.ts`
+//   或 `~/rikka/Dsh-SYuki/world_map/REMOVED-CODE.md` 的 S9b8 条。
+//   守卫（可执行）：`frontend_selftest_worldsim_p1.mjs` 的 S9b8 段。
 // ═══════════════════════════════════════════════════════════════════
 
 // 🗄 2026-10-06（S9b5-A）：`districtRenderSvg()`（小区渲染 / `world_map_render` 命令的
 //   前端出口）已退役 —— 唯一消费者是 `DistrictViz.vue`，页面与路由同批删。
 //   命令本体随后由 S9b6 批 B 一并退掉（见上面那条补记）。
-
-/**
- * 地图库列表（含容量统计）：真壳 invoke，浏览器 HTTP。
- *
- * Tauri 侧命令：
- *   pub async fn world_map_maplib_list(
- *     app: AppHandle, kind: Option<String>, ad: Option<String>,
- *     limit: Option<usize>, sort: Option<String>,
- *   ) -> Result<Value, String>          // 返回 { stats, entries }，与 /api/maplib/list 一致
- *
- * 空串过滤交给 Rust 侧（它自己做 `filter(|s| !s.trim().is_empty())`），
- * 这里把 undefined 原样传：JSON 会丢掉 undefined 的键 → Rust 收到 None → 用默认值，
- * 与 HTTP 版 `httpGet` 丢掉空参数的行为一致。
- */
-export async function maplibListAuto(o: MapLibListOpts = {}): Promise<MapLibListPayload> {
-  if (!isTauriRuntime()) return maplibList(o);
-  return await invoke<MapLibListPayload>("world_map_maplib_list", {
-    kind: o.kind,
-    ad: o.ad,
-    limit: o.limit,
-    sort: o.sort,
-  });
-}
-
-/**
- * 地图库容量统计：真壳 invoke，浏览器 HTTP。
- *
- * Tauri 侧命令：`pub async fn world_map_maplib_stats(app: AppHandle) -> Result<Value, String>`
- * 返回 `{ count, bytes, mb, by_kind, max_bytes, max_mb }`（字段名与 HTTP 版一致）。
- */
-export async function maplibStatsAuto(): Promise<MapLibStats> {
-  if (!isTauriRuntime()) return maplibStats();
-  return await invoke<MapLibStats>("world_map_maplib_stats");
-}
-
-/**
- * 地图库容量清理（LRU）：真壳 invoke，浏览器 HTTP。
- *
- * Tauri 侧命令：
- *   pub async fn world_map_maplib_cleanup(
- *     app: AppHandle, max_mb: Option<f64>, dry_run: Option<bool>, dry: Option<bool>,
- *   ) -> Result<Value, String>          // { removed, freed, freed_mb, dry_run, victims? }
- *
- * ⚠️ 干跑参数在 Rust 侧叫 `dry_run`，JS 侧必须写 **camelCase `dryRun`**。
- * 写错成 `dry_run` 不会「变成真删」——Tauri 忽略不认识的键，Rust 侧 `dry_run` 收到 None，
- * 于是走 `dry_run.or(dry).unwrap_or(true)` = **true**（干跑），属于失败安全；
- * 但那样「真删」按钮会永远删不掉东西、又没人发现，所以这里**显式**把布尔传全，
- * 绝不依赖「少传参数碰默认值」。语义对齐：本函数参数的 `dry: true` = 干跑。
- */
-export async function maplibCleanupAuto(o: {
-  maxMb?: number;
-  dry: boolean;
-}): Promise<MapLibCleanupResult> {
-  if (!isTauriRuntime()) return maplibCleanup(o);
-  return await invoke<MapLibCleanupResult>("world_map_maplib_cleanup", {
-    maxMb: o.maxMb,
-    dryRun: !!o.dry, // 只有调用方明写 dry:false 才会真删，与 HTTP 版纪律一致
-  });
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // 「世界模拟」首屏要的是**裸 SVG 文本**，不是 data URL —— 所以这里补一个 geoSvgText()

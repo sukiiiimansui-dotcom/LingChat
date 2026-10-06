@@ -6,11 +6,16 @@
  * ⚠️ **本次是纯搬运、零行为变化**：函数体/常量/注释一字未改；`ML_*` 常量组一并搬来，
  *   原文件**import 回去**继续用（`export *` 不建本地绑定 —— 漏了这步就编译不过，量过的坑）。
  *
- * 🔴 **现状（2026-10-06，S9b7 批 D 之后）**：那个"原文件"（`useWsMapLibre.ts`）已整份删除，
+ * 🔴 **现状（2026-10-06，S9b8 批 E 之后）**：那个"原文件"（`useWsMapLibre.ts`）已整份删除，
  *   本模块**唯一的活出口是 `assetUrl`**（`src/composables/wsMapLibreCss.ts:11` → 现役宿主
- *   `WsDistrictMapLibre.vue` 的 `injectCss`）。其余导出里：8 个孤立符号已退役（墓碑见文件末），
- *   `styleFor` / `THEME_*` / `ML_*` 目前只剩闸在读（`ws_base_maxzoom_selftest.mjs` 等）——
- *   **不是活路**，只是本批不动它们（另立候选）。现役 App 的 style 走
+ *   `WsDistrictMapLibre.vue` 的 `injectCss`）。其余符号三类，逐符号依据见 `REMOVED-CODE.md` 的 S9b8 条：
+ *     · 已退役（连本体删）：S9b7 的 8 个 + 本批的 `ML_SRC` / `ML_LAND` / `ML_LINE` / `ML_HI` / `ML_HI_LINE`；
+ *     · 收敛（本体留着、只去 `export`）：`basemapTiles`（S9b7）、`ML_BG` / `ML_BASE_LAYER`（本批）——
+ *       消费者都在本文件内（`styleFor`）；
+ *     · 只剩闸在读：`styleFor` / `THEME_DARK` / `THEME_LIGHT` / `ML_BASE`
+ *       （`ws_base_maxzoom_selftest.mjs` ①②④ 段 + ⑦b 段的反向判据）——**不是活路**，
+ *       但它们同时是那份"底图 maxzoom 收口"守卫的输入/锚点，退掉就等于放弃那条守卫（见 S9b8 台账）。
+ *   现役 App 的 style 走
  *   `WsDistrictMapLibre.vue → wsFallback2d.styleNow() → wsDistrictScene.districtStyleOf()`
  *   → `wsMapTheme.themeStyleParts()`，与这里的 `styleFor` 是两条路。
  */
@@ -72,23 +77,22 @@ export function assetUrl(path: string): string {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   图层 / 数据源 id（外部（验证页、后续图层）要按 id 找图层，所以导出）
-   ⚠️ 2026-10-06（S9b7 批 D）照实记：`ML_SRC` / `ML_LAND` / `ML_LINE` / `ML_HI` / `ML_HI_LINE`
-   这五个**已经没有任何消费者**了 —— 唯一铺它们的是刚退役的 `layersFor`（全仓零引用）。
-   本批**不动**它们（审计候选 ④ 的清单里没有这五个，不在授权范围）⇒ 另立候选，别当成"还有人在用"。
-   仍在用的：`ML_BG` / `ML_BASE` / `ML_BASE_LAYER`（`styleFor` 内部）与闸里的 `ML.ML_BASE`。
+   底图 source / layer 的 id
+   🗄 2026-10-06（S9b8 批 E，逐符号复核的结论 —— 不是照抄"只剩闸在消费"那句）：
+     · **退役（连本体删）**：`ML_SRC="ws-ml-src"` / `ML_LAND="ws-ml-land"` / `ML_LINE="ws-ml-line"`
+       / `ML_HI="ws-ml-hi"` / `ML_HI_LINE="ws-ml-hi-line"` —— 唯一铺它们的是 S9b7 已退役的
+       `layersFor()`；剥注释后扫 `src`+`public`（排除 vendor）+ 闸目录**全部** .mjs：**零命中**
+       （按**字面量** `ws-ml-*` 再扫一遍也零命中，排除"有人直接写字符串"这条漏网）。
+     · **收敛（只去 `export`）**：`ML_BG` / `ML_BASE_LAYER` —— 消费者**只在模块内**
+       （`styleFor` 里 `id: ML_BG` 与 `id: ML_BASE_LAYER` 各一处）；闸里对它们是 0 引用。
+     · **继续导出**：`ML_BASE` —— 闸 `ws_base_maxzoom_selftest.mjs` 用 `ML.ML_BASE` 取底图源
+       判 `maxzoom` 收口（同时它也是 `styleFor` 内部那个 source 的键）。
+   守卫（可执行，别靠记性）：同闸 ⑦b 段（源码级 + 模块面 + "4 个锚点必须继续导出"的反向判据）。
    ══════════════════════════════════════════════════════════════════════════ */
-export const ML_SRC = "ws-ml-src";
-export const ML_BG = "ws-ml-bg";
-/** 陆地填充（第 4 层：最低对比） */
-export const ML_LAND = "ws-ml-land";
-/** 行政边界（第 3 层） */
-export const ML_LINE = "ws-ml-line";
-/** 高亮填充（选中/悬停）—— 永远画在最上层（规格：用户内容最上） */
-export const ML_HI = "ws-ml-hi";
+const ML_BG = "ws-ml-bg";
 /** 底图 source/layer 的 id（UI 升级 2026-09-19：没有底图时"地图"只是一块纯色） */
 export const ML_BASE = "ws-ml-base";
-export const ML_BASE_LAYER = "ws-ml-base-l";
+const ML_BASE_LAYER = "ws-ml-base-l";
 
 /**
  * 免密钥底图（Carto，实测可达 0.57s，**全球覆盖含中国**，署名 OSM+CARTO）。
@@ -113,7 +117,13 @@ function basemapTiles(dark: boolean): string[] {
       : "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
   ];
 }
-export const ML_HI_LINE = "ws-ml-hi-line";
+/* 🗄 2026-10-06（S9b8 批 E）退役：`ML_HI_LINE = "ws-ml-hi-line"` 原来长在这里
+   （上一批 S9b7 的墓碑里就记着它零消费者，本批连本体退）。
+   逐字墓碑（连同上面那四个，回退时照抄这一份即可）：
+     export const ML_SRC = "ws-ml-src";        export const ML_LAND = "ws-ml-land";
+     export const ML_LINE = "ws-ml-line";      export const ML_HI = "ws-ml-hi";
+     export const ML_HI_LINE = "ws-ml-hi-line";
+   原文：`git log -p -- src/components/views/worldsim/wsMapStyle.ts`。 */
 
 /**
  * 样式（MapLibre 的"皮肤"）。**背景色 = 现在的海色**（`.ws-sea-*` 那套的同一来源）。

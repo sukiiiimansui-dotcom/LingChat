@@ -573,7 +573,17 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
 }
 
 /**
- * 底图瓦片源的 **`maxzoom` 上限** —— `wsMapStyle.styleFor(theme, { baseMaxZoom })` 的**唯一真源**。
+ * 底图瓦片源的 **`maxzoom` 上限** —— **唯一真源**。
+ *
+ * 🔴 2026-10-06（S9b8 批 G）改口径：这里原先写"`wsMapStyle.styleFor(theme, { baseMaxZoom })` 的
+ *   唯一真源"，那句话**与现状不符**了 ——
+ *     · **现役**消费者是本文件的 `themeStyleParts()`（`const baseCap = baseMaxZoomFor(theme)`，
+ *       覆盖 `sources.base.maxzoom`，**只收口不放大**）；它服务于 App 小区级那条路
+ *       （`WsDistrictMapLibre.vue → wsFallback2d.styleNow() → wsDistrictScene.districtStyleOf()`）。
+ *     · `wsMapStyle.styleFor(theme, { baseMaxZoom })` 那条**区县级**调用点已随
+ *       `useWsMapLibre.ts`（2026-10-06 删除）退役 ⇒ 现在读它的**只剩闸**
+ *       （`ws_base_maxzoom_selftest.mjs` ①②段，`styleForStage` 也已在 S9b7 退役）。
+ *   ⇒ 真源只有一个（本函数），但"谁在读它"要按上面这两条写，别再把退役那条路当现役。
  *
  * ## 它算两件事（顺序不能反）
  * ① **淡出终点**：`Math.ceil(baseFade.to)` —— 底图到 `to` 就完全透明了，再往上取瓦片是纯白等
@@ -584,14 +594,16 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
  *    现在由**函数本身**保证（以前只由 `themeStyleParts` 里那一次 `min(原值, …)` 保证）。
  *    为什么必须补（2026-10-04，机主推翻「地面太糊」之后）：
  *      二次元的淡出终点抬到 **18**（默认机位 16.4 要看得见真瓦片）⇒ `ceil(to) = 18`，
- *      而这条值会被 `wsMapStyle.styleFor({ baseMaxZoom })` **原样**写进底图源（区县级那条路）
+ *      而这条值会被 `themeStyleParts()` **原样**写进它产出的底图源
+ *      （`sources.base.maxzoom`；退役的区县级那条路则是由 `styleFor({ baseMaxZoom })` 写进去的）
  *      ⇒ 地图库到 z17 就会去要 Esri 那张 **2521B 占位图**「Map data not yet available」
  *      = 2026-09-25「地图变白/没了」那次事故**换个入口再来一遍**。
  *    现在：`min(主题声明的 maxzoom, ceil(to))` ⇒ 二次元 = `min(16, 18) = **16**`（真实细节上限，
  *    z17 起交给地图库放大复用 z16，永不请求占位图）。
  *
  * 🔴 **没有 `baseFade` 的主题返回 `undefined`**（`null` = 全程不淡出，暗色/对照组用它）——
- * ⇒ 调用方（`styleFor`）保持原有的 **20**，那类主题真的要瓦片看东西，砍了就糊。
+ * ⇒ 现役调用方 `themeStyleParts()` 原样保留主题自己声明的 **16**（退役的 `styleFor` 那条路是
+ *   保持它原有的 **20**），那类主题真的要瓦片看东西，砍了就糊。
  * ⚠️ 主题对象上**没有 `sources`** 时（自检里的裸对象、老调用点）行为与以前**逐位相同**：只做 `ceil`，
  *    不替调用方兜测 —— 判据 ② 是"夹到主题声明的上限"，不是"凭空发明一个上限"。
  *

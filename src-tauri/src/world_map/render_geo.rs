@@ -157,6 +157,11 @@ const ELEV_MARGIN: f64 = 8.0;
 /// 按河流等级分三档线宽 —— 对应 Natural Earth `scalerank`（1 最大）。
 /// 索引即分桶号，见 [`river_bucket`]。
 const RIVER_WIDTHS: [f64; 3] = [2.0, 1.4, 1.0];
+// 三档线宽必须严格递减，否则"分级"没意义 —— 这是常量的性质，直接在编译期钉住：
+// 比原来放在 `river_bucket_splits_by_scalerank` 里的运行期断言更早失败，也顺带治掉
+// clippy 的"断言恒真"（常量的比较在它眼里就是常量表达式）。
+const _: () = assert!(RIVER_WIDTHS[0] > RIVER_WIDTHS[1]);
+const _: () = assert!(RIVER_WIDTHS[1] > RIVER_WIDTHS[2]);
 
 /// `scalerank` → 线宽分桶（同桶合并进同一条 `<path>`，减少元素数）
 fn river_bucket(rank: i64) -> usize {
@@ -883,9 +888,7 @@ mod tests {
         assert_eq!(river_bucket(4), 1);
         assert_eq!(river_bucket(5), 2);
         assert_eq!(river_bucket(9), 2);
-        // 三档线宽必须递减，否则"分级"没意义
-        assert!(RIVER_WIDTHS[0] > RIVER_WIDTHS[1]);
-        assert!(RIVER_WIDTHS[1] > RIVER_WIDTHS[2]);
+        // 三档线宽递减已在 RIVER_WIDTHS 定义处用 `const _: () = assert!(…)` 钉在编译期
     }
 
     /// `hydro_layers` 的视口裁剪与容差：空输入安全、框外丢弃、框内保留。    #[test]

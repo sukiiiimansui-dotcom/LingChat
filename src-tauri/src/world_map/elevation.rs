@@ -450,11 +450,11 @@ mod tests {
         let lo = *vals.iter().min().unwrap();
         let hi = *vals.iter().max().unwrap();
         assert!(
-            lo >= -200 && lo <= 10,
+            (-200..=10).contains(&lo),
             "最低点不像中国（吐鲁番约 -154m）：{lo}"
         );
         assert!(
-            hi >= 5000 && hi <= 9000,
+            (5000..=9000).contains(&hi),
             "最高点不像中国（珠峰 8848m）：{hi}"
         );
         // 有相当比例的高原/高山，否则说明取数取错了区域

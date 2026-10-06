@@ -453,7 +453,7 @@ pub fn spawn_stream(
                 // 【临时诊断】把前 3 个 data 行原样报给前端，定位「chars=0」的成因
                 if dbg.2 <= 3 {
                     let _ = tx.send(Event::Warn {
-                        message: format!("RAW#{} {}", dbg.2, &data.chars().take(220).collect::<String>()),
+                        message: format!("RAW#{} {}", dbg.2, data.chars().take(220).collect::<String>()),
                     }).await;
                 }
                 let obj: Value = match serde_json::from_str(data) {

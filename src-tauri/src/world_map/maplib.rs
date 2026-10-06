@@ -8,7 +8,6 @@
 //!   3. **索引可从文件自愈**：`scan()` 把「文件存在但没登记」的补回来（索引只是缓存，数据本体才是关键）
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -749,7 +748,7 @@ mod tests {
         let alive = lib.list(None, None, None, "recent");
         for (i, rel) in rels.iter().enumerate() {
             let id = format!("district:44{i:04}:dark");
-            let was_victim = victims.iter().any(|v| *v == id);
+            let was_victim = victims.contains(&id);
             assert_eq!(
                 lib.abs(rel).exists(),
                 !was_victim,

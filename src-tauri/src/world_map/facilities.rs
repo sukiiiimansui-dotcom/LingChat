@@ -2242,7 +2242,9 @@ mod tests {
         // Python: round(2.675, 2) = 2.67（不是 2.68）
         assert_eq!(round_n(2.675, 2), 2.67);
         assert_eq!(round_n(1.005, 2), 1.0);
-        assert_eq!(round_n(1.4142135, 2), 1.41);
+        // 写 √2 的常量而不是 1.4142135 字面量：数值一样（都进位到 1.41），但 clippy 的
+        // `approx_constant`（默认 deny）不再报"这看着像常量"。
+        assert_eq!(round_n(std::f64::consts::SQRT_2, 2), 1.41);
         // 特值不 panic
         assert!(round_n(f64::NAN, 2).is_nan());
         assert_eq!(round_n(f64::INFINITY, 2), f64::INFINITY);

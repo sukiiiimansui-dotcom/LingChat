@@ -886,7 +886,8 @@ mod tests {
         // 三档线宽递减已在 RIVER_WIDTHS 定义处用 `const _: () = assert!(…)` 钉在编译期
     }
 
-    /// `hydro_layers` 的视口裁剪与容差：空输入安全、框外丢弃、框内保留。    #[test]
+    /// `hydro_layers` 的视口裁剪与容差：空输入安全、框外丢弃、框内保留。
+    #[test]
     fn hydro_layers_culls_out_of_view() {
         let feats = hydro::parse(
             &json!({"type":"FeatureCollection","features":[

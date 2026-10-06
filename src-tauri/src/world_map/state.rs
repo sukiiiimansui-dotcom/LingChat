@@ -396,10 +396,10 @@ impl MapRuntime {
         }
         if let Some(v) = obj.get("events") {
             if let Some(list) = v.as_array() {
-                if summary::push_events(&mut self.events, list, EVENTS_MAX) {
-                    if !changed.iter().any(|c| c == "events") {
-                        changed.push("events".into());
-                    }
+                if summary::push_events(&mut self.events, list, EVENTS_MAX)
+                    && !changed.iter().any(|c| c == "events")
+                {
+                    changed.push("events".into());
                 }
             }
         }

@@ -81,10 +81,6 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn est_width(text: &str, size: f64) -> f64 {
-    text.chars().map(|c| if (c as u32) > 0x2E80 { size } else { size * 0.55 }).sum()
-}
-
 fn project(lng: f64, lat: f64) -> (f64, f64) {
     let x = (lng + 180.0) / 360.0;
     let s = (lat.to_radians()).sin().clamp(-0.9999, 0.9999);
@@ -630,14 +626,13 @@ pub fn render_geo_svg(fc: &Value, o: &GeoOpts) -> Result<String, String> {
         w - pad + 6.0, pad - 10.0, st.sub_text, o.level
     ));
 
-    let css = format!(
-        "text{{font-family:system-ui,-apple-system,'PingFang SC','Noto Sans CJK SC',sans-serif}}\
-.geo-fill{{transition:fill .16s,filter .16s;cursor:pointer}}\
-.geo-region:hover .geo-fill{{filter:brightness(1.07) saturate(1.15)}}\
-.geo-region:hover .geo-border{{stroke-width:2.2;stroke:#79d9ff}}\
-svg[data-zoom=\"1\"] .z2,svg[data-zoom=\"1\"] .z3{{display:none}}\
-svg[data-zoom=\"2\"] .z3{{display:none}}"
-    );
+    let css = "text{font-family:system-ui,-apple-system,'PingFang SC','Noto Sans CJK SC',sans-serif}\
+.geo-fill{transition:fill .16s,filter .16s;cursor:pointer}\
+.geo-region:hover .geo-fill{filter:brightness(1.07) saturate(1.15)}\
+.geo-region:hover .geo-border{stroke-width:2.2;stroke:#79d9ff}\
+svg[data-zoom=\"1\"] .z2,svg[data-zoom=\"1\"] .z3{display:none}\
+svg[data-zoom=\"2\"] .z3{display:none}"
+        .to_string();
 
     Ok(format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" data-zoom="{}" font-family="system-ui,sans-serif"><style>{css}</style>{}</svg>"#,

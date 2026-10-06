@@ -779,10 +779,8 @@ fn score(
         return -(FAR as f64);
     }
     // 别的设施贴太近轻微减分，避免挤成一团
-    if !all_pool.is_empty() {
-        if all_pool.iter().map(|p| cheb(cell, *p)).min().unwrap_or(0) <= 1 {
-            s -= 4.0;
-        }
+    if !all_pool.is_empty() && all_pool.iter().map(|p| cheb(cell, *p)).min().unwrap_or(0) <= 1 {
+        s -= 4.0;
     }
     s
 }
@@ -816,10 +814,11 @@ fn rank(
             if meta.need_water && state.water_dist[i] > 1 {
                 continue; // 硬约束：码头必须临水
             }
-            if min_gap != 0 && !same_pool.is_empty() {
-                if same_pool.iter().map(|p| cheb(cell, *p)).min().unwrap_or(0) < min_gap {
-                    continue;
-                }
+            if min_gap != 0
+                && !same_pool.is_empty()
+                && same_pool.iter().map(|p| cheb(cell, *p)).min().unwrap_or(0) < min_gap
+            {
+                continue;
             }
             if !fits(state, x, y, meta.foot) {
                 continue;

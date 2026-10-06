@@ -279,7 +279,7 @@ pub async fn build_blocks(
     let diag = coord::haversine_m((main_lng.0, main_lat.0), (main_lng.1, main_lat.1));
     // 主块的名字要问上一级：自己那份 geojson 里装的是下辖区域，不含自己的名字。
     // 查不到就退回 adcode —— 显示 "440100" 也比空白强，但正常路径应该给出「广州市」。
-    let main_name = match parent_of(&main_ad) {
+    let main_name = match parent_of(main_ad) {
         Some(p) => match src.fetch(&p).await {
             Ok(fc) => features(&fc, Some(&p))
                 .into_iter()

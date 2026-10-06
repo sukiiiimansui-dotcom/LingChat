@@ -340,8 +340,8 @@ pub fn render_svg(layout: &Value, o: &Opts) -> String {
 
     // ── 停车位（z3）──
     for pk in details::list(layout, "parking") {
-        let (x, y) = (gx(num(&pk, "x", 0.0)), gy(num(&pk, "y", 0.0)));
-        let (bw, bh) = (num(&pk, "w", 0.5) * cell, num(&pk, "h", 0.5) * cell);
+        let (x, y) = (gx(num(pk, "x", 0.0)), gy(num(pk, "y", 0.0)));
+        let (bw, bh) = (num(pk, "w", 0.5) * cell, num(pk, "h", 0.5) * cell);
         p.push(format!(
             r##"<rect class="z3 {}" x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" rx="2" fill="{}" stroke="#ffffff" stroke-width="1" opacity=".95"/>"##,
             lay("parking"), st.parking

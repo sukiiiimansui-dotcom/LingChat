@@ -1841,13 +1841,17 @@ mod tests {
         assert!(far.contains(&"train".to_string()));
     }
 
+    /// 裸函数指针版的水域检测器签名：`detect_cross_water_with` 收 `Option<&F>`，
+    /// 只写得出 `None` 的地方靠它把 `F` 定下来。
+    type CrossWaterFn = fn((f64, f64), (f64, f64)) -> bool;
+
     #[test]
     fn cross_water_hook_and_ferry() {
         let a = XUWEN;
         let b = HAIKOU;
         // 未注册检测器时保守返回 false（与 Python 一致）
         assert!(!detect_cross_water(a, b));
-        let no_checker: Option<&fn((f64, f64), (f64, f64)) -> bool> = None;
+        let no_checker: Option<&CrossWaterFn> = None;
         assert!(!detect_cross_water_with(no_checker, a, b));
         let yes = |_a: (f64, f64), _b: (f64, f64)| true;
         assert!(detect_cross_water_with(Some(&yes), a, b));

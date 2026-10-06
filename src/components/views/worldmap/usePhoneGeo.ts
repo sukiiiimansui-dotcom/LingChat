@@ -15,6 +15,13 @@
  * 4. `location()` 的 `area` 对没反查到名字的层级会**原样吐 adcode**
  *    （`"中国·重庆市·500100·500102"`）→ 必须过滤纯数字段。
  *
+ * ## ⚠️ 「拿不到列表」不许静默（2026-10-06 S9b5-B 改的口径）
+ * 原来 `loadDestList()` 里是 `catch {}` —— 每一级失败都咽掉、最后返回空数组，界面只说
+ * 「拿不到目的地列表」。真因是**真壳里 `world_map_geo_children` 根本没注册**（invoke 直接 reject），
+ * 而这条命令的孪生路由在调试服务里一直有 ⇒ 浏览器预览全绿、手机上恒空，谁都看不出来。
+ * 现在两边都补齐了（`mod.rs` 两个命令 + `lib.rs` 注册），并且这里把**失败原因**带出来写进 `err`：
+ * 拿不到就说清楚是哪一级、错在哪，绝不返回一个"看着像正常"的空列表。
+ *
  * ⚠️ 一切网络访问都走 `worldMap.ts` 的**双通路**（真壳 invoke / 浏览器 HTTP）。
  *    **绝不在这里直连 8791** —— 那是本地调试端口，装进 APK 必然失败。
  */
@@ -92,26 +99,39 @@ export function prettyArea(area: unknown): string {
   return parts.join("·");
 }
 
+/** 错误信息太长会把手机里那行小字挤爆，截到一句人话的长度 */
+function shortErr(e: unknown): string {
+  const s = e instanceof Error ? e.message : String(e ?? "");
+  return s.length > 120 ? s.slice(0, 117) + "…" : s;
+}
+
 /**
  * 目的地候选：**从最近一级往上找**，取第一个能给出 ≥2 个下级的层级。
  * （固定取 `path` 倒数第二级会只剩 1 项 —— 见文件头第 3 条坑）
+ *
+ * @returns `list` 候选（可能为空）+ `reason` **为空列表时**给用户看的原因（空列表却 `reason` 为空 =
+ *          调用方的 bug，不许出现）
  */
 export async function loadDestList(
   path: Array<{ adcode?: string }>,
   leaf: string
-): Promise<PhoneDest[]> {
+): Promise<{ list: PhoneDest[]; reason: string }> {
+  let tried = 0;
+  let lastErr = "";
   for (let i = path.length - 1; i >= 0; i--) {
     const ad = String(path[i]?.adcode || "");
     if (!ad || ad === leaf) continue;
+    tried += 1;
     try {
       const kids = (await geoChildren(ad)).filter((x) => String(x.adcode) !== leaf);
-      if (kids.length >= 2) return kids;
-    } catch {
-      /* 这一级拿不到就继续往上。真壳里命令还没注册（见 worldMap.ts 的说明）→ 会一路走到空列表，
-         此时界面显示「目的地列表拿不到」，不卡住、不白屏 */
+      if (kids.length >= 2) return { list: kids, reason: "" };
+    } catch (e) {
+      lastErr = shortErr(e);
     }
   }
-  return [];
+  if (lastErr) return { list: [], reason: `拿不到目的地列表：${lastErr}` };
+  if (!tried) return { list: [], reason: "拿不到目的地列表（定位结果里没有可用的上一级区划）" };
+  return { list: [], reason: "拿不到目的地列表（这一带没有可选的同级区县）" };
 }
 
 /** 手机应用通用的「定位 + 目的地候选」。 */
@@ -144,7 +164,10 @@ export function usePhoneGeo() {
         area: prettyArea(loc.area),
         leafAd: leaf,
       };
-      destList.value = await loadDestList(path, leaf);
+      const r = await loadDestList(path, leaf);
+      destList.value = r.list;
+      // 空列表 = 这个 app 的目的地下拉框没得选 ⇒ **必须**把原因说出来（见文件头那段）
+      if (!r.list.length) err.value = r.reason || "拿不到目的地列表";
     } catch (e) {
       err.value = `定位失败：${e instanceof Error ? e.message : e}`;
     }

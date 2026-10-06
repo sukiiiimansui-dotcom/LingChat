@@ -12,9 +12,6 @@
   <AchievementToast v-if="isMainWindow" />
   <AdventureUnlockNotify v-if="isMainWindow" />
   <AppDialog v-if="isMainWindow" />
-
-  <!-- 世界地图叠加层（背景层 / 角落小窗）：与上面几个全局组件同一口径，仅主窗口挂载 -->
-  <WorldMapLayer v-if="isMainWindow" />
 </template>
 
 <script setup lang="ts">
@@ -28,8 +25,6 @@
   import AchievementToast from "./components/ui/AchievementToast.vue";
   import AdventureUnlockNotify from "./components/ui/AdventureUnlockNotify.vue";
   import AppDialog from "./components/ui/AppDialog.vue";
-  // 世界地图叠加层（背景层 / 角落小窗）：纯新增组件，懒加载由组件内部自理
-  import WorldMapLayer from "./components/views/WorldMapLayer.vue";
   import { initUIStore, useUIStore } from "./stores/modules/ui/ui";
   import { useGameStore } from "./stores/modules/game";
   import { i18n } from "./locales";

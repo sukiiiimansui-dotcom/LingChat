@@ -1,14 +1,19 @@
-// 把 LingChat 的角色 / 对话 / 记忆 / 日程数据接到世界地图上（T6-4）
+// 把 LingChat 的角色名单接到世界界面（T6-4）
 //
 // 目标（用户明确要求）：
-//   · 地图上的 NPC 只有**LingChat 角色列表里的角色**才带头像，其余只是点
-//   · 手机通讯录 = LingChat 角色；手机日程 = LingChat 日程（T4-5 已解析）
-//   · 角色在地图上的位置由**日程**决定（在上班 → 出现在商业设施）
+//   · 角色名单 = LingChat 角色列表（`characterGetAll` → 头像转 asset URL）
+//   · 拿不到 Tauri 接口时退回后端的角色目录（`/api/schedule/chars`），两级兜底
+//
+// ⚠️ 这个文件原来是「角色名单 + 往世界地图的老 JS 模块里灌数据」的合体，
+//    2026-10-06 拆开了（S9b5-B）：**注入那半已退役**（`useWorldModules.ts` 连同
+//    `public/world_map/*.js` 的 5 个脚本、284 KB 一起不再加载），只留下角色名单这半——
+//    它在 `useWsActors.ts` 里是地图上「人」的名单真源，是活的那半。
+//    老 JS 模块当年吃的是 `NPC_SYS.setNamedCharacters()` / `PHONE.setContacts()` 这套 window 全局，
+//    现在世界界面是 Vue 自己的组件，名单直接进 `useWsActors`，不再经过 window。
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { characterGetAll, getCharacterFilePath } from '@/api/services/character'
 import type { Character } from '@/types'
-import worldMapApi, { type SchedulePayload } from '@/api/services/worldMap'
-import { loadWorldModules, worldModule } from './useWorldModules'
+import worldMapApi from '@/api/services/worldMap'
 
 export interface WorldCharacter {
   id: string
@@ -19,7 +24,6 @@ export interface WorldCharacter {
 }
 
 let cachedCharacters: WorldCharacter[] | null = null
-let lastBind = 0
 
 /** 读 LingChat 角色列表，并把头像转成可显示的 asset URL */
 export async function loadWorldCharacters(force = false): Promise<WorldCharacter[]> {
@@ -67,89 +71,4 @@ export async function loadWorldCharacters(force = false): Promise<WorldCharacter
   }
   cachedCharacters = out
   return out
-}
-
-/** 注入到 npc.js：只有名单里的角色才升级为带头像的 named NPC */
-export function bindCharactersToNpc(chars: WorldCharacter[]) {
-  const NPC = worldModule<any>('NPC_SYS')
-  if (!NPC || typeof NPC.setNamedCharacters !== 'function') return 0
-  NPC.setNamedCharacters(
-    chars.map((c) => ({
-      id: c.id,
-      name: c.name,
-      avatarUrl: c.avatarUrl,
-      persona: c.persona,
-    })),
-  )
-  return chars.length
-}
-
-/** 注入到 phone.js：通讯录 = LingChat 角色 */
-export function bindCharactersToPhone(chars: WorldCharacter[]) {
-  const PHONE = worldModule<any>('PHONE')
-  if (!PHONE || typeof PHONE.setContacts !== 'function') return 0
-  PHONE.setContacts(
-    chars.map((c) => ({
-      name: c.name,
-      avatar: c.avatarUrl,
-      signature: c.persona.slice(0, 40),
-    })),
-  )
-  return chars.length
-}
-
-/** 日程 → 手机日程界面（数据来自 T4-5 的 /api/schedule） */
-export function bindScheduleToPhone(sch: SchedulePayload | null) {
-  const PHONE = worldModule<any>('PHONE')
-  if (!PHONE || typeof PHONE.setSchedule !== 'function' || !sch) return 0
-  const list: any[] = []
-  // 角色日程 → 按「时间 内容」排成待办样式
-  for (const r of sch.roles || []) {
-    for (const it of r.timeline || []) {
-      list.push({ time: it.time, title: `${r.name}：${it.content || it.name}`, tag: it.kindZh, done: false })
-    }
-  }
-  // LingChat 自己的待办
-  for (const t of sch.todos || []) {
-    list.push({
-      time: (t as any).deadline || '',
-      title: String((t as any).text ?? ''),
-      tag: String((t as any).group ?? '待办'),
-      done: !!(t as any).completed,
-    })
-  }
-  list.sort((a, b) => String(a.time).localeCompare(String(b.time)))
-  PHONE.setSchedule(list)
-  return list.length
-}
-
-/** 一次性绑定（页面进来时调一次即可，内部有节流） */
-export async function bindWorldData(opts?: { force?: boolean }): Promise<{
-  characters: number
-  schedule: number
-  source: string
-}> {
-  await loadWorldModules()
-  const now = Date.now()
-  if (!opts?.force && now - lastBind < 4000) {
-    return { characters: cachedCharacters?.length || 0, schedule: 0, source: 'throttled' }
-  }
-  lastBind = now
-  const chars = await loadWorldCharacters(opts?.force)
-  const nNpc = bindCharactersToNpc(chars)
-  const nPhone = bindCharactersToPhone(chars)
-  let sch: SchedulePayload | null = null
-  let source = 'none'
-  try {
-    sch = await worldMapApi.schedule()
-    source = sch?.source || 'unknown'
-    bindScheduleToPhone(sch)
-  } catch {
-    sch = null
-  }
-  return {
-    characters: Math.max(nNpc, nPhone),
-    schedule: (sch?.roles || []).length,
-    source,
-  }
 }

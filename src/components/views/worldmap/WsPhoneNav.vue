@@ -9,12 +9,16 @@
   3) **当前位置**：`worldMapApi.location()`（依赖 T0-1 的命令；浏览器走 HTTP 兜底）。
   4) **小屏可用性**：面板固定 ~264px 宽，地图按可用宽取图。
 
-  ## 一个实现上的取舍（值得写下来）
-  后端**没有"区县中心坐标"接口**（实测：`/api/blocks?ad=` 返回 `{ok:false}`，
-  `/api/location?ad=` 会忽略 ad 直接返回本机定位）。而 `transport_plan` 要的是 **lat/lng**。
-  所以目的地的坐标由**该区县 GeoJSON 的面积质心**算出来（`/api/geo_json?ad=`）。
-  与 `wsgame.html` 里修标注锚点用的是同一套数学 —— 那里踩过"顶点平均会被密集处拽跑"的坑，
-  这里直接用面积质心，不再重复那个错误。
+  ## 目的地从哪来（2026-10-06 S9b5-B 复核过）
+  「去哪」的下拉框 = **当前所在市的同级区县**，来自 `usePhoneGeo` 的 `destList`
+  （`location()` → `path` → 逐级往上找 `geoChildren()`）。它**不是**角落世界地图那条链：
+  角落地图吃的是 `/api/bigmap` + `useWorldMapLayer.ts` 那份模块级单例状态（连同
+  `WorldMapLayer.vue` / `WorldMap.vue` 一起退役了），本组件吃的是定位 + 区划列表 + 路径规划，
+  所以「角落世界地图退役」**没有**带走这个列表（判据与取舍写在本组件的提交信息里）。
+
+  🔴 原来这里自己抄了一份「质心 / 地名美化 / 逐级找候选」的实现，与 `usePhoneGeo.ts` 分叉；
+  本次收口到 `usePhoneGeo`（单一真源），顺带把「真壳里命令还没注册」那句**已经不成立**的
+  提示去掉 —— `world_map_geo_json` / `world_map_geo_children` 已经在 `lib.rs` 注册。
 -->
 <template>
   <div class="nav">
@@ -23,16 +27,16 @@
       <img v-if="mapSrc" :src="mapSrc" alt="当前区域地图" />
       <div v-else class="nav__mapload">{{ mapErr || "地图加载中…" }}</div>
       <div class="nav__where">
-        <span class="nav__pin">◆</span>{{ me?.area || "定位中…" }}
+        <span class="nav__pin">◆</span>{{ geo.me.value?.area || "定位中…" }}
       </div>
     </div>
 
     <!-- 目的地：从"当前市的同级区县"里选（没有地理编码接口，这是最接近真实的可用路径） -->
     <label class="nav__row">
       <span class="nav__k">去哪</span>
-      <select v-model="destAd" class="nav__sel" :disabled="!destList.length">
+      <select v-model="destAd" class="nav__sel" :disabled="!geo.destList.value.length">
         <option value="">选择目的地…</option>
-        <option v-for="d in destList" :key="d.adcode" :value="d.adcode">{{ d.name }}</option>
+        <option v-for="d in geo.destList.value" :key="d.adcode" :value="d.adcode">{{ d.name }}</option>
       </select>
     </label>
 
@@ -68,10 +72,12 @@
 
 <script setup lang="ts">
   import { computed, ref, watch } from "vue";
-  import worldMapApi, { geoChildren, geoJson, mapSvgUrl } from "@/api/services/worldMap";
+  import worldMapApi, { mapSvgUrl } from "@/api/services/worldMap";
+  import { usePhoneGeo } from "./usePhoneGeo";
 
-  const me = ref<{ lat: number; lng: number; area?: string; leafAd?: string; parentAd?: string } | null>(null);
-  const destList = ref<Array<{ name: string; adcode: string }>>([]);
+  /* 定位 / 目的地候选 / 面积质心 / 地名美化 —— 全部走共用 hook（单一真源，别在这儿再抄一份） */
+  const geo = usePhoneGeo();
+
   const destAd = ref("");
   const mapSrc = ref("");
   const mapErr = ref("");
@@ -80,119 +86,30 @@
   const opts = ref<any[]>([]);
   const picked = ref(0);
 
-  /* 面积质心（与 wsgame 的标注锚点同一套）：只取面积最大的环，避免被密集顶点拽跑 */
-  function ringArea(r: number[]) {
-    let a = 0;
-    for (let i = 0, j = r.length - 2; i < r.length; j = i, i += 2) a += r[j] * r[i + 1] - r[i] * r[j + 1];
-    return a / 2;
-  }
-  function centroid(geo: any): [number, number] | null {
-    const g = geo?.features?.[0]?.geometry;
-    if (!g) return null;
-    const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates || [];
-    let best: number[] | null = null, bestA = 0;
-    for (const poly of polys) for (const ring of poly) {
-      const a = Math.abs(ringArea(flat(ring)));
-      if (a > bestA) { bestA = a; best = flat(ring); }
-    }
-    if (!best) return null;
-    let a2 = 0, cx = 0, cy = 0;
-    for (let i = 0, j = best.length - 2; i < best.length; j = i, i += 2) {
-      const f = best[j] * best[i + 1] - best[i] * best[j + 1];
-      a2 += f; cx += (best[j] + best[i]) * f; cy += (best[j + 1] + best[i + 1]) * f;
-    }
-    a2 /= 2;
-    if (Math.abs(a2) < 1e-12) return null;
-    return [cx / (6 * a2), cy / (6 * a2)]; // [lng, lat]
-  }
-  const flat = (ring: number[][]) => ring.flatMap(([lng, lat]) => [lng, lat]);
-
-  /** 目的地坐标：抓该区县的 GeoJSON，算面积质心。
-   *  ⚠️ 走 `geoJson()` 的**双通路**（真壳 invoke / 浏览器 HTTP），不要在组件里直连 8791 ——
-   *  那是本地调试端口，装进 APK 必然失败（我自己先犯过这个错，已改）。 */
-  async function destLatLng(ad: string): Promise<{ lat: number; lng: number } | null> {
-    try {
-      const c = centroid(await geoJson(ad));
-      return c ? { lng: c[0], lat: c[1] } : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /** 显示用的地名：`location()` 的 `area` 会把没反查到名字的层级**原样吐 adcode**
-   *  （实测 "中国·重庆市·500100·500102"）→ 把纯数字段过滤掉，别让用户看编号。 */
-  function prettyArea(area: unknown): string {
-    const parts = String(area || "")
-      .split("·")
-      .map((x) => x.trim())
-      .filter((x) => x && !/^\d+$/.test(x) && x !== "中国");
-    return parts.join("·");
-  }
-
-  /** 目的地候选：**从最近的一级往上找**，取第一个能给出 ≥2 个下级的层级。
-   *  踩过的坑：原来固定取 `path` 倒数第二级，实测那是 "500100"（一个中间层），
-   *  `geo/children?ad=500100` 只回 1 个 → 下拉框里只有一项，等于没法用。 */
-  async function loadDestList(path: any[], leaf: string) {
-    for (let i = path.length - 1; i >= 0; i--) {
-      const ad = String(path[i]?.adcode || "");
-      if (!ad || ad === leaf) continue;
-      try {
-        const kids = (await geoChildren(ad)).filter((x) => String(x.adcode) !== leaf);
-        if (kids.length >= 2) return kids;
-      } catch {
-        /* 这一级拿不到就继续往上。真壳里命令还没注册（见 worldMap.ts 的说明）→ 会一路走到空列表，
-           此时界面显示"目的地列表拿不到"，**不卡住、不白屏** */
-      }
-    }
-    return [];
-  }
-
-  /** 只用于给"为什么没有目的地列表"一句人话解释；判定本身交给 worldMapApi 的双通路 */
-  function isTauriRuntimeHint() {
-    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && !(window as any).__LINGCHAT_WEB_MOCK__;
-  }
-
   async function init() {
+    await geo.load();
+    /* 「为什么没有目的地列表」由 hook 给出人话（它知道试过哪一级、错在哪），这里只负责显示 */
+    if (geo.err.value) err.value = geo.err.value;
+    const leaf = geo.me.value?.leafAd;
+    if (!leaf) return;
+    // 地图：**按小屏取图**（264 宽），不是塞 1000px 的大图
     try {
-      const loc: any = await worldMapApi.location({ fast: true } as any);
-      if (loc && !loc.error && Number.isFinite(loc.lat)) {
-        const path = loc.path || [];
-        const leaf = String(loc.leaf?.adcode || path[path.length - 1]?.adcode || "");
-        const parent = String(path[path.length - 2]?.adcode || "");
-        me.value = { lat: loc.lat, lng: loc.lng, area: prettyArea(loc.area), leafAd: leaf, parentAd: parent };
-        // 地图：**按小屏取图**（264 宽），不是塞 1000px 的大图
-        if (leaf) {
-          try {
-            mapSrc.value = await mapSvgUrl(leaf, "gaode", 264, 150);
-          } catch (e) {
-            mapErr.value = `地图取不到（${e instanceof Error ? e.message : e}）`;
-          }
-        }
-        // 目的地候选：从最近一级往上找，直到拿到 ≥2 个（见 loadDestList 的注释）
-        destList.value = await loadDestList(path, leaf);
-        if (!destList.value.length) {
-          err.value = isTauriRuntimeHint()
-            ? "真壳里还需要 Rust 侧补 world_map_geo_children（浏览器预览可用）"
-            : "拿不到目的地列表（区域接口没返回下级）";
-        }
-      } else {
-        err.value = "定位没结果（可以先用 IP 估测）";
-      }
+      mapSrc.value = await mapSvgUrl(leaf, "gaode", 264, 150);
     } catch (e) {
-      err.value = `定位失败：${e instanceof Error ? e.message : e}`;
+      mapErr.value = `地图取不到（${e instanceof Error ? e.message : e}）`;
     }
   }
 
   async function plan() {
-    if (!me.value || !destAd.value) return;
+    if (!geo.me.value || !destAd.value) return;
     busy.value = true;
     err.value = "";
     opts.value = [];
     try {
-      const to = await destLatLng(destAd.value);
+      const to = await geo.destLatLng(destAd.value);
       if (!to) throw new Error("拿不到目的地坐标");
       const res: any = await worldMapApi.transportPlan(
-        { lat: me.value.lat, lng: me.value.lng },
+        { lat: geo.me.value.lat, lng: geo.me.value.lng },
         to
       );
       if (res?.ok === false) throw new Error(res.error || "规划失败");
@@ -210,7 +127,7 @@
   const steps = computed(() => {
     const o = opts.value[picked.value];
     if (!o) return [] as string[];
-    const out = [`从当前位置出发（${me.value?.area || "已定位"}）`];
+    const out = [`从当前位置出发（${geo.me.value?.area || "已定位"}）`];
     out.push(`乘 ${o.icon} ${o.mode_name}，约 ${o.distance_text}`);
     if (Number.isFinite(o.ride_min)) out.push(`其中乘坐约 ${Math.round(o.ride_min)} 分钟`);
     if (Number.isFinite(o.wait_min) && o.wait_min > 0) out.push(`预计等待约 ${Math.round(o.wait_min)} 分钟`);

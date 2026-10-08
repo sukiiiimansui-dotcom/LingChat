@@ -16,7 +16,7 @@ name: 世界模拟·质量报告
 # 另外**只认它自己的文件**：改了这份 workflow 会跑一次（自验），源码推送不会。
 on:
   push:
-    branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
+    branches: ['dev', 'feat/worldsim', 'feat/world-map', 'feat/world-map-**']
     paths:
       - '.github/workflows/quality-check.yml'
   schedule:

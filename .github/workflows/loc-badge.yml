@@ -25,7 +25,7 @@ on:
     - cron: '20 18 * * *'   # 每天 02:20（UTC+8）
   workflow_dispatch:
   push:
-    branches: ['feat/worldsim', 'feat/world-map-**']
+    branches: ['dev', 'feat/worldsim', 'feat/world-map-**']
     paths:
       # 只认它自己这两个文件：改了它自验一次；**推源码不再触发**（免得每条推送都产生机器提交）
       - 'scripts/loc-badge.py'

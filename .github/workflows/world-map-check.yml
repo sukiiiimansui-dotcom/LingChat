@@ -11,7 +11,7 @@ name: 世界模拟·轻量检查
 # 触发：push 到开发分支 / 手动。`paths` 只放在会影响的目录上，改文档不会白跑一次。
 on:
   push:
-    branches: ['feat/worldsim', 'feat/world-map', 'feat/world-map-**']
+    branches: ['dev', 'feat/worldsim', 'feat/world-map', 'feat/world-map-**']
     paths:
       - 'src/**'
       - 'src-tauri/**'

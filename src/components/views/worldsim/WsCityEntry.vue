@@ -176,6 +176,21 @@
       >
         🏙 天际线
       </button>
+      <!-- 🧊 2026-10-07 · **渲染方式**（顶栏第五件；双引擎并列 P1）。
+           机主原话：「three.js 的建筑风格尽量贴近 maplibre…**用户可以选择渲染方式**…
+           现在就 C，**除了渲染不一样，其他全一样**喵」。
+           它**不是**第二个地图实现：换的是这一屏下面那层画布由谁画（同一座城、同一份 `bld`/`roads`
+           数据、同一套 `wstheme.json` 配色）。真源与切换都在 `wsRenderBackend` / `WsSceneView`
+           的舞台上，本页只渲染这颗 chip + 转交点击（与上面那颗「楼房档位」同一个写法）。 -->
+      <button
+        class="wsce__btn wsce__btn--render"
+        type="button"
+        data-ws-act="renderer"
+        :title="rendererChipTitle"
+        @click="toggleRenderer"
+      >
+        {{ rendererChipText }}
+      </button>
     </header>
 
     <!-- 没装过城市数据时的**常驻提示**（点了就开引导）——"少了一整座城市的楼房"这种事
@@ -293,6 +308,21 @@
      钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
   import { useWsActors } from "@/composables/useWsActors";
   import { districtPinsOf, type PlacedActor, type WsDistrictPin } from "./wsActors";
+  /* 🧊 双引擎并列（2026-10-07 · P1，主人：「用户可以选择渲染方式…除了渲染不一样，其他全一样」）。
+     本页只做**两件事**，渲染/切换/交接一行都不在这里（那些在 `WsSceneView.vue` 的舞台上）：
+       · 顶栏那颗「渲染」chip（用户选 map / three，落盘 `wsm:v1:renderer`）；
+       · 把「角色（**经纬度**）+ 主题」推给契约 —— 两个后端读的是同一份。
+     ⚠️ 主题取值复用现成真源 `readWsMapTheme()`（`wsm:v1:mapTheme`，`wsMapTheme.ts:1127`），
+        本页**不**自己解析键名、也不自己定义"现在是什么主题"。 */
+  import { WS_MAP_THEME_DEFAULT, readWsMapTheme } from "./wsMapTheme";
+  import {
+    contractActors,
+    contractTheme,
+    rendererLive,
+    rendererPref,
+    setRendererPref,
+    type WsRenderActor,
+  } from "./wsRenderBackend";
   /* 🧑 面板的开关/选中（模块级单例，与地图组件 `WsDistrictMapLibre.vue` 读的是同一份）。 */
   import { useWsPanel } from "@/composables/useWsPanel";
   /* 💗 好感的**唯一真源**：`+6` 是 `wsRelation.ts` 的 `SOURCE_WEIGHT.gift`，
@@ -315,10 +345,6 @@
   /* 「是不是真壳」只有这一份判据（`api/services/worldMap.isTauriRuntime`，`useWorldTrips` 用的也是它）——
      本页再加一个 `"__TAURI_INTERNALS__" in window` 就等于第二份实现。 */
   import { isTauriRuntime } from "@/api/services/worldMap";
-  /* 🏙 「天际线」入口要的那两份（都不是新造的东西）：
-     · `roamStore` = 漫游期间「我」的位置真源（`wsJoystick.ts:1234`，`wsPickInteract` 读的同一份）；
-     · `ROAM_PIN_ID` = 那颗钉子的 id（`wsJoystick.ts:1188`，写死 "me" 就等于第二份口径）。 */
-  import { ROAM_PIN_ID, roamStore } from "./wsJoystick";
   /* 📨 发消息走**既有**命令（不是新协议）：`send_chat_message`（`api/chat.rs:31`，`lib.rs:836` 注册）。
      ⚠️ 它**没有角色参数** ⇒ 发给的是当前对话角色；目标对不上时本页**不发**（见 `chatCanSend`）。 */
   import { invoke } from "@tauri-apps/api/core";
@@ -399,39 +425,70 @@
 
   /* ══ 🏙 2026-10-06 · 「天际线」入口（顶栏第四颗；**只是打开一页**，不是第二个地图实现）═════════════
      点它 = **整页**同源跳转 `public/ws3d/index.html`（three 版 3D 城市）。这一屏只负责回答一个问题：
-     **"从哪儿看"**。三条规矩都写在这一段里（本页是唯一实现，别处不许再算一份）：
+     **"从哪儿看"**。规矩都写在这一段里（本页是唯一实现，别处不许再算一份）：
 
        ① **看谁**：角色面板开着 ⇒ 面板对着的那个人；否则 App 自己的"当前角色"
           （`gameStore.currentInteractRoleId ?? mainRoleId`，与本文件 `currentRoleId` 同一份口径）；
-          再退回地图上第一个真角色；最后才轮到「我」。
+          再退回地图上第一个真角色。
        ② **网格 → 经纬度**：与地图上那批钉子**同一个式子**（`wsPickInteract.ts:85-92`：
           `w + (gx+0.5)/28*(e-w)` / `n - (gy+0.5)/28*(n-s)`），锚点也是同一份"建图时兜底抓一次、
           之后不再变"的视野 bbox（`wsPickInteract.ts:404-421` 的口径）—— 不这么办就会与地图上
           看见的那颗钉子**不是同一个点**（拖动过地图之后尤其明显）。
-       ③ 「我」在漫游期间的位置真源是 `roamStore`（`wsPickInteract.ts:439-447`：那期间谁都不许挪它）。
-       三条都拿不到 ⇒ **退回地图当前中心**（`dailyMap.getCenter()`，与"三件事"用的是同一个调用）；
+       ③ 🔴 **「我」这颗钉子本页不碰**：漫游期间「我」的位置真源是摇杆那份 `roamStore`
+          （`wsJoystick.ts:1234`，`wsPickInteract.ts:439-447` 明写"那期间谁都不许把它挪走"），
+          而 `ws_joystick_selftest.mjs:767-768` 有一条**红判据**钉着这一屏里不许出现那个标识符
+          （原话：这一屏本来就不推 me，也不许顺手加）。本页确实不需要它：真的一个角色钉子都
+          拿不到时**直接退到地图当前中心** —— 漫游时相机本来就从那份位置派生，地图中心 ≈ 你脚下，
+          比拿格子坐标冒充要准。
+       以上都拿不到 ⇒ **退回地图当前中心**（`dailyMap.getCenter()`，与"三件事"用的是同一个调用）；
        连地图都还没到位 ⇒ **不带坐标参数**（那一页会用它自己的默认中心，绝不编一个坐标）。
 
      ⚠️ 这一颗**没有状态**：半径由那一页自己管（主人拍板默认 300 m，页面上还能加减），所以这里
         没有 `localStorage` 键 —— `wsm:v1:skymode` 那种开关是 O2（地图里叠三层）才需要的。
      ⚠️ i18n：本片只允许改这一个文件 ⇒ 文案先写死中文（下一轮再收进 `worldsim.*`）。 */
-  /** 钉子的视野锚点：抓一次就固定（与 `wsPickInteract.ensurePinAnchor` 同一口径，见上 ②） */
-  let pinBBox: [number, number, number, number] | null = null;
+  /**
+   * 钉子的视野锚点：抓一次就固定（与 `wsPickInteract.ensurePinAnchor` 同一口径，见上 ②）。
+   *
+   * 🔴 它**必须是响应式的**（`ref`，不是普通 `let`）：契约的角色名单（`stageActors`）是一个
+   * `computed`，而锚点是**异步**才抓到的（地图 `daily-ready` 之后）—— 用普通变量的话，
+   * computed 只会在 `mapPins` 变化时重算，锚点后来才到位这件事**没人通知它**
+   * ⇒ 契约里永远是 0 个人（2026-10-07 探针实测到的那条红：地图上 4 个钉子、契约里 0 个角色）。
+   */
+  const pinBBox = ref<[number, number, number, number] | null>(null);
   function capturePinBBox(m: DailyMapLike | null): void {
-    if (pinBBox || !m) return;
+    if (pinBBox.value || !m) return;
     try {
       const bb = m.getBounds?.();
       const w = Number(bb?.getWest());
       const s0 = Number(bb?.getSouth());
       const e = Number(bb?.getEast());
       const n = Number(bb?.getNorth());
-      if ([w, s0, e, n].every((v) => Number.isFinite(v)) && e > w && n > s0) pinBBox = [w, s0, e, n];
+      if ([w, s0, e, n].every((v) => Number.isFinite(v)) && e > w && n > s0) pinBBox.value = [w, s0, e, n];
     } catch {
       /* 拿不到就少一条路：`skyCenter()` 会如实退到地图中心 */
     }
   }
 
-  /** 「从哪儿看」的那个人（顺序见上 ①）；一个角色都没有 ⇒ `null` */
+  /**
+   * 钉子（28×28 草图网格）→ **经纬度**。本文件里**唯一一份**。
+   *
+   * 为什么抽出来：`skyCenter()`（打开独立页那颗）与契约的角色名单（`stageActors`）都要它 ——
+   * 两处各写一遍就是"同一个点算成两个位置"的老病（3D 立绘会与地图上的钉子错开）。
+   * 口径与 `wsPickInteract.ts:85-92` 那张表逐字相同（锚点 = 抓一次就不再变的视野 bbox）；
+   * 拿不到 bbox ⇒ `null`（调用方各自按"数不出来就不编"处理）。
+   */
+  function pinLngLat(pin: WsDistrictPin): { lng: number; lat: number } | null {
+    const b = pinBBox.value;
+    if (!b) return null;
+    const g = 28;
+    const [w, s0, e, n] = b;
+    const lng = w + ((Number(pin.gx) + 0.5) / g) * (e - w);
+    /* 纬度要翻转：网格 y 向下增大、纬度向北增大（当年第一次写这个就忘了翻） */
+    const lat = n - ((Number(pin.gy) + 0.5) / g) * (n - s0);
+    return Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null;
+  }
+
+  /** 「从哪儿看」的那个人（顺序见上 ①）；**一个真角色都没有 ⇒ `null`**（「我」不算，见上 ③） */
   function skyPinOf(): WsDistrictPin | null {
     const pins = mapPins.value || [];
     if (panelOpen.value && panelTargetId.value && panelTargetId.value !== "me") {
@@ -443,34 +500,16 @@
       const hit = pins.find((p) => p.id === want);
       if (hit) return hit;
     }
-    const real = pins.find(
-      (p) => !p.isMe && p.name && Number.isFinite(Number(p.gx)) && Number.isFinite(Number(p.gy))
+    return (
+      pins.find((p) => !p.isMe && p.name && Number.isFinite(Number(p.gx)) && Number.isFinite(Number(p.gy))) || null
     );
-    if (real) return real;
-    return pins.find((p) => p.isMe) || null;
   }
 
   /** 中心 + **这个中心是从哪来的**（后者只用来写 title；位置本身绝不冒充"真经纬度"） */
   function skyCenter(): { lng: number; lat: number; src: string } | null {
     const pin = skyPinOf();
-    if (pin) {
-      if (pin.isMe || pin.id === ROAM_PIN_ID) {
-        const roam = roamStore.get();
-        if (roam && Number.isFinite(roam.lng) && Number.isFinite(roam.lat)) {
-          return { lng: roam.lng, lat: roam.lat, src: "漫游中的我" };
-        }
-      }
-      const b = pinBBox;
-      if (b) {
-        const g = 28;
-        const [w, s0, e, n] = b;
-        const lng = w + ((Number(pin.gx) + 0.5) / g) * (e - w);
-        const lat = n - ((Number(pin.gy) + 0.5) / g) * (n - s0);
-        if (Number.isFinite(lng) && Number.isFinite(lat)) {
-          return { lng, lat, src: `角色「${pin.name || pin.id}」` };
-        }
-      }
-    }
+    const ll = pin ? pinLngLat(pin) : null;
+    if (pin && ll) return { lng: ll.lng, lat: ll.lat, src: `角色「${pin.name || pin.id}」` };
     const c = dailyCenter();
     return c ? { lng: c.lng, lat: c.lat, src: "地图当前中心" } : null;
   }
@@ -1142,6 +1181,56 @@
     });
   });
 
+  /* ══ 🧊 2026-10-07 · 双引擎并列（P1）：把「角色 + 主题」推给契约 ═══════════════════════════
+     契约（`wsRenderBackend.ts`）里**只许有经纬度与米** ⇒ 这里做那一次换算（用本文件里唯一那份
+     `pinLngLat()`，与地图上钉子的锚点同一个 bbox）。
+       · 一个钉子都换不出来（bbox 还没抓到 / 全是叠着的散点）⇒ **推空名单**，绝不编坐标；
+         这时 2D 那侧照旧画它的钉子（那是既有通路），只是 3D 这一侧没有立绘可画；
+       · 「我」也一起推（`isMe`）：地图上「我」本来就是一颗钉子，两个后端看到的是**同一批人**；
+       · 🔴 本页**不碰**那份漫游位置（`ws_joystick_selftest.mjs` 有一条红判据钉着这一屏
+         不许把它挪走）—— 上面那句是"钉子快照 + 行程插值"，与漫游无关。 */
+  const stageActors = computed<WsRenderActor[]>(() => {
+    const out: WsRenderActor[] = [];
+    for (const p of mapPins.value || []) {
+      const ll = pinLngLat(p);
+      if (!ll) continue;
+      out.push({ id: p.id, name: p.name || p.id, lat: ll.lat, lng: ll.lng, isMe: !!p.isMe });
+    }
+    return out;
+  });
+  watch(stageActors, (list) => { contractActors.value = list; }, { immediate: true });
+
+  /* 主题 / 昼夜：取值复用现成真源（**不新造第二套判据**）。
+     · `theme` = `wsm:v1:mapTheme`（`readWsMapTheme()`，与地图组件读的是同一个键）；
+     · `timeOfDay` = 本入口地图**实际**用的夜色 = **0**（本页没有把世界时间传给地图，见下面那条注释）；
+     · `clock` 只给 HUD 看（不参与任何渲染判据）。 */
+  contractTheme.value = {
+    theme: readWsMapTheme() || WS_MAP_THEME_DEFAULT,
+    /* ⚠️ 如实写 0：`WsCityEntry` 没给 `WsSceneView` 传 `:night` ⇒ 地图那边 `props.night` 默认 0
+       （也就是说这一屏现在**本来就是白天**）。等哪天入口把世界时间接上，这里跟着改一处即可
+       —— 在那之前编一个"夜色"就是两个后端不一致的开始。 */
+    timeOfDay: 0,
+    clock: new Date().toTimeString().slice(0, 5),
+  };
+
+  /* ══ 🧊 2026-10-07 · 「渲染」chip（顶栏那一颗；双引擎并列 P1）══════════════════════════════
+     机主原话：「three.js 的建筑风格尽量贴近 maplibre，然后呢，**用户可以选择渲染方式**…
+     现在就 C，**除了渲染不一样，其他全一样**喵」。
+     三行接线，与上面那颗「楼房档位」chip 同一个写法：
+       · 真源 = `wsm:v1:renderer`（读写只有 `wsRenderBackend` 那一处，坏值回 `map`）；
+       · 字面读 **`rendererLive`**（屏幕上**真的**是谁）—— 3D 起不来时舞台已经回退成地图，
+         这时 chip 必须如实显示"地图"，不能显示一个没生效的「3D」；
+       · 点一下只改偏好，**真切换在舞台里**（本页不碰相机、不碰画布、不碰 DOM）。 */
+  const rendererChipText = computed(() => (rendererLive.value === "three" ? "🧊 3D" : "🗺 地图"));
+  const rendererChipTitle = computed(() => {
+    if (rendererLive.value === "three") return "当前用 three.js 渲染（同一座城、同一套配色）。点一下换回地图";
+    if (rendererPref.value === "three") return "three.js 那条路没起来（原因在屏幕上那条提示里），现在仍用地图";
+    return "当前用地图渲染（MapLibre，默认）。点一下换成 three.js（同一座城、同一套配色）";
+  });
+  function toggleRenderer(): void {
+    setRendererPref(rendererPref.value === "three" ? "map" : "three");
+  }
+
   /* ── ① 走近：一次判定（滞回状态由本页拿着，喂回下一次）── */
   const nearResult = ref<NearResult | null>(null);
   /** 滞回记忆（键 = 钉子 id）。**故意不放进 ref**：它只被 `nearbyOf` 读写，
@@ -1567,5 +1656,15 @@
     white-space: nowrap;
     border-color: rgba(121, 217, 255, 0.42);
     color: #9fd8ef;
+  }
+  /* 🧊 2026-10-07 · 顶栏第五颗（「渲染」chip）。取法与上面两颗同一条（`flex: 0 1 auto` +
+     省略号；顶栏只有一行、绝不换行）。文案刻意**短**（「🗺 地图」/「🧊 3D」）——
+     第五颗之后顶栏本来就在挤，字数多一点就会把品牌名压没。
+     颜色取紫，与「楼房」（暖橙）、「天际线」（冷蓝）一眼分得开。 */
+  .wsce__btn--render {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    border-color: rgba(198, 160, 255, 0.45);
+    color: #d3bcff;
   }
 </style>

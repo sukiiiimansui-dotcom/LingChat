@@ -26,9 +26,13 @@
   · `±/全区` 按钮同理仍在该组件里（见 `WorldSim.vue` 顶部那一段说明）。
 -->
 <template>
-  <div class="ws-sceneview">
-    <!-- 地图本体：外观/相机/层序/验证面板/自拍全在 `WsDistrictMapLibre` 里（**只调它，不复制**） -->
+  <div ref="rootEl" class="ws-sceneview">
+    <!-- 地图本体：外观/相机/层序/验证面板/自拍全在 `WsDistrictMapLibre` 里（**只调它，不复制**）。
+         🆕 2026-10-07（双引擎并列 P1）：外面多了一层 `v-if` —— `rendererLive === "map"` 时才是它。
+         切到 3D 时它**整个被卸载**（`map.remove()` ⇒ WebGL 上下文当场释放），
+         这就是"任何时刻最多一个后端在渲染"那条硬要求的实现方式（见下面 3D 宿主那一段）。 -->
     <WsDistrictMapLibre
+      v-if="showMap"
       :area="area"
       :adcode="adcode"
       :radius="radius"
@@ -41,6 +45,18 @@
       @scene-ready="onSceneReady"
       @pick-actor="emit('pick-actor', $event)"
     />
+
+    <!-- 🧊 3D 宿主机（双引擎并列 P1）：`rendererLive === "three"` 时才有这个 div，
+         three 的画布由 `wsThreeBackend` 挂进来（`init(host, …)`）。
+         ⚠️ 它与上面那块地图**互斥**（同一个 `v-if` 的两支）⇒ 不可能同时存在两个画布。 -->
+    <div v-else ref="threeHost" class="ws-sceneview__three"></div>
+
+    <!-- 🔴 失败即回退那句话（`PLAN-DUAL-ENGINE.md` §4.5）：3D 起不来时必须**看得见原因**，
+         且已经自动回到地图 —— 不许白屏、也不许静默退回。用户点掉它就消失。 -->
+    <div v-if="rendererFallback" class="ws-sceneview__note" role="status">
+      <span class="ws-sceneview__note-txt">{{ rendererFallback }}</span>
+      <button class="ws-sceneview__note-x" type="button" @click="clearFallback">知道了</button>
+    </div>
 
     <!-- 🚌 交通设施那一行（代拍页 `?tf=1` 的 HUD 位置）。
          **只读诊断**：显示 `wsTransport.transportHudLine()` 的原文（含「示意，非事实」与各计数）。
@@ -89,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-  import { ref } from "vue";
+  import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
   import WsDistrictMapLibre from "./WsDistrictMapLibre.vue";
   import type { WsDistrictPin } from "./wsActors";
   /* 🏠 切片③：只借**类型**（「我的家」的取名点形状）—— 规则在共享真源 `wsDaily.ts`，这里不实现 */
@@ -112,6 +128,29 @@
   import { wsToast } from "./wsToast";
   /* 🔔 toast 队列的渲染处（切片① 收成组件：**新入口也要弹同一条提示**，见模板里那段注释）。 */
   import WsToasts from "./WsToasts.vue";
+  /* 🧊 双引擎并列（2026-10-07 · P1）：契约 + 两个后端。**两个实现只在这里注册一次** ——
+     舞台是唯一同时知道两边的那个地方（见文件末尾"双引擎舞台"那一段）。 */
+  import { createMapBackend } from "./wsMapBackend";
+  import { createThreeBackend } from "./wsThreeBackend";
+  import {
+    clearFallback,
+    contractActors,
+    contractTheme,
+    createRenderBackend,
+    noteSwitch,
+    registerRenderBackend,
+    rendererFallback,
+    rendererLastError,
+    rendererLive,
+    rendererPref,
+    setLiveBackend,
+    type WsRenderBackend,
+    type WsRenderBackendId,
+    type WsRenderState,
+  } from "./wsRenderBackend";
+
+  registerRenderBackend("map", () => createMapBackend({ themeNow: () => contractTheme.value }));
+  registerRenderBackend("three", () => createThreeBackend());
 
   const props = withDefaults(
     defineProps<{
@@ -291,6 +330,9 @@
     buildings: { features?: unknown[] } | null;
     places?: () => readonly PlacePoint[];
   }): void {
+    /* 🧊 双引擎：地图一就绪就把实例交给 map 后端（**必须先做**：切到 3D 时要靠它读视野、捞数据）。
+       它只做"读/喂/捞"三件事，不碰这一屏的渲染 ⇒ 放在最前面不会影响下面那条交通设施接线。 */
+    adoptMapBackend(p?.map ?? null);
     /* 🏠 切片③：**先把三件事那条路分出去**，再谈交通设施。
        🔴 顺序是硬要求：下面的 `if (!props.tf) return;` 是新入口（`:tf="false"`）的必经之路，
        把这一行放到它后面 = 新入口**永远收不到 `daily-ready`**，而且**不报错**（HUD 一直空着）。
@@ -310,6 +352,204 @@
     scene = m;
     void refreshTransport();
   }
+
+  /* ══════════════════════════════════════════════════════════════════════════════════════
+   * 🧊 双引擎舞台（2026-10-07 · P1）—— 「换后端 + 交接状态」这条线**只在这里**
+   * ══════════════════════════════════════════════════════════════════════════════════════
+   * 它只做四件事：
+   *   ① 按 `rendererLive` 决定挂哪一支（模板里那个 `v-if/v-else`）—— 两支互斥 ⇒ 画布最多一个；
+   *   ② 切换时先把旧后端的 `readView()` 读回来、`captureWorld()` 捞一份世界数据（地图还在的时候捞）；
+   *   ③ `old.pause()` → 换 DOM（旧的**整个卸载**）→ 等两帧 → `new.init()`；
+   *   ④ 新后端起不来 ⇒ 记一句 HUD 看得见的原因 + 自动回 map（`PLAN-DUAL-ENGINE.md` §4.5）。
+   *
+   * 🔴 为什么"卸载"而不是"藏起来"：地图与 three 各要一个 WebGL 上下文，Android WebView 上
+   * 两个上下文互相挤是已知风险（那份 PLAN §3 标的是"推断"）。**藏起来**就只能靠"暂停渲染"
+   * 这条软约束；**卸载**是硬的：`map.remove()` / `renderer.dispose()+forceContextLoss()`
+   * 之后上下文真的没了 —— 判据也因此可以写成"整页 `<canvas>` 数 ≤1"这种一眼可数的形式。
+   *
+   * ⚠️ 代价如实记在这里：换回 map 时 MapLibre 要**重新建一次图**（楼与路从模块级仓库
+   * `bldStore` 重新落图，不走网络）。实测耗时见 `switchLog`（探针也读它）。 */
+  const rootEl = ref<HTMLElement | null>(null);
+  const threeHost = ref<HTMLElement | null>(null);
+  /** 地图那一支在不在（模板读它；**它是 `rendererLive` 的镜像**，没有第二份状态） */
+  const showMap = computed(() => rendererLive.value === "map");
+
+  type MapBound = WsRenderBackend & { bind?: (m: unknown) => void; unbind?: () => void };
+  let mapBackend: MapBound | null = null;
+  let active: WsRenderBackend | null = null;
+  /** 地图还没就绪时先把"要恢复的视野"存在这儿，`scene-ready` 一到就喂进去 */
+  let pendingView: WsRenderState | null = null;
+  let swapping = false;
+  let queued: WsRenderBackendId | null = null;
+  let startupSwapDone = false;
+
+  /** 等两帧（第一帧让 Vue 把 DOM 换掉、第二帧让 GPU 真的回收上下文 —— 与 PLAN §4.2 同口径） */
+  const twoFrames = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame !== "function") return resolve();
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+
+  /** 地图就绪：把实例绑给 map 后端，并把"欠着的那次 applyView"补上 */
+  async function adoptMapBackend(m: unknown): Promise<void> {
+    await ensureMapBackend();
+    mapBackend?.bind?.(m);
+    active = mapBackend;
+    setLiveBackend(active);
+    if (pendingView && mapBackend) {
+      mapBackend.applyView(pendingView);
+      pendingView = null;
+    }
+    mapBackend?.resume?.();
+    /* 上次存的是 three ⇒ 地图一就绪就自动切过去（**不是**开局直接进 3D：那样没有 center 可交接，
+       也没有 `bld` 那份数据可捞）。只做一次。 */
+    if (!startupSwapDone && rendererPref.value !== rendererLive.value) {
+      startupSwapDone = true;
+      void nextTick(() => doSwap(rendererPref.value));
+    }
+  }
+
+  /**
+   * 建 map 后端（**幂等**：`onMounted` 与 `scene-ready` 谁先到都只建一个）。
+   * ⚠️ 这两条路是**真会抢**的：地图组件挂载与它 emit `scene-ready` 之间只隔几毫秒，
+   *    而 `init()` 是 async ⇒ 不做这个闸就会出现两个 map 后端实例（台账里两条 `running`）。
+   */
+  let mapInitPromise: Promise<void> | null = null;
+  function ensureMapBackend(): Promise<void> {
+    if (mapInitPromise) return mapInitPromise;
+    mapInitPromise = (async () => {
+      const mb = createRenderBackend("map") as MapBound;
+      await mb.init(rootEl.value || document.body, fallbackView(), null);
+      mapBackend = mb;
+      if (!active) {
+        active = mb;
+        setLiveBackend(mb);
+      }
+    })();
+    return mapInitPromise;
+  }
+  /** 丢掉 map 后端（切到 three 时；下次要用会重新建一个） */
+  function dropMapBackend(): void {
+    mapBackend = null;
+    mapInitPromise = null;
+  }
+
+  /** 拿不到任何后端时的"一个能用的视野"（兜底，不编经纬度：用主题 + 一个安全的半径） */
+  function fallbackView(): WsRenderState {
+    return {
+      center: { lat: 0, lng: 0 },
+      radius: 300,
+      bearing: 0,
+      pitch: 0,
+      theme: contractTheme.value.theme,
+      timeOfDay: contractTheme.value.timeOfDay,
+      clock: contractTheme.value.clock,
+      actors: contractActors.value.map((a) => ({ ...a })),
+      selection: null,
+    };
+  }
+
+  async function doSwap(next: WsRenderBackendId): Promise<void> {
+    if (next === rendererLive.value) return;
+    if (swapping) {
+      queued = next;
+      return;
+    }
+    swapping = true;
+    const t0 = performance.now();
+    const from = rendererLive.value;
+    const old = active;
+    let view: WsRenderState | null = old?.readView() ?? pendingView ?? null;
+    let ok = true;
+    let why = "";
+    try {
+      /* ⓪ `overlay` 这一轮**只留契约位**（主人给过退路）⇒ 在这里就抛一句人话，
+            然后照 `PLAN §4.5` 走"失败即回退"（HUD 看得见原因 + 自动回 map）。
+            放在最前面是刻意的：连 DOM 都不换一下，用户不会看到闪一下的 3D。 */
+      const nb = next === "map" ? null : createRenderBackend(next);
+      /* ① 旧后端还活着的时候把该拿的拿到手（世界数据必须现在捞：等一下 source 就没了） */
+      const world = old ? await old.captureWorld() : null;
+      if (old && !view) view = old.readView();
+      old?.pause();
+      /* ② 换 DOM：旧后端在这一刻**真的被卸载**（地图组件卸载 ⇒ `map.remove()` / three 下一条路
+            由 `destroy()` 放掉上下文）。`setLiveBackend(null)` 保证探针不会读到"两个都在跑"。 */
+      rendererLive.value = next;
+      setLiveBackend(null);
+      active = null;
+      await nextTick();
+      await twoFrames();
+      /* ③ 起新的 */
+      if (!nb) {
+        await ensureMapBackend();
+        active = mapBackend;             // 真正"在跑"要等 `scene-ready`（`bind` + `resume`）
+        setLiveBackend(active);
+        pendingView = view;              // 地图一到位就把视野喂回去
+      } else {
+        const host = threeHost.value;
+        if (!host) throw new Error("3D 宿主元素没挂上（模板里缺 .ws-sceneview__three）");
+        await nb.init(host, view ?? fallbackView(), world);
+        if (view) nb.applyView(view);
+        nb.resume();
+        active = nb;
+        setLiveBackend(nb);
+        dropMapBackend();
+        pendingView = null;
+      }
+    } catch (e) {
+      ok = false;
+      why = String((e as Error)?.message || e || "未知原因");
+      rendererLastError.value = why;
+      rendererFallback.value = `3D 渲染起不来：${why} —— 已自动回到地图（视野保持切换前那一份）。`;
+      /* ④ 回退：回到 map，并把刚才那一份视野补回去（**不许白屏、也不许把用户甩到别处**） */
+      if (next !== "map") {
+        rendererLive.value = "map";
+        pendingView = view;
+        setLiveBackend(null);
+        active = null;
+      }
+    } finally {
+      swapping = false;
+      noteSwitch({ from, to: rendererLive.value, ms: Math.round(performance.now() - t0), ok, why: why || undefined });
+      if (queued) {
+        const q = queued;
+        queued = null;
+        void doSwap(q);
+      }
+    }
+  }
+
+  watch(rendererPref, (next) => void doSwap(next));
+  /* 角色与主题：宿主推什么，舞台就喂给"当前活着的那个后端"（契约里那一份是两个后端共用的） */
+  watch(
+    () => contractActors.value,
+    (list) => active?.setActors(list)
+  );
+  watch(
+    () => contractTheme.value,
+    (t) => {
+      active?.setTheme(t.theme, t.timeOfDay);
+      if (rendererFallback.value && rendererLive.value === "three") clearFallback();
+    }
+  );
+
+  onMounted(() => {
+    /* 开局**永远先走地图**（默认后端不许变）；存了 three 的偏好在 `scene-ready` 之后自动切过去 */
+    void ensureMapBackend();
+  });
+
+  onBeforeUnmount(() => {
+    try {
+      active?.pause();
+      /* 地图那一支的销毁归 `WsDistrictMapLibre` 自己（它 `onBeforeUnmount` 里 `map.remove()`）；
+         three 这一支没有别人管 ⇒ 在这里放掉上下文（不然整屏切走会剩一个活着的 WebGL 上下文）。 */
+      if (active && active.id === "three") active.destroy();
+    } catch {
+      /* 卸载期的异常不该再往外抛 */
+    }
+    setLiveBackend(null);
+    active = null;
+    dropMapBackend();
+  });
 </script>
 
 <style scoped>
@@ -317,6 +557,50 @@
   .ws-sceneview {
     position: absolute;
     inset: 0;
+  }
+
+  /* 🧊 3D 宿主机：与地图那一支**同一个盒子**（`inset: 0`）——
+     两个后端的画布尺寸因此逐像素相同 ⇒ 相机换算里那个"画布 CSS 高"才是同一个数。 */
+  .ws-sceneview__three {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: #0a1018;
+  }
+
+  /* 🔴 失败即回退那句话：**必须在屏幕上**（不是 console、不是 title）—— 判据是"看得见原因"。
+     位置压在地图下沿之上、`z-index` 高于地图与 HUD；点「知道了」才消失（不自动淡出）。 */
+  .ws-sceneview__note {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: rgba(24, 12, 12, 0.88);
+    border: 1px solid rgba(255, 170, 120, 0.5);
+    color: #ffe6d5;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .ws-sceneview__note-txt {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .ws-sceneview__note-x {
+    flex: 0 0 auto;
+    min-height: 32px;
+    min-width: 64px;
+    padding: 4px 10px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 200, 160, 0.5);
+    background: rgba(255, 200, 160, 0.16);
+    color: #ffe6d5;
+    font: inherit;
   }
 
   /* 交通设施 HUD：与代拍页同一个位置感（左下角），**只读诊断**，不参与任何渲染逻辑 */

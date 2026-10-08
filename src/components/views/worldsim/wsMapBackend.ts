@@ -136,10 +136,20 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
   return {
     id: "map",
 
-    async init(h: HTMLElement): Promise<void> {
+    async init(h: HTMLElement, s: WsRenderState): Promise<void> {
       host = h;
       instance = ledgerPush("map", "created");
       state = "created";
+      /**
+       * 🆕 2026-10-08：**把"上台时被交代的那一眼"先记下来**。
+       *
+       * 为什么必须有这一句：地图实例是**异步**才绑上来的（`scene-ready` → `bind()`）。
+       * 在那之前 `readView()` 只能答 `lastView`，而 `lastView` 原来是 `null`
+       * ⇒ 舞台"失败即回退"回到 map 之后，探针读 `state.center` 读到的是 `null`，
+       * 「center 交接误差 ≤1 m」那条判据**永远量不出来**（实测读数就是 `meters: null`）。
+       * 现在：init 时给的那份 state 就是它的答案，bind 之后自然换成地图的真实视野。
+       */
+      if (s) lastView = { ...s, actors: s.actors.map((a) => ({ ...a })) };
     },
 
     /** 舞台在地图就绪（`scene-ready`）时把实例递进来 */

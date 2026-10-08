@@ -86,6 +86,8 @@ export interface WsThreeDiag {
   roadRanks: number[];
   actors: number;
   actorsSkipped: number;
+  /** 名字对不上原型那三张立绘、按序号轮换的人数（0 = 全都对上了） */
+  artFallback: number;
   draws: number;
   frames: number;
   colorPick: { id: string; color: string; h3d: number; hBase: number } | null;
@@ -107,9 +109,14 @@ export function webgl2Reason(): string | null {
   } catch (e) {
     return "取 WebGL2 上下文时抛错：" + String((e as Error)?.message || e);
   } finally {
+    /* 🔴 探测用的上下文**两个都要还回去**：只还 webgl2 的话，"只有 WebGL1"那条路上
+       每探一次就白占一个 WebGL1 上下文（本喵 2026-10-08 在无头里量到上下文是稀缺资源）。 */
     try {
-      const gl = cv?.getContext("webgl2") as WebGL2RenderingContext | null;
-      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+      const g2 = cv?.getContext("webgl2") as WebGL2RenderingContext | null;
+      const g1 = g2 || (cv?.getContext("webgl") as WebGLRenderingContext | null);
+      (g1 as { getExtension?: (n: string) => { loseContext?: () => void } | null } | null)
+        ?.getExtension?.("WEBGL_lose_context")
+        ?.loseContext?.();
     } catch {
       /* 释放不掉也无所谓：它只是个探测用的画布 */
     }
@@ -247,7 +254,7 @@ export function createThreeBackend(): WsRenderBackend {
   const diag: WsThreeDiag = {
     buildings: 0, capped: 0, tris: 0, holesDropped: 0, withColor3d: 0, withH3d: 0,
     fromReal: 0, fromLevels: 0, fromKind: 0,
-    roadSegs: 0, roadRanks: [], actors: 0, actorsSkipped: 0,
+    roadSegs: 0, roadRanks: [], actors: 0, actorsSkipped: 0, artFallback: 0,
     draws: 0, frames: 0, colorPick: null, errors: [],
   };
 
@@ -530,6 +537,7 @@ export function createThreeBackend(): WsRenderBackend {
     }
     avatars.length = 0;
     diag.actors = 0;
+    diag.artFallback = 0;
     diag.actorsSkipped = Math.max(0, actors.length - ACTOR_CAP);
     if (!actors.length || !scene || !frame) return;
     try {
@@ -540,7 +548,12 @@ export function createThreeBackend(): WsRenderBackend {
     }
     for (const a of actors.slice(0, ACTOR_CAP)) {
       try {
-        const idx = Math.max(0, CHAR_NAMES.indexOf(a.name));
+        /* 立绘选哪一张：名字对得上就用原型里那一位；对不上**按名单序号轮换**，
+           而不是 `Math.max(0, indexOf)` —— 那个写法会让所有对不上名字的人**都变成第 0 个**
+           （2026-10-08 本喵读代码时揪出来的：四个角色会长得一模一样，且不报错）。 */
+        const known = CHAR_NAMES.indexOf(a.name);
+        const idx = known >= 0 ? known : diag.actors % CHAR_NAMES.length;
+        if (known < 0) diag.artFallback++;
         const ch = charMod.createCharacter({ kind: "billboard", assetsBase: ASSETS_BASE, index: idx });
         const [x, z] = toLocal(frame, a.lng, a.lat);
         ch.object3D.position.set(x, 0, z);
@@ -602,6 +615,52 @@ export function createThreeBackend(): WsRenderBackend {
   }
   let refMpp = 0;
 
+  /**
+   * 把这一摊**拆干净**（`destroy()` 与"起不来的半成品"共用同一份）。
+   *
+   * 🔴 为什么"起不来"也要走这里：`init()` 是**先 append 画布、再建渲染器**的顺序，
+   *    渲染器建不起来时那块画布会留在宿主里。舞台失败回退后虽然会把整个宿主 div 摘掉，
+   *    但那条路依赖 Vue 的下一次渲染 —— 判据（"任何时刻舞台上只有一个后端画布"）不该
+   *    建立在"别人等会儿会收拾"上面。起不来就当场拆掉，本喵 2026-10-08 补的。
+   */
+  function teardownAll(): void {
+    try {
+      renderer?.setAnimationLoop?.(null);
+    } catch {
+      /* ignore */
+    }
+    window.removeEventListener("resize", onResize);
+    for (const av of avatars) {
+      try {
+        av.ch?.dispose?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    avatars.length = 0;
+    disposeMesh(bldMesh);
+    disposeMesh(roadMesh);
+    bldMesh = null;
+    roadMesh = null;
+    try {
+      renderer?.dispose?.();
+      /* 显式丢上下文：Android WebView 上"两个上下文互相挤"是已知风险（PLAN-DUAL-ENGINE.md §3），
+         我们能做的那一半就是**走的时候立刻放掉**。 */
+      renderer?.forceContextLoss?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      renderer?.domElement?.remove?.();
+    } catch {
+      /* ignore */
+    }
+    renderer = null;
+    scene = null;
+    camera = null;
+    host = null;
+  }
+
   return {
     id: "three",
 
@@ -630,7 +689,21 @@ export function createThreeBackend(): WsRenderBackend {
       canvas.className = "ws-three-canvas";
       canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none";
       host.appendChild(canvas);
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
+      } catch (e) {
+        /* 🔴 建不起来就把画布当场摘掉（不留半死的后端画布），再抛给舞台走"失败即回退" */
+        try {
+          canvas.remove();
+        } catch {
+          /* 摘不掉也不影响后面的回退 */
+        }
+        const msg = "three 建渲染器失败（拿不到可用的 WebGL 上下文）：" + String((e as Error)?.message || e);
+        diag.errors.push(msg);
+        state = "failed";
+        ledgerMark(instance, "failed", msg);
+        throw new Error(msg);
+      }
       renderer.setPixelRatio(Math.min(3, window.devicePixelRatio || 1));
       renderer.setSize(w, hh, false);
       const th = wsMapTheme(s.theme) as unknown as { canvas?: { bg?: string } };
@@ -646,13 +719,23 @@ export function createThreeBackend(): WsRenderBackend {
       frame = frameOf(s.center);
       curState = s;
       curWorld = world;
-      if (world) {
-        buildBuildings(world.buildings, world.themeId || s.theme);
-        buildRoads(world.roads, world.themeId || s.theme, (2 * saneRadius(s.radius)) / hh);
-        refMpp = lastMpp;
+      try {
+        if (world) {
+          buildBuildings(world.buildings, world.themeId || s.theme);
+          buildRoads(world.roads, world.themeId || s.theme, (2 * saneRadius(s.radius)) / hh);
+          refMpp = lastMpp;
+        }
+        applyCameraToThree(s);
+        await rebuildActors(contractActors.value.length ? contractActors.value : s.actors);
+      } catch (e) {
+        /* 后半段（建楼/建路/立绘）中途抛错也要**拆干净再抛**，不然舞台上留一个半死的 3D */
+        const msg = "three 初始化中途失败：" + String((e as Error)?.message || e);
+        diag.errors.push(msg);
+        teardownAll();
+        state = "failed";
+        ledgerMark(instance, "failed", msg);
+        throw new Error(msg);
       }
-      applyCameraToThree(s);
-      await rebuildActors(contractActors.value.length ? contractActors.value : s.actors);
       window.addEventListener("resize", onResize);
       renderer.setAnimationLoop(tick);
       state = "running";
@@ -733,41 +816,7 @@ export function createThreeBackend(): WsRenderBackend {
     },
 
     destroy(): void {
-      try {
-        renderer?.setAnimationLoop(null);
-      } catch {
-        /* ignore */
-      }
-      window.removeEventListener("resize", onResize);
-      for (const av of avatars) {
-        try {
-          av.ch?.dispose?.();
-        } catch {
-          /* ignore */
-        }
-      }
-      avatars.length = 0;
-      disposeMesh(bldMesh);
-      disposeMesh(roadMesh);
-      bldMesh = null;
-      roadMesh = null;
-      try {
-        renderer?.dispose?.();
-        /* 显式丢上下文：Android WebView 上"两个上下文互相挤"是已知风险（PLAN-DUAL-ENGINE.md §3），
-           我们能做的那一半就是**走的时候立刻放掉**。 */
-        renderer?.forceContextLoss?.();
-      } catch {
-        /* ignore */
-      }
-      try {
-        renderer?.domElement?.remove?.();
-      } catch {
-        /* ignore */
-      }
-      renderer = null;
-      scene = null;
-      camera = null;
-      host = null;
+      teardownAll();
       state = "destroyed";
       ledgerMark(instance, "destroyed");
     },

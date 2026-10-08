@@ -508,6 +508,21 @@ export function probeBackendDiag(): unknown {
   }
 }
 
+/**
+ * 舞台那个后端手上的**世界数据**（就是交接时递给下一个后端的那一份）。
+ *
+ * 给谁用：`world_map/ws_three_harness_probe.mjs`（自用靶场）—— 它把这份数据当夹具，
+ * 在**不经过 MapLibre** 的页面里把 three 后端单拉起来量读数。这样量到的楼/路
+ * 与地图交给 three 的**是同一份**，不是靶场自己又挑了一遍。
+ */
+export async function probeCaptureWorld(): Promise<WsRenderWorld | null> {
+  try {
+    return (await liveBackend?.captureWorld?.()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 if (typeof window !== "undefined") {
   (window as unknown as { __WSRENDER__?: unknown }).__WSRENDER__ = {
     view: renderProbeView,
@@ -517,6 +532,8 @@ if (typeof window !== "undefined") {
     /** canvas 的 GL 体检（**显式调用**：它会给没上下文的画布建上下文，别在轮询里调） */
     canvasGlJson: () => JSON.stringify(canvasInfo(document, true)),
     diagJson: () => JSON.stringify(probeBackendDiag()),
+    /** 舞台上那份"世界数据"的 JSON（靶场探针的夹具来源；拿不到就是 `null`） */
+    worldJson: () => JSON.stringify(probeCaptureWorld()),
     /** 切到某个后端（**探针专用**：与点 chip 是同一条路，只是省掉找元素点它） */
     setPref: (id: string) => setRendererPref(parseRendererId(id)),
   };

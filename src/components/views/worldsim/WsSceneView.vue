@@ -413,13 +413,17 @@
    * 建 map 后端（**幂等**：`onMounted` 与 `scene-ready` 谁先到都只建一个）。
    * ⚠️ 这两条路是**真会抢**的：地图组件挂载与它 emit `scene-ready` 之间只隔几毫秒，
    *    而 `init()` 是 async ⇒ 不做这个闸就会出现两个 map 后端实例（台账里两条 `running`）。
+   *
+   * 🆕 2026-10-08 `seed`：**把要交接的那一眼一起交代给它**。地图实例要等 `scene-ready`
+   *    才绑得上来，而"失败即回退"回到 map 的那一刻 `readView()` 就得答得出来
+   *    （否则探针读到的 `state` 是 null ⇒ 「center 交接误差 ≤1 m」量不出来）。
    */
   let mapInitPromise: Promise<void> | null = null;
-  function ensureMapBackend(): Promise<void> {
+  function ensureMapBackend(seed?: WsRenderState | null): Promise<void> {
     if (mapInitPromise) return mapInitPromise;
     mapInitPromise = (async () => {
       const mb = createRenderBackend("map") as MapBound;
-      await mb.init(rootEl.value || document.body, fallbackView(), null);
+      await mb.init(rootEl.value || document.body, seed ?? fallbackView(), null);
       mapBackend = mb;
       if (!active) {
         active = mb;
@@ -480,7 +484,7 @@
       await twoFrames();
       /* ③ 起新的 */
       if (!nb) {
-        await ensureMapBackend();
+        await ensureMapBackend(view);
         active = mapBackend;             // 真正"在跑"要等 `scene-ready`（`bind` + `resume`）
         setLiveBackend(active);
         pendingView = view;              // 地图一到位就把视野喂回去
@@ -506,6 +510,23 @@
         pendingView = view;
         setLiveBackend(null);
         active = null;
+        /* 🔴 旧的 map 后端必须丢掉：它手里那个 MapLibre 实例**已经被 `map.remove()` 了**
+           （切到 three 时组件卸载），留着它 `readView()` 读的是个死实例。
+           `dropMapBackend()` 之后下面那句会建一个**干净**的、并且带着交接视野的新后端。 */
+        dropMapBackend();
+      }
+      /* 🆕 2026-10-08：**当场**把 map 后端重新建起来，并把交接的那一眼交代给它。
+         为什么不等 `scene-ready`：地图是异步才绑上来的，中间这段时间 `liveBackend` 是 null
+         ⇒ 契约里 `state` 读到 null（探针的「center 交接误差 ≤1 m」就是因此量不出来）。
+         这里建的是**同一个**后端实例（`ensureMapBackend` 幂等），`scene-ready` 一到还是绑它。 */
+      try {
+        await ensureMapBackend(view);
+        if (!active && rendererLive.value === "map") {
+          active = mapBackend;
+          setLiveBackend(active);
+        }
+      } catch {
+        /* 连 map 后端都建不起来：维持 null（探针会如实地读到"数不出来"） */
       }
     } finally {
       swapping = false;

@@ -12,6 +12,14 @@ name: 代码量徽章
 #   · 数 src / src-tauri/src / crates / scripts / public + 仓库根目录的自用页面
 #   · 不含空行、不含整行注释
 #   · 排除依赖与产物：node_modules / dist* / target / public/vendor / gen / temp
+#
+# 🔴 2026-10-08 修（run 37700829493 三次全挂）：失败点不是数行数，是**下面的 `git pull --rebase --autostash` 撞 LFS** ——
+#    报「9 files that should have been pointers, but weren't」。根因：`.gitattributes` 把 `*.webp`/`*.jpg` 划给 LFS，
+#    而本机**没有 git-lfs**，3D 页的角色立绘与 docs 演示图是按普通 blob 提交的 ⇒ 有 lfs 的 runner 认为它们本该是指针。
+#    修法是仓库自己的先例（`public/prerender/**`、`public/citypacks-sample/*.zip`）：在 `.gitattributes` 里给这两类路径
+#    加 `binary -filter` 例外（**故意不进 LFS**）。这次推这个文件本身就当回归自验（它的 paths 里含自身）。
+#    ⚠️ 遗留脆弱点（已知，未改）：这个"自己 rebase + push"的写法对拉取时的 LFS 状态、脏树、并发都敏感；
+#    今天的 3 次重试是**撞同一面墙**（只会刷红）。将来要么让它**只出数字不改仓库**，要么失败即退不再重试。
 on:
   schedule:
     - cron: '20 18 * * *'   # 每天 02:20（UTC+8）

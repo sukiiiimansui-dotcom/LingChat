@@ -1,0 +1,265 @@
+<!doctype html>
+<!--
+  ws3dharness.html —— **three 后端靶场**（🔴 自用测试靶场：不随 app 发布、不参与验收、不属于 pnpm build 的入口）
+
+  ## 为什么要有这一页
+  本机（Termux 手机，无 GPU）的无头 Chromium 里 **MapLibre 一渲染就把 GL 弄死**：
+  实测最小 MapLibre 地图（空 style + 一个 background 层）1.5 秒内 `isContextLost()`，
+  之后**同文档里新开的 WebGL 上下文一律拿不到**（证据见 `world_map/HANDOFF-LOG.md` 与
+  `~/chk/_gl2*.mjs` 那组诊断）。⇒ 走真页面的 `map → three` 那条路在本机**永远走不到**。
+
+  这一页把 MapLibre 完全绕开：**直接 import three 后端**，用一份夹具世界数据把它拉起来，
+  于是 three 侧**自己能做主的那些读数**（帧/draw、楼路是否来自那份数据、立绘数、相机双射往返误差）
+  都能在真浏览器 + 真 WebGL2（SwiftShader）里量出来。
+
+  ## 它**不能**测什么（照实写，别把它当验收）
+  · 舞台那套切换接线（DOM 互斥、台账、`captureWorld` 交接、失败即回退）**它一点都没碰** ——
+    那些只能由 `world_map/ws_dual_engine_probe.mjs` 在真页面上量；
+  · 「整页 canvas 总数」「只有一个上下文在渲染」这类**跨后端**的判据不在这里；
+  · 夹具是探针从**真地图的 `bld`/`roads` source** 里捞出来喂进来的（`__WSRENDER__.worldJson()`），
+    所以"同源"这件事成立；但夹具是**一份快照**，不证明交接过程本身。
+
+  ## 谁在用
+  `world_map/ws_three_harness_probe.mjs`：它先开 App 页捞夹具 → 落盘到 `dist-webdev/_m1_fixture.json`
+  → 再打开本页 → 读 `window.__HARNESS__` 里的原始读数做断言。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>three 后端靶场（自用层 · 不参与验收）</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0a1018;
+        color: #e8eef7;
+        font: 12px/1.5 ui-monospace, monospace;
+      }
+      #stage {
+        position: relative;
+        width: 932px;
+        height: 557px;
+        overflow: hidden;
+      }
+      #out {
+        margin: 8px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .ok {
+        color: #6ee7a8;
+      }
+      .bad {
+        color: #ff9a9a;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <pre id="out">靶场启动中…</pre>
+    <script type="module">
+      /* 🔴 只读/驱动 three 后端本身，**不 import App 外壳**（没有 Vue、没有地图、没有路由） */
+      import { createThreeBackend } from "/src/components/views/worldsim/wsThreeBackend";
+      import {
+        contractActors,
+        contractTheme,
+        metersBetweenCenters,
+        WS_RENDER_KEY,
+        parseRendererId,
+      } from "/src/components/views/worldsim/wsRenderBackend";
+
+      const out = document.getElementById("out");
+      const stage = document.getElementById("stage");
+      const rows = [];
+      const raw = { fixture: null, states: [], diag: null, stats: null, canvas: {}, errs: [] };
+      const errs = [];
+      window.__ERR__ = errs;
+      for (const [k, fn] of [
+        ["console.error", console.error],
+        ["console.warn", console.warn],
+      ]) {
+        console[k.split(".")[1]] = function () {
+          try {
+            errs.push(k + ": " + Array.prototype.map.call(arguments, (a) => (a && a.message) || String(a)).join(" "));
+          } catch {
+            /* ignore */
+          }
+          fn.apply(console, arguments);
+        };
+      }
+      window.addEventListener("error", (e) => errs.push("error: " + (e.message || "")));
+      window.addEventListener("unhandledrejection", (e) => errs.push("reject: " + String(e.reason)));
+
+      const check = (name, ok, extra) => {
+        rows.push({ name, ok: !!ok, extra: extra === undefined ? null : extra });
+        out.innerHTML += `\n${ok ? '<span class="ok">✅</span>' : '<span class="bad">❌</span>'} ${name}${
+          extra === undefined ? "" : "  → " + JSON.stringify(extra).slice(0, 400)
+        }`;
+      };
+      const info = (s) => {
+        out.innerHTML += `\n  · ${s}`;
+      };
+      const canvasN = () => stage.querySelectorAll("canvas").length;
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      window.__HARNESS__ = { done: false, rows, raw, errs };
+
+      async function main() {
+        /* ── ① 夹具（探针从真地图的 source 里捞的那一份） ── */
+        let fx = null;
+        try {
+          const r = await fetch("./_m1_fixture.json", { cache: "no-store" });
+          fx = await r.json();
+        } catch (e) {
+          check("夹具读得到（dist-webdev/_m1_fixture.json）", false, String(e));
+          window.__HARNESS__.done = true;
+          return;
+        }
+        raw.fixture = {
+          bld: fx.world?.buildings?.features?.length ?? null,
+          roads: fx.world?.roads?.features?.length ?? null,
+          theme: fx.world?.themeId ?? null,
+          actors: fx.actors?.length ?? null,
+          center: fx.view?.center ?? null,
+          radius: fx.view?.radius ?? null,
+        };
+        check(
+          "夹具到手（楼/路/角色都非空，且是探针从真地图 source 捞的）",
+          (fx.world?.buildings?.features?.length ?? 0) > 0 && (fx.world?.roads?.features?.length ?? 0) > 0,
+          raw.fixture
+        );
+
+        /* ── ② 契约里的角色/主题：探针喂什么，靶场就推什么（与舞台上那条路同一份单例） ── */
+        contractActors.value = (fx.actors || []).map((a) => ({ ...a }));
+        contractTheme.value = {
+          theme: fx.view?.theme || fx.world?.themeId || "anime",
+          timeOfDay: Number(fx.view?.timeOfDay) || 0,
+          clock: fx.view?.clock || "",
+        };
+        info(`契约角色数：${contractActors.value.length} / 主题：${contractTheme.value.theme}`);
+
+        /* ── ③ 持久化：坏值必须回 map（契约的唯一判据，顺手在这里也真跑一遍） ── */
+        const bad = ["true", "", "MAP", "webgl", "overlay ", "three ", null].map((v) => [v, parseRendererId(v)]);
+        check(
+          "wsm:v1:renderer 坏值一律回 map（键名 = " + WS_RENDER_KEY + "）",
+          WS_RENDER_KEY === "wsm:v1:renderer" && bad.every(([v, got]) => (v === "three " ? true : got === "map")),
+          bad
+        );
+
+        /* ── ④ 把 three 后端拉起来（真 WebGL2：SwiftShader） ── */
+        const b = createThreeBackend();
+        const state = {
+          center: { lat: Number(fx.view.center.lat), lng: Number(fx.view.center.lng) },
+          radius: Number(fx.view.radius),
+          bearing: Number(fx.view.bearing) || 0,
+          pitch: Number(fx.view.pitch) || 0,
+          theme: contractTheme.value.theme,
+          timeOfDay: contractTheme.value.timeOfDay,
+          clock: contractTheme.value.clock,
+          actors: contractActors.value.map((a) => ({ ...a })),
+          selection: null,
+        };
+        const beforeInit = canvasN();
+        const t0 = performance.now();
+        try {
+          await b.init(stage, state, fx.world);
+        } catch (e) {
+          check("three 后端 init 成功（拿得到 WebGL2）", false, String(e?.message || e));
+          window.__HARNESS__.done = true;
+          return;
+        }
+        const initMs = Math.round(performance.now() - t0);
+        await sleep(2500); // 让它真出几帧
+        const st = b.stats();
+        const dg = typeof b.diag === "function" ? b.diag() : null;
+        raw.stats = st;
+        raw.diag = dg;
+        raw.canvas = { before: beforeInit, after: canvasN() };
+        info(`init 用了 ${initMs} ms；stats = ${JSON.stringify(st)}`);
+        check("three 真的在出帧（frames>0 且 draw call>0）", (dg?.frames ?? 0) > 0 && (dg?.draws ?? 0) > 0, {
+          frames: dg?.frames,
+          draws: dg?.draws,
+          fps: st?.fps,
+        });
+        check("stats().rendering === true（它自己在跑）", st?.rendering === true, st);
+        check("楼是从**交给它的那份数据**来的（有要素、color3d/h3d 逐栋齐）",
+          (dg?.buildings ?? 0) > 0 && dg.withH3d === dg.buildings && dg.withColor3d === dg.buildings,
+          { bld: dg?.buildings, capped: dg?.capped, withColor3d: dg?.withColor3d, withH3d: dg?.withH3d, tris: dg?.tris });
+        check("路也来自那份数据（roadSegs>0 且有 rank 表）", (dg?.roadSegs ?? 0) > 0 && (dg?.roadRanks?.length ?? 0) > 0, {
+          segs: dg?.roadSegs,
+          ranks: dg?.roadRanks,
+        });
+        check("角色是 2D 立绘 billboard，且**个数 == 契约角色数**",
+          dg?.actors === contractActors.value.length && (dg?.actors ?? 0) > 0,
+          { three: dg?.actors, contract: contractActors.value.length, skipped: dg?.actorsSkipped, artFallback: dg?.artFallback });
+        check("靶场里只有 three 自己那 1 块画布", canvasN() === beforeInit + 1, raw.canvas);
+
+        /* ── ⑤ 相机双射往返：applyView(s) → readView() 必须回到同一眼 ──
+           ⚠️ 局部平面框架的锚点是**交接那一刻的中心**，所以这里测的是**同一视野附近**的几个点
+              （0 / 50 / 200 / 800 米量级）—— 那正是"切换时相机交接"这件事本身。 */
+        const cases = [
+          state,
+          { ...state, center: { lat: state.center.lat + 0.00045, lng: state.center.lng } },
+          { ...state, center: { lat: state.center.lat, lng: state.center.lng + 0.002 } },
+          { ...state, radius: state.radius * 1.6, bearing: 37, pitch: 12 },
+          { ...state, radius: state.radius * 0.55, bearing: -140, pitch: 55 },
+          { ...state, center: { lat: state.center.lat - 0.006, lng: state.center.lng + 0.007 }, radius: state.radius * 2.2 },
+        ];
+        let worstM = 0;
+        let worstR = 0;
+        let worstAng = 0;
+        for (let i = 0; i < cases.length; i++) {
+          const s = cases[i];
+          b.applyView(s);
+          const back = b.readView();
+          if (!back) {
+            check(`相机往返 #${i + 1}：readView() 有得答`, false, null);
+            continue;
+          }
+          const dm = metersBetweenCenters(s.center, back.center);
+          const dr = Math.abs(back.radius - s.radius) / Math.max(1e-9, s.radius);
+          const db = Math.abs(((back.bearing - s.bearing + 540) % 360) - 180);
+          const dp = Math.abs(back.pitch - s.pitch);
+          worstM = Math.max(worstM, dm);
+          worstR = Math.max(worstR, dr);
+          worstAng = Math.max(worstAng, db, dp);
+          raw.states.push({
+            i: i + 1, want: { c: s.center, r: s.radius, b: s.bearing, p: s.pitch },
+            got: { c: back.center, r: back.radius, b: back.bearing, p: back.pitch },
+            meters: Number(dm.toFixed(4)), relRadius: Number(dr.toFixed(6)),
+            dBearing: Number(db.toFixed(3)), dPitch: Number(dp.toFixed(3)),
+          });
+          info(`往返 #${i + 1}：center 差 ${dm.toFixed(3)} m / radius 相对差 ${(dr * 100).toFixed(4)}% / bearing 差 ${db.toFixed(3)}° / pitch 差 ${dp.toFixed(3)}°`);
+        }
+        check("相机双射：center 往返误差 ≤1 m（全部用例）", worstM <= 1, { worstMeters: Number(worstM.toFixed(4)) });
+        check("相机双射：radius 往返相对误差 ≤1%（全部用例）", worstR <= 0.01, { worstRel: Number(worstR.toFixed(6)) });
+        check("相机双射：bearing/pitch 往返误差 ≤0.5°（全部用例）", worstAng <= 0.5, { worstDeg: Number(worstAng.toFixed(4)) });
+
+        /* ── ⑥ 暂停 / 销毁：画布与上下文都要放掉 ── */
+        b.pause();
+        await sleep(300);
+        const stPaused = b.stats();
+        check("pause() 之后 stats().rendering === false", stPaused?.rendering === false, stPaused);
+        b.resume();
+        await sleep(600);
+        b.destroy();
+        await sleep(300);
+        raw.canvas.afterDestroy = canvasN();
+        check("destroy() 之后 stage 里一块画布都不剩", canvasN() === 0, raw.canvas);
+
+        /* ── ⑦ 控制台 ── */
+        raw.errs = errs.slice(0, 20);
+        check("靶场里控制台 error/warn = 0", errs.length === 0, errs.slice(0, 6));
+        window.__HARNESS__.done = true;
+        out.innerHTML += `\n\n📋 靶场结果：${rows.filter((r) => r.ok).length} 过 / ${rows.filter((r) => !r.ok).length} 红`;
+      }
+
+      main().catch((e) => {
+        errs.push("main: " + String(e?.stack || e));
+        window.__HARNESS__.done = true;
+      });
+    </script>
+  </body>
+</html>

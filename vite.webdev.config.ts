@@ -33,6 +33,10 @@ export default defineConfig({
     //   · webdev.html —— 主应用（带 Tauri 垫片，走 8791 的 HTTP 通路）
     //   · wsfx.html   —— T4-1/T4-2（昼夜 / 天气）的独立预览页，一页出齐
     //                    白天/黄昏/夜晚 + 晴/雨/雪/雾 + 降级档
+    //   ⚠️ 2026-10-08：`wsgeo.html` 那条 input 已摘掉 —— 它 import 的
+    //      `src/components/views/worldsim/wsGeoMap.ts` 在 c7f8768d（退役遗留配件闭包）里
+    //      被删了，页面却留在 input 里 ⇒ **整个预览包构建不出来**（rollup 直接报红）。
+    //      页面已一并删除。以后新增自用页照上面的规矩：**必须**列进 input，删页面时也要摘掉这行。
     //   · wsux.html   —— 「世界模拟」HUD 风格板（3 套候选，1:1 真实舞台 932×430）。
     //                    ⚠️ 它是**纯静态**页（无 script / 无 import，三张地图以 data URI 内嵌），
     //                    列在这里只是让它进同一条验证管道（会被 5212 服务到）；
@@ -52,7 +56,12 @@ export default defineConfig({
         wsux: path.resolve(__dirname, "wsux.html"),       // HUD 风格板（3 套候选）
         wsgame: path.resolve(__dirname, "wsgame.html"),   // 游戏化界面 v1（全国地图，机主已指出概念不对）
         wslife: path.resolve(__dirname, "wslife.html"),   // 游戏化界面 v2：角色为主 + 街区 + 同屏对话
-        wsgeo: path.resolve(__dirname, "wsgeo.html"),
+        //   · ws3dharness.html —— **three 后端靶场**（🔴 自用测试页：不随 app 发布、不参与验收）。
+        //     本机无头里 MapLibre 一渲染就把 GL 弄死 ⇒ 真页面上的 map→three 那条路走不到；
+        //     这一页绕开 MapLibre、直接 import three 后端，量它**自己做主**的那些读数
+        //     （帧/draw、楼路是否来自交给它的那份数据、立绘数、相机双射往返误差）。
+        //     用法与判据见 world_map/ws_three_harness_probe.mjs。
+        ws3dharness: path.resolve(__dirname, "ws3dharness.html"),
       },
     },
   },

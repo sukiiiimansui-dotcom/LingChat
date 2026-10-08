@@ -110,7 +110,7 @@ export function webgl2Reason(): string | null {
     return "取 WebGL2 上下文时抛错：" + String((e as Error)?.message || e);
   } finally {
     /* 🔴 探测用的上下文**两个都要还回去**：只还 webgl2 的话，"只有 WebGL1"那条路上
-       每探一次就白占一个 WebGL1 上下文（本喵 2026-10-08 在无头里量到上下文是稀缺资源）。 */
+       每探一次就白占一个 WebGL1 上下文（无头环境实测：上下文是稀缺资源）。 */
     try {
       const g2 = cv?.getContext("webgl2") as WebGL2RenderingContext | null;
       const g1 = g2 || (cv?.getContext("webgl") as WebGLRenderingContext | null);
@@ -550,7 +550,7 @@ export function createThreeBackend(): WsRenderBackend {
       try {
         /* 立绘选哪一张：名字对得上就用原型里那一位；对不上**按名单序号轮换**，
            而不是 `Math.max(0, indexOf)` —— 那个写法会让所有对不上名字的人**都变成第 0 个**
-           （2026-10-08 本喵读代码时揪出来的：四个角色会长得一模一样，且不报错）。 */
+           （四个角色长得一模一样，且不报错，2026-10-08 读代码时发现）。 */
         const known = CHAR_NAMES.indexOf(a.name);
         const idx = known >= 0 ? known : diag.actors % CHAR_NAMES.length;
         if (known < 0) diag.artFallback++;
@@ -621,7 +621,7 @@ export function createThreeBackend(): WsRenderBackend {
    * 🔴 为什么"起不来"也要走这里：`init()` 是**先 append 画布、再建渲染器**的顺序，
    *    渲染器建不起来时那块画布会留在宿主里。舞台失败回退后虽然会把整个宿主 div 摘掉，
    *    但那条路依赖 Vue 的下一次渲染 —— 判据（"任何时刻舞台上只有一个后端画布"）不该
-   *    建立在"别人等会儿会收拾"上面。起不来就当场拆掉，本喵 2026-10-08 补的。
+   *    建立在"别人等会儿会收拾"上面。起不来就当场拆掉。
    */
   function teardownAll(): void {
     try {
@@ -645,8 +645,13 @@ export function createThreeBackend(): WsRenderBackend {
     try {
       renderer?.dispose?.();
       /* 显式丢上下文：Android WebView 上"两个上下文互相挤"是已知风险（PLAN-DUAL-ENGINE.md §3），
-         我们能做的那一半就是**走的时候立刻放掉**。 */
-      renderer?.forceContextLoss?.();
+         我们能做的那一半就是**走的时候立刻放掉**。
+         ⚠️ 先问一句扩展在不在：软件栈（SwiftShader）上 `WEBGL_lose_context` 可能根本没有，
+         那时 three 的 `forceContextLoss()` 会往控制台打一条 warning —— 而"控制台 0 error/warn"
+         是一条硬判据（靶场实测：软件栈上少了这一步就会多一条 warning）。拿不到就只 dispose。 */
+      const gl = (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null;
+      const lose = gl?.getExtension?.("WEBGL_lose_context") as { loseContext?: () => void } | null;
+      if (lose?.loseContext) lose.loseContext();
     } catch {
       /* ignore */
     }

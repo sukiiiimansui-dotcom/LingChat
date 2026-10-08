@@ -532,8 +532,11 @@ if (typeof window !== "undefined") {
     /** canvas 的 GL 体检（**显式调用**：它会给没上下文的画布建上下文，别在轮询里调） */
     canvasGlJson: () => JSON.stringify(canvasInfo(document, true)),
     diagJson: () => JSON.stringify(probeBackendDiag()),
-    /** 舞台上那份"世界数据"的 JSON（靶场探针的夹具来源；拿不到就是 `null`） */
-    worldJson: () => JSON.stringify(probeCaptureWorld()),
+    /** 舞台上那份"世界数据"的 JSON（靶场探针的夹具来源；拿不到就是 `null`）。
+     *  ⚠️ 返回的是 **Promise**：`captureWorld()` 要等 `getData()`。探针那边必须用
+     *  WebDriver 的 `execute/async` 取 —— 写成同步 `JSON.stringify(promise)` 只会得到
+     *  `{}`，看起来像"地图没吐数据"（2026-10-08 实测踩过）。 */
+    worldJson: () => probeCaptureWorld().then((w) => JSON.stringify(w)),
     /** 切到某个后端（**探针专用**：与点 chip 是同一条路，只是省掉找元素点它） */
     setPref: (id: string) => setRendererPref(parseRendererId(id)),
   };

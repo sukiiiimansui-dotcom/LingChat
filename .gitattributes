@@ -48,3 +48,15 @@ public/prerender/manifest.json text diff eol=lf
 # 只盖 zip —— `cities.json` / `README.md` 仍按上面的文本规则（reviewer 要能读 diff）。
 # ⚠️ 必须写在 `*.zip filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
 public/citypacks-sample/*.zip binary -filter
+
+# 🎭 3D 页的角色立绘（`public/ws3d/ws3dgl/assets/characters/**`，8 张 webp · 总 ~2.5MB）：**故意不进 LFS**。
+# 理由同 public/prerender：① 它们是"随页面走的小素材"，不是大素材；② 本机**没有 git-lfs**
+# （`git lfs version` 直接报 "not a git command"）⇒ 我们只能按普通 blob 提交；而 `.gitattributes`
+# 上面的 `*.webp filter=lfs` 会让**有 lfs 的 CI** 认为"这些文件本该是指针却不是"，
+# 于是「代码量徽章」工作流的 `git pull --rebase --autostash` 直接失败（2026-10-07 run 37700829493，重试 3 次全撞同一面墙）。
+# ⚠️ 必须写在 `*.webp filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
+public/ws3d/ws3dgl/assets/** binary -filter
+
+# 📸 世界模拟的演示图（`docs/worldsim/*.jpg`）：同上，故意不进 LFS（同一类"本机无 lfs + CI 期待指针"的冲突）。
+# ⚠️ 必须写在 `*.jpg filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
+docs/worldsim/*.jpg binary -filter

@@ -3,7 +3,7 @@
 
   ## 为什么要有这个组件
   `wsToast()`（`wsToast.ts`）只是往一个**模块级队列**里推消息 —— 队列得有人渲染才看得见。
-  这个渲染原先只有一处：孤儿页 `WorldSim.vue` 里的那几行 `<div class="ws-toasts">`。
+  这个渲染原先只有一处：旧入口（WorldSim.vue，已删除）里的那几行 `<div class="ws-toasts">`。
    把悬浮手机挂回 `/worldsim`（`WsSceneView.vue`）之后，**新入口没有这个渲染处** ——
   实测（无头浏览器探针，2026-10-01）：点「音乐」「我的」两个没接进来的应用，
   面板行为对（不换页），但**页面上一个字都没出现** ＝ 不可接受的"点了没反应"。
@@ -12,13 +12,13 @@
 
   ## 两个宿主各挂一次，**不能同时挂两个**
   `items` 是模块级单例（不是 per-instance），两个宿主同时渲染会**弹两条一样的**。
-  所以：老宿主 `WorldSim.vue` 挂一处；新宿主 `WsSceneView.vue` **跟着 `phone` 开关挂**
+  所以：旧入口（WorldSim.vue，已删除）挂一处；新宿主 `WsSceneView.vue` **跟着 `phone` 开关挂**
   （`phone=false` 时只有老宿主在渲染）。
 
   ## 样式为什么带兜底值
   令牌（`--ws-panel` / `--ws-border` / `--ws-shadow` / `--ws-blur`）定义在全局皮肤
   `src/assets/styles/worldsim.css` 的 `.ws-root.theme-*` 里 —— 而**新入口不渲染 `.ws-root`**，
-  取不到那些变量。所以这里一律 `var(--令牌, 兜底值)`（与 `worldsim-trip.css` 同一条既有约定：
+  取不到那些变量。所以这里一律 `var(--令牌, 兜底值)`（与 worldsim-trip.css（已删除） 同一条既有约定：
   单独用也不至于没颜色）。动画用自己的 `ws-toast-in` 关键帧，不依赖全局那一份。
 -->
 <template>

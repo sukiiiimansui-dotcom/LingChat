@@ -31,7 +31,7 @@
  * · （S9b2 已删）`drawContours`：搬过来之前就**没有任何调用点**（宿主里只有定义处 + 一处注释提到它），
  *   S2 按"只搬不改"整块搬了过来；2026-10-05 复核 src 侧仍是零消费者 ⇒ 连同它独用的那 7 个
  *   `@/composables/wsContour` 导入与 return 里的一处一起删掉。**活的等高线层在另一条路上**
- *   （`useWsMapLibre.ts` 的 `ML_CONTOUR_LAYER = "ws-ml-contour-l"`），与这里那个 `dem-line` 不是同一个 id
+ *   （旧的 MapLibre composable（useWsMapLibre.ts，已删除）的 `ML_CONTOUR_LAYER = "ws-ml-contour-l"`），与这里那个 `dem-line` 不是同一个 id
  *   —— 契约读数因此会少 1，闸里按"集合差恰好是 `dem-line`"如实申报，不是放松。
  * · `renderKind` / `fallbackWhy` / `fallbackKind` 这些**状态**仍留在宿主（M8/M9 的地盘），
  *   本模块只读它们、不改它们的所有权。

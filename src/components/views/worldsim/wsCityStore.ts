@@ -64,7 +64,7 @@ import {
   type ZipEntry,
 } from "./wsCityPack";
 /* 只借 `shallowRef` 一个 API：下载源必须是**响应式**的（保存后界面立刻变），
-   这是 `worldsim` 这一层的既有做法（`wsFocus.ts` / `wsPerf.ts` / `wsToast.ts` 等都直接 import vue）。 */
+   这是 `worldsim` 这一层的既有做法（wsFocus.ts（已删除） / `wsPerf.ts` / `wsToast.ts` 等都直接 import vue）。 */
 import { shallowRef } from "vue";
 
 /**

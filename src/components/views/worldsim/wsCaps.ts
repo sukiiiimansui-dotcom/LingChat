@@ -6,11 +6,11 @@
  *
  * | 开关 | 处数 | 在哪判 |
  * |---|---|---|
- * | `USE_MAPLIBRE` | 6 | `WsDistrict.vue`（写死 true） |
- * | `SKETCH_DISABLED` | 3 | `WsDistrict.vue`（写死 true） |
- * | `districtUnderlayVisible` | 2 | `WorldSim.vue`（写死 false） |
+ * | `USE_MAPLIBRE` | 6 | 旧小区页（WsDistrict.vue，已删除）（写死 true） |
+ * | `SKETCH_DISABLED` | 3 | 旧小区页（WsDistrict.vue，已删除）（写死 true） |
+ * | `districtUnderlayVisible` | 2 | 旧入口（WorldSim.vue，已删除）（写死 false） |
  * | `showAi` | 6 | `WsDistrictMapLibre.vue`（默认 false） |
- * | `perfLow` | 9 | `WorldSim.vue` ← `wsPerf` |
+ * | `perfLow` | 9 | 旧入口（WorldSim.vue，已删除） ← `wsPerf` |
  * | `ws-perf-low`（CSS 类） | 18 | `worldsim.css` / `worldsim-loading.css` |
  * | `fallback` | 26 | 到处都是（头像/高度/天气各一套） |
  *

@@ -4,7 +4,7 @@
   ## 这一屏是什么
   「世界模拟」入口 = **代拍页那一屏（MapLibre 3D 地图）**，外加一层**首次引导**
   （选城市 → 下载该城市的楼房数据 → 进地图）。上游那套 DataV 全国 SVG 下钻
-  （`WorldSim.vue`：顶栏 ⋯ 抽屉 / 34 个区划 / 「点『进入』才下钻」/ 未读角标 / 小地图 /
+  （旧入口（WorldSim.vue，已删除）：顶栏 ⋯ 抽屉 / 34 个区划 / 「点『进入』才下钻」/ 未读角标 / 小地图 /
   「选别的地方」）**不再是被引用的入口**（文件留着，路由里一行可回退）。
 
   ## 为什么地图是"常驻"而不是"引导完再挂"
@@ -65,7 +65,7 @@
 
   ## 2026-10-01（当晚第二轮）· 把**世界模拟的皮肤**挂回来（根元素加 `ws-root theme-mint` + import CSS）
   已报「点了角色**连个UI都没有，字直接在地图上显示**」⇒ 实测：**这一屏根本没有 `--ws-*` 令牌表**。
-  旧入口 `WorldSim.vue` 干了两件事：`import "@/assets/styles/worldsim.css"` + 根元素
+  旧入口（WorldSim.vue，已删除）干了两件事：`import "@/assets/styles/worldsim.css"` + 根元素
   `class="ws-root <主题类>"`（令牌定义在 `.ws-root.theme-*` 下）；2026-09-26 换成这一屏时**两件都没做**
   ⇒ 部署包里 `--ws-panel:` **一处定义都没有、只有引用** ⇒ 抽屉/卡片的底色、边框、圆角、排版全丢。
   与当天早上那个「MapLibre 样式表没加载」是同一类病：**换入口漏挂全局依赖**。
@@ -113,7 +113,7 @@
 
     <!-- （2026-10-02）·**事件上屏**：现实事件引擎抽中一条时冒一个气泡（≈4.2 秒后自己消失）。
          数据层（tick 轮询 + `world_map:event` 广播 + 三通道开关）一行不在本文件：全在
-         `useWorldEvents`（**已在跑**、也被孤儿页 `WorldSim.vue` 挂着）——这里只做接线。
+         `useWorldEvents`（**已在跑**、也被旧入口（WorldSim.vue，已删除）挂着）——这里只做接线。
          它是**瞬时**元素，不是常驻浮块（上面那条 ≤3 的账没被它破坏）。
          `:placed="[]"` 是**故意**的（详见 script 里 `bubblePlaced` 的注释）：
             这一屏是 MapLibre **真地理**视图，而 `WsEventBubble` 的定位数学
@@ -289,7 +289,7 @@
   import type { DailyTask, PlacePoint, Resident, Spot } from "./wsDaily";
   import { type InstalledCity, cityStore } from "./wsCityStore";
   /* （2026-10-02）·「事件上屏 + 天气角标」：
-     事件数据层 = `useWorldEvents`（**同一份** composable，孤儿页 `WorldSim.vue` 挂的也是它）；
+     事件数据层 = `useWorldEvents`（**同一份** composable，旧入口（WorldSim.vue，已删除）挂的也是它）；
      画气泡 = `WsEventBubble.vue`（一行渲染逻辑都不在本文件）；
      天气 = `useWorldWeather`（真壳 invoke / 预览 HTTP 双通路）+ `WsWeatherBadge.vue`。
      天气角标的样式在**全局** `worldsim-weather.css` 里（组件自己不带 style），必须 import，
@@ -305,7 +305,7 @@
      本页只**喂真实输入 + 推上去**，不在这里写任何一条换算（PR 门禁 C1：不许第二份实现）。 */
   import { localHourOf, needPairOf, useWsNeeds } from "./wsNeeds";
   /* **地图上的人**（M1-1）：装配逻辑全在既有的 `useWsActors` 里（**不新造第二套**）；
-     钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（老入口 `WorldSim.vue` 调的是同一份）。 */
+     钉子形状的换算调**共享纯函数** `wsActors.districtPinsOf()`（旧入口（WorldSim.vue，已删除）调的是同一份）。 */
   import { useWsActors } from "@/composables/useWsActors";
   import { districtPinsOf, type PlacedActor, type WsDistrictPin } from "./wsActors";
   /* 双引擎并列（2026-10-07 · 用户可以选择渲染方式…除了渲染不一样，其他全一样）。
@@ -362,7 +362,7 @@
      + `WsDistrictMapLibre.vue`（见下面 `joyOn` 那段注释）。 */
   import { joyInitialOn, writeJoyStored } from "./wsJoystick";
   /* **世界模拟的皮肤**（令牌表 + `.ws-*` 组件的公共样式）。
-     它原来**只有旧入口 `WorldSim.vue` import** ⇒ 换成这一屏之后一直没加载，
+     它原来**只有旧入口（WorldSim.vue，已删除） import** ⇒ 换成这一屏之后一直没加载，
      结果 `--ws-panel` 这类令牌全空、抽屉看起来就是"一堆字铺在地图上"（2026-10-01 已报的）。
      `worldsim.css` 里的令牌定义在 `.ws-root.theme-*` 下 ⇒ 根元素也必须挂 `ws-root`（见模板）。
      它是**全局皮肤**（不是 scoped）：这一屏内的 `.ws-btn` / `.ws-card` / 抽屉等一律受益。 */
@@ -864,7 +864,7 @@
 
   /* ══ （2026-10-02）·**事件上屏** + 待写记忆只读预览 ═══════════════════════════
      数据层（tick 轮询 + `world_map:event` 广播 + 三通道开关 + 待写记忆预览）**一行都不在本文件**：
-     全在共享 composable `useWorldEvents`（孤儿页 `WorldSim.vue` 挂的是同一份 ⇒ 不存在第二份实现）。
+     全在共享 composable `useWorldEvents`（旧入口（WorldSim.vue，已删除）挂的是同一份 ⇒ 不存在第二份实现）。
      本页只做三件事：
        ① 把当前说话的角色名传进 tick（事件挂到正确的人头上靠它）；
        ② popup 通道：抽中时 `wsToast` 弹一条（配色按事件类别；气泡那一路由 composable 自己写 `bubbles`）；

@@ -1,12 +1,12 @@
 /**
- * wsMapStyle.ts —— **底图 style / 图层的唯一真源**（2026-09-22 从 `useWsMapLibre.ts` **原样搬入**）。
+ * wsMapStyle.ts —— **底图 style / 图层的唯一真源**（2026-09-22 从 旧的 MapLibre composable（useWsMapLibre.ts，已删除） **原样搬入**）。
  *
  * 为什么搬：`ALIGN-UPSTREAM.md` / `MERGE-STANDALONE-PAGES.md` 要求"样式构建**只允许一份**"，
- * 而它原来长在 `useWsMapLibre.ts`（1200 行的 composable）里 ⇒ 别的渲染路想复用只能抄一份。
+ * 而它原来长在 旧的 MapLibre composable（useWsMapLibre.ts，已删除）（1200 行的 composable）里 ⇒ 别的渲染路想复用只能抄一份。
  * **本次是纯搬运、零行为变化**：函数体/常量/注释一字未改；`ML_*` 常量组一并搬来，
  *   原文件**import 回去**继续用（`export *` 不建本地绑定 —— 漏了这步就编译不过，量过的坑）。
  *
- * **现状（2026-10-06，S9b8 批 E 之后）**：那个"原文件"（`useWsMapLibre.ts`）已整份删除，
+ * **现状（2026-10-06，S9b8 批 E 之后）**：那个"原文件"（旧的 MapLibre composable（useWsMapLibre.ts，已删除））已整份删除，
  *   本模块**唯一的活出口是 `assetUrl`**（`src/composables/wsMapLibreCss.ts:11` → 现役宿主
  *   `WsDistrictMapLibre.vue` 的 `injectCss`）。其余符号三类，逐符号依据见 `REMOVED-CODE.md` 的 S9b8 条：
  *     · 已退役（连本体删）：S9b7 的 8 个 + 本批的 `ML_SRC` / `ML_LAND` / `ML_LINE` / `ML_HI` / `ML_HI_LINE`；
@@ -19,10 +19,10 @@
  *   `WsDistrictMapLibre.vue → wsFallback2d.styleNow() → wsDistrictScene.districtStyleOf()`
  *   → `wsMapTheme.themeStyleParts()`，与这里的 `styleFor` 是两条路。
  */
-/* ── 主题色（2026-10-06 从 `wsGeoMap.ts` **原样搬入**，纯搬运、零行为变化）────────
+/* ── 主题色（2026-10-06 从 wsGeoMap.ts（已删除） **原样搬入**，纯搬运、零行为变化）────────
  * 为什么搬：底图 style 是**唯一真源**，却要向一个已退役的 Canvas2D 渲染器借主题常量 ——
- * 那个渲染器（`wsGeoMap.ts` 的 `WsGeoMap` 类）随下钻死簇一起删了，所以把这三个符号
- * 落到它唯一的活消费者这里。下面这段与 `wsGeoMap.ts` 里的原文**逐字节相同**。 */
+ * 那个渲染器（wsGeoMap.ts（已删除） 的 `WsGeoMap` 类）随下钻死簇一起删了，所以把这三个符号
+ * 落到它唯一的活消费者这里。下面这段与 wsGeoMap.ts（已删除） 里的原文**逐字节相同**。 */
 export interface GeoTheme {
   /** 陆地填充 */
   land: string;
@@ -156,8 +156,8 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom
          `GeoTheme`（本函数的入参类型）上**没有** `baseFade`/`sources` —— 它们在
          `WsMapTheme`/`WsMapLookSpec`（`wsMapTheme.ts`，也就是主题 JSON 的 `themes[*].baseFade`：
          `night` 是 `null`、`anime` 才有值）⇒ 所以收口值由**调用方**用可选的 `opts.baseMaxZoom` 递进来
-         （`useWsMapLibre.ts` 建图那条：`stageThemeParts()` → `wsMapTheme.baseMaxZoomFor()`）。
-         2026-10-06（S9b7 批 D）：那条调用点已随 `useWsMapLibre.ts` 删除，`styleForStage` 也已退役
+         （旧的 MapLibre composable（useWsMapLibre.ts，已删除）建图那条：`stageThemeParts()` → `wsMapTheme.baseMaxZoomFor()`）。
+         2026-10-06（S9b7 批 D）：那条调用点已随 旧的 MapLibre composable（useWsMapLibre.ts，已删除）删除，`styleForStage` 也已退役
          ⇒ 现在**读这个参数的只剩闸**（回归测试 ①②段）。上面那半句留原样，
          是为了记住"默认值为什么必须是 20"。
          2026-10-04 语义收窄：那个函数现在**同时**夹一层"主题自己声明的 `sources.base.maxzoom`"
@@ -210,7 +210,7 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom
    三个符号原来长在这里（`layersFor` 铺 `ws-ml-*` 数据层、`paintUpdatesFor` 是换主题的三元组、
    `NO_HIGHLIGHT_FILTER` 是 `layersFor` 里那两条高亮层的 `filter:`）。
    依据：`layersFor` / `paintUpdatesFor` 在**全仓（含本文件）零引用** —— 它们唯一的调用方是
-   `useWsMapLibre.ts`（2026-10-06 整份删除）；`NO_HIGHLIGHT_FILTER` 的**唯一**消费者就是
+   旧的 MapLibre composable（useWsMapLibre.ts，已删除）（2026-10-06 整份删除）；`NO_HIGHLIGHT_FILTER` 的**唯一**消费者就是
    `layersFor`（`:201` / `:208` 两处 `filter:`），先删 `layersFor` 它就成了零消费者死常量
    （审计口径是"只去 export"，去完 export 仍是死的 —— 所以这里连本体一起退，别骗下一个人）。
    原文：`git log -p -- src/components/views/worldsim/wsMapStyle.ts`（或 `REMOVED-CODE.md` 的 S9b7 条）。
@@ -240,7 +240,7 @@ export function styleFor(theme: GeoTheme, opts: { basemap?: boolean; baseMaxZoom
      ① **不在现役路上**：App 的 style 由 `WsDistrictMapLibre.vue` 的 `style: styleNow()` →
         `wsFallback2d.ts` 的 `styleNow()` → `wsDistrictScene.districtStyleOf()` →
         `wsMapTheme.themeStyleParts()` 产出；`src`/`public` 里对本符号零引用。
-     ② **唯一调用点早已退役**：它服务的"区县级建图"那条路长在 `useWsMapLibre.ts`（2026-10-06 删除）。
+     ② **唯一调用点早已退役**：它服务的"区县级建图"那条路长在 旧的 MapLibre composable（useWsMapLibre.ts，已删除）（2026-10-06 删除）。
      ③ **换不了锚点**：它守的"区县级调用点与兜底路拿到同一个 `baseMaxZoom`"没有第二个通路可比；
         现役那条路的底图上限由 `themeStyleParts` 一处收口，由 回归测试
         的 ⑤/⑥ 段单独守着。

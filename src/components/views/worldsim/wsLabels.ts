@@ -3,7 +3,7 @@
 // 为什么是 DOM 标签而不是 MapLibre 的文字层：
 //   样式里 `glyphs` 是**明令禁止**的（`glyphs: undefined` ⇒ 样式校验失败 ⇒ `load` 永不触发、
 //   整张地图全白且零报错——项目里栽过）。要中文就得自托管 glyphs PBF 字体 + 生成工具链，
-//   体积/依赖都不划算 ⇒ **用 DOM 标签**（先例：`WsAvatarMark.vue` 的名字标签、`WsDistrictMapLibre.vue` 的 domPins）。
+//   体积/依赖都不划算 ⇒ **用 DOM 标签**（先例：头像标（WsAvatarMark.vue，已删除）的名字标签、`WsDistrictMapLibre.vue` 的 domPins）。
 //
 // **铁律（ROUTE.md：画面可以编，事实不许编）**：
 //   · 标签只显示**真名字**；没有 `name` 的对象**就不显示**（**不许编**"某某大厦"——编名字 = 给 AI 制造幻觉源）；

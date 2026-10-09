@@ -19,7 +19,7 @@
 //       · **写进角色记忆 / 触发现实事件** —— 前端根本没有这条通路：
 //         Rust 侧 `commit_event` 只被 `world_map_tick`（随机摇号）调用，
 //         没有任何 Tauri 命令或 HTTP 端点能让前端**提交一条自定义事件**。
-//         ⇒ 这一步只能等主会话在 `WorldSim.vue` 里接 `WsCharPanel` 的 `@gift`（接线点写在
+//         ⇒ 这一步只能等主会话在 旧入口（WorldSim.vue，已删除）里接 `WsCharPanel` 的 `@gift`（接线点写在
 //           卡片评论里），或者在 Rust 侧加一条 `world_map_gift_send` 命令。
 //
 // 依赖纪律：只 import `./wsIntervene`（它只 import vue + ./wsActors，都没有 `@/` 别名）

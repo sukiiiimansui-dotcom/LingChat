@@ -26,7 +26,7 @@
 //   ① `actors` 的**键必须是角色的 `display_name`**（= `settings.yml` 的 `ai_name`），
 //      不是 roleId、不是文件夹名 —— Rust 侧 `role_manager.rs` 是拿说话人的 display_name
 //      去查的，键不对只会少掉「·便利店里」那一截（场景行还在，所以很难发现）。
-//   ② 坐标 `x`/`y` 就是小区图的**格点坐标**（与 `WorldSim.vue` 的 `WS_GRID=28` 同一套），
+//   ② 坐标 `x`/`y` 就是小区图的**格点坐标**（与 旧入口（WorldSim.vue，已删除）的 `WS_GRID=28` 同一套），
 //      Rust 的 `summary::cell_xy` 认 `x`/`y` 也认 `gx`/`gy`。
 //   ③ **退出世界模拟必须推 `{scene: null}`**：注入的开关就是「有没有 scene」，
 //      不退的话会一直带着上次的地图上下文跟模型说话。

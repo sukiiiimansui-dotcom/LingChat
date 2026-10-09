@@ -3,7 +3,7 @@
 // 为什么单独一个纯 TS 文件（而不是塞进组件里）：
 //   · 这一层全是**纯函数**（小时 → 时段 / → 色调 / 建筑矩形 → 窗户格子），
 //     没有 Vue、没有 DOM，所以 `node xxx.mjs` 用 esbuild 打包后能直接跑断言
-//     （与 `wsGeo.ts` / `wsDistrictPaint.ts` 的自检口径一致）；
+//     （与 wsGeo.ts（已删除） / wsDistrictPaint.ts（已删除） 的自检口径一致）；
 //   · 页面只负责把结果画出来，逻辑错了能在秒级的自检里发现，不用等浏览器。
 //
 // ── 与老线的关系（`public/world_map/world_time.js`，449 行裸 JS）──────────────
@@ -208,7 +208,7 @@ export function nightLevel(hour: number): number {
  *    这是 T4-1 的原始要求，属于**新写**，不是移植。
  *
  * 做法：新线小区图的建筑是 `<rect class="ws-b">`，坐标在 `0..size` 的格子里
- *      （`wsDistrictPaint.ts` 的 `buildingSpecs`）。这里给每个建筑算出若干**窗格**，
+ *      （wsDistrictPaint.ts（已删除） 的 `buildingSpecs`）。这里给每个建筑算出若干**窗格**，
  *      由 `WsWindowLight.vue` 画成一层跟着地图一起缩放的 SVG 覆盖层。
  *      刻意**不改** `buildingSpecs` 的输出：那份 SVG 文本是自检的基准，
  *      动它等于把一堆断言一起改了（得不偿失）。
@@ -233,7 +233,7 @@ export interface WsWindowCell {
 }
 
 /* ── 窗格的四个常数，是按**真实的小区图**标定的 ──────────────────────────
- * 小区图的网格是 28×28（`WorldSim.vue` 的 `WS_GRID`），实测的建筑量级是
+ * 小区图的网格是 28×28（旧入口（WorldSim.vue，已删除）的 `WS_GRID`），实测的建筑量级是
  * **2×2 格子**（`paint.addBuilding({x,y,w:2,h:2})` 那一路，见 P1 自检）。
  * 一开始按「窗边长 0.62 + 墙厚 0.45」标定 → 2×2 的楼扣掉四周墙只剩 1.1 格子，
  * 一扇窗都放不下（自检里 `2×2 量级的楼也能出窗` 那条直接挂了）。

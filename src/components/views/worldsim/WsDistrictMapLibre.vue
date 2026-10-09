@@ -334,7 +334,7 @@
      本切片是**纯搬迁**（§2.4：只移动 + 加签名，不顺手清理）⇒ 一行都不动它们；
      清理与 `HEIGHT_COLOR_RAMP` / `heightColorExpression`（S2 之后同样悬空）一起归 S9「删死代码」。
      `BldFeature` / `RoadSeg` / `worldMapApi` / `geoJson` 等**仍在宿主用**（面板、吸附、初始取楼）。 */
-  /* 性能档位（模块级单例，与 `WorldSim.vue` 拿到的是**同一份**）。
+  /* 性能档位（模块级单例，与 旧入口（WorldSim.vue，已删除）拿到的是**同一份**）。
      为什么这个组件也要拿它：**降级决定发生在这里** —— 只有这里知道"最后到底走了哪条渲染路"，
      而档位必须跟着那条路走（见 `fallback2d()` 里 `perf.forceLow()` 那段）。 */
   import { useWsPerf } from "./wsPerf";

@@ -581,7 +581,7 @@ export function wsMapTheme(id: string | null | undefined): WsMapTheme {
  *       覆盖 `sources.base.maxzoom`，**只收口不放大**）；它服务于 App 小区级那条路
  *       （`WsDistrictMapLibre.vue → wsFallback2d.styleNow() → wsDistrictScene.districtStyleOf()`）。
  *     · `wsMapStyle.styleFor(theme, { baseMaxZoom })` 那条**区县级**调用点已随
- *       `useWsMapLibre.ts`（2026-10-06 删除）退役 ⇒ 现在读它的**只剩闸**
+ *       旧的 MapLibre composable（useWsMapLibre.ts，已删除）（2026-10-06 删除）退役 ⇒ 现在读它的**只剩闸**
  *       （回归测试 ①②段，`styleForStage` 也已在 S9b7 退役）。
  *   ⇒ 真源只有一个（本函数），但"谁在读它"要按上面这两条写，别再把退役那条路当现役。
  *

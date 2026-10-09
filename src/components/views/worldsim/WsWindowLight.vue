@@ -86,8 +86,8 @@
   /**
    * 建筑矩形的一批快照。用「读 DOM」而不是「让页面把数据传下来」的理由：
    * 那份数据现在只存在于 `DistrictCanvas` 内部（`WsDistrict` 没有 expose、
-   * `done` 事件也不带布局），为了这个纯观感的能力去改 `WsDistrict.vue` /
-   * `useWorldSim.ts` 属于扩大 diff，不划算。
+   * `done` 事件也不带布局），为了这个纯观感的能力去改 旧小区页（WsDistrict.vue，已删除） /
+   * useWorldSim.ts（已删除） 属于扩大 diff，不划算。
    */
   const rects = ref<WsBuildingRect[]>([]);
 
@@ -147,7 +147,7 @@
    *
    * 为什么必须折算：AI 精绘画布的 viewBox 是**正方形**（`0 0 size size`），
    *    而盒子常常是长方形 —— 地图靠 `preserveAspectRatio`（默认 `xMidYMid meet`）
-   *    居中留白（`WsAvatarLayer.vue` 的文件头把同一件事写得很清楚：头像也必须复刻
+   *    居中留白（头像层（WsAvatarLayer.vue，已删除）的文件头把同一件事写得很清楚：头像也必须复刻
    *    同一套折算，否则会"落在盒子上而不是图上"）。窗户光同理：不折算就与楼错位。
    *
    * **不能去量 `.ws-paint` 的 `getBoundingClientRect`** —— 这是踩过的坑：

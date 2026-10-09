@@ -25,6 +25,16 @@
  *
  * ⚠️ 依赖是**运行时**从 `public/` 取的（不打包进 App）：`three.min.js` 与 `character.mjs` 都用
  * 运行时拼出来的 URL 动态 import ⇒ 词法上 Vite 分析不到，产物里不会多出 664KB 的 three。
+ *
+ * ## 🔴 `public/ws3d/ws3dgl/vendor/three.min.js` 是**裁剪过的构建**（只导出 117 个成员）
+ * 2026-10-08 实测（靶场 `ws3dharness.html` 第一次喂真数据就炸）：
+ *   · `Float32BufferAttribute` **没有**（只有 `BufferAttribute`）⇒ 原来建楼/建路那两句直接抛
+ *     `is not a constructor`，表现是"三后端起来了但一栋楼都没有"；
+ *   · `MeshLambertMaterial` **没有**（只有 `MeshBasicMaterial` / `MeshStandardMaterial` / `MeshToonMaterial`）
+ *     ⇒ 桥面的明暗改成**建几何时按 Lambert 公式烘进顶点色**（配方见 `shadeOf`），
+ *       于是顶面就是 `color3d` 原色、墙面按朝向变暗 —— 与 2D 的 `bld-ext` 同一个观感口径；
+ *   · `Raycaster` **没有** ⇒ `centerPick()` 用自带的射线求交（`pickFeatureByRay`）。
+ * ⇒ 以后往这个文件里加 three 用法之前，先对着 vendor 那份构建核一遍导出名单。
  */
 
 import { renderHeight } from "./wsBuildingLook";
@@ -171,6 +181,23 @@ function mixHexStr(a: string, b: string, t: number): string {
   return "#" + c.map((x) => Math.max(0, Math.min(255, x)).toString(16).padStart(2, "0")).join("");
 }
 
+/* ── 烘进顶点色的 Lambert（**这个 three 构建没有 MeshLambertMaterial**，见文件头）────────
+ * 原来场景里是 `AmbientLight(0.62)` + `DirectionalLight(0.38)` 打在 Lambert 材质上；
+ * 现在同一套系数在**建几何时**算进顶点色，材质退成 `MeshBasicMaterial`（不受光）。
+ * · 顶面：系数取 **1.0** ⇒ 屋顶颜色就是 `color3d` 原色（与 2D 的 `bld-ext` 逐位一致）；
+ * · 墙面：按水平法线吃一次 Lambert（0.62 + 0.38 × max(0, n·L̂)）。 */
+const AMBIENT_K = 0.62;
+const SUN_K = 0.38;
+const SUN_DIR: readonly [number, number, number] = (() => {
+  const v: [number, number, number] = [0.35, 1, 0.36];
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+})();
+/** 某个朝向的漫反射系数（顶面由调用方直接给 1.0） */
+function shadeOf(nx: number, ny: number, nz: number): number {
+  const d = nx * SUN_DIR[0] + ny * SUN_DIR[1] + nz * SUN_DIR[2];
+  return AMBIENT_K + SUN_K * Math.max(0, d);
+}
 /** 把环坐标（可能嵌套）读成 [lng,lat] 数组 */
 function ringPts(raw: unknown): Array<[number, number]> {
   if (!Array.isArray(raw)) return [];
@@ -249,6 +276,8 @@ export function createThreeBackend(): WsRenderBackend {
   let lastDt = 0;
   /** 三角形 → 要素下标（`centerPick` 用：命中第几个三角就知道是哪栋楼） */
   let triFeature: Int32Array = new Int32Array(0);
+  /** 每个要素的 XZ 包围盒 `[minX,minZ,maxX,maxZ]`（射线求交先过它，见 `pickFeatureByRay`） */
+  let featAabb = new Float32Array(0);
   let featureIds: string[] = [];
   let featureMeta: Array<{ color: string; h3d: number; hBase: number }> = [];
   const diag: WsThreeDiag = {
@@ -261,6 +290,11 @@ export function createThreeBackend(): WsRenderBackend {
   /** 运行时 URL（**故意**不让打包器静态分析到：见文件头最后一段） */
   const runtimeUrl = (path: string): string =>
     new URL(path, typeof location !== "undefined" ? location.href : "http://127.0.0.1/").href;
+
+  /** `Float32BufferAttribute` 在这个 three 构建里不存在 ⇒ 自己按 `BufferAttribute` 造一个 */
+  function attr3(arr: number[]): unknown {
+    return new THREE!.BufferAttribute(new Float32Array(arr), 3);
+  }
 
   function sizeOf(): { w: number; h: number } {
     const w = host?.clientWidth || host?.getBoundingClientRect().width || 800;
@@ -356,6 +390,7 @@ export function createThreeBackend(): WsRenderBackend {
     diag.fromLevels = 0;
     diag.fromKind = 0;
     triFeature = new Int32Array(0);
+    featAabb = new Float32Array(0);
     featureIds = [];
     featureMeta = [];
     if (!THREE || !scene || !frame || !fc) return;
@@ -363,6 +398,7 @@ export function createThreeBackend(): WsRenderBackend {
     const pos: number[] = [];
     const col: number[] = [];
     const triTo: number[] = [];
+    const featBox: number[] = [];
     /* 超过上限时**先画离锚点最近的**（近处的楼才是用户真正在看的那一批）。
        排序用要素自己的第一个坐标当代表点 —— 精确到米没必要，这只是"先画谁"的取舍。 */
     let list = fc.features;
@@ -401,9 +437,17 @@ export function createThreeBackend(): WsRenderBackend {
       featureIds.push(String(f.id ?? ""));
       featureMeta.push({ color: hex, h3d: top, hBase: base });
       let added = false;
+      const box = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
+      const grow = (x: number, z: number): void => {
+        if (x < box[0]) box[0] = x;
+        if (z < box[1]) box[1] = z;
+        if (x > box[2]) box[2] = x;
+        if (z > box[3]) box[3] = z;
+      };
       for (const ring of rings) {
         if (ring.length < 3) continue;
         const pts = ring.map(([lng, lat]) => toLocal(frame!, lng, lat));
+        for (const p of pts) grow(p[0], p[1]);
         const tris = triangulateRing(pts);
         if (!tris.length) continue;
         added = true;
@@ -429,15 +473,26 @@ export function createThreeBackend(): WsRenderBackend {
             [a[0], base, a[1]], [b[0], base, b[1]], [b[0], top, b[1]],
             [a[0], base, a[1]], [b[0], top, b[1]], [a[0], top, a[1]],
           ];
+          /* 墙面法线 = 这条边在水平面里转 90°（朝外那一侧由叉积定；DoubleSide 下无所谓正负，
+             只要"同一个朝向拿到同一个系数"） */
+          const ex = b[0] - a[0];
+          const ez = b[1] - a[1];
+          const el = Math.hypot(ex, ez) || 1;
+          const k = shadeOf(-ez / el, 0, ex / el);
+          const wr = rgb[0] * k;
+          const wg = rgb[1] * k;
+          const wb = rgb[2] * k;
           for (const p of quad) {
             pos.push(p[0]!, p[1]!, p[2]!);
-            col.push(rgb[0] * 0.94, rgb[1] * 0.94, rgb[2] * 0.94);
+            col.push(wr, wg, wb);
           }
           triTo.push(fi, fi);
         }
       }
-      if (added) diag.buildings++;
-      else {
+      if (added) {
+        diag.buildings++;
+        featBox.push(box[0], box[1], box[2], box[3]);
+      } else {
         /* 没画成的那一栋要**从名单里退掉**，否则 `centerPick` 会指到一栋画不出来的楼上 */
         featureIds.pop();
         featureMeta.pop();
@@ -445,14 +500,16 @@ export function createThreeBackend(): WsRenderBackend {
     }
     if (!pos.length) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute("position", attr3(pos));
+    g.setAttribute("color", attr3(col));
     g.computeVertexNormals();
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    /* 材质不受光：明暗已经在顶点色里（见 `shadeOf` 那一段的说明） */
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
     bldMesh = new THREE.Mesh(g, mat);
     bldMesh.name = "ws-buildings";
     scene.add(bldMesh);
     triFeature = Int32Array.from(triTo);
+    featAabb = Float32Array.from(featBox);
     diag.tris = triFeature.length;
   }
 
@@ -516,8 +573,8 @@ export function createThreeBackend(): WsRenderBackend {
     diag.roadRanks = Array.from(ranks).sort((a, b) => a - b);
     if (!pos.length) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute("position", attr3(pos));
+    g.setAttribute("color", attr3(col));
     g.computeVertexNormals();
     roadMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     roadMesh.name = "ws-roads";
@@ -666,6 +723,100 @@ export function createThreeBackend(): WsRenderBackend {
     host = null;
   }
 
+  /**
+   * 屏幕坐标（NDC）→ 命中的要素下标 + 命中点（局部米坐标 `[x, y, z]`）。
+   *
+   * 为什么自己写：这个 three 构建**没有 `Raycaster`**。做法是最朴素的 Möller–Trumbore：
+   *   · 射线起点 = 相机位置，方向 = `Vector3(ndcX, ndcY, 0.5).unproject(camera)` 归一化
+   *     （与 three 的 `Raycaster.setFromCamera` 同一个式子）；
+   *   · 先用每个要素的 XZ 包围盒做一次 slab 测试把绝大多数三角形筛掉；
+   *   · 命中的取**最近**那个三角形 ⇒ "屏幕上那一点最前面是哪栋楼"。
+   */
+  function pickFeatureByRay(ndcX: number, ndcY: number): { fi: number; point: [number, number, number] } | null {
+    if (!THREE || !camera || !bldMesh) return null;
+    const geo = bldMesh.geometry as { getAttribute?: (n: string) => { array?: ArrayLike<number> } | undefined };
+    const pa = geo?.getAttribute?.("position")?.array;
+    if (!pa || !triFeature.length) return null;
+    const tip = new THREE.Vector3(ndcX, ndcY, 0.5).unproject(camera);
+    const ox = camera.position.x;
+    const oy = camera.position.y;
+    const oz = camera.position.z;
+    let dx = tip.x - ox;
+    let dy = tip.y - oy;
+    let dz = tip.z - oz;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    dx /= dl;
+    dy /= dl;
+    dz /= dl;
+    let best = Number.POSITIVE_INFINITY;
+    let bestFi = -1;
+    const nFeat = featAabb.length / 4;
+    for (let fi = 0; fi < nFeat; fi++) {
+      /* 包围盒预筛（slab 法，只看 XZ；相机在高处俯视时射线在 XZ 上的投影一定有长度） */
+      const minX = featAabb[fi * 4]!;
+      const minZ = featAabb[fi * 4 + 1]!;
+      const maxX = featAabb[fi * 4 + 2]!;
+      const maxZ = featAabb[fi * 4 + 3]!;
+      let t0 = Number.NEGATIVE_INFINITY;
+      let t1 = Number.POSITIVE_INFINITY;
+      let miss = Math.abs(dx) < 1e-9;
+      if (!miss) {
+        const ta = (minX - ox) / dx;
+        const tb = (maxX - ox) / dx;
+        t0 = Math.max(t0, Math.min(ta, tb));
+        t1 = Math.min(t1, Math.max(ta, tb));
+      } else if (ox < minX || ox > maxX) continue;
+      miss = Math.abs(dz) < 1e-9;
+      if (!miss) {
+        const ta = (minZ - oz) / dz;
+        const tb = (maxZ - oz) / dz;
+        t0 = Math.max(t0, Math.min(ta, tb));
+        t1 = Math.min(t1, Math.max(ta, tb));
+      } else if (oz < minZ || oz > maxZ) continue;
+      if (t1 < Math.max(0, t0) || t1 < 0) continue;
+      if (t0 > best) continue;                       // 已经在更近的命中后面了，别再算三角形
+      /* 这个要素的三角形区间：`triFeature` 是逐三角形的要素下标（顶盖 3 个一组、墙 2 个一组） */
+      for (let tri = 0; tri * 3 + 2 < triFeature.length; tri++) {
+        if (triFeature[tri * 3] !== fi) continue;
+        const i0 = tri * 9;
+        if (i0 + 8 >= pa.length) break;
+        const ax = pa[i0]!;
+        const ay = pa[i0 + 1]!;
+        const az = pa[i0 + 2]!;
+        const e1x = pa[i0 + 3]! - ax;
+        const e1y = pa[i0 + 4]! - ay;
+        const e1z = pa[i0 + 5]! - az;
+        const e2x = pa[i0 + 6]! - ax;
+        const e2y = pa[i0 + 7]! - ay;
+        const e2z = pa[i0 + 8]! - az;
+        /* Möller–Trumbore */
+        const px = dy * e2z - dz * e2y;
+        const py = dz * e2x - dx * e2z;
+        const pz = dx * e2y - dy * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(det) < 1e-12) continue;
+        const inv = 1 / det;
+        const tx = ox - ax;
+        const ty = oy - ay;
+        const tz = oz - az;
+        const u = (tx * px + ty * py + tz * pz) * inv;
+        if (u < -1e-6 || u > 1 + 1e-6) continue;
+        const qx = ty * e1z - tz * e1y;
+        const qy = tz * e1x - tx * e1z;
+        const qz = tx * e1y - ty * e1x;
+        const v = (dx * qx + dy * qy + dz * qz) * inv;
+        if (v < -1e-6 || u + v > 1 + 1e-6) continue;
+        const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (t > 1e-4 && t < best) {
+          best = t;
+          bestFi = fi;
+        }
+      }
+    }
+    if (bestFi < 0 || !Number.isFinite(best)) return null;
+    return { fi: bestFi, point: [ox + dx * best, oy + dy * best, oz + dz * best] };
+  }
+
   return {
     id: "three",
 
@@ -715,12 +866,8 @@ export function createThreeBackend(): WsRenderBackend {
       scene = new THREE.Scene();
       scene.background = new THREE.Color(th.canvas?.bg || "#0a1018");
       camera = new THREE.PerspectiveCamera((FOV_Y * 180) / Math.PI, w / hh, NEAR_M, 8000);
-      /* 光：顶面正好拿到 1.0 的系数 ⇒ **屋顶颜色 = `color3d` 原色**（与 2D 逐位一致），
-         墙面按朝向下暗 —— 从俯视看才有体积感。 */
-      scene.add(new THREE.AmbientLight(0xffffff, 0.62));
-      const sun = new THREE.DirectionalLight(0xffffff, 0.38);
-      sun.position.set(0.35, 1, 0.36);
-      scene.add(sun);
+      /* 这里**不放灯**：明暗在 `buildBuildings` 里按同一套 Lambert 系数烘进顶点色了
+         （这个 three 构建没有 `MeshLambertMaterial`，见文件头那一段）。 */
       frame = frameOf(s.center);
       curState = s;
       curWorld = world;
@@ -838,13 +985,15 @@ export function createThreeBackend(): WsRenderBackend {
     },
 
     /**
-     * 屏幕正中那栋楼：`Raycaster` 沿屏幕上那一圈（与 2D **同一套环**，见 `WS_CENTER_RING`）打，
+     * 屏幕正中那栋楼：沿屏幕上那一圈（与 2D **同一套环**，见 `WS_CENTER_RING`）打射线，
      * 命中三角形的下标 → 要素下标 → 那份 GeoJSON 里的 `id`。两条引擎各自独立算，比出来相同才算数。
+     *
+     * ⚠️ 这个 three 构建里**没有 `Raycaster`**（见文件头）⇒ 用自带的 `pickFeatureByRay`
+     *    （Möller–Trumbore + 每要素 XZ 包围盒预筛），公式与 `Raycaster.setFromCamera` 同一套。
      */
     centerPick(): { kind: "bld"; id: string; lng: number; lat: number } | null {
       if (!THREE || !camera || !bldMesh || !frame) return null;
       const { w, h } = sizeOf();
-      const ray = new THREE.Raycaster();
       const ring: Array<[number, number]> = [[0, 0]];
       for (const r of [6, 12, 18]) {
         for (let i = 0; i < 8; i++) {
@@ -853,19 +1002,20 @@ export function createThreeBackend(): WsRenderBackend {
         }
       }
       for (const [dx, dy] of ring) {
-        const ndc = new THREE.Vector2(((w / 2 + dx) / w) * 2 - 1, -(((h / 2 + dy) / h) * 2 - 1));
-        ray.setFromCamera(ndc, camera);
-        const hits = ray.intersectObject(bldMesh, false);
-        for (const hit of hits) {
-          const tri = Math.floor((hit.faceIndex ?? 0));
-          if (tri < 0 || tri * 3 + 2 >= triFeature.length) continue;
-          const fi = triFeature[tri * 3]!;
-          const id = featureIds[fi];
-          if (!id) continue;
-          const meta = featureMeta[fi];
-          diag.colorPick = meta ? { id, color: meta.color, h3d: meta.h3d, hBase: meta.hBase } : null;
-          return { kind: "bld", id, lng: hit.point.x, lat: hit.point.z };
+        const ndcX = ((w / 2 + dx) / w) * 2 - 1;
+        const ndcY = -(((h / 2 + dy) / h) * 2 - 1);
+        let hit = null;
+        try {
+          hit = pickFeatureByRay(ndcX, ndcY);
+        } catch {
+          hit = null;
         }
+        if (!hit) continue;
+        const id = featureIds[hit.fi];
+        if (!id) continue;
+        const meta = featureMeta[hit.fi];
+        diag.colorPick = meta ? { id, color: meta.color, h3d: meta.h3d, hBase: meta.hBase } : null;
+        return { kind: "bld", id, lng: hit.point[0], lat: hit.point[2] };
       }
       diag.colorPick = null;
       return null;

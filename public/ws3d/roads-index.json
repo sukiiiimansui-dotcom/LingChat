@@ -1,6 +1,6 @@
 {
- "_note": "由 world_map/ws3d_make_index.mjs 生成：把 public/roadsbundle/ 的格翻译成原型 /api/osm_cache 的 files[] 形状。键里的经纬度按 0.002° 量化（data.mjs:49），radius 是该格半对角线；cell 是 0.05° 格名（App 口径）。",
- "generatedBy": "world_map/ws3d_make_index.mjs",
+ "_note": "由索引脚本 ws3d_make_index.mjs 生成：把 public/roadsbundle/ 的格翻译成原型 /api/osm_cache 的 files[] 形状。键里的经纬度按 0.002° 量化（data.mjs:49），radius 是该格半对角线；cell 是 0.05° 格名（App 口径）。",
+ "generatedBy": "ws3d_make_index.mjs",
  "source": "public/roadsbundle/index.json",
  "cellSize": 0.05,
  "keyGrain": 0.002,

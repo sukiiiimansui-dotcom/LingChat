@@ -10,7 +10,7 @@
       ════════════════════════════════════════════════════════════════════════
 
       机主原话：
-        「现在来用 lingchat 的那个游戏引擎（就 l2d 那个）来设计一个给我看喵（这个你自己来设计一个）」
+        「现在来用 lingchat 的那个游戏引擎（就 l2d 那个）来设计一个给我看（这个你自己来设计一个）」
 
       ## 用的是哪个「引擎」
       LingChat 里驱动 Live2D 的是 **PixiJS 8.15**（`untitled-pixi-live2d-engine` 的 deps/peer 都是它），
@@ -33,7 +33,7 @@
       ## 数据
       `/api/geo_json?ad=<adcode>`（8791，带 CORS）。全国 = 100000，35 个要素。
 
-      ⚠️ 本文件是**自用层**：进 PR 前必须剔除（与 webdev.html / wsfx.html / wsux.html 同一档）。
+      本文件是**自用层**：进 PR 前必须剔除（与 webdev.html / wsfx.html / wsux.html 同一档）。
     -->
     <style>
       :root {
@@ -170,7 +170,7 @@
     <div id="app">
       <!-- 地图主体：优先 PixiJS(WebGL)，上下文丢失/不可用时自动切 Canvas2D -->
       <div id="stage"></div>
-      <!-- ⚠️ 必须显式写 width/height:100%：canvas 是**替换元素**，只写 `inset:0` 时
+      <!-- 必须显式写 width/height:100%：canvas 是**替换元素**，只写 `inset:0` 时
            `width:auto` 会取它的固有尺寸 300×150，于是兜底画布只有 300×150（踩过）。 -->
       <canvas id="stage2d" style="position:absolute;inset:0;width:100%;height:100%;display:none"></canvas>
 
@@ -226,7 +226,7 @@
       const MODEL_URL = "/vendor/l2d/haru/Haru.model3.json";
 
       /* 配色：**背景要素一律低对比**（Mapbox 规范），唯一的高饱和色留给"用户内容"。
-         注：规范给的是街道图的语义（water/roads/buildings）；我们画的是行政区划图，
+         注：规范给的是街道图的语义（water/roads/buildings）；本项目画的是行政区划图，
          所以按同一套"层级"原则换算了角色：海域=背景、陆地=低对比底、省界=次级线、
          选中=用户内容（主题色）。 */
       const C = {
@@ -241,7 +241,7 @@
       };
 
       /* 全国视图只标这些（≤8 个）—— 标注分级的落地。
-         依据：Mapbox「缩放 0~4 只标国界 + 首都级」；我们全国视图塞 32 个省名必然重叠（实测 25/32 重叠）。 */
+         依据：Mapbox「缩放 0~4 只标国界 + 首都级」；全国视图塞 32 个省名必然重叠（实测 25/32 重叠）。 */
       const ANCHORS = ["新疆维吾尔自治区", "西藏自治区", "内蒙古自治区", "黑龙江省", "四川省", "广东省", "北京市", "上海市"];
 
       const $ = (s) => document.querySelector(s);
@@ -320,7 +320,7 @@
             powerPreference: "high-performance",
             autoDensity: true,
             resolution: Math.min(2, window.devicePixelRatio || 1),
-            // 🔴 必须开：WebGL 默认不保留绘制缓冲，**无头截图会拍到一张空白画布**
+            // 必须开：WebGL 默认不保留绘制缓冲，**离屏截图会拍到一张空白画布**
             // （实测两次截图逐字节相同）。真机看不出来，但验收链依赖截图。
             preserveDrawingBuffer: true,
           });
@@ -341,7 +341,7 @@
         if (backend.kind !== "pixi") { pixi = null; }
 
         // ②b 看门狗：**一次探测不够** —— 实测 pixi 在 420ms 时报告"上下文健在"，
-        //     之后才丢（SwiftShader 下必现）。丢了就当场切 Canvas2D，并重画一遍。
+        //     之后才丢（软件渲染下必现）。丢了就当场切 Canvas2D，并重画一遍。
         //     这在 Android WebView 低端机上同样是真实场景，不是只为截图。
         const watchdog = setInterval(() => {
           if (backend.kind !== "pixi") return clearInterval(watchdog);
@@ -390,7 +390,7 @@
       }
 
       /* ── 投影：经纬度 → 世界坐标（Web Mercator，x/y **必须同单位**）──
-         🔴 踩过的坑（2026-09-16）：原来写的是 `x = lng`（**度**）而 `y = mercY(lat)`（**弧度**），
+         踩过的坑（2026-09-16）：原来写的是 `x = lng`（**度**）而 `y = mercY(lat)`（**弧度**），
          两套单位混用 → x 的跨度是 y 的 80 倍 → 整张地图被**压成一条横线**，
          看起来像"地图没画出来"，其实是画成了一条几乎退化的带子。
          修法：经度也换成弧度（`lng * π / 180`），与 mercator 的 y 同量纲。 */
@@ -446,7 +446,7 @@
         const k = view.s / fitScale;
         return k > 3.2 ? feats.map((f) => f.name) : ANCHORS;
       }
-      /* 🔴 踩过的坑（2026-09-16 机主报「文字和地图严重错位」）：
+      /* 踩过的坑（2026-09-16 反馈「文字和地图严重错位」）：
          原来用**全部顶点的平均值**当锚点 —— 但省份的顶点分布极不均匀（海岸线密、内陆疏，
          还有一堆小岛），顶点平均会被密集处**拽跑**，标注就飘到省外/海边去了。
          正解：取**面积最大的那个环**，用**多边形面积质心**（标准公式）当锚点。
@@ -497,8 +497,8 @@
 
       /* ══════════════════════════════════════════════════════════════════
          渲染后端：① PixiJS(WebGL)  ② Canvas2D 兜底
-         为什么必须有 ②：**Pixi 在 SwiftShader/低端 GPU 下会丢 WebGL 上下文**
-         （本机实测第 2 帧就丢：`isContextLost() === true`，页面全白且不报错）。
+         为什么必须有 ②：**Pixi 在软件渲染/低端 GPU 下会丢 WebGL 上下文**
+         （软件渲染下第 2 帧就丢：`isContextLost() === true`，页面全白且不报错）。
          这在 Android WebView 上也是真实风险，所以不是"为了截图好看"。
          ══════════════════════════════════════════════════════════════════ */
       const backend = {
@@ -646,7 +646,7 @@
         backend.kind === "pixi" ? app.renderer.height / app.renderer.resolution : $("#stage2d").clientHeight;
 
       /* ── 尺寸/位置：地图取「整幅放下」（contain），只留够 HUD 呼吸的边距 ──
-         ⚠️ 注意：全国图的数据 bbox 是**正方形**，contain 之后地图在屏幕上永远是正方形，
+         注意：全国图的数据 bbox 是**正方形**，contain 之后地图在屏幕上永远是正方形，
          边长 ≈ 舞台高 − 52 ⇒ **面积占比天然受限**（904×341 的舞台上上限约 27%）。
          想更满只能裁剪（`slice`），代价是砍掉黑龙江/新疆/西藏，**不划算**。
          所以这里的目标是"地图尽量大 + 两侧空白变成有内容的侧栏"，不是硬凑面积占比。 */
@@ -695,7 +695,7 @@
           if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
           if (pts.size >= 2) {
             /* 双指：按两指距离比例缩放，锚点 = 两指中点（**本地坐标**）。
-               🔴 踩过的坑（机主报「双手放大位移未知方向」）：这里原来
+               踩过的坑（反馈「双手放大位移未知方向」）：这里原来
                ① 用 client 坐标当锚点（画布若有偏移就错了）；
                ② **没有清掉单指拖拽留下的速度** → 松手后惯性带着地图朝"上一次拖的方向"漂走。
                两处一起修：锚点转本地坐标；进入双指时立刻停掉拖拽与速度。 */

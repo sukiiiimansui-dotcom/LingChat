@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  ws3dharness.html —— **three 后端靶场**（🔴 自用测试靶场：不随 app 发布、不参与验收、不属于 pnpm build 的入口）
+  ws3dharness.html —— **three 后端靶场**（自用测试靶场：不随 app 发布、不参与验收、不属于 pnpm build 的入口）
 
   ## 为什么要有这一页
   本机（Termux 手机，无 GPU）的无头 Chromium 里 **MapLibre 一渲染就把 GL 弄死**：
@@ -60,7 +60,7 @@
     <div id="stage"></div>
     <pre id="out">靶场启动中…</pre>
     <script type="module">
-      /* 🔴 只读/驱动 three 后端本身，**不 import App 外壳**（没有 Vue、没有地图、没有路由） */
+      /* 只读/驱动 three 后端本身，**不 import App 外壳**（没有 Vue、没有地图、没有路由） */
       import { createThreeBackend } from "/src/components/views/worldsim/wsThreeBackend";
       import {
         contractActors,
@@ -148,7 +148,7 @@
           bad
         );
 
-        /* ── ④ 把 three 后端拉起来（真 WebGL2：SwiftShader） ── */
+        /* ── ④ 把 three 后端拉起来（真 WebGL2：软件渲染） ── */
         const b = createThreeBackend();
         const state = {
           center: { lat: Number(fx.view.center.lat), lng: Number(fx.view.center.lng) },
@@ -197,7 +197,7 @@
         check("靶场里只有 three 自己那 1 块画布", canvasN() === beforeInit + 1, raw.canvas);
 
         /* ── ⑤ 相机双射往返：applyView(s) → readView() 必须回到同一眼 ──
-           ⚠️ 局部平面框架的锚点是**交接那一刻的中心**，所以这里测的是**同一视野附近**的几个点
+           局部平面框架的锚点是**交接那一刻的中心**，所以这里测的是**同一视野附近**的几个点
               （0 / 50 / 200 / 800 米量级）—— 那正是"切换时相机交接"这件事本身。 */
         const cases = [
           state,

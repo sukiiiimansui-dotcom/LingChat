@@ -50,10 +50,10 @@
       ── 打开方式 ────────────────────────────────────────────────────────────
         http://127.0.0.1:5212/wsenter.html     ← 生产预览包（机主看的入口）
         http://127.0.0.1:5210/wsenter.html     ← vite dev（改代码时用）
-      ⚠️ 本文件必须同时列在 `vite.webdev.config.ts` 的 `rollupOptions.input` 里，
+      本文件必须同时列在 `vite.webdev.config.ts` 的 `rollupOptions.input` 里，
          否则它**不在任何验证管道里**（会直接 404，且构建不报错）。
 
-      ⚠️ 自用层：与 webdev.html / wsfx.html / wsux.html 同一档，进 PR 前整体剔除。
+      自用层：与 webdev.html / wsfx.html / wsux.html 同一档，进 PR 前整体剔除。
     -->
     <style>
       @font-face {
@@ -143,7 +143,7 @@
         color: #7fd0ff;
         font-weight: 700;
       }
-      /* ⚠️ 唯一的「为了这一步好截图」的让步：真实 StartItem 的字号是
+      /* 唯一的「为了这一步好截图」的让步：真实 StartItem 的字号是
          `clamp(40px,4vw,72px)`（为竖屏手机设计）。本页的验证舞台是 932×430
          **横屏**（世界模拟沿用的 1:1 真实舞台），40px × 7 项会超出 StartPage 的
          6vw 内边距而互相压住。这里只在**矮视口**下降一档字号/边距，
@@ -401,7 +401,7 @@
       .map-hint .pill {
         pointer-events: auto;
       }
-      /* ⚠️ 实测优化：`backdrop-filter: blur()` 每帧要把下层读回来做一次模糊。
+      /* 实测优化：`backdrop-filter: blur()` 每帧要把下层读回来做一次模糊。
          在动画期间（图层本来就要被反复重光栅）它是纯亏，且此刻内容透明度很低、
          肉眼看不出差别。展开/收起时挂 `.anim` 关掉它。 */
       .map-host.anim .map-top,
@@ -726,7 +726,7 @@
         for (const rec of raw) {
           const world = rec.polys.map((poly) =>
             poly.map((ring) => {
-              // ⚠️ 必须是**普通数组**：Pixi 的 `Graphics.poly()` 内部走
+              // 必须是**普通数组**：Pixi 的 `Graphics.poly()` 内部走
               //    `new Polygon(points)`，而 Polygon 只认 `number[]` 或 `{x,y}[]` ——
               //    喂 Float32Array 会落到「按 {x,y} 解析」的分支，整条路径变 NaN
               //    （画面上就是「什么都没画，也不报错」）。
@@ -818,8 +818,8 @@
          （Android WebView 在低端机/后台切换时**真的会**丢上下文），
          自动降级到 **Canvas2D**，地图、平移缩放、LOD 全部照常，只是
          光栅质量与帧率降一档，并且会在 HUD 上标出来。
-         ⚠️ 这不是"为了好看"加的花样：验收用的无头 Chromium 只有
-            SwiftShader 软件 WebGL，实测**第 2 帧就丢上下文**（见报告），
+         这不是"为了好看"加的花样：软件 WebGL 下
+            **第 2 帧就会丢上下文**，没有这条兜底就一张图都截不到。
             没有这条兜底就一张图都截不到。
          ──────────────────────────────────────────────────────────────── */
       const R = { backend: "none", reason: "", lostEvents: [] };
@@ -1012,7 +1012,7 @@
           /* 忽略 */
         }
         app = null;
-        // ⚠️ 必须置空：`app.destroy(true,{children:true})` 之后这些引用还在，
+        // 必须置空：`app.destroy(true,{children:true})` 之后这些引用还在，
         //    真值判断会通过、然后去操作已销毁对象 → applyCam() 抛错 →
         //    调用它的 rAF 链断掉（表现为「测量 Promise 永远不 resolve」）。
         stage = landG = borderG = labelLayer = dotG = null;
@@ -1216,7 +1216,7 @@
             if (on) L.txt.position.set(L.a.cx, L.a.cy);
           });
         // 锚点圆点（tier≥2 才有，省得缩略图一团红点）
-        // ⚠️ 每次重建 GraphicsContext 都要重传 GPU buffer，所以只在「显示集合」真的
+        // 每次重建 GraphicsContext 都要重传 GPU buffer，所以只在「显示集合」真的
         //    变了才重建；展开动画里 tier 一直停在 1，这里几乎不会触发。
         const sig = tier >= 2 ? "2|" + [...show].sort((x, y) => x - y).join(",") : "0";
         if (sig !== lod.dotSig) {
@@ -1245,7 +1245,7 @@
       }
 
       // 相机两端的「标准位姿」：缩略态 = 把全国 fit 进小地图；展开态 = fit 进全屏。
-      // ⚠️ 每次 paint 都重算 —— 曾经只在 init 算一次，而 init 时 #screenChat 还是
+      // 每次 paint 都重算 —— 曾经只在 init 算一次，而 init 时 #screenChat 还是
       //    display:none（量到 0×0），fitZ 于是返回**负数**，整张地图缩放为负、什么都看不见。
       function recomputeFit() {
         readThumb();
@@ -1761,7 +1761,7 @@
         $("screenChat").classList.toggle("on", name === "chat");
         host.classList.toggle("hidden", name !== "chat");
         if (name === "chat") {
-          // ⚠️ 必须**同步**量一次再 paint：`#screenChat` 刚从 display:none 变成
+          // 必须**同步**量一次再 paint：`#screenChat` 刚从 display:none 变成
           //    block，`getBoundingClientRect()` 会强制一次布局并拿到真实矩形。
           //    若只放进 rAF，会有「容器还停留在上一状态（=满屏）」的一帧闪白。
           paint(0);
@@ -1793,7 +1793,7 @@
       host.addEventListener("click", (e) => {
         CLICK_N++;
         // 缩略态被点 → 展开（展开态里 click 有别的用途，见 pickProvince）
-        // ⚠️ 必须排掉「收起」等顶栏按钮冒泡上来的 click，否则会「收起完立刻又展开」
+        // 必须排掉「收起」等顶栏按钮冒泡上来的 click，否则会「收起完立刻又展开」
         if (inChrome(e)) return;
         if (!st.expanded && !st.animating) expandMap();
       });
@@ -1930,7 +1930,7 @@
           return renderOff;
         },
         // 决定性对照：**一个什么都不装的空 div**，只做同样的 translate+scale 动画。
-        // 如果它跟地图容器一样慢 → 慢的是这台机器的软件合成，不是我们的渲染。
+        // 如果它跟地图容器一样慢 → 慢的是软件合成，不是渲染本身。
         measurePlainTransform: async (ms = 420) => {
           const d = document.createElement("div");
           d.style.cssText = `position:fixed;left:0;top:0;width:100vw;height:100vh;background:#345;will-change:transform;transform-origin:0 0;z-index:95;`;
@@ -2008,7 +2008,7 @@
           renderHud();
           return r;
         },
-        // 合成双指 pinch（无头里没法真捏，用 PointerEvent 走同一条处理链）
+        // 合成双指 pinch（没法真捏，用 PointerEvent 走同一条处理链）
         synthPinch: (k = 1.8, steps = 8) => {
           const cx = VW() / 2,
             cy = VH() / 2;

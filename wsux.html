@@ -36,7 +36,7 @@
           见 README 第 6 节的完整推导与实测表。
       ═══════════════════════════════════════════════════════════════════════════
 
-      🔴 判据自检（规格第六节的 7 条，本页每套都过；量出来的数字见每套下面的表）
+      判据自检（规格第六节的 7 条，本页每套都过；量出来的数字见每套下面的表）
         1 同屏常驻浮动信息块 ≤3   2 地图占比                3 全国视图标注 ≤8
         4 文字对比度 ≥4.5:1       5 触控目标 ≥44×44px       6 夜晚=深色主题
         7 展开动画 transform/opacity + 300ms + Decelerate
@@ -85,7 +85,7 @@
       .plan__name { font-size: 15px; font-weight: 800; }
       .plan__one { font-size: 12.5px; color: #98a0b0; }
 
-      /* 真机板：932×430 —— 与机主窗口逐像素同尺寸 */
+      /* 真机板：932×430 —— 与真机窗口逐像素同尺寸 */
       .board {
         width: 932px; height: 430px; position: relative; overflow: hidden;
         display: flex; flex-direction: column; font-family: var(--ff);
@@ -595,7 +595,7 @@
         if (!t) return;
         t.addEventListener("click", function () {
           var night = b.classList.toggle("night");
-          // 文案描述「点它会切到哪」：白天 → 🌙 夜；夜里 → ☀️ 昼
+          // 文案描述「点它会切到哪」：白天 → 夜；夜里 → 昼
           t.textContent = night ? "☀️ 昼" : "🌙 夜";
         });
       })();

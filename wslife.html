@@ -32,7 +32,7 @@
         真接入时换成 `district_stream`（AI 精绘）或 `wsDistrictPaint` 的草图，几何接口不变。
       · 引擎：`pixi.js`（**已在 package.json 里**，零新增依赖）+ Live2D cubism 运行时。
 
-      ⚠️ 自用层：进 PR 前必须剔除。
+      自用层：进 PR 前必须剔除。
     -->
     <style>
       :root {
@@ -333,7 +333,7 @@
           await app.init({
             background: C.ground, resizeTo: $("#stage"), antialias: false,
             autoDensity: true, resolution: Math.min(2, window.devicePixelRatio || 1),
-            preserveDrawingBuffer: true, // 否则无头截图拍到空白画布
+            preserveDrawingBuffer: true, // 否则离屏截图拍到空白画布
           });
           $("#stage").appendChild(app.canvas);
           app.canvas.addEventListener("webglcontextlost", () => { ctxLostFlag = true; });
@@ -346,7 +346,7 @@
         backend.init();
         if (backend.kind !== "pixi") pixi = null;
 
-        // 看门狗：SwiftShader/低端 GPU 下 Pixi 会在第 2 帧丢上下文（实测）
+        // 看门狗：软件渲染/低端 GPU 下 Pixi 会在第 2 帧丢上下文
         const wd = setInterval(() => {
           if (backend.kind !== "pixi") return clearInterval(wd);
           const gl = app?.renderer?.gl;
@@ -501,7 +501,7 @@
           idleMotionGroup: "Idle", motionPreload: engine.MotionPreloadStrategy.IDLE,
           useHighPrecisionMask: "auto", textureOptions: { lod: "single-auto" },
         });
-        // 🔴 必须先判 app：WebGL 上下文丢失后看门狗会把 app 销毁（实测抛 null.stage）
+        // 必须先判 app：WebGL 上下文丢失后看门狗会把 app 销毁（实测抛 null.stage）
         if (!app) throw new Error("无 WebGL：角色模型已就绪，但渲染后端已切 Canvas2D");
         const h = stageH();
         const k = (h * 0.62) / model.height;   // 角色占舞台高约 6 成 —— 是**主角**，不是装饰

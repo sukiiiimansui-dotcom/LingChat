@@ -25,7 +25,7 @@
       所以新开一个入口：**先加载垫片，再加载真正的主入口**。
       访问：http://127.0.0.1:5219/webdev.html
 
-      ⚠️ 这里的数据是【空值】—— 只能看布局 / 配色 / 交互 / 动画，
+      这里的数据是【空值】—— 只能看布局 / 配色 / 交互 / 动画，
           **不能**用来验证业务逻辑（那要真机或真壳）。
     -->
     <div id="app"></div>
@@ -39,7 +39,7 @@
       window.addEventListener("unhandledrejection", function (e) {
         window.__ERRORS__.push("reject: " + String((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
       });
-      // ⚠️ 关键：Vue 会**自己捕获**组件渲染/生命周期的异常再 `console.error`，
+      // 关键：Vue 会**自己捕获**组件渲染/生命周期的异常再 `console.error`，
       //    这类错误**不会**触发 window.onerror —— 上一版因此看到空的 errs，
       //    误以为"没报错"。这里把 console.error / warn 也收进来。
       (function () {

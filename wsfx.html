@@ -18,12 +18,12 @@
           `WsWeatherBadge.vue`）—— 不是"预览用的仿制版"，所以这里看到的偏差
           就是主应用里的偏差。
 
-      ⚠️ 它**不模拟地图本身**：底下那层是一个方格 + 几条街区色块的示意图，
+      它**不模拟地图本身**：底下那层是一个方格 + 几条街区色块的示意图，
          （真实地图要么要后端 `/api/geo_svg`，要么要 AI 精绘）。所以要验的是
          "色/粒子/角标对不对"，不是"地图画得对不对"。
 
       访问：http://127.0.0.1:5210/wsfx.html   （vite dev 能服务根目录下的 html）
-      ⚠️ 本文件是**自用层**：进 PR 前必须剔除（与 webdev.html / src/web-mock.ts 同一档）。
+      本文件是**自用层**：进 PR 前必须剔除（与 webdev.html / src/web-mock.ts 同一档）。
     -->
     <style>
       :root {
@@ -129,7 +129,7 @@
         justify-content: center;
       }
       /* =.ws-neigh__layer svg（worldsim.css:742）：
-         ⚠️ 元素盒是**长方形**（撑满舞台），而 viewBox 是正方形 →
+         元素盒是**长方形**（撑满舞台），而 viewBox 是正方形 →
          真正居中留白的是 `preserveAspectRatio`（默认 xMidYMid meet），
          留白发生在**内容**里、不在元素盒上。这一页刻意保留这个事实 ——
          窗户光的信箱折算对不对，正是在这种形状下才看得出来。 */
@@ -225,9 +225,9 @@
          （P1 自检里 `paint.addBuilding({ x, y, w: 2, h: 2 })` 那一路）。
          窗户光在 2×2 上正好出 2×2 = 4 扇窗；1×1 的棚子出 0 扇（这是标定好的）。 */
       const BLD = 2.2;
-      /* ⚠️ 3.02 不是随手取的：最右一列 x = 1 + 8·PITCH，再加上最宽的一栋（2.2 + 0.4）
+      /* 3.02 不是随手取的：最右一列 x = 1 + 8·PITCH，再加上最宽的一栋（2.2 + 0.4）
          必须 ≤ 28。原来写的 3.1 会得到 28.4 —— **溢出网格**，窗户光算出来的窗格
-         会跟着飘到图外面去（这条是校验脚本 `~/chk/check-wsfx-winlight.mjs` 抓到的）。 */
+         会跟着飘到图外面去（这条是校验脚本抓到的）。 */
       const PITCH = 3.02;
 
       function drawMap() {
@@ -288,7 +288,7 @@
         ──────────────────────────────────────────────────────────────────────
         `manualState(kind, intensity)` —— 本页自用的小工具（**不在 wsWeather.ts 里**）
         ──────────────────────────────────────────────────────────────────────
-        ⚠️ 这里原来写的是 `import { manualState } from ".../wsWeather.ts"`，
+        这里原来写的是 `import { manualState } from ".../wsWeather.ts"`，
         但那个模块**从来没有导出过这个名字** → 页面一打开就抛
         `does not provide an export named 'manualState'`（dev 模式同样会炸，不是只有构建才有的问题）。
         之所以一直没被发现：**这一页不在任何验证管道里** ——
@@ -344,7 +344,7 @@
          把它拉进预览页会把无关的布局问题一起带进来）。 */
       const Host = {
         setup() {
-          /* ⚠️ 这三个 `.value` 读取**必须留在 render 里**：
+          /* 这三个 `.value` 读取**必须留在 render 里**：
              渲染函数只在它读过的响应式数据变化时才重跑。第一版把它们提到
              setup 里算好（`tint.value` 只求值一次），结果点开关只有下面的
              readout 变了、图层纹丝不动 —— 预览页最容易骗自己的就是这种"看起来点了"。 */
@@ -426,7 +426,7 @@
       sync();
       setInterval(sync, 700);
 
-      /* ⚠️ 刻意**不**给 stage 加 `.ws-root`：
+      /* 刻意**不**给 stage 加 `.ws-root`：
          `worldsim.css` 里的 `.ws-root` 是 `position: fixed; inset: 0` 的整页外壳，
          加到预览页会把那一块顶出文档流、整页布局崩掉（而这一页根本不引 worldsim.css）。
          低端机档只用到 `.ws-perf-low`（挂在 <html> 上），组件自己的降级分支

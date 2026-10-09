@@ -11,7 +11,7 @@
 
   ## 一个实现上的取舍（值得写下来）
   后端**没有"区县中心坐标"接口**（实测：`/api/blocks?ad=` 返回 `{ok:false}`，
-  `/api/location?ad=` 会忽略 ad 直接返回本机定位）。而 `transport_plan` 要的是 **lat/lng**。
+  `/api/location?ad=` 会忽略 ad 直接返回设备定位）。而 `transport_plan` 要的是 **lat/lng**。
   所以目的地的坐标由**该区县 GeoJSON 的面积质心**算出来（`/api/geo_json?ad=`）。
   与 `wsgame.html` 里修标注锚点用的是同一套数学 —— 那里踩过"顶点平均会被密集处拽跑"的坑，
   这里直接用面积质心，不再重复那个错误。

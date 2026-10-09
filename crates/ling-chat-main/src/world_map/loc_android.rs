@@ -5,7 +5,7 @@
 //! 打包成 APK 之后，定位原本只有两条路：**手动坐标** 和 **IP 兜底**（只到城市级）。
 //! 要拿真实 GPS 有两条路，本工程都走不通：
 //!
-//! 1. **`tauri-plugin-geolocation`** —— 本机 crates.io **403**，离线缓存里**没有**这个
+//! 1. **`tauri-plugin-geolocation`** —— crates.io **403**，离线缓存里**没有**这个
 //!    crate（`~/.cargo/registry/cache/*/ | grep -i geo` 无输出），加进去就没法在本地
 //!    `cargo metadata --offline` 验证；而且它的 Android 实现依赖 **Google Play Services**
 //!    （`GoogleApiAvailability.isGooglePlayServicesAvailable()` 不等于 SUCCESS 就直接失败），

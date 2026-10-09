@@ -11,7 +11,7 @@
 //!
 //! ## 为什么内嵌（`include_str!`）而不是运行时下载
 //!
-//! 本机实测（脚本 `recon/stab.sh`）：同一个 raw.githubusercontent.com 的 URL **连测 3 次只成功 1 次**，
+//! 实测（脚本 `recon/stab.sh`）：同一个 raw.githubusercontent.com 的 URL **连测 3 次只成功 1 次**，
 //! 另两次 90s 超时；jsDelivr 冷缓存 86s、热缓存 4.3s。
 //! **运行时依赖一个 1/3 成功率的服务 = 必然出问题。**
 //! 内嵌之后：**零网络请求、零新依赖、首次安装即离线可用**，正好满足「拿不到数据不能白屏」。

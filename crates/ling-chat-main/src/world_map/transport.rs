@@ -239,7 +239,7 @@ fn num(v: &Value, k: &str, d: f64) -> f64 {
 /// Arnold Neumaier 的改进 Kahan 算法，于是 `sum([1.3, 32.9, 1.3])` 是 35.5，
 /// 而朴素的从左往右累加是 35.49999999999999。差这 1e-14 会顺着
 /// `duration_min → fmt_duration` 变成「40分钟 vs 39分钟」这种肉眼可见的差别
-/// （本机实测：广州→广州南站方案列表第 3 条的时长文案）。
+/// （实测：广州→广州南站方案列表第 3 条的时长文案）。
 /// 原型的自检数值是在这台机器上（Python 3.14）跑出来的，所以这里跟着它走。
 /// 如果哪天要退回 Python ≤3.11 的语义，把 `py_sum` 换成普通的 `.sum()` 即可。
 fn py_sum<I: IntoIterator<Item = f64>>(items: I) -> f64 {
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn sum_matches_python312_neumaier() {
         // Python 3.12 起 sum() 对 float 用 Neumaier 补偿求和；移植必须跟着走，
-        // 否则偶尔会在时长文案上差 1 分钟（本机实测就是这么发现的）
+        // 否则偶尔会在时长文案上差 1 分钟（实测就是这么发现的）
         assert_eq!(py_sum([1.3, 32.9, 1.3]), 35.5);
         assert_ne!(0.0 + 1.3 + 32.9 + 1.3, 35.5, "朴素累加会差 1e-14");
         assert_eq!(py_sum(Vec::<f64>::new()), 0.0);

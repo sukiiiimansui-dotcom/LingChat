@@ -6,7 +6,7 @@
 //!
 //! ## 为什么"组上下文"要抽成不依赖 `AppHandle` 的纯函数
 //!
-//! 本机（Termux/Android）不能跑 `cargo test`（Tauri 全量编译 40 分钟起），能真跑的
+//! Termux/Android 环境不能跑 `cargo test`（Tauri 全量编译 40 分钟起），能真跑的
 //! 只有"用已编译好的 rlib + `rustc --test`"这一条路。`#[tauri::command]` 要
 //! `AppHandle`/`State`，测试里构造不出来 —— 所以凡是**判定逻辑**（字段映射、天气
 //! 过期、事件历史映射、闸门、drain 语义）全部放在不碰 Tauri 的纯函数里，
@@ -287,7 +287,7 @@ fn recent_one(v: &Value) -> Option<RecentEvent> {
 /// | `place` | `actors[role].facility` → `.place` → `.name` | `""` |
 /// | `place_kind` | `actors[role].type` → `.kind` | `""` |
 /// | `indoors` | `actors[role].indoor/indoors/inside` → 设施表同名开关 | `false`（按户外） |
-/// | `hour` | `now.hour()`（本机时区） | —— |
+/// | `hour` | `now.hour`（本地时区） | —— |
 /// | `weather` | `weather.desc` → `.desc_en`（**过期/`error` 当没有**） | `""` |
 /// | `temp_c` | `weather.temp_c`（数字或字符串数字） | `None` |
 /// | `mood` / `energy` | `actors[role].mood` / `.energy`（须落在 0–1） | `None` |
@@ -689,7 +689,7 @@ mod tests {
     /// `state` 模块本身（文件顶部的 `use` 只带进来了三个类型名）
     use super::super::state;
 
-    /// 本机时区的固定时刻（`Local` 而不是 `Utc`：`hour` 字段要的就是本机小时）
+    /// 本地时区的固定时刻（`Local` 而不是 `Utc`：`hour` 字段要的就是本地小时）
     fn at(hour: u32) -> DateTime<Local> {
         Local
             .with_ymd_and_hms(2026, 9, 12, hour, 24, 0)

@@ -383,7 +383,7 @@ pub struct SummaryInput<'a> {
     pub weather: Option<&'a Value>,
     /// 这次注入是给哪个角色的（`actors` 的键）
     pub role: &'a str,
-    /// `"19:24"` 形式的本机时间（由调用方取，本文件不引 chrono）
+    /// `"19:24"` 形式的本地时间（由调用方取，本文件不引 chrono）
     pub hhmm: &'a str,
     /// 0..=23，用来算中文时段
     pub hour: u32,

@@ -375,7 +375,7 @@ pub fn spawn_stream(
         //   thread 'tokio-rt-worker' panicked at rustls-platform-verifier-0.7.0/src/android.rs:90:
         //   Expect rustls-platform-verifier to be initialized
         // 这条路径就是「AI 精绘小区」，也就是说**小区图在真机上根本画不出来**。
-        // 本机（Termux 同为 android target）已复现：走裸客户端的请求返回 HTTP 000 + 上面那行 panic。
+        // Termux 同为 android target）已复现：走裸客户端的请求返回 HTTP 000 + 上面那行 panic。
         let tls = match crate::utils::tls::build_tls_config() {
             Ok(t) => t,
             Err(e) => {

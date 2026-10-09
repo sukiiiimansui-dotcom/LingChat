@@ -21,7 +21,7 @@
 //!    时间一律 chrono（真源里 `time_now` 也是这么改的）。
 //! 4. **一个依赖都没加**：reqwest / chrono / serde_json / once_cell 本来就在
 //!    `Cargo.toml` 里；URL 编码直接用真源自带的 10 行 [`urlencoding`]，
-//!    不引 `urlencoding` crate（本机 crates.io 403，能不加就不加）。
+//!    不引 `urlencoding` crate（crates.io 403，能不加就不加）。
 //!
 //! ## 前端契约（`src/api/services/worldMap.ts`，已逐行核对）
 //!
@@ -136,7 +136,7 @@ const GEOCODE_MAX: Duration = Duration::from_secs(3);
 /// 这里**故意保留 25 秒**而不是砍到 5 秒以内，理由是：
 /// Tauri 的 invoke 在前端 reject 之后，Rust 这边的 future 照跑不误，跑完会写进
 /// [`WEATHER_CACHE`]；下一次调用（重新进页面、切页签）就是缓存命中、秒回。
-/// 本机实测 wttr.in 正常在 1～2.5 秒返回，常见路径本来就落在 5 秒内。
+/// 实测 wttr.in 正常在 1～2.5 秒返回，常见路径本来就落在 5 秒内。
 /// 若要把「首次进页面就有天气」也保证下来，改前端那一行（5000 → 26000）
 /// 比在这里砍超时更对 —— 砍了连缓存都暖不上。
 const WEATHER_TIMEOUT: Duration = Duration::from_secs(25);
@@ -684,10 +684,10 @@ fn zh_weather(desc: &str) -> String {
 
 /// 极简 URL 编码（城市名可能是中文，必须转义）。
 ///
-/// 真源自带这 10 行，所以**不引 `urlencoding` crate**（本机 crates.io 403，
+/// 真源自带这 10 行，所以**不引 `urlencoding` crate**（crates.io 403，
 /// 能不加依赖就不加）。保留字符集与 `encodeURIComponent` 一致，
 /// 非 ASCII 一律 `%XX` 逐字节转 —— wttr.in 的路径段就吃这个格式
-/// （本机实测 `%E9%87%8D%E5%BA%86%E5%B8%82` → 200 + 重庆的天气）。
+/// （实测 `%E9%87%8D%E5%BA%86%E5%B8%82` → 200 + 重庆的天气）。
 fn urlencoding(s: &str) -> String {
     let mut out = String::new();
     for b in s.as_bytes() {

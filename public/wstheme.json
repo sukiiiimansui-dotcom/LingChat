@@ -1,5 +1,5 @@
 {
- "_note": "由 world_map/ws_map_theme_selftest.mjs 从 wsMapTheme.ts 生成，别手改",
+ "_note": "由主题自检脚本从 wsMapTheme.ts 生成，别手改",
  "themes": {
   "night": {
    "id": "night",

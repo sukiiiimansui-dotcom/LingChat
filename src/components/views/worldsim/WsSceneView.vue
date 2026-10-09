@@ -6,7 +6,7 @@
   ⇒ 本轮**只挂这一屏**：地图本体（外观/相机/层序都来自 `wsScene` + `wsMapTheme` 那套真源）
      + **交通设施**（代拍页 `?tf=1` 的内容）。
      其余叠加（头像层/天气/时间/窗光/事件/行程卡/车辆/小地图/等高线/区界/AI 示意层/AI 精绘卡/天气 pill/±全区按钮）
-     在 `WorldSim.vue` 里**停挂但保留**（一步一 commit，随时可 `git revert` 切回）。
+     在 旧入口（WorldSim.vue，已删除）里**停挂但保留**（一步一 commit，随时可 `git revert` 切回）。
      台账见 本仓外的脚本。
 
   ## 它为什么是"薄壳"
@@ -23,7 +23,7 @@
   ## 没做什么（如实写，别当成"做好了"）
   · 等高线 / 区界 / AI 示意层仍然由 `WsDistrictMapLibre` 自己挂（它们是那一屏的一部分，
     本轮**没有**开关；要停挂得改那个组件，不在这里假装关掉）；
-  · `±/全区` 按钮同理仍在该组件里（见 `WorldSim.vue` 顶部那一段说明）。
+  · `±/全区` 按钮同理仍在该组件里（见 旧入口（WorldSim.vue，已删除）顶部那一段说明）。
 -->
 <template>
   <div ref="rootEl" class="ws-sceneview">
@@ -69,7 +69,7 @@
 
     <!-- 底部两个动作（与 `WsDistrict` 那一屏**同一组按钮、同一套类名**）：
          需要"进这个世界"的入口不能因为重做而消失。
-         类名复用，但样式**必须在本文件里重写一份** —— `WsDistrict.vue` 是 `<style scoped>`，
+         类名复用，但样式**必须在本文件里重写一份** —— 旧小区页（WsDistrict.vue，已删除）是 `<style scoped>`，
          那些 `.ws-dist__*` 规则不会作用到本组件（见下面 style 块里的说明）。
 
          2026-09-26（App 入口替换）：`chrome` 开关（**默认 true ⇒ 老路径逐字不变**）。
@@ -90,7 +90,7 @@
     </div>
 
     <!-- 悬浮手机（2026-10-01）：把孤儿 `WsPhone.vue` 挂回 App 入口。
-         `phone` 默认 false ⇒ 老调用点逐字不变（`WorldSim.vue` 自己已经在挂，见上面那条注释）；
+         `phone` 默认 false ⇒ 老调用点逐字不变（旧入口（WorldSim.vue，已删除）自己已经在挂，见上面那条注释）；
          新入口 `WsCityEntry.vue` 传 `:phone="!guideOpen"`（引导 sheet 开着时不挂，免得挡着它）。
          手机本体、八个应用、`READY` 清单全在 `WsPhone.vue` 里 —— 这里**一行渲染逻辑都没有**。
          z-index 用令牌（手机 `--z-ws-phone:60`，手机自己在样式里定义），不会盖住验证面板。 -->
@@ -99,7 +99,7 @@
     <!-- toast：`wsToast` 只是往**模块级队列**里推，得有人渲染才看得见。
          实测（无头浏览器探针）：新入口原来没挂这个渲染处 ⇒ 点「音乐」「我的」
          面板行为是对的（不换页），但**页面上一个字都不出现** = 不可接受的"点了没反应"。
-         跟着 `phone` 开关挂：老宿主 `WorldSim.vue` 自己挂了一份，**同一队列两边都渲染会弹两条**。 -->
+         跟着 `phone` 开关挂：旧入口（WorldSim.vue，已删除）自己挂了一份，**同一队列两边都渲染会弹两条**。 -->
     <WsToasts v-if="phone" />
   </div>
 </template>
@@ -175,7 +175,7 @@
        *
        * 2026-09-26（App 入口替换）：新入口 `WsCityEntry.vue` 直接进 3D 地图、没有"区县"上一级，
        * 底栏里的「← 回到区县」会是死按钮 ⇒ 它传 `false`。
-       * 默认 `true` 是刻意的：老调用点（`WorldSim.vue` 的引导主线）**一个字都不用改**，
+       * 默认 `true` 是刻意的：老调用点（旧入口（WorldSim.vue，已删除）的引导主线）**一个字都不用改**，
        * 行为与本改动前逐字相同。
        */
       chrome?: boolean;
@@ -189,13 +189,13 @@
        *
        * 用 prop 分流而不是"新入口直接渲染 `WsDistrictMapLibre`"：
        * 后者会让新老两条路各有一份宿主接线（第二份实现，PR 门禁 C1 要防的正是这个）。
-       * 默认 `true` ⇒ 老调用点（`WorldSim.vue` 的引导主线）**逐字不变**。
+       * 默认 `true` ⇒ 老调用点（旧入口（WorldSim.vue，已删除）的引导主线）**逐字不变**。
        */
       tf?: boolean;
       /**
        * 悬浮手机开关（**默认 false**， 2026-10-01）。
        *
-       * 为什么默认是 **false**（与 `chrome`/`tf` 默认 true 相反）：老调用点 `WorldSim.vue`
+       * 为什么默认是 **false**（与 `chrome`/`tf` 默认 true 相反）：老调用点 旧入口（WorldSim.vue，已删除）
        * **自己已经挂了** `<WsPhone>`（`WorldSim.vue:242` 与 `:352`）⇒ 这里若也默认挂，
        * 老路径上会出现**两部手机**（两个 悬浮按钮）。所以只有新入口 `WsCityEntry.vue` 显式传 `true`。
        *
@@ -207,7 +207,7 @@
        * 摇杆 + 近景（角色第一视角）开关（**默认 false**，2026-10-03 已定）。
        *
        * 为什么默认 **false**：近景是一套**新的操作与观感**（镜头中心 = 「我」的漫游位置、`pitch` 64），
-       * 只有新入口 `/worldsim` 显式打开；老调用点（`WorldSim.vue` 的引导主线）与代拍页
+       * 只有新入口 `/worldsim` 显式打开；老调用点（旧入口（WorldSim.vue，已删除）的引导主线）与代拍页
        * **一个字都不用改**、行为逐字不变。
        * 开关的解析（`?joy=0`）在入口那一层（`wsJoystick.joyOnFromLocation`，唯一定义处），
        * 本组件只**原样透传** —— 薄壳不许有第二份判据（PR 门禁 C1）。
@@ -236,7 +236,7 @@
      * 而新入口 `WsCityEntry.vue` 传的正是 `:tf="false"` ⇒ 把三件事挂在那个 handler 的**后半段**
      * 会**永远收不到、也不报错**（表现只是"HUD 一直空着"）。所以本组件在早退**之前**分流一条：
      * `emit("daily-ready", …)`（见 `onSceneReady` 的第一行），`tf` 是真是假都照发。
-     * 老宿主 `WorldSim.vue` 不监听这个事件 ⇒ 对它零影响。
+     * 旧入口（WorldSim.vue，已删除）不监听这个事件 ⇒ 对它零影响。
      */
     (e: "daily-ready", p: { map: unknown; places?: () => readonly PlacePoint[] }): void;
   }>();
@@ -244,7 +244,7 @@
   /**
    * 手机上**没接进来**的应用被点了（`WsPhone.vue:164` 那条 `emit("open-app", key)` 路径）⇒ 如实提示。
    *
-   * 这句话的**唯一真源**在 `worldmap/wsPhoneApps.ts`（老宿主 `WorldSim.vue` 用同一份）——
+   * 这句话的**唯一真源**在 `worldmap/wsPhoneApps.ts`（旧入口（WorldSim.vue，已删除）用同一份）——
    * 两个宿主各写一份文案，说法迟早漂移（PR 门禁 C1 防的就是这个）。
    */
   function onPhoneApp(key: string): void {
@@ -646,8 +646,8 @@
     color: #ffcf8a;
   }
 
-  /* ── 底部两个动作（复刻 `WsDistrict.vue` 里 `.ws-dist__*` 那一组）──
-     为什么**必须在这里再写一份**：`WsDistrict.vue` 的样式是 `<style scoped>`，
+  /* ── 底部两个动作（复刻 旧小区页（WsDistrict.vue，已删除）里 `.ws-dist__*` 那一组）──
+     为什么**必须在这里再写一份**：旧小区页（WsDistrict.vue，已删除）的样式是 `<style scoped>`，
      只作用于那个组件自己的元素 —— 换到本组件后那些类名**一个样式都吃不到**
      （第一版我直接复用了类名 ⇒ 底栏会变成"贴着顶部的一行字"，而且会挡住地图顶部）。
      口径照抄（间距/换行/省略号都一样），但**位置改成浮在地图下沿**（这一屏是整屏地图）。 */

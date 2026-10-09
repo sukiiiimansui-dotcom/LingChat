@@ -1,6 +1,6 @@
 /* wsMapBackend.ts —— **map 后端**：把现有那张 MapLibre 地图**包一层**，让它服从 `wsRenderBackend` 的契约。
  *
- * ## 🔴 这个文件不许干的事（主人定的红线，写在最前面免得后面手痒）
+ * ## 这个文件不许干的事（既定的红线，写在最前面免得后面手痒）
  * · **不许**碰地图的取参（`wsArtParams` / `bldArtParamsOf`）、挑楼（`wsBldPickStore`）、
  *   `bld-*` 图层清单 —— 那些都是共享真源，改一处就踩两页一致闸（`ws_pages_consistency.mjs`）；
  * · **不许**在这里画任何东西：地图怎么画是 `WsDistrictMapLibre.vue` 的事，本文件只做三件事 ——
@@ -126,7 +126,7 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
         return null;
       }
     };
-    /* ⚠️ 顺序要紧：两个 source 都在 MapLibre 里，而它下一刻就要被销毁了 ⇒ 必须在这里 await 完 */
+    /* 顺序要紧：两个 source 都在 MapLibre 里，而它下一刻就要被销毁了 ⇒ 必须在这里 await 完 */
     const buildings = await grab("bld");
     const roads = await grab("roads");
     if (!buildings && !roads) return null;
@@ -141,7 +141,7 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
       instance = ledgerPush("map", "created");
       state = "created";
       /**
-       * 🆕 2026-10-08：**把"上台时被交代的那一眼"先记下来**。
+       * 2026-10-08：**把"上台时被交代的那一眼"先记下来**。
        *
        * 为什么必须有这一句：地图实例是**异步**才绑上来的（`scene-ready` → `bind()`）。
        * 在那之前 `readView()` 只能答 `lastView`，而 `lastView` 原来是 `null`

@@ -1,8 +1,8 @@
 /* wsThreeBackend.ts —— **three 后端**：用**同一份世界数据 + 同一套配色**画的那条渲染路。
  *
- * ## 口径（主人 2026-10-07 原话：「three.js 的建筑风格尽量贴近 maplibre … 用户可以选择渲染方式，
+ * ## 口径（2026-10-07 原话：「three.js 的建筑风格尽量贴近 maplibre … 用户可以选择渲染方式，
  *    **除了渲染不一样，其他全一样**」）
- * 这一版是**最小可视版**（主人在同一轮里给过退路：做不完就把 P1 收敛成"契约 + 开关 +
+ * 这一版是**最小可视版**（用户在同一轮里给过退路：做不完就把 P1 收敛成"契约 + 开关 +
  * 相机/主题/角色交接 + 用 App 的楼数据与同一主题色画出来，哪怕是盒子 + 同一套 ramp 色阶"）：
  *   · **楼**：来自 `bld` source 的那份 GeoJSON（`WsRenderWorld.buildings`，地图正在画的同一批要素），
  *     每栋按 `h_base → h3d` 挤出，**颜色逐栋取要素自带的 `color3d`**（与 2D 的 `bld-ext` paint
@@ -12,7 +12,7 @@
  *   · **路**：`roads` source 的那份 GeoJSON，宽度复用 `roadStyleOf(rank).w`、
  *     颜色复用主题的 `road.rankColors`（与 2D 的 `road-line-*` 同一份调色板）；
  *   · **角色**：**2D 立绘 billboard**，直接复用原型那份逐字节拷贝的
- *     `public/ws3d/ws3dgl/three/character.mjs`（主人钦定的 2.5D 形态，原型本来就支持）；
+ *     `public/ws3d/ws3dgl/three/character.mjs`（用户钦定的 2.5D 形态，原型本来就支持）；
  *   · **相机**：与 MapLibre **同一套针孔模型**（垂直视场角 0.6435011087932844 rad ≈ 36.87°，
  *     `dist = radius / tan(fov/2)`，`cameraToCenterDistance` 的原式）⇒ `center/zoom/bearing/pitch`
  *     是真双射，切过去像"同一视野换了个渲染器"，不是瞬移。
@@ -23,10 +23,10 @@
  *     但那一套是"按距离自己造城"，与"同一份数据"冲突 ⇒ 本轮不用它造城，只借它的立绘工厂）；
  *   · 没有命中 → 卡片（P3）；`centerPick()` 只服务于 P1 那条"中心那栋是同一栋"的判据。
  *
- * ⚠️ 依赖是**运行时**从 `public/` 取的（不打包进 App）：`three.min.js` 与 `character.mjs` 都用
+ * 依赖是**运行时**从 `public/` 取的（不打包进 App）：`three.min.js` 与 `character.mjs` 都用
  * 运行时拼出来的 URL 动态 import ⇒ 词法上 Vite 分析不到，产物里不会多出 664KB 的 three。
  *
- * ## 🔴 `public/ws3d/ws3dgl/vendor/three.min.js` 是**裁剪过的构建**（只导出 117 个成员）
+ * ## `public/ws3d/ws3dgl/vendor/three.min.js` 是**裁剪过的构建**（只导出 117 个成员）
  * 2026-10-08 实测（靶场 `ws3dharness.html` 第一次喂真数据就炸）：
  *   · `Float32BufferAttribute` **没有**（只有 `BufferAttribute`）⇒ 原来建楼/建路那两句直接抛
  *     `is not a constructor`，表现是"三后端起来了但一栋楼都没有"；
@@ -119,7 +119,7 @@ export function webgl2Reason(): string | null {
   } catch (e) {
     return "取 WebGL2 上下文时抛错：" + String((e as Error)?.message || e);
   } finally {
-    /* 🔴 探测用的上下文**两个都要还回去**：只还 webgl2 的话，"只有 WebGL1"那条路上
+    /* 探测用的上下文**两个都要还回去**：只还 webgl2 的话，"只有 WebGL1"那条路上
        每探一次就白占一个 WebGL1 上下文（无头环境实测：上下文是稀缺资源）。 */
     try {
       const g2 = cv?.getContext("webgl2") as WebGL2RenderingContext | null;
@@ -249,7 +249,7 @@ function linesOf(geom: unknown): Array<Array<[number, number]>> {
 
 /**
  * 造 three 后端。
- * ⚠️ 模块加载与 WebGL2 探测都在 `init()` 里做（不在工厂里做）—— 工厂必须同步返回，
+ * 模块加载与 WebGL2 探测都在 `init` 里做（不在工厂里做）—— 工厂必须同步返回，
  *    失败要走"抛错 ⇒ 舞台回退"那条路，而不是在 import 期把整个页面带崩。
  */
 export function createThreeBackend(): WsRenderBackend {
@@ -675,7 +675,7 @@ export function createThreeBackend(): WsRenderBackend {
   /**
    * 把这一摊**拆干净**（`destroy()` 与"起不来的半成品"共用同一份）。
    *
-   * 🔴 为什么"起不来"也要走这里：`init()` 是**先 append 画布、再建渲染器**的顺序，
+   * 为什么"起不来"也要走这里：`init` 是**先 append 画布、再建渲染器**的顺序，
    *    渲染器建不起来时那块画布会留在宿主里。舞台失败回退后虽然会把整个宿主 div 摘掉，
    *    但那条路依赖 Vue 的下一次渲染 —— 判据（"任何时刻舞台上只有一个后端画布"）不该
    *    建立在"别人等会儿会收拾"上面。起不来就当场拆掉。
@@ -701,9 +701,9 @@ export function createThreeBackend(): WsRenderBackend {
     roadMesh = null;
     try {
       renderer?.dispose?.();
-      /* 显式丢上下文：Android WebView 上"两个上下文互相挤"是已知风险（PLAN-DUAL-ENGINE.md §3），
-         我们能做的那一半就是**走的时候立刻放掉**。
-         ⚠️ 先问一句扩展在不在：软件栈（SwiftShader）上 `WEBGL_lose_context` 可能根本没有，
+      /* 显式丢上下文：Android WebView 上"两个上下文互相挤"是已知风险（§3），
+         能做的那一半就是**走的时候立刻放掉**。
+         先问一句扩展在不在：软件栈（SwiftShader）上 `WEBGL_lose_context` 可能根本没有，
          那时 three 的 `forceContextLoss()` 会往控制台打一条 warning —— 而"控制台 0 error/warn"
          是一条硬判据（靶场实测：软件栈上少了这一步就会多一条 warning）。拿不到就只 dispose。 */
       const gl = (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null;
@@ -848,7 +848,7 @@ export function createThreeBackend(): WsRenderBackend {
       try {
         renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
       } catch (e) {
-        /* 🔴 建不起来就把画布当场摘掉（不留半死的后端画布），再抛给舞台走"失败即回退" */
+        /* 建不起来就把画布当场摘掉（不留半死的后端画布），再抛给舞台走"失败即回退" */
         try {
           canvas.remove();
         } catch {
@@ -988,7 +988,7 @@ export function createThreeBackend(): WsRenderBackend {
      * 屏幕正中那栋楼：沿屏幕上那一圈（与 2D **同一套环**，见 `WS_CENTER_RING`）打射线，
      * 命中三角形的下标 → 要素下标 → 那份 GeoJSON 里的 `id`。两条引擎各自独立算，比出来相同才算数。
      *
-     * ⚠️ 这个 three 构建里**没有 `Raycaster`**（见文件头）⇒ 用自带的 `pickFeatureByRay`
+     * 这个 three 构建里**没有 `Raycaster`**（见文件头）⇒ 用自带的 `pickFeatureByRay`
      *    （Möller–Trumbore + 每要素 XZ 包围盒预筛），公式与 `Raycaster.setFromCamera` 同一套。
      */
     centerPick(): { kind: "bld"; id: string; lng: number; lat: number } | null {

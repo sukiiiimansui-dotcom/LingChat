@@ -1,4 +1,4 @@
-/* wsRenderBackend.ts —— **双引擎并列的契约**（主人 2026-10-07：「将 three.js 作为一种渲染形式，
+/* wsRenderBackend.ts —— **双引擎并列的契约**（2026-10-07 「将 three.js 作为一种渲染形式，
  * 与原有的 map 无缝切换；只是引擎不同，不嵌功能，并列功能」；2026-10-07 补一句口径：「用户可以选择
  * 渲染方式，**除了渲染不一样，其他全一样**」）。
  *
@@ -8,9 +8,9 @@
  *   · `three` —— 用**同一份世界数据与同一套配色**画的 three.js 渲染（用户显式选的那条路）。
  * 两者互不知道对方存在，只共同服从下面这份 `WsRenderState`；切换 = 换后端 + 交接状态。
  *
- * ## 🔴 红线（PLAN-DUAL-ENGINE.md §1 定的，本喵照抄不改口径）
+ * ## 红线（§1 定的，照抄不改口径）
  * 契约里**只许出现经纬度与米**：不许把 MapLibre 的 `LngLat` 或 three 的 `Vector3`
- * 泄进来。判据是**可执行的**：`world_map/ws_render_contract_selftest.mjs` 会扫这个文件，
+ * 泄进来。判据是**可执行的**：回归测试 会扫这个文件，
  * 出现 `LngLat` / `Vector3` / `maplibregl` / `THREE` 这类引擎标识符就报红。
  * ⇒ 两个后端的适配层（`wsMapBackend.ts` / `wsThreeBackend.ts`）才是"翻译官"，脏活都在那边。
  *
@@ -27,19 +27,19 @@
 import { computed, ref, type ComputedRef, type Ref } from "vue";
 import { metersBetween } from "./wsFeatureStore";
 
-/** 后端 id。`map` 是默认；坏值一律回落到它（`PLAN-DUAL-ENGINE.md` §4.4）。 */
+/** 后端 id。`map` 是默认；坏值一律回落到它（§4.4）。 */
 export type WsRenderBackendId = "map" | "three" | "overlay";
 
 /**
- * 🧊 三种状态（主人 2026-10-07 追加的口径：「maplibre 那个很丑的喵，我认为 C 的话值得一试喵」）：
+ * 三种状态（2026-10-07 追加的口径：「maplibre 那个很丑的 C 的话值得一试」）：
  *   · `map`     —— 只有地图（**默认**，行为一个字都不许变）；
  *   · `three`   —— 只有 three（全渲染：用 App 的楼/路数据与同一套配色）；
- *   · `overlay` —— **地图 + three 透明叠加层同时活着**（主人明确要试的那条路）。
+ *   · `overlay` —— **地图 + three 透明叠加层同时活着**（用户明确要试的那条路）。
  *
- * 🔴 那条"同时最多一个画布"的不变量**只对 `map ⇄ three` 成立**（这也是本轮实现并验的那一段）；
+ * 那条"同时最多一个画布"的不变量**只对 `map ⇄ three` 成立**（这也是本轮实现并验的那一段）；
  *    `overlay` 下两个 WebGL 上下文并存是**要试的东西**，不再是违规。
  *
- * ⚠️ **本轮 `overlay` 只留接口位**（主人给过退路：「先把 map ⇄ three 的切换与契约做完并提交，
+ * **本轮 `overlay` 只留接口位**（用户给过退路：「先把 map ⇄ three 的切换与契约做完并提交，
  *    把 overlay 只留接口位（契约里有这个状态、能返回"未实现"），并把差额写进报告」）——
  *    它的实现要求（透明画布 / 不接管输入 / 不进后处理 / 每帧从地图读相机 / 动态物第一批：
  *    红绿灯·街边设施·交通工具 / `webglcontextlost` 兜底）一条都还没做，见 `OVERLAY_GAP`。
@@ -102,9 +102,9 @@ export interface WsRenderFc {
 /**
  * 交接的"世界数据"：换后端时**从旧后端捞一份交给新后端**。
  *
- * 为什么契约里要有它（`PLAN-DUAL-ENGINE.md` §2 的接口表里没有，是本轮加的）：
+ * 为什么契约里要有它（§2 的接口表里没有，是本轮加的）：
  * 两条后端**不许同时活着** ⇒ 切到 three 时 MapLibre 已经被销毁，`bld` / `roads` 两个
- * source 也随之消失。而主人这一轮的口径是「**除了渲染不一样，其他全一样**」= three 必须画
+ * source 也随之消失。而用户这一轮的口径是「**除了渲染不一样，其他全一样**」= three 必须画
  * **同一批楼、同一套高度、同一套颜色** ⇒ 只能在旧后端还活着的时候把那份 GeoJSON 捞下来。
  * 捞的是**地图 source 里的那份**（`GeoJSONSource.getData()`，公开 API），不是重算一份
  * —— 重算就是第二套挑楼/取参逻辑，那正是红线。
@@ -126,7 +126,7 @@ export interface WsRenderStats {
   note?: string;
 }
 
-/** 两个实现同一份（`PLAN-DUAL-ENGINE.md` §2）。P1 只用到 init/applyView/readView/… 那一半。 */
+/** 两个实现同一份（§2）。P1 只用到 init/applyView/readView/… 那一半。 */
 export interface WsRenderBackend {
   readonly id: WsRenderBackendId;
   init(host: HTMLElement, state: WsRenderState, world: WsRenderWorld | null): Promise<void>;
@@ -234,8 +234,8 @@ export const rendererPref: Ref<WsRenderBackendId> = ref(readRendererPref());
 /**
  * **真的挂在台上**的那个后端（与 `rendererPref` 可能短暂不同：初始化失败时会退回 map）。
  *
- * 🔴 初值**永远**是 `map`（哪怕上次存的是 three）：地图那条路**必须先跑到就绪**，
- * 我们才有 center/zoom 可交接、也才有 `bld` 那份世界数据可捞。存了 three 的偏好会在
+ * 初值**永远**是 `map`（哪怕上次存的是 three）：地图那条路**必须先跑到就绪**，
+ * 才有 center/zoom 可交接、也才有 `bld` 那份世界数据可捞。存了 three 的偏好会在
  * 地图 ready 之后由舞台自动切过去（一次切换，用户看到的是"进来就是 3D"）。
  */
 export const rendererLive: Ref<WsRenderBackendId> = ref(WS_RENDER_DEFAULT);
@@ -251,7 +251,7 @@ export const contractTheme: Ref<{ theme: string; timeOfDay: number; clock: strin
 export const contractSelection: Ref<WsRenderSelection | null> = ref(null);
 
 /**
- * 🔴 **失败即回退**的那句话（`PLAN-DUAL-ENGINE.md` §4.5）。
+ * **失败即回退**的那句话（§4.5）。
  * 非空 ⇒ HUD 上必须看得见它（"不许白屏、也不许静默退回"）。
  */
 export const rendererFallback: Ref<string> = ref("");
@@ -370,7 +370,7 @@ export interface WsRenderProbeView {
   stageCanvases: number;
 }
 
-/** 一个 canvas 的体检信息（**只读**；`gl` 是它自己那套上下文，不是我们建的） */
+/** 一个 canvas 的体检信息（**只读**；`gl` 是它自己那套上下文，不是建的） */
 export interface WsCanvasInfo {
   w: number;
   h: number;
@@ -379,12 +379,12 @@ export interface WsCanvasInfo {
   cls: string;
   id: string;
   parent: string;
-  /** 在舞台（`.ws-sceneview`）里 = 后端画布；在外面的另有主人 */
+  /** 在舞台（`.ws-sceneview`）里 = 后端画布；在外面的另有用户 */
   inStage: boolean;
   /**
    * `'webgl2'` / `'webgl'` / `'2d'` / `'none'` / `'?'`（没查）。
    *
-   * 🔴 **默认不查**（`'?'`）：`getContext()` 这个调用本身会**给还没有上下文的画布建一个上下文**，
+   * **默认不查**（`'?'`）：`getContext` 这个调用本身会**给还没有上下文的画布建一个上下文**，
    * 而每帧/每次轮询都查一遍 = 一次真实的上下文泄漏 —— 2026-10-07 探针实测到了它的后果
    * （轮询几百次之后，连 MapLibre 自己都拿不到 WebGL2 了，整页掉进 2D 降级路）。
    * ⇒ 想查就**显式**调 `canvasInfo(true)`，一次就好。
@@ -425,7 +425,7 @@ export function canvasInfo(doc: Document = document, probeGl = false): WsCanvasI
       const d = (f as HTMLIFrameElement).contentDocument;
       if (d) d.querySelectorAll("canvas").forEach((cv) => out.push(one(cv as HTMLCanvasElement)));
     } catch {
-      /* 跨源就算不到（我们只用同源） */
+      /* 跨源就算不到（只用同源） */
     }
   }
   return out;
@@ -471,7 +471,7 @@ export function countCanvases(doc: Document = document): number {
       const d = (f as HTMLIFrameElement).contentDocument;
       if (d) n += d.querySelectorAll("canvas").length;
     } catch {
-      /* 跨源就算不到（我们只用同源） */
+      /* 跨源就算不到（只用同源） */
     }
   }
   return n;
@@ -533,7 +533,7 @@ if (typeof window !== "undefined") {
     canvasGlJson: () => JSON.stringify(canvasInfo(document, true)),
     diagJson: () => JSON.stringify(probeBackendDiag()),
     /** 舞台上那份"世界数据"的 JSON（靶场探针的夹具来源；拿不到就是 `null`）。
-     *  ⚠️ 返回的是 **Promise**：`captureWorld()` 要等 `getData()`。探针那边必须用
+     *  返回的是 **Promise**：`captureWorld` 要等 `getData`。探针那边必须用
      *  WebDriver 的 `execute/async` 取 —— 写成同步 `JSON.stringify(promise)` 只会得到
      *  `{}`，看起来像"地图没吐数据"（2026-10-08 实测踩过）。 */
     worldJson: () => probeCaptureWorld().then((w) => JSON.stringify(w)),

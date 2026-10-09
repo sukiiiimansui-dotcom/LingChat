@@ -173,7 +173,7 @@ impl RoleRepo {
     ///
     /// **为什么需要关闭 FK？**
     /// 角色的 FK 引用散布在 save/line/line_perception/memory_bank/running_script 等多个表，
-    /// 任何一处漏清理都会触发 SQLite FK 约束失败。关闭 FK 让我们不再"打地鼠"，即使将来 schema
+    /// 任何一处漏清理都会触发 SQLite FK 约束失败。关闭 FK 让不再"打地鼠"，即使将来 schema
     /// 增加新引用也不会破坏删除流程。手工清理步骤保留是为了不留下孤儿行（line_perception
     /// 等 NOT NULL 字段不删会留垃圾，line.sender_role_id 保留归属更有用——所以这部分仍然置 NULL）。
     ///

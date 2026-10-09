@@ -413,7 +413,7 @@ impl GameRoleManager {
 
             // 阶段 3.5: 世界模拟的地图上下文（P3）
             //
-            // ⚠️ 这里在 `game_status` 锁内（`api/chat.rs` 拿锁 → `add_line` →
+            // 这里在 `game_status` 锁内（`api/chat.rs` 拿锁 → `add_line` →
             // `refresh_memories` → 本函数），**绝不能 await 网络**。
             // `injection_for` 是**同步**函数：只读进程内那份 `MapRuntime` 缓存
             // （天气用的是已抓好的快照，过期就不用），拿不到锁就沿用上一次的文本。

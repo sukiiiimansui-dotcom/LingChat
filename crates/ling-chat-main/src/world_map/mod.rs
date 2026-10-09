@@ -1,6 +1,6 @@
 //! 世界地图 Rust 后端（T6-5）
 //!
-//! 模块本体来自独立真源工程 `~/rikka/Dsh-SYuki/world_map_rs/src/`（纯 Rust、无 Tauri 依赖，
+//! 模块本体来自独立真源工程 本仓外的纯 Rust 真源工程（纯 Rust、无 Tauri 依赖，
 //! 在那边能单独编译并跑单元测试）。搬进来时只做了两件事：
 //!   1. 模块之间的跨模块引用加 `world_map::` 前缀（`crate::coord` → `crate::world_map::coord`）
 //!   2. 真源 `main.rs` 的 axum 路由**没有**搬 —— 那是独立调试 HTTP 服务的入口，不是 Tauri 的东西
@@ -141,7 +141,7 @@ pub fn cache_dir(_app: &AppHandle) -> PathBuf {
 ///
 /// 只认环境变量 `WM_EXTRA_DIRS`（用 `:` 或 `;` 分隔多个路径），**不猜任何机器上的路径**。
 ///
-/// ⚠️ 这里原先硬编码过 `$HOME/rikka/Dsh-SYuki/world_map/worlddata/cn` 之类的候选目录 ——
+/// 这里原先硬编码过 `本机候选目录 之类的候选目录 ——
 /// 那是开发机的私有布局，写进上游仓库等于让每个用户的启动路径都去 stat 一串
 /// 根本不存在的目录（移动端 `$HOME` 更是应用私有目录，永远不命中）。
 /// 现在不设这个变量就返回空表，行为与没有这段逻辑完全一致；
@@ -180,7 +180,7 @@ fn make_source(app: &AppHandle) -> geo::GeoSource {
 
 /// 世界地图数据根目录：`geo/`（geojson 缓存）、`maplib/`、`osm/`、`events.json` 都在它下面。
 ///
-/// 注意：`docs/world-map/07` 里规划的是 `<data_dir>/game_data/world_map/`，
+/// 注意： 里规划的是 `<data_dir>/game_data/world_map/`，
 /// 而这里是 [`world_root`]（`<data_dir>/.world_map/`，点前缀是为了不被 `lan_sync` 同步，
 /// 理由见那个函数的文档）。新模块跟着**已有代码**走，避免同一个功能出现两个数据根。
 fn world_dir(_app: &AppHandle) -> PathBuf {
@@ -605,10 +605,10 @@ pub async fn world_map_geo_svg(
         // 真实水系默认开：它是「全国级真实地理」的主要视觉来源。
         // 传 false 可退回加图层之前的样子（不白屏、不报错）。
         hydro: hydro.unwrap_or(true),
-        // 真实地形默认开。⚠️ 它和水系是**两个独立功能域**，各自可单独关：
+        // 真实地形默认开。它和水系是**两个独立功能域**，各自可单独关：
         // 只想要河流不要地形，传 `elevation: false, hydro: true` 即可。
         //
-        // 📌 上游重构提示：本命令现在注册在 `lib.rs` 的 `generate_handler!` 里；
+        // 上游重构提示：本命令现在注册在 `lib.rs` 的 `generate_handler!` 里；
         // 上游已把所有命令注册搬到 `app/commands.rs`，将来 rebase 时**应把它一并挪过去**，
         // 不要再往 `lib.rs` 里加东西（维护者在 PR #802 评审里点名过这个习惯）。
         elevation: elevation.unwrap_or(true),
@@ -845,7 +845,7 @@ fn transit_nodes_of(
         None => Value::Null,
     };
     // 节点也带上经纬度：前端要画"我上车的那个站"，自检要量"上车点离真实站点多远"。
-    // ⚠️ 换算公式必须与 `transport.rs::station_in_grid` 逐字一致
+    // 换算公式必须与 `transport.rs::station_in_grid` 逐字一致
     //    （`grid_to_world(gx, gy, anchor, mpc)` → `world_to_lng_lat`），
     //    否则"画出来的图标"与"规划器认定的站点"会差一点，验收就对不上了。
     let with_ll: Vec<Value> = nodes
@@ -1205,7 +1205,7 @@ fn level_zh_of(level: &str) -> &'static str {
 /// 返回 `{ ok, key, cached, count, summary, text, meta }`；
 /// 没缓存且没 `force` 时 `ok=false` + `hint`，让调用方降级为纯 LLM 生成。
 ///
-/// ⚠️ **不要把 `force=true` 接到「平移 / 缩放 / 进页面」这类自动路径上。**
+/// **不要把 `force=true` 接到「平移 / 缩放 / 进页面」这类自动路径上。**
 ///
 /// 这是本命令唯一会**写盘**的分支。缓存键是 200m 网格（`osm.rs` 的 `GRID = 0.002`），
 /// 而网格数随「访问过的地理位置」增长 —— 也就是说**键空间实际上是无界的**：
@@ -1235,7 +1235,7 @@ pub async fn world_map_osm_summary(
         cached = data.is_some();
     }
     if data.is_none() && force {
-        // ⚠️ 必须注入预配置的 TLS 后端：reqwest 0.13 默认走 rustls-platform-verifier，
+        // 必须注入预配置的 TLS 后端：reqwest 0.13 默认走 rustls-platform-verifier，
         // 而本仓从不初始化它 → 裸 builder 在 Android 上发请求时 panic（见 `src/utils/tls.rs`）。
         // 与 `stream.rs` 那处是同一类漏配，两处一起补。
         let tls = crate::utils::tls::build_tls_config()?;
@@ -1296,7 +1296,7 @@ pub async fn world_map_osm_summary(
 /// 而不是一个异常）。这个形状与调试服务 `/api/buildings` **逐字段一致**，
 /// 所以浏览器里验过的渲染代码，换成 Tauri 通路不用改一行。
 ///
-/// ## ⚠️ 磁盘增长：这是本命令第二条会写盘的通路
+/// ## 磁盘增长：这是本命令第二条会写盘的通路
 ///
 /// 与 `world_map_osm_summary` 一样按 200m 网格落盘，键空间随"访问过的地点"无界增长。
 /// 这里**刻意**与那条不同：缓存未命中就真去抓（否则页面第一次打开永远是空的，
@@ -1341,7 +1341,7 @@ pub async fn world_map_buildings(
         cached = data.is_some();
     }
     if data.is_none() {
-        // ⚠️ 必须注入预配置的 TLS 后端（与 `world_map_osm_summary` 同一处坑，见其注释）
+        // 必须注入预配置的 TLS 后端（与 `world_map_osm_summary` 同一处坑，见其注释）
         let tls = crate::utils::tls::build_tls_config()?;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(45))
@@ -1434,7 +1434,7 @@ pub async fn world_map_time() -> Result<Value, String> {
 /// 改它会破坏「两边结构逐字段相同」这条对拍前提 —— 组装 JSON 是「接口层」的事，
 /// 归命令层（本文件）与调试服务（`world_map_rs/src/main.rs`）各自负责。
 ///
-/// ⚠️ 刻意**不放**耗时字段（曾经有 `gen_ms`，已删）：这份返回必须是输入的纯函数
+/// 刻意**不放**耗时字段（曾经有 `gen_ms`，已删）：这份返回必须是输入的纯函数
 /// （同 area/size/seed/key → 逐字节相同），否则「刷新后设施位置不变」就没法用
 /// 「两次请求 sha256 相等」来证明 —— 掺进去一个毫秒数，两次请求必然不同。
 fn facilities_payload(lay: &Value, area: &str, level: &str, seed: Option<i64>, source: &str) -> Value {
@@ -1525,7 +1525,7 @@ pub async fn world_map_facilities_types() -> Result<Value, String> {
 /// 前端已经把设施表拿在手上了，再生成一次既浪费又可能与它显示的那份不是同一批）；
 /// 不传则按 `area/size/seed/level` 从草图重新生成。
 ///
-/// ⚠️ 若前端的设施来自地图库布局（`key`），这里必须把 `facilities` 数组传回来 ——
+/// 若前端的设施来自地图库布局（`key`），这里必须把 `facilities` 数组传回来 ——
 /// 本命令没有 `key` 参数，重新生成只会得到草图上的那一批。
 #[tauri::command]
 pub async fn world_map_facility_at(

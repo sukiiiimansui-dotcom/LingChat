@@ -6,7 +6,7 @@
 //! 全在前端手里（地图页是前端渲染的）。所以中间需要一个**进程内共享状态**：
 //!
 //! ```text
-//!   前端地图页 ──world_map_update_runtime(patch)──▶ MapRuntime（本模块，Arc<RwLock<_>>）
+//!   前端地图页 ──world_map_update_runtime(patch)──MapRuntime（本模块，Arc<RwLock<_>>）
 //!                                                      │  同步读，不 await
 //!                            AI 工具（get_my_location / get_nearby_facilities / move_to）
 //!                                                      │
@@ -103,7 +103,7 @@ impl PendingMemory {
 /// 角色名被反复改名时表无限膨胀（每个角色名一条）。
 const INJECTION_CACHE_MAX: usize = 64;
 
-/// 注入文本 + 它的指纹（「变化时才更新」的落点，机主定的 H38）。
+/// 注入文本 + 它的指纹（「变化时才更新」的落点，既定的 H38）。
 #[derive(Clone, Debug)]
 pub struct InjectionCache {
     /// [`summary::fingerprint`] 的结果：文本没变 → 指纹没变 → 直接复用文本
@@ -526,7 +526,7 @@ impl MapRuntime {
 
     /// **只读预览**待写记忆（看一眼，**一行都不取走**）—— `world_map_pending_memory` 用它。
     ///
-    /// ## 消费权裁定（期 1，2026-10-02 —— 与上屏同期定死）
+    /// ## 消费权裁定（2026-10-02 —— 与上屏同期定死）
     ///
     /// 这个队列**只有一个消费方**：[`MapRuntime::injection_text`]（注入路径）。
     /// 理由不是偏好，是它自己的语义 —— 那些行之所以能删，是因为
@@ -639,7 +639,7 @@ pub fn injection_preview(role: &str) -> String {
 /// 目前只有一个调用点：`ai_service/message_system/producer.rs` 在流式切句前决定
 /// 要不要启用位置指令剥离器（`world_map::directive::Scanner`）。
 /// **没开世界模拟时必须返回 `false`**，那条路的字节与改造前完全一致 —— 这是给官方
-/// 提 PR 的红线（见 `directive.rs` 模块注释与 `~/chk/p4/producer_diff.rs` 的差分测试）。
+/// 提 PR 的红线（见 `directive.rs` 模块注释与 差分测试 的差分测试）。
 ///
 /// 拿不到读锁（前端正好在推 patch）也算"没开"：宁可漏掉一轮指令，
 /// 也不去改变官方那条管线上的行为（`try_read` 不等待，见模块注释的铁律 1）。
@@ -898,7 +898,7 @@ mod tests {
         assert!(rt.scene.is_some());
     }
 
-    /// 期 2（2026-10-02）**负数断言**：同一份 `mood`/`energy` 连推两次，第二次必须**什么都没改**。
+    /// （2026-10-02）**负数断言**：同一份 `mood`/`energy` 连推两次，第二次必须**什么都没改**。
     ///
     /// 为什么值得单钉一条：心情/体力是**按时间衰减的推导值**（前端 `wsNeeds.ts` 每次决策点重算），
     /// 一旦哪里写成"每次推都 += 一点"，现象是"角色的体力自己在涨"——不报错、日志也看不出来，
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(rt.actors["小满"]["facility"], json!("便利店"));
 
         // 换成"没有这两个键"的一次推送（= 数不出来，前端什么都不推）⇒ 旧值**原样留着**
-        // ⚠️ 这是字段级合并的既定语义，不是本期新加的：不推 ≠ 清零。
+        // 这是字段级合并的既定语义，不是本期新加的：不推 ≠ 清零。
         rt.apply_patch(&json!({"actors": {"小满": {"facility": "便利店"}}}));
         assert_eq!(rt.actors["小满"]["mood"], json!(0.42));
     }
@@ -1119,11 +1119,11 @@ mod tests {
         assert!(!rt.preview("小满").contains("只看看不拿走"));
     }
 
-    /// 🔴 **消费权裁定**（期 1，2026-10-02）：`world_map_pending_memory` 这条路
+    /// **消费权裁定**（2026-10-02）：`world_map_pending_memory` 这条路
     /// **只看不取**，所以"先让前端跑一轮，再跑一次对话注入"之后，
     /// 那件事**仍然能被 AI 看见**。
     ///
-    /// 这一条就是计划里的**能证红的判据**（`PLAN-GAMEPLAY.md:57` 的 ③）：
+    /// 这一条就是计划里的**能证红的判据**（③）：
     /// 把 `pending_lines` 换成 `take_memory`（= 修好前前端那条 drain 的行为），
     /// 下面第一条断言立刻红（`injection_text` 里再也不会出现那行）。
     #[test]
@@ -1158,7 +1158,7 @@ mod tests {
     }
 
     /// 反向对照（**这条是"修好前"的样子**）：前端若用 drain 那条路跑一轮，
-    /// 注入就再也看不到那一行了 —— 这正是期 1 要堵的洞。
+    /// 注入就再也看不到那一行了 —— 这正是 要堵的洞。
     ///
     /// 它故意用 `take_memory`（drain 语义）而不是预览，为的是把"两种做法的差别"
     /// 钉在测试里：上一条绿、这一条红，差别只有那一个调用。
@@ -1169,7 +1169,7 @@ mod tests {
         let taken = rt.take_memory(Some("小满")); // ← 修好前前端干的事
         assert_eq!(taken.len(), 1);
         let injected = rt.injection_text("小满", &Local::now());
-        /* ⚠️ 判据必须咬**记忆行本身**（`旁白: …` / 「记忆：」那一块），不能咬"便利店"这种词 ——
+        /* 判据必须咬**记忆行本身**（`旁白: …` / 「记忆：」那一块），不能咬"便利店"这种词 ——
            测试场景自己就写着「…·便利店里」（第一版就是这么假的绿：`!contains("便利店")` 直接红）。
            这一条要证明的是"那行**记忆**没进注入"，不是"这几个字没出现在文本里"。 */
         assert!(

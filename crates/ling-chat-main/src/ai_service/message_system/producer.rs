@@ -199,7 +199,7 @@ impl StreamProducer {
                     //
                     // 这里**不能**走 `dispatch_sentence`：tool_loop 在插入栅栏前已经置位
                     // `tool_calls_seen`，dispatch 会把句子扣进 `pending_sentence`，
-                    // 而那正是我们此刻要放出去的东西。
+                    // 而那正是此刻要放出去的东西。
                     if let Some(pending) = pending_sentence.take() {
                         Self::send_sentence(&self.tx, pending, &mut sentence_index, false).await?;
                     }

@@ -1,6 +1,6 @@
 name: 世界模拟·轻量检查
 
-# 这份工作流只回答一个问题：**我们的代码能不能编译**。
+# 这份工作流只回答一个问题：**代码能不能编译**。
 #   · 前端构建：`pnpm build`（= 生成语言包版本值 → `vue-tsc --noEmit --skipLibCheck` → `vite build`）
 #     —— 与三条原生构建的 `beforeBuildCommand` **同一条命令**，不再各跑各的
 #   · Rust：`cargo check --all-targets`（含测试目标 ⇒ 测试代码也一起过一遍类型/借用检查）
@@ -15,7 +15,7 @@ on:
     paths:
       - 'src/**'
       - 'src-tauri/**'
-      # 上游 2026-10-02 workspace 化后，我们的 Rust（含 world_map）在 crates/ 下
+      # 上游 2026-10-02 workspace 化后， Rust（含 world_map）在 crates/ 下
       - 'crates/**'
       - 'public/**'
       - 'scripts/**'         # 构建脚本（prepare-desktop-resources / gen-locale-version …）也是构建输入
@@ -91,7 +91,7 @@ jobs:
       - name: 装依赖
         run: pnpm install --frozen-lockfile
 
-      # 🔴 2026-10-06：这里原来是 `npx vue-tsc` + `npx vite build` 两步，与三条原生构建**实际跑的
+      # 2026-10-06：这里原来是 `npx vue-tsc` + `npx vite build` 两步，与三条原生构建**实际跑的
       # 那条命令**（`src-tauri/tauri.conf.json` 的 `beforeBuildCommand` → `pnpm build`）**不等价**：
       # `pnpm build` 里还多一步 `node scripts/gen-locale-version.mjs`。结果那个脚本的 esbuild 调用
       # 只在 CI 上炸（本地 Termux 布局不同 ⇒ 一直没暴露），轻量检查全绿、APK / iOS / 四平台全红。

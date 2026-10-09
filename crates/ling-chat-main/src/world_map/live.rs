@@ -6,7 +6,7 @@
 //! （待补清单就写在那个文件的注释里）。这里把它们搬进应用内 —— 前端那份降级代码
 //! 不用改，命令一注册、invoke 一命中，降级分支自然就不再执行。
 //!
-//! 真源：`~/rikka/Dsh-SYuki/world_map_rs/src/main.rs` 的 `location_api` / `weather_api`
+//! 真源：本仓外的真源工程 的 `location_api` / `weather_api`
 //! / `WEATHER_ZH` / `zh_weather` / `admin_chain` / `location_payload` / `urlencoding`。
 //! 那个工程是**只读参考**，本次一个字节都没动它。
 //!
@@ -71,7 +71,7 @@ const IP_TIMEOUT: Duration = Duration::from_secs(8);
 /// 为什么不能照抄 8 秒：`worldMap.ts` 给这个命令套了 **6 秒** 的 `withTimeout`，
 /// 一超就 reject → 走降级 → 用户看到的是前端写死的那句「定位不可用」。
 /// 压到 4 秒，命令就能在预算内**自己**返回 `{error, hint}`（带具体原因），
-/// `WorldMap.vue::relocate()` 判 `loc.error` 之后显示的是我们给的 hint，信息量更大。
+/// `WorldMap.vue::relocate` 判 `loc.error` 之后显示的是给的 hint，信息量更大。
 /// 4 秒 + 下面 `GEOCODE_BUDGET_FAST` 的 1.2 秒 = 5.2 秒，卡在 6 秒预算里。
 const IP_TIMEOUT_FAST: Duration = Duration::from_secs(4);
 
@@ -94,7 +94,7 @@ const LOCATION_BUDGET: Duration = Duration::from_secs(11);
 /// 本文件只敢用 5.2 秒；GPS 之后还得给 ③ IP 兜底和「反查行政区」留地方。
 /// 3 秒足够覆盖两种**能成**的情况 —— 系统缓存命中（毫秒级）和 GPS 热启动（1~2 秒）；
 /// 冷启动（5~30 秒）本来就等不到，**与其让用户干等，不如早点退 IP**。
-/// 而且这次请求会把 GPS 引擎唤醒：用户过几十秒再点一次「📍 按定位」，
+/// 而且这次请求会把 GPS 引擎唤醒：用户过几十秒再点一次「按定位」，
 /// 走的就是缓存命中 + 真实坐标了。
 const GPS_TIMEOUT_FAST: Duration = Duration::from_millis(3000);
 
@@ -132,7 +132,7 @@ const GEOCODE_MAX: Duration = Duration::from_secs(3);
 
 /// wttr.in 上游超时：真源就是这个值，照搬。
 ///
-/// ⚠️ 前端给这个命令套的是 **5 秒**（`withTimeout(..., 5000, '天气')`），比 25 秒小。
+/// 前端给这个命令套的是 **5 秒**（`withTimeout(..., 5000, '天气')`），比 25 秒小。
 /// 这里**故意保留 25 秒**而不是砍到 5 秒以内，理由是：
 /// Tauri 的 invoke 在前端 reject 之后，Rust 这边的 future 照跑不误，跑完会写进
 /// [`WEATHER_CACHE`]；下一次调用（重新进页面、切页签）就是缓存命中、秒回。

@@ -470,7 +470,7 @@ mod tests {
             names.push(name.as_str());
         }
         assert_eq!(names, vec!["get_my_location", "get_nearby_facilities", "move_to"]);
-        // move_to 的 target 必填 —— 执行器会替我们拦缺参调用
+        // move_to 的 target 必填 —— 执行器会替拦缺参调用
         assert_eq!(
             MoveTo.definition().function.parameters["required"],
             json!(["target"])

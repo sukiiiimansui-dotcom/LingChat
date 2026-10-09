@@ -1,4 +1,4 @@
-//! 生活设施(T2-1) + 交通设施(T2-2)（Rust 版，逐行对照 Python 原型 `world_map/facilities.py`）
+//! 生活设施(T2-1) + 交通设施(T2-2)（Rust 版，逐行对照 Python 原型 Python 原型）
 //!
 //! ## 这个模块干什么
 //! 拿一张格网 `layout`（建筑 + 路网 + 公园 + 水体，约定见文件末尾 `demo_layout()`），在**空格**里摆设施：
@@ -25,7 +25,7 @@
 //!   「分数抖动」「邻格尝试顺序」，且统一用 [`StdRng::seed_from_u64`] 播种，种子由
 //!   `sha256("{area}|{size}|{salt}")` 前 4 字节给出（[`seed_of`]），
 //!   生活设施用 salt=`life`、交通设施用 salt=`traffic`。**同输入永远同输出**，可缓存、可回归。
-//!   ⚠️ 但 Rust 的 `StdRng`（ChaCha12）与 Python 的 `random.Random`（MT19937）**不是同一个算法**，
+//!   但 Rust 的 `StdRng`（ChaCha12）与 Python 的 `random.Random`（MT19937）**不是同一个算法**，
 //!   随机序不同 ⇒ 具体落点坐标不会与 Python 逐位相同。这是**有意接受的行为差异**：结构、数量、
 //!   类型分布、规则约束（临路/临水/不重叠/间距）两边一致，只有「第几个候选」的挑选不同。
 //!   要逐位对拍得把 MT19937 也搬过来，那还不如直接用 Python 原型跑。
@@ -1009,7 +1009,7 @@ fn alloc(count: i64, weights: &[(String, f64)]) -> Vec<(String, i64)> {
 /// 从摘要派生随机种子：取摘要**前 4 字节按大端解释**（对应 Python 侧
 /// `int(hexdigest()[:8], 16)` 的那一步）。
 ///
-/// ⚠️ 摘要算法用的是 `sha2`（上游已有依赖），**不是** Python 侧那份 md5 ——
+/// 摘要算法用的是 `sha2`（上游已有依赖），**不是** Python 侧那份 md5 ——
 /// 所以「区域名 → 种子」这条链路与 Python 原型**不再逐位一致**（种子的位数、
 /// 以及种子之后的随机序，两边都不同）。Rust 侧自身是自洽的：同输入永远同输出。
 /// 选 `sha2` 是为了不给上游新增依赖（md5 不在上游 Cargo.toml 里）。
@@ -1019,7 +1019,7 @@ fn seed_of(area: &str, size: i64, salt: &str) -> u64 {
 }
 
 /// 造随机源：显式 seed 优先，否则按区域名派生。
-/// ⚠️ `StdRng`(ChaCha12) ≠ Python 的 `random.Random`(MT19937)：随机序不同是有意接受的差异，
+/// `StdRng`(ChaCha12) ≠ Python 的 `random.Random`(MT19937)：随机序不同是有意接受的差异，
 /// 两边只保证「同输入同输出」与结构一致，不保证坐标逐位相同。
 fn rng_of(area: &str, size: i64, salt: &str, seed: Option<i64>) -> StdRng {
     match seed {

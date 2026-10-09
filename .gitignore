@@ -202,9 +202,9 @@ data/plugins/*
 # 本地 APK build 路径
 prev-build-*/
 
-# 🛰 LOD 预渲染瓦片（生成物，全量几百 MB）——**两个目录，别搞混**：
-#   · `public/prerender/`      = **真瓦片**（`world_map/prerender_pipeline.py` 用真楼脚印+OSM 道路画，页面默认吃它）
-#   · `public/prerender-demo/` = **示意/占位瓦片**（骨架阶段的假几何；机主 2026-09-25 拍板「占位默认不画」
+# LOD 预渲染瓦片（生成物，全量几百 MB）——**两个目录，别搞混**：
+#   · `public/prerender/`      = **真瓦片**（离线数据生成脚本 用真楼脚印+OSM 道路画，页面默认吃它）
+#   · `public/prerender-demo/` = **示意/占位瓦片**（骨架阶段的假几何；2026-09-25 已定「占位默认不画」
 #                                ⇒ 搬到单独目录，只在 `?lod=demo` 对照/自检时用）
 # 下面这条只挡**真瓦片目录的新 PNG**；已经跟踪的（试点 ≤3MB 样本）不受影响、照常提交。
 
@@ -212,44 +212,44 @@ prev-build-*/
 #   `.gitignore` 只对**未跟踪**文件生效 ⇒ 它们照常能提交（PR 只带这批 ≤3MB 的可复现样本）；
 # · 之后**新生成**的全量瓦片（没被跟踪过的路径）在这里被忽略，不会把仓库撑爆。
 # 清单 `manifest.json` 是**已跟踪**的，跟着样本一起走（PR 描述要用它的署名与统计）。
-# ⚠️ 只忽略 **PNG**（瓦片），`manifest.json` 与已跟踪的那批样本照常提交：
+# 只忽略 **PNG**（瓦片），`manifest.json` 与已跟踪的那批样本照常提交：
 #    gitignore 对**已跟踪**文件无效 ⇒ 骨架阶段那批示意瓦片 + 试点真瓦片仍在版本控制里（PR 样本），
 #    而全量新生成的瓦片（未跟踪路径）被这里挡住。
 public/prerender/**/*.png
 
-# 🛣 离线路面包（`world_map/export_roads_bundle.py` 生成物，页面按需取；**不入 git**）：
+# 离线路面包（离线数据生成脚本 生成物，页面按需取；**不入 git**）：
 #    由已取到的路网缓存导出，`index.json` 里有格数/条数/时间戳，可随时重生成。
 public/roadsbundle/
-# 🏢 离线楼房包（`world_map/export_bld_bundle.py` 生成物；**不入 git**）：
+# 离线楼房包（离线数据生成脚本 生成物；**不入 git**）：
 #    由已缓存的 Overture 楼房盘导出（**真脚印 = real**，不含 sketch），index.json 里有格数/栋数/时间戳。
-#    ⚠️ 体积大（实测 373 格 / 72 万栋 / ~100MB）⇒ 只该在本地生成，**别提交**（预览包重建会一起拷过去）。
+#    体积大（实测 373 格 / 72 万栋 / ~100MB）⇒ 只该在本地生成，**别提交**（预览包重建会一起拷过去）。
 public/bldbundle/
-# 🧱 **细格楼房包（0.01°）**：同一个导出脚本 `--size 0.01` 的产物，落在**另一个目录**里，
+# **细格楼房包（0.01°）**：同一个导出脚本 `--size 0.01` 的产物，落在**另一个目录**里，
 #    为的是**双包并存**（老包 0.05° 是唯一端到端验过的一版，先不删）。客户端按 `index.cellSize` 认格边长
 #    ⇒ 两个目录都能跑（`wsOfflineFeed` 的候选目录 `["bldbundle-002","bldbundle"]`）。
 #    实测：7676 格 / 72.0 万栋 / 102.8MB（与老包**同体积**，只是格子更细）⇒ 同样别提交。
 public/bldbundle-002/
-# 🏷 **真名包**（`world_map/export_names_bundle.py --out` 的落点；命名线交接过来的那条）：
+# **真名包**（离线数据生成脚本 --out` 的落点；命名线交接过来的那条）：
 #    由 Overture places 的行组索引导出（**离线复用 footer 索引 + 行组缓存，零下载**）。
 #    实测 93 格 + index / ~233KB ⇒ 与 placesbundle 同待遇：生成物、不入 git。
 public/namesbundle/
-# 🏷 片区名离线包（`world_map/fetch_places.py` + `export_places_bundle.py` 生成物；**不入 git**）：
+# 片区名离线包（离线数据生成脚本 + 离线数据生成脚本 生成物；**不入 git**）：
 #    实测 32 格 / 145 个有名点 / 12.5 KB；以后补区县会变大 ⇒ 与另两个包同待遇，只留可复现的小样本。
 public/placesbundle/
 
-# 水系/绿地离线包（生成物，不进 git；管线 world_map/gw_bundle.py）
+# 水系/绿地离线包（生成物，不进 git；管线 离线数据生成脚本）
 public/gwbundle/
 
 # ── 2026-09-26 夜（PR 卫生：这三样原先只靠 .git/info/exclude 保护，那是**本机 local-only**，
 #    不进 PR 分支 ⇒ 一旦在别的机器上重放，它们就会被打包进去）──
-# 🖼 预览产物（构建出来的一整包，361 MB）
+# 预览产物（构建出来的一整包，361 MB）
 dist-webdev/
-# 🏙 城市包发布目录（运行期生成的 zip，**生成物不进 git**）
+# 城市包发布目录（运行期生成的 zip，**生成物不进 git**）
 public/citypacks/
-# 🧪 示意/占位瓦片（只服务试验台 `?lod=demo`；`PR-SLICES.md` 明确"不进 PR"）
+# 示意/占位瓦片（只服务试验台 `?lod=demo`；内部设计文档 明确"不进 PR"）
 public/prerender-demo/
 
-# 私有预览输出目录（切片① 代理建的，366MB，不进 git）
+# 私有预览输出目录（代理建的，366MB，不进 git）
 dist-namesverify/
 
 # 质量报告的落盘目录（工作流产物，不进仓）

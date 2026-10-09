@@ -753,7 +753,7 @@ mod tests {
         // 打开数据卡片：卡片必须在旋转组**之外**（否则卡片会歪着显示）
         let with_charts = render_svg(&l, &Opts { charts: true, ..Default::default() });
         let rot_open = with_charts.find("wm-rot").unwrap();
-        // ⚠️ `str::find` 只有"模式"一个参数（没有"从某处开始找"的重载）→ 自己切片 + 加偏移
+        // `str::find` 只有"模式"一个参数（没有"从某处开始找"的重载）→ 自己切片 + 加偏移
         let rot_close = rot_open
             + with_charts[rot_open..]
                 .find("</g>")

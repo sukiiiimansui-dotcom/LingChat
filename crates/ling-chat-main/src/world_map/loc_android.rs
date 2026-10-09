@@ -71,13 +71,13 @@ use tauri::{plugin::PluginHandle, AppHandle, Manager, Wry};
 /// 为什么不叫 `"geolocation"`：那是官方插件的名字，将来若真把官方插件加进来会撞名
 /// （`PluginManager.plugins` 是 HashMap，后注册的会覆盖先注册的）。加自己的前缀躲开。
 ///
-/// ⚠️ 这个字符串只在本工程内部使用（Rust → Kotlin 单向，前端从不直接调用它），
+/// 这个字符串只在本工程内部使用（Rust → Kotlin 单向，前端从不直接调用它），
 /// 改它不影响任何 JS / capabilities。
 const PLUGIN_NAME: &str = "lingchat-location";
 
 /// Kotlin 侧包名（`register_android_plugin` 会把 `.` 换成 `/` 再拼类名）。
 ///
-/// ⚠️ **必须与 App 的 Android 包名一致**：由 `src-tauri/tauri.conf.json` 的
+/// **必须与 App 的 Android 包名一致**：由 `src-tauri/tauri.conf.json` 的
 /// `identifier`（`com.noiq.ling-chat`，连字符在 Android 包名里被去掉）推出——
 /// 对应 `src-tauri/gen/android/app/src/main/java/com/noiq/lingchat/location/LocationPlugin.kt`。
 /// 写错不会编译报错，而是在**运行时** `Class.forName` 失败（见 `init()` 的兜底注释）。
@@ -223,7 +223,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<Wry> {
     #[cfg(target_os = "android")]
     {
         builder = builder.setup(|app, api| {
-            // ⚠️ 这一步是**阻塞**的：内部 run_on_android_context + `rx.recv()` 等主线程
+            // 这一步是**阻塞**的：内部 run_on_android_context + `rx.recv` 等主线程
             // 把 Kotlin 插件 new 出来并 load 进 PluginManager。
             // 时序上安全：PluginManager.onActivityCreate 在 TauriActivity.onCreate 里跑，
             // 而插件 setup 发生在 WryLifecycleObserver.onStart → Rust.start()，
@@ -295,7 +295,7 @@ pub async fn locate(app: &AppHandle, timeout: Duration, max_age: Duration) -> Gp
             // 先把两个字段 move 出来，省得跟 `resp` 的借用纠缠
             let code = resp.code.unwrap_or_default();
             let message = resp.message.unwrap_or_default();
-            // ⚠️ 这里**故意不用 `match code.as_str()`**：那样 `code` 会被借用贯穿整个
+            // 这里**故意不用 `match code.as_str`**：那样 `code` 会被借用贯穿整个
             // match（Rust 2021 的 scrutinee 规则），arm 里就 move 不出来了（E0505）。
             // 用 if/else 比较，借用当场结束。
             if code == "PERMISSION_DENIED" {

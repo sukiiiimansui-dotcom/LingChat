@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 公共 Overpass 端点，按顺序回退（前一个失败才试下一个）。
 ///
-/// ## ⚠️ 加端点前必读：**公共镜像的覆盖范围不一样**
+/// ## 加端点前必读：**公共镜像的覆盖范围不一样**
 ///
 /// Overpass 有一堆公共镜像，但**不是每个都装全球数据**。有的只装某个国家/地区
 /// （典型：`overpass.osm.ch` 只装瑞士）。这类"局部镜像"对中国的表现是：
@@ -39,7 +39,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///
 /// ## 实测方法（2026-09-13 用的就是这套）
 ///
-/// ⚠️ **必须用调用方的真实参数**测。`world_map_osm_summary` 的默认半径是 **300m**，
+/// **必须用调用方的真实参数**测。`world_map_osm_summary` 的默认半径是 **300m**，
 /// 子句是 `DEFAULT_KINDS` 的 5 类 × (way+node) = 10 个。
 /// 用 3000m 测会得到完全不同的结论（那规模在 `.de` 上要跑 180s+、在 `maps.mail.ru` 上直接 504），
 /// 容易误判成"端点都坏了"。
@@ -86,13 +86,13 @@ pub const DEFAULT_KINDS: [&str; 5] = ["building", "highway", "amenity", "leisure
 // 上面那套「按种类取」的查询**拿不到楼高**（`out center tags` 只给中心点，
 // 连轮廓都没有），所以楼房要单开一条查询：`out geom` 拿整条 way 的几何。
 
-/// `building:levels` → 米 的层高。**这是 OSM 的通用约定值**，不是我们编的：
+/// `building:levels` → 米 的层高。**这是 OSM 的通用约定值**，不是编的：
 /// OSM wiki 明确写 "building:levels … 3 metres per level" 是缺省换算。
 pub const LEVEL_METERS: f64 = 3.0;
 
 /// 既无高度也无层数时的默认楼高（米）。
 ///
-/// ⚠️ **这个值必须随数据一起返回给前端**（`stats.default_height_m`）——
+/// **这个值必须随数据一起返回给前端**（`stats.default_height_m`）——
 /// 让前端自己写一个 8 就会两边不一致，"哪些楼是猜的"也就说不清了。
 pub const DEFAULT_HEIGHT_M: f64 = 8.0;
 
@@ -102,7 +102,7 @@ pub const MAX_HEIGHT_M: f64 = 500.0;
 
 /// 建筑缓存键前缀。
 ///
-/// 🔴 **必须与摘要缓存分开**：两者用的是同一个 200m 网格 `grid_key`，
+/// **必须与摘要缓存分开**：两者用的是同一个 200m 网格 `grid_key`，
 /// 若共用文件名，`fetch_area`（按种类取）与 `fetch_buildings`（取轮廓）
 /// 会**互相覆盖同一份缓存** —— 表现为"楼房时有时无、摘要里出现 geometry 字段"，
 /// 而且两份数据都"看起来是对的"，极难定位。加前缀后键空间互不相交。
@@ -286,10 +286,10 @@ pub async fn fetch_area(
 ///   · 带上 `["building"!="no"]` —— OSM 里 `building=no` 是"这里不是楼"的显式否，
 ///     有些编辑器会用它压掉误标，不该被画成一栋楼。
 ///
-/// ⚠️ **`building:part` 不会被匹配**（键名不同），这是对的：它是"楼的一部分"，
+/// **`building:part` 不会被匹配**（键名不同），这是对的：它是"楼的一部分"，
 /// 与父要素同时渲染会**双重挤出**（部件从楼里穿出来）。真要细分体块得另开一条路。
 ///
-/// ⚠️ `relation["building"]` 也取回来了，但 [`buildings_geojson`] **只解析 way**：
+/// `relation["building"]` 也取回来了，但 [`buildings_geojson`] **只解析 way**：
 /// 多边形的环组装（outer/inner 配对、洞）是另一件事，草率地"取点数最多的 outer"
 /// 会把带内院的楼画成实心块，且**不报任何错**。所以关系被**计数但不渲染**
 /// （`stats.skipped.relation`）—— 数据缺口必须看得见，不能悄悄少画。
@@ -567,7 +567,7 @@ fn ring_of(geom: &[Value]) -> Option<Vec<Value>> {
 /// **两个返回值都要**：
 ///   · FC 是给 MapLibre 的（保持成**纯 GeoJSON**，不掺自定义字段，
 ///     免得哪天渲染器对多余成员挑食）；
-///   · 统计是给人看的 —— 「多少栋楼的高度是真数据、多少栋是我猜的」必须可回答，
+///   · 统计是给人看的 —— 「多少栋楼的高度是真数据、多少栋是的」必须可回答，
 ///     否则"地图上楼房看起来挺对"这件事无法与"其实全是默认 8 米"区分开。
 ///
 /// 每个要素的 `properties`：
@@ -728,7 +728,7 @@ pub fn buildings_geojson(osm: &Value) -> (Value, Value) {
 /// 道路缓存的键前缀（与 `BUILDINGS_KEY_PREFIX` 隔离，理由同上）
 pub const ROADS_KEY_PREFIX: &str = "road_";
 
-/// 我们要的路等级 → **渲染/寻路用的"档次"**（0 最粗 ~ 4 最细）。
+/// 要的路等级 → **渲染/寻路用的"档次"**（0 最粗 ~ 4 最细）。
 ///
 /// 为什么要在后端就归一化：前端要按档次分线宽/亮度，寻路要按档次给**通行代价**
 /// （走主干道比钻小巷快）。这两件事都需要一张"等级表"，
@@ -750,7 +750,7 @@ pub fn road_rank(highway: &str) -> u8 {
 
 /// 取路的 Overpass QL。
 ///
-/// ⚠️ 三个刻意的取舍：
+/// 三个刻意的取舍：
 ///   1. **只取 `way`**：道路在 OSM 里就是 way（关系是路线的集合，没有自己的几何）；
 ///   2. **用正则一次列全**而不是 `way["highway"]` 全收 —— 后者会把
 ///      `bus_stop` 的站台、`platform`、`construction` 甚至 `proposed`（**规划中、根本不存在**）
@@ -1236,7 +1236,7 @@ mod tests {
     fn buildings_query_asks_for_geometry_not_centers() {
         let q = buildings_query(29.5630, 106.5516, 300.0);
         assert!(q.starts_with("[out:json][timeout:40];("), "{q}");
-        // 🔴 这条是本查询存在的理由：`out center` 只有中心点，挤不出体块
+        // 这条是本查询存在的理由：`out center` 只有中心点，挤不出体块
         assert!(q.ends_with(");out geom;"), "必须用 out geom：{q}");
         assert!(!q.contains("out center"), "不能退回 out center：{q}");
         assert!(q.contains("way[\"building\"][\"building\"!=\"no\"](around:300,29.563,106.5516);"));
@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(feats.len(), 3, "只有 3 条是能画的 way");
         assert_eq!(st["count"], json!(3));
 
-        // 🔴 关键不变量：三档来源之和 == 画出来的栋数（分布不能自己骗自己）
+        // 关键不变量：三档来源之和 == 画出来的栋数（分布不能自己骗自己）
         let h = st["height_source"]["height"].as_u64().unwrap();
         let l = st["height_source"]["levels"].as_u64().unwrap();
         let d = st["height_source"]["default"].as_u64().unwrap();
@@ -1548,8 +1548,8 @@ mod tests {
 // **反过来：让草图按真实数据长出来**（按真实朝向排路网、楼放在真实相对位置）。
 //
 // 这个函数只做第一件事：**从真实楼体的边里估出主朝向**。
-// ⚠️ 用**边长加权**而不是"数边"：长边（临街立面）才代表街区走向，短边多是阳台/凹凸。
-// ⚠️ 角度取**模 90°**：矩形街区的两个方向等价（0° 与 90° 是同一套肌理）。
+// 用**边长加权**而不是"数边"：长边（临街立面）才代表街区走向，短边多是阳台/凹凸。
+// 角度取**模 90°**：矩形街区的两个方向等价（0° 与 90° 是同一套肌理）。
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// 从一组多边形环里估主朝向：返回 `(度数 0~90, 强度 0~1)`。
@@ -1701,7 +1701,7 @@ mod orientation_tests {
 //     让"楼高覆盖率低"这件事在**生成阶段**就可量化，而不是等画出来才发现一片 8m；
 //   · 按占地**降序**并截断（生成器只画得下前 N 栋；地标/大楼优先）。
 //
-// ⚠️ 高度 fallback 链与前端 `wsBuildingHint.ts` 同口径：height → levels×3 → 默认 8m。
+// 高度 fallback 链与前端 `wsBuildingHint.ts` 同口径：height → levels×3 → 默认 8m。
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// 一栋真实楼（归一化坐标 + 高度）
@@ -1821,7 +1821,7 @@ pub fn hint_buildings(osm: &serde_json::Value, max_n: usize) -> (f64, f64, Vec<H
         let name = tags.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
         out.push(HintBuilding {
             x: (cx - min_x) / w,
-            // ⚠️ y 轴翻转：纬度向上、网格向下（与前端 wsGridGeo 的约定一致；写错整张图上下颠倒）
+            // y 轴翻转：纬度向上、网格向下（与前端 wsGridGeo 的约定一致；写错整张图上下颠倒）
             y: (max_y - cy) / h,
             area: ring_area_rel(&ring) / (w * h),
             height_m: h_m,

@@ -3,14 +3,14 @@ name: 构建开发版（全量测试）
 on:
   push:
     # 2026-10-05：把当前开发分支 `feat/worldsim` 加进来 —— 否则这份**四平台全量构建**
-    # （windows-amd64 / linux-amd64 / linux-aarch64 / macos）在 fork 上永远不会为我们的提交跑。
+    # （windows-amd64 / linux-amd64 / linux-aarch64 / macos）在 fork 上永远不会为提交跑。
     branches: ["feat/worldsim", "dev", "dev/**"]
     # 2026-10-05 第二改：`paths-ignore` → **`paths` 白名单**。
     # 原来只忽略 `**.md`/`docs/**`/`.vscode/**` ⇒ 改 CI 配置、改工具脚本、动 `.github/**` 之类
-    # **任何非文档改动都会拉一次 20 分钟的四平台构建**（主人原话：「现在干什么都会触发 ci」）。
+    # **任何非文档改动都会拉一次 20 分钟的四平台构建**（现在干什么都会触发 ci）。
     # 现在只有**真会影响构建的目录**才自动触发；要临时跑一次用 `workflow_dispatch`（下面本来就有）。
     paths:
-      # 2026-10-05 收窄（主人原话「干什么都会触发 ci」）：这一份是**原生侧**验证 ⇒ 只有 Rust/原生相关
+      # 2026-10-05 收窄（干什么都会触发 ci）：这一份是**原生侧**验证 ⇒ 只有 Rust/原生相关
       # 改动才自动跑。前端（`src/**`、`public/**`）由「轻量检查」每次推都验；原生构建另有**每天定时一次**
       # （下面的 `schedule`）+ 手动触发（`workflow_dispatch`）兜底。
       - 'src-tauri/**'

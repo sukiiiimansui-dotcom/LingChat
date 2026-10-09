@@ -17,7 +17,7 @@
 //! ## 为什么这个文件不 import tauri
 //! 它是**纯函数模块**（`Value` 进 `Value` 出），所以能在手机上脱离工程
 //! `rustc --test` 真跑单测 —— 存档兼容性这种"错了就丢用户数据"的地方，
-//! 不该只有"我看了一遍代码"这一种验证方式。
+//! 不该只有"了一遍代码"这一种验证方式。
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 

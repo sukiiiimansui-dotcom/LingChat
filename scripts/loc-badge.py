@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.dirname(HERE)
 
 # 要数的目录（相对树根）
-# ⚠️ 不要加 `wsbench/`：那是**本机测试台**，不进 git（`.git/info/exclude`），
+# 不要加 `wsbench/`：那是**测试台**，不进 git（`.git/info/exclude`），
 #    数它会让"本地复算"和"CI 复算"对不上（2026-10-06 实测差 1.4 万行，就是它）。
 #    徽章要反映的是**仓库里真有的东西**。
 SCAN = ["src", "src-tauri/src", "crates", "scripts", "public"]
@@ -250,7 +250,7 @@ def main():
     per_lang = count_tree(args.root)
     upstream = count_tree(args.upstream) if args.upstream else None
 
-    # 🔴 守门：上游那棵树要是没数到东西（路径写错、克隆失败、目录是空的），
+    # 守门：上游那棵树要是没数到东西（路径写错、克隆失败、目录是空的），
     # **宁可报错也不要**出一个「官方 0 行 ⇒ 净增 = 本仓全部」的假数字。
     if upstream is not None and total_of(upstream) < 1000:
         print(f"❌ 官方树 `{args.upstream}` 只数到 {total_of(upstream)} 行 —— 路径不对或没拉下来，拒绝出数。", file=sys.stderr)

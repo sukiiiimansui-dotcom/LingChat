@@ -22,7 +22,7 @@ pub struct OsmHint {
     /* ── B 方案（2026-09-19）：让草图**按真实数据长出来**，而不是"贴到真实地图上" ──
        为什么走 B：渝中区 400m 的 152 栋真实楼体实测 ⇒ 真实城市肌理**主朝向 ≈30~40°**，
        而本文件生成的是**轴对齐 0°/90° 井字路网**（差 30~40°）；且楼体位置是 RNG 生成
-       ⇒ **逐栋对齐在数学上不可能**。（详见 world_map/NEXT-STEP.md） */
+       ⇒ **逐栋对齐在数学上不可能**。（详见 内部设计文档） */
     /// 真实楼体主朝向（度，0~90）；0 表示"没有信息，按轴对齐"
     pub orientation_deg: f64,
     /// 真实楼体清单（已归一化到 0~1，见 `osm::HintBuilding`）；空 = 没有信息
@@ -59,10 +59,10 @@ impl OsmHint {
             highway_kinds: len("highway_types"),
             has_water: has("leisure", "water") || has("landuse", "water"),
             has_park: has("leisure", "park") || has("leisure", "garden"),
-            // ⚠️ 真实楼体信息**不在 summary 里**（summary 是聚合结果，没有逐栋几何）——
+            // 真实楼体信息**不在 summary 里**（summary 是聚合结果，没有逐栋几何）——
             // 要它得拿 Overpass 原始 JSON 走 `with_real_buildings()`。
             // 这里显式写全字段（不用 `..Default::default()`）是有意的：
-            // 以后再加字段时**编译器会强制我在这里做决定**，而不是悄悄漏掉。
+            // 以后再加字段时**编译器会强制做决定**，而不是悄悄漏掉。
             orientation_deg: 0.0,
             buildings: Vec::new(),
             buildings_total: 0,
@@ -71,7 +71,7 @@ impl OsmHint {
 
     /// 在已有摘要的基础上**补上真实楼体信息**（B 方案用）。
     ///
-    /// ⚠️ 这一步**不会改变 `make_sketch` 的任何现有行为** ——
+    /// 这一步**不会改变 `make_sketch` 的任何现有行为** ——
     /// `make_sketch` 目前只读 density/has_water/has_park；新字段先落在这里，
     /// 等路网/楼体排布改造时再消费（分阶段做，每阶段都能独立验收）。
     pub fn with_real_buildings(mut self, osm: &Value, max_n: usize) -> Self {
@@ -110,7 +110,7 @@ pub fn make_sketch(area_name: &str, size: i32, seed: Option<u64>, osm: Option<&O
        草图的楼/公园/水域是**轴对齐矩形**（schema 只有 x/y/w/h），只转中心点会让
        "街道斜着、楼还是正的" —— 比不转更难看。而场景级旋转由渲染器统一施加，
        对所有元素（线段 + 矩形）都是**精确**的，且**不动 schema**。
-       ⚠️ 渲染器还没消费这个字段（阶段 C 做）—— 在它消费之前，本字段只是**数据就绪**。 */
+       渲染器还没消费这个字段（阶段 C 做）—— 在它消费之前，本字段只是**数据就绪**。 */
     let rot = osm.map(|o| o.orientation_deg).unwrap_or(0.0);
 
     let mut buildings: Vec<Value> = Vec::new();
@@ -269,7 +269,7 @@ pub fn make_sketch(area_name: &str, size: i32, seed: Option<u64>, osm: Option<&O
         "name": area_name,
         "size": s,
         // 场景旋转（度，绕中心）。0 = 轴对齐（与历史行为一致）。
-        // ⚠️ 这里只能是普通注释：`json!` 宏内部是表达式，Rust 不允许表达式上的 `///` 文档属性
+        // 这里只能是普通注释：`json!` 宏内部是表达式，Rust 不允许表达式上的 `///` 文档属性
         "rot": rot,
         "buildings": buildings,
         "roads": roads,
@@ -340,7 +340,7 @@ mod tests {
         }
     }
 
-    /// 🔴 阶段 A 的**回归护栏**：新增字段**不得**改变现有生成行为。
+    /// 阶段 A 的**回归护栏**：新增字段**不得**改变现有生成行为。
     /// 做法：同样的 (area, size, seed)，一次用"只有旧字段"的 hint、一次用"补了真实楼体"的 hint，
     /// 生成结果必须**逐字节相同**（等路体排布改造时，这条测试会**故意红**，那时才该改它）。
     #[test]

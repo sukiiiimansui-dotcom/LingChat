@@ -1,4 +1,4 @@
-//! 交通工具系统（T2-3 的 Rust 版，逐行对照 Python 原型 `world_map/transport.py`）
+//! 交通工具系统（T2-3 的 Rust 版，逐行对照 Python 原型 Python 原型）
 //!
 //! ## 这个模块干什么
 //! 9 种交通方式（walk/bike/bus/subway/taxi/car/train/plane/ferry）的参数表 →
@@ -620,7 +620,7 @@ fn station_for(mode_key: &str, lng: f64, lat: f64, context: Option<&Value>) -> O
 // 本模块不内置水域/海岸线数据（体积大且需与地图数据同源）。两种用法：
 // ① 调用方直接传 cross_water=True/False；② 注册水域检测器，由地理模块注入。
 // 与 Python 的唯一差别：Rust 没有「捕获异常」，检测器里 panic 会传播给调用方，
-// 所以约定检测器必须自己保证不 panic（锁中毒时我们会取回内层值而不是二次 panic）。
+// 所以约定检测器必须自己保证不 panic（锁中毒时会取回内层值而不是二次 panic）。
 
 /// 水域检测器签名：两点是否跨水
 pub type WaterChecker = Box<dyn Fn((f64, f64), (f64, f64)) -> bool + Send + Sync + 'static>;

@@ -21,7 +21,7 @@ use crate::ai_service::llm::{ChunkStream, LlmChunk, LlmConfig, LlmUsage};
 use crate::ai_service::types::{LlmMessage, ToolDefinition};
 
 // ─── Provider ────────────────────────────────────────────────────
-// 钦灵：为了修复 DeepSeek 问题，我在这里预留了字段，以备将来使用。
+// 钦灵：为了修复 DeepSeek 问题，预留了字段，以备将来使用。
 // （provider 现用于 #787 的剥名规避门控；reasoning_effort 为思考等级，仅开启思考时下发）
 
 pub struct GenaiProvider {

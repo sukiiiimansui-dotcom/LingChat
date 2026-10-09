@@ -22,7 +22,7 @@
 //! | [`world_map_pending_memory`] | **只读预览**待写记忆（一行不取走） | 前端地图页的「待写记忆」区 |
 //! | [`world_map_take_pending_memory`] | **取走**待写记忆（drain） | 记忆管线的接入点 |
 //!
-//! ⚠️ 消费权（期 1，2026-10-02）：待写记忆队列的**唯一消费方是注入路径**
+//! 消费权（2026-10-02）：待写记忆队列的**唯一消费方是注入路径**
 //! （`state.rs::injection_text`）。前端只能只读预览 —— 两边抢会让 AI 的注入**静默**少一段，
 //! 详见 [`world_map_pending_memory`] 的注释。
 //!
@@ -632,7 +632,7 @@ pub async fn world_map_take_pending_memory(
 
 /// `world_map_pending_memory` —— **只读预览**待写记忆（看一眼，**一行都不取走**）。
 ///
-/// ## 消费权裁定（期 1，2026-10-02：与"事件上屏"同期定死）
+/// ## 消费权裁定（2026-10-02：与"事件上屏"同期定死）
 ///
 /// 待写记忆队列原先有**两个**消费方：注入路径（`state.rs::injection_text`）与前端面板的
 /// [`world_map_take_pending_memory`]。两边抢同一个队列 —— 前端一 drain，AI 那一轮注入就
@@ -658,7 +658,7 @@ pub async fn world_map_pending_memory(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    // 🔴 读锁（不是写锁）：这一层连"想改队列"的能力都不给自己 —— 只读是结构上的，
+    // 读锁（不是写锁）：这一层连"想改队列"的能力都不给自己 —— 只读是结构上的，
     //    不靠调用方自觉（`take_memory` 那条路要 `write()`）。
     let guard = state.0.read().await;
     let items = guard.pending_lines(wanted.as_deref());
@@ -1078,7 +1078,7 @@ mod tests {
         assert!(payload["speech_hint"].as_str().unwrap().starts_with("刚才发生了："));
     }
 
-    /// 期 2：事件的 `effects`（心情/体力增量）必须**原样**过广播载荷 ——
+/// 事件的 `effects`（心情/体力增量）必须**原样**过广播载荷 ——
     /// 前端 `wsNeeds.applyEvent` 只认 `payload.event.effects` 这一份（页面里 0 处算术）。
     /// 同时核对：不带 effects 的事件在载荷里是**空数组**，不是缺字段（"没有"要说得出来）。
     #[test]

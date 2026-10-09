@@ -1203,7 +1203,7 @@ pub fn editor_list_global_characters(key: String) -> Result<Vec<GlobalCharacter>
 /// 按「剧本 key + 角色 key」在剧本自己的 `characters/` 里找。全局角色库不在这
 /// 条路径上，所以剧本里写一个全局角色名，运行时必然解析不到人。
 ///
-/// 但作者真正的诉求是「别让我把已有的人设再敲一遍」，那复制一份就够了：
+/// 但作者真正的诉求是「别让已有的人设再敲一遍」，那复制一份就够了：
 /// 复制之后 `register_script_roles` 能正常注册，剧本也仍然是自包含的。
 ///
 /// **立绘默认不复制**：`get_avatar_file` 的查找顺序本来就是「先

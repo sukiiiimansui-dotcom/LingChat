@@ -369,7 +369,7 @@ pub fn spawn_stream(
             "stream": true
         });
 
-        // ⚠️ 必须注入预配置的 TLS 后端（见 `src/utils/tls.rs` 的模块说明）：
+        // 必须注入预配置的 TLS 后端（见 `src/utils/tls.rs` 的模块说明）：
         // reqwest 0.13 默认用 rustls-platform-verifier 验证系统证书，而本仓**从不初始化它**
         // → 裸 `Client::builder().build()` 在 Android 上发请求时会 **panic**（不是返回 Err）：
         //   thread 'tokio-rt-worker' panicked at rustls-platform-verifier-0.7.0/src/android.rs:90:

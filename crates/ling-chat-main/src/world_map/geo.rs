@@ -110,7 +110,7 @@ impl GeoSource {
     pub fn new(cache: impl AsRef<Path>) -> Self {
         let cache = cache.as_ref().to_path_buf();
         let _ = std::fs::create_dir_all(&cache);
-        // ⚠️ LingChat 专有改动（同步真源时注意保留）：
+        // LingChat 专有改动（同步真源时注意保留）：
         // 这里拉的是 https://geo.datav.aliyun.com/...，而 reqwest 0.13 默认用
         // rustls-platform-verifier，Android 上不预先初始化会直接 panic ——
         // 见 src/utils/tls.rs 的模块说明。真源工程（Termux/桌面调试服务）用裸 builder 没问题，

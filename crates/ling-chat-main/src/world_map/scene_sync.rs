@@ -10,7 +10,7 @@
 //!
 //! ## 为什么单独一层、且**不依赖任何 crate**
 //! 本机跑不了 `cargo test`（没有 `target/`，冷编译整棵 Tauri 依赖树 40 分钟起），
-//! 但纯 `std` 模块可以脱离工程直接 `rustc --test` 跑（这条技术我们验证过）。
+//! 但纯 `std` 模块可以脱离工程直接 `rustc --test` 跑（这条技术验证过）。
 //! 所以**这一层刻意不出现 `use crate::…`、不出现 serde/tauri** ——
 //! 这是"能在手机上跑单测"的**唯一前提**，改动前请先想清楚。
 //!
@@ -34,13 +34,13 @@
 /// 作用有两个：① 一眼看出"这是地图生成的，不是用户建的"；
 /// ② 让清理/统计能**精确圈定**自己造的场景（不要去猜名字）。
 ///
-/// ⚠️ 它同时是**已持久化数据的格式**（见模块注释），别随手改。
+/// 它同时是**已持久化数据的格式**（见模块注释），别随手改。
 pub const MAP_SCENE_ID_PREFIX: &str = "worldmap:";
 
 /// 一段描述里最多提几个附近设施。
 ///
 /// 旁白最终进的是 LLM prompt（`generator.rs:231-235`），提太多既费 token
-/// 又会把"地点"这件事淹掉 —— 细节本来就该留在我们自己的 addendum 里。
+/// 又会把"地点"这件事淹掉 —— 细节本来就该留在自己的 addendum 里。
 pub const NEARBY_MAX: usize = 3;
 
 /// 地图侧输入 —— 对应 `MapRuntime.scene` 的 `{area, place, adcode}`
@@ -82,7 +82,7 @@ pub enum SkipReason {
     NoPlace,
     /// 用户动过 `current_scene_id` → 让位（见 [`should_yield`]）。
     YieldToUser,
-    /// 当前已经在我们要去的那个场景上了 → 不必重复写。
+    /// 当前已经在要去的那个场景上了 → 不必重复写。
     SameScene,
     /// 拼不出合法的场景文案（fail closed，见模块注释第 2 条）。
     NoUsableText,
@@ -227,8 +227,8 @@ pub fn scene_draft(input: &PlaceInput<'_>) -> Option<SceneDraft> {
     })
 }
 
-/// **让位规则**：我们在世界模拟期间借用了 `current_scene_id`，这个函数判断
-/// "现在这个值还是不是我们写的" —— 不是就让位，不要再抢。
+/// **让位规则**：在世界模拟期间借用了 `current_scene_id`，这个函数判断
+/// "现在这个值还是不是写的" —— 不是就让位，不要再抢。
 ///
 /// ## 为什么需要它（上游零仲裁）
 /// `current_scene_id` 是 `GameStatus` 上的**单一全局槽位**（`game_status.rs:39`），
@@ -236,11 +236,11 @@ pub fn scene_draft(input: &PlaceInput<'_>) -> Option<SceneDraft> {
 /// 用户随时可能在设置页点一个场景（`SettingsBackground.vue:726`），
 /// 而 `game.rs:475-483` 在"没有场景时随机挑一个" —— 所以这个槽位**一直在被人动**。
 ///
-/// ## 真值表（`we_last_wrote` = 我们上次写进去的值）
-/// | 我们上次写的 | 当前值 | 让位？ | 含义 |
+/// ## 真值表（`we_last_wrote` = 上次写进去的值）
+/// | 上次写的 | 当前值 | 让位？ | 含义 |
 /// |---|---|---|---|
 /// | `None` | 任意 | **否** | 还没写过 → 这次是"借"（先把原值存进书签再覆盖） |
-/// | `Some(x)` | `Some(x)` | **否** | 还是我们写的 → 继续同步 |
+/// | `Some(x)` | `Some(x)` | **否** | 还是写的 → 继续同步 |
 /// | `Some(x)` | `Some(y)` | **是** | 被别人改了 → 让位 |
 /// | `Some(x)` | `None` | **是** | 被别人清空了（例如设置页再点一次取消选中，`SettingsBackground.vue:708-714`）→ 让位 |
 ///
@@ -264,7 +264,7 @@ pub fn should_yield(we_last_wrote: Option<&str>, current: Option<&str>) -> bool 
 /// 4. 否则 → [`Plan::Switch`]
 ///
 /// 第 2 步排在第 3 步**前面**是刻意的：如果用户手动切到了**别的**场景，
-/// 我们要报的是"让位"，而不是"已经在目标场景上"—— 前者会让我们彻底停止同步，
+/// 要报的是"让位"，而不是"已经在目标场景上"—— 前者会让彻底停止同步，
 /// 后者只表示这一次不用动。两者对调用方的后续行为不同，不能混。
 pub fn plan(
     current: Option<&str>,
@@ -355,8 +355,8 @@ mod tests {
 
         // 真正的不变量：id 里**最多只有 1 个 `/`**（base 与 place 之间的那个分隔符）。
         // 段内部的斜杠必须已经被清洗掉，否则"段边界"就不唯一了。
-        // ⚠️ 别写成 `!contains('/')` —— id 本来就是 `worldmap:<base>[/<place>]`，
-        //    那个分隔符是**格式的一部分**（第一版我这里断言错了，是测试的错不是代码的错）。
+        // 别写成 `!contains('/')` —— id 本来就是 `worldmap:<base>[/<place>]`，
+        //    那个分隔符是**格式的一部分**（第一版断言错了，是测试的错不是代码的错）。
         for p in [x, y] {
             let id = scene_id(&p).unwrap();
             let rest = &id[MAP_SCENE_ID_PREFIX.len()..];
@@ -394,7 +394,7 @@ mod tests {
         assert!(id.starts_with(MAP_SCENE_ID_PREFIX));
         assert!(is_map_scene(&id));
         assert!(!is_map_scene("440104"));
-        assert!(!is_map_scene("plugin:foo/bar")); // 插件场景不该被当成我们的
+        assert!(!is_map_scene("plugin:foo/bar")); // 插件场景不该被当成
     }
 
     // ── 文案 ────────────────────────────────────────────────────────
@@ -480,7 +480,7 @@ mod tests {
         // 没写过 → 不让位（这次是"借"，原值由调用方存书签）
         assert!(!should_yield(None, None));
         assert!(!should_yield(None, Some("用户选的咖啡厅")));
-        // 还是我们写的 → 不让位
+        // 还是写的 → 不让位
         assert!(!should_yield(Some("worldmap:440104"), Some("worldmap:440104")));
         // 被别人改成别的 → 让位
         assert!(should_yield(Some("worldmap:440104"), Some("用户选的咖啡厅")));
@@ -500,7 +500,7 @@ mod tests {
             plan(Some("用户选的咖啡厅"), None, &i),
             Plan::Switch(scene_draft(&i).unwrap())
         );
-        // 已经在我们写的场景上 → 不重复写（高频 patch 不刷盘）
+        // 已经在写的场景上 → 不重复写（高频 patch 不刷盘）
         assert_eq!(plan(Some(&id), Some(&id), &i), Plan::Skip(SkipReason::SameScene));
     }
 
@@ -519,11 +519,11 @@ mod tests {
         );
     }
 
-    /// 让位优先于"已经在目标场景上"：顺序反了会让我们继续抢。
+    /// 让位优先于"已经在目标场景上"：顺序反了会让继续抢。
     #[test]
     fn yield_takes_precedence_over_same_scene() {
         let i = place("东山口", Some("便利店"), Some("440104"));
-        // 我们上次写的 ≠ 当前（用户切走了）→ 必须是让位，而不是别的理由
+        // 上次写的 ≠ 当前（用户切走了）→ 必须是让位，而不是别的理由
         let p = plan(Some("别的场景"), Some("worldmap:440104"), &i);
         assert_eq!(p, Plan::Skip(SkipReason::YieldToUser));
     }

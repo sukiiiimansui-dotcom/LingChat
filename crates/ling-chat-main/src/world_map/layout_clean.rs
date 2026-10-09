@@ -6,8 +6,8 @@
 //!
 //! | 来源 | 重叠保证 |
 //! |---|---|
-//! | 规则草图 `sketch::make_sketch` | ✅ 有 `occ` 占用表 + `overlaps()` 逐栋拒绝重叠 |
-//! | **AI 精绘**（LLM 返回的布局） | ❌ **完全没有几何校验** |
+//! | 规则草图 `sketch::make_sketch` | 有 `occ` 占用表 + `overlaps` 逐栋拒绝重叠 |
+//! | **AI 精绘**（LLM 返回的布局） | **完全没有几何校验** |
 //!
 //! AI 布局一路走到画布的链路是：
 //! `bridge::run_stream` → `stream::assemble_layout` → `Event::Done.layout`

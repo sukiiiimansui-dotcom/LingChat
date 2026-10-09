@@ -3,7 +3,7 @@ name: 世界模拟·质量报告
 # 这份工作流**只出数字，不判红**（每个检查都 `continue-on-error`）。
 # 目的：把"屎山有多少"从感觉变成可比的数字 —— 重复率 / 未用导出 / 循环依赖 / 格式漂移 / Rust lint。
 #
-# 🔴 2026-10-06 三处「数字不可信」的修法（第一版基线暴露的）：
+# 2026-10-06 三处「数字不可信」的修法（第一版基线暴露的）：
 #   ① 报告目录**不能叫 `.ci-reports`** —— `upload-artifact@v4` 默认**不收隐藏目录**，
 #      所以 artifact 一直是空的（"No files were found with the provided path"）。改成 `ci-reports/`。
 #   ② prettier 原来 `| tail -30` ⇒ 摘要里的"漂移文件数"**上限恒为 30**（真值更大的时候看不出来）。
@@ -12,7 +12,7 @@ name: 世界模拟·质量报告
 #      摘要里那一格会**冒充 0 个环**。现在记退出码、三态显示（N 个环 / 0 / **未测出**），
 #      并且主测只扫 `.ts`（`--extensions ts --ts-config tsconfig.json`）避开那个解析坑。
 #
-# 触发：**不吃普通 push**（主人：「你加的质量报告触发了一半 ci」）—— 每天定时一次 + 手动；
+# 触发：**不吃普通 push**（你加的质量报告触发了一半 ci）—— 每天定时一次 + 手动；
 # 另外**只认它自己的文件**：改了这份 workflow 会跑一次（自验），源码推送不会。
 on:
   push:
@@ -73,10 +73,10 @@ jobs:
       - name: 循环依赖（madge，只扫 .ts 避开 .vue 解析崩）
         id: madge
         continue-on-error: true
-        # 收紧点：基线出来后，如果环数 > 0 且都在我们自己的模块里，可改成"环数不许增加"。
-        # ⚠️ 第一版是 `--extensions ts,vue`，实测 @babel/parser 在某个带 JSX 的文件上炸
+        # 收紧点：基线出来后，如果环数 > 0 且都在自己的模块里，可改成"环数不许增加"。
+        # 第一版是 `--extensions ts,vue`，实测 @babel/parser 在某个带 JSX 的文件上炸
         #    (`SyntaxError: Unexpected token (2:3)`) ⇒ 那一格其实**没有读数**却显示 0。
-        #    现在只扫 .ts（依赖图同样能覆盖我们的模块），并把退出码留给摘要判三态。
+        #    现在只扫 .ts（依赖图同样能覆盖模块），并把退出码留给摘要判三态。
         run: |
           mkdir -p ci-reports
           npx --yes madge@8 --circular --extensions ts --ts-config tsconfig.json \
@@ -88,7 +88,7 @@ jobs:
       - name: 格式漂移（prettier，仓库自带配置）
         id: prettier
         continue-on-error: true
-        # ⚠️ 原来 `| tail -30` 会让摘要里的"漂移文件数"上限恒为 30 ⇒ 现在整份落盘再数。
+        # 原来 `| tail -30` 会让摘要里的"漂移文件数"上限恒为 30 ⇒ 现在整份落盘再数。
         run: |
           mkdir -p ci-reports
           npx prettier --check "src/**/*.{ts,vue,css}" > ci-reports/prettier.txt 2>&1 || true
@@ -158,7 +158,7 @@ jobs:
         if: always()
         with:
           name: quality-js
-          # ⚠️ 目录**不能以点开头**：`upload-artifact@v4` 默认不收隐藏目录（第一版就是这么空掉的）
+          # 目录**不能以点开头**：`upload-artifact@v4` 默认不收隐藏目录（第一版就是这么空掉的）
           path: ci-reports/
           if-no-files-found: warn
 
@@ -231,10 +231,10 @@ jobs:
         run: |
           # 三态：有读数 / 0 / **未测出**
           #
-          # 🔴 2026-10-06 两个"假数字"的修法（都拿真 artifact 验过）：
+          # 2026-10-06 两个"假数字"的修法（都拿真 artifact 验过）：
           #   ① clippy 那两格原来数 `^warning` / `^error` —— 而 CI 上 clippy 输出**带 ANSI 颜色码**
           #      （`\x1b[33mwarning\x1b[0m:`），行首根本不是 "warning" ⇒ 恒算 **0**（235 条警告被写成 0）。
-          #      ⚠️ 就算剥掉颜色，`^warning:` 也只有 3 行 —— clippy 的诊断是**多行分块**的，
+          #      就算剥掉颜色，`^warning:` 也只有 3 行 —— clippy 的诊断是**多行分块**的，
           #      "数 warning 行"这条路本身不通。**唯一可信的是 cargo 自己的汇总行** `generated N warnings`，
           #      所以这里从汇总行求和，并把它自报的 `(N duplicates)` 一并写出来（免得又是个说不清的数）。
           #   ② rustfmt 那格数 `^Diff in` —— 那是**每个 diff 块**一行，不是每个文件

@@ -24,14 +24,14 @@ name: Build Map APK (unsigned · 本地签名)
 #
 #   · **NDK 缓存**：`sdkmanager "ndk;28.2.13676358"` 每次下 ~1GB。官方工作流也没缓存它，
 #     这是最容易被忽略的一块。这里加了 —— 命中后省掉几分钟。
-#   · **Gradle 缓存**：官方有、我们原来漏了。`~/.gradle/caches` + `wrapper`。
-#   · **rust-cache 开启 `cache-on-failure`**：⚠️ 这条最关键。原来没开，
+#   · **Gradle 缓存**：官方有、原来漏了。`~/.gradle/caches` + `wrapper`。
+#   · **rust-cache 开启 `cache-on-failure`**：这条最关键。原来没开，
 #     一旦构建失败（比如接线点写错），**整个 target/ 缓存就丢了**，
 #     下次从零编 —— 而失败重试恰恰是最常见的场景。
 #   · **`cache-all-crates`**：连 registry / git 依赖一起缓存。
 #   · **`profile` 可选输入**：默认 `fast`，用 env 覆盖 `.cargo/config.toml` 里的
 #     `lto="thin"` / `opt-level="z"`（那是为发布体积优化的，编译很慢）。
-#     `fast` 档实测能显著缩短编译时间，代价是产物略大 —— 我们只是自用验证，划算。
+#     `fast` 档实测能显著缩短编译时间，代价是产物略大 —— 只是自用验证，划算。
 #     要出正式包时选 `release`。
 #   · **concurrency**：同一分支的新构建会自动取消旧的，不浪费 runner。
 # ════════════════════════════════════════════════════════════════════════════
@@ -54,7 +54,7 @@ on:
     # 把当前开发分支加进来：推送即构建，别再让代码只靠本地 `vue-tsc` / `vite build` 兜着。
     branches: ['dev', 'feat/worldsim', 'feat/world-map', 'feat/world-map-**']
     paths:
-      # 2026-10-05 收窄（主人原话「干什么都会触发 ci」）：这一份是**原生侧**验证 ⇒ 只有 Rust/原生相关
+      # 2026-10-05 收窄（干什么都会触发 ci）：这一份是**原生侧**验证 ⇒ 只有 Rust/原生相关
       # 改动才自动跑。前端（`src/**`、`public/**`）由「轻量检查」每次推都验；原生构建另有**每天定时一次**
       # （下面的 `schedule`）+ 手动触发（`workflow_dispatch`）兜底。
       - 'src-tauri/**'
@@ -111,16 +111,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # ⚠️ 关键：`lfs: true` 让 checkout 直接拉 LFS 真文件。
+          # 关键：`lfs: true` 让 checkout 直接拉 LFS 真文件。
           # 少了它，152 个素材全是 131 字节指针 → APK 变空壳。
           lfs: true
 
-      # ⚠️ 必须用 `pnpm/setup@v1`（与官方工作流一致），**不能用 `pnpm/action-setup`**：
+      # 必须用 `pnpm/setup@v1`（与官方工作流一致），**不能用 `pnpm/action-setup`**：
       # 本仓库 `package.json` 里有 `"packageManager": "pnpm@11.21.0"`，
       # 再给 action 指定 `version` 会报「Multiple versions of pnpm specified」直接挂
       # （实测：Build Map APK #1 就死在第一步，0.0 分钟）。
       # 这个 action 还会**顺带装好 Node**（`runtime: node@26`），
-      # 所以官方工作流里没有单独的 `actions/setup-node` —— 我们也照做，省一步。
+      # 所以官方工作流里没有单独的 `actions/setup-node` —— 也照做，省一步。
       - uses: pnpm/setup@v1
         with:
           runtime: node@26
@@ -147,12 +147,12 @@ jobs:
           distribution: zulu
           java-version: '21'
 
-      # ⚠️ 2026-10-05：**必须显式覆盖 `packages`**。该 action 的默认值是
+      # 2026-10-05：**必须显式覆盖 `packages`**。该 action 的默认值是
       # `tools platform-tools`，而新 runner 镜像（ubuntu24/20260927.320）的 SDK 仓库里
       # **已经没有 `tools` 这个包** ⇒ `sdkmanager --install tools` 报
       # `Warning: Failed to find package 'tools'` ⇒ action 退出码 1，后面 11~20 步
       # （含「构建 APK」）**全被 skip**（run 37302533531 就是这么挂的；09-13 能过是因为旧镜像还认它）。
-      # 我们本来就有自己的 `sdkmanager "ndk;28.2.13676358"` 步骤，`tools` 不是必需品。
+      # 本来就有自己的 `sdkmanager "ndk;28.2.13676358"` 步骤，`tools` 不是必需品。
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools'
@@ -171,7 +171,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential clang
 
       # ── LFS 素材：空壳包的防线 ──────────────────────────────────────────
-      # ⚠️ 这里**故意用裸的 `git lfs pull`、不加 `--include`**（与官方 `release.yml` 一致）。
+      # 这里**故意用裸的 `git lfs pull`、不加 `--include`**（与官方 `release.yml` 一致）。
       # 原因：本仓库 LFS 规则是**按扩展名**的，按**路径**过滤看着更精确，
       # 但只要有一个 LFS 文件落在过滤路径之外（例如 `docs/assets/` 下的配图），
       # 就会被**静默漏掉** —— 而"漏掉素材"正是空壳包的成因，代价太大。
@@ -206,16 +206,16 @@ jobs:
       - name: 准备 Android 项目
         run: pnpm android:prepare
 
-      # ⚠️ 必须给开发包一个**独立的安装标识**（2026-09-13 加）
+      # 必须给开发包一个**独立的安装标识**（2026-09-13 加）
       #
-      # 起因：fork 继承的是上游的包名 `com.noiq.lingchat`，而机主手机上装的是**官方版**，
+      # 起因：fork 继承的是上游的包名 `com.noiq.lingchat`，而设备上装的是**官方版**，
       # 包名相同 → 安装器会直接把它当成「更新」，**覆盖掉官方 App**。
       #
       # Android 里两个概念要分清：
-      #   · `namespace`     = 代码包名（Kotlin 类路径 / R 类）—— 我们的
+      #   · `namespace`     = 代码包名（Kotlin 类路径 / R 类）——
       #                       `com/noiq/lingchat/location/LocationPlugin.kt` 在这里
       #   · `applicationId` = **安装标识**——系统靠它判断"这是不是同一个 App"
-      # 所以**只改 applicationId、namespace 保持不动**：官方版与我们的开发包能并存，
+      # 所以**只改 applicationId、namespace 保持不动**：官方版与开发包能并存，
       # 而 `register_android_plugin` 找的类路径不变，GPS 链路不受影响。
       #
       # 这一步只改 CI 工作区里的构建产物，**不碰仓库文件**（PR 不受影响）。
@@ -233,7 +233,7 @@ jobs:
             || { echo "❌ applicationId 没改成功"; exit 1; }
           echo "✅ namespace 未动 · applicationId 已改为独立标识"
 
-      # ── Gradle 缓存：官方有、我们原来漏了 ───────────────────────────────
+      # ── Gradle 缓存：官方有、原来漏了 ───────────────────────────────
       - name: 缓存 Gradle
         uses: actions/cache@v4
         with:
@@ -246,7 +246,7 @@ jobs:
 
       # 注意：这里**不配置任何签名**。
       # 没有 keystore.properties 时 Gradle 出的是 `app-*-release-unsigned.apk`，
-      # 正是我们要的 —— 拿回本地用自备 keystore 签。
+      # 正是要的 —— 拿回本地用自备 keystore 签。
       - name: 构建 APK（release · 未签名）
         run: |
           echo "编译档位: ${{ inputs.profile }}  (LTO=$CARGO_PROFILE_RELEASE_LTO opt-level=$CARGO_PROFILE_RELEASE_OPT_LEVEL)"

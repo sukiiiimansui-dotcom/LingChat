@@ -32,7 +32,7 @@
 //!
 //! ### 三个刻意的设计取舍
 //!
-//! * **冷却/闸门是把该条权重置 0，不是整体跳过**。机主明确要求：某个事件在冷却里，
+//! * **冷却/闸门是把该条权重置 0，不是整体跳过**。要求：某个事件在冷却里，
 //!   剩下的候选仍按各自权重正常抽。若改成"跳过整轮"，就会出现"最近下过雨所以这半小时
 //!   世界什么都不发生"这种怪事 —— 事件引擎的稀缺性应该由**全局节流**统一控制。
 //! * **天气类事件严格按真实天气开闸**（`weather.rain` 只在 `ctx.weather` 分类为雨时可触发）。
@@ -88,7 +88,7 @@
 //! ## 已知取舍（如实记录）
 //!
 //! * `luck.puddle`（踩到水坑）只在真实天气是雨时可触发，而"雨天降低户外运气项"
-//!   这条规则又会把它 ×0.35 —— 两条规则方向相反。按机主要求保留规则本身，
+//!   这条规则又会把它 ×0.35 —— 两条规则方向相反。按要求保留规则本身，
 //!   水坑事件因此只在雨天且其他候选都不可用时才会出现（权重仍 > 0，不是被禁掉）。
 //! * 权重数值是**拍出来的手感值**（不是拟合出来的）：只有量级有意义
 //!   （节日 ×5、深夜社交 ×0.25 这类），别把它们当标定参数。
@@ -137,7 +137,7 @@ pub const HEALTH_NIGHT_FACTOR: f64 = 2.0;
 
 /// 雨雪天：交通 ×2.2（堵车 / 延误）
 pub const TRAFFIC_RAIN_FACTOR: f64 = 2.2;
-/// 雨雪天：**户外**运气项 ×0.35（机主要求：雨天降低 luck 里的户外项）
+/// 雨雪天：**户外**运气项 ×0.35（要求：雨天降低 luck 里的户外项）
 pub const OUTDOOR_LUCK_RAIN_FACTOR: f64 = 0.35;
 
 /// 在餐厅/商场/超市这类消费场所：消费类 ×1.8
@@ -159,7 +159,7 @@ pub const LOW_ENERGY_HEALTH_FACTOR: f64 = 1.6;
 /// 体力低：工作学习 ×0.6（累 → 干不动）
 pub const LOW_ENERGY_WORK_FACTOR: f64 = 0.6;
 
-/// 节日当天：节日类 ×5.0（机主要求"大幅提高"）
+/// 节日当天：节日类 ×5.0（要求"大幅提高"）
 pub const FESTIVAL_FACTOR: f64 = 5.0;
 /// 节日当天：社交类 ×1.2（顺带的，节日里人也更容易凑到一起）
 pub const FESTIVAL_SOCIAL_FACTOR: f64 = 1.2;
@@ -381,7 +381,7 @@ pub fn weather_short(desc: &str) -> String {
 /// 单独的 `0.0` = 这一项不动（不是"清零"）。
 ///
 /// 为什么副作用写在事件表里、而不是前端按 id 再抄一张表：事件的语义真源就是这张表。
-/// 前端只做一件事 —— 把 `effects` 交给 `wsNeeds` 应用（`PLAN-GAMEPLAY.md:65` 的验收④：
+/// 前端只做一件事 —— 把 `effects` 交给 `wsNeeds` 应用（验收④：
 /// 「事件带的 `effects` 只改 `wsNeeds` 一处，页面里 0 处算术」）。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct NeedEffect {
@@ -478,7 +478,7 @@ macro_rules! ev {
     };
 }
 
-/// 十类现实事件总表（41 条：机主逐条确认的 38 条 + 3 条同类补充 ——
+/// 十类现实事件总表（41 条：逐条确认的 38 条 + 3 条同类补充 ——
 /// `festival.crowd` / `mood.calm` / `luck.small_gift`）。
 ///
 /// 权重手感：普通日常 5～7，罕见 3～5，节日当天专属 8～12（因为它平时被闸门关着）。
@@ -504,7 +504,7 @@ pub static EVENTS: &[EventDef] = &[
     ev!("social.stand_up", Category::Social, "被放鸽子", "{someone}临时说来不了，约在{place}的见面只能取消", 4.0, 7200),
 
     // ── 工作学习（4）──
-    // 加班带 `effects`（期 2）：体力掉 ⇒ 接下来"健康类升 / 工作学习类降"，也就是"累到容易病、也干不动活"。
+    // 加班带 `effects`（：体力掉 ⇒ 接下来"健康类升 / 工作学习类降"，也就是"累到容易病、也干不动活"。
     ev!("work.overtime", Category::Work, "加班", "临时被留下加班，{place}的灯一直亮到很晚", 6.0, 5400, hours: (17, 23), effects: &[NeedEffect { mood: -0.06, energy: -0.15 }]),
     ev!("work.meeting", Category::Work, "临时会议", "突然被拉进一个临时会议，{role}的下午被打断了", 6.0, 3600, hours: (9, 18), outdoor: Some(false)),
     // 截止时间是会拖到凌晨的，所以这条**不设时段闸门** —— 深夜的"工作 ×0.2"修正
@@ -513,7 +513,7 @@ pub static EVENTS: &[EventDef] = &[
     ev!("work.exam", Category::Work, "考试", "明天有考试，{role}在{place}翻着书，有点心不在焉", 4.0, 86400, hours: (8, 23)),
 
     // ── 健康（4）──
-    // 失眠这条带 `effects`（期 2）：`energy` 掉到 `LOW_ENERGY_THRESHOLD`(0.3) 之下时，
+    // 失眠这条带 `effects`（：`energy` 掉到 `LOW_ENERGY_THRESHOLD`(0.3) 之下时，
     // 权重修正 ⑤ 会抬健康类、压工作学习类 —— 一条"没睡好"从此**真的**影响接下来几小时出什么事。
     ev!("health.cold", Category::Health, "感冒", "{role}有点感冒，鼻子一直不通气", 5.0, 14400),
     ev!("health.insomnia", Category::Health, "失眠", "躺下很久也没睡着，{role}听着{place}外面的动静", 6.0, 14400, hours: (23, 5), outdoor: Some(false), effects: &[NeedEffect { mood: -0.08, energy: -0.18 }]),
@@ -539,7 +539,7 @@ pub static EVENTS: &[EventDef] = &[
     ev!("festival.crowd", Category::Festival, "人挤人", "节日的{place}人挤人，{role}走两步就要停一下", 8.0, 21600, festival_only: true),
 
     // ── 情绪（4）──
-    // 🔴 这四条里的前两条带 `effects`（期 2「因果通电」）：心情类事件**真的**把 `mood` 推低/推高，
+    // 这四条里的前两条带 `effects`（「因果通电」）：心情类事件**真的**把 `mood` 推低/推高，
     //    下一轮 `weight_for` 的 ④（`mood < LOW_MOOD_THRESHOLD` ⇒ 情绪类 ×2.2）就能读到 ——
     //    这就是"心情低时更容易出情绪类事件"的闭环。数值是**手感值**（与权重同款，不是标定参数）：
     //    ±0.22 足以把 0.55 上下的基线推过/推回 0.35 这条线，又不至于一条事件定生死。
@@ -1091,7 +1091,7 @@ pub fn candidates<'a>(
 //  抽签
 // ═══════════════════════════════════════════════════════════════════
 
-/// 抽一次事件：这一步就是机主要求的那个纯函数入口。
+/// 抽一次事件：这一步就是要求的那个纯函数入口。
 ///
 /// * `roll` —— `0.0..=1.0` 的均匀随机数，**由调用方摇**（`rand::random::<f64>()`。
 ///   本文件不引 rand，也不取系统时间，所以单测能把 roll 钉在区间边界上）
@@ -1286,7 +1286,7 @@ fn placeholders(text: &str) -> Vec<String> {
 
 /// 应用内 toast：`【标题】一句话`。
 ///
-/// 机主的默认建议是**这条关掉**（打断聊天），但通道本身要有 —— 设置项在前端。
+/// 默认建议是**这条关掉**（打断聊天），但通道本身要有 —— 设置项在前端。
 pub fn popup_text(ev: &PlannedEvent) -> String {
     format!("【{}】{}", ev.title, ev.text)
 }
@@ -1463,7 +1463,7 @@ mod tests {
 
     // ── 事件表完整性 ────────────────────────────────────────────
 
-    /// 十类一个不少，且每类至少 3 条（机主：每类至少 3 个具体事件）
+    /// 十类一个不少，且每类至少 3 条（每类至少 3 个具体事件）
     #[test]
     fn table_covers_all_ten_categories_with_at_least_three() {
         let t = table();
@@ -1475,7 +1475,7 @@ mod tests {
         assert!(t.len() >= 32, "总事件数 {} 少于 32", t.len());
     }
 
-    /// 机主逐条确认过的例子必须在表里（防止后来改表时把某条删没了）
+    /// 逐条确认过的例子必须在表里（防止后来改表时把某条删没了）
     #[test]
     fn table_keeps_the_confirmed_examples() {
         let ids = [
@@ -2383,7 +2383,7 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  期 2 · 事件 → 心情/体力（effects）
+    //  事件 → 心情/体力（effects）
     // ═══════════════════════════════════════════════════════════════
 
     /// 带 `effects` 的正好是这四条（多一条少一条都要在这里显式改，防止悄悄扩散）。
@@ -2449,7 +2449,7 @@ mod tests {
         let back: PlannedEvent = serde_json::from_value(v).unwrap();
         assert_eq!(back.effects, ev.effects, "effects 过一趟 JSON 就变了");
 
-        // 期 2 之前落进 `MapRuntime.events` 的旧条目：没有 `effects` 键
+        //  之前落进 `MapRuntime.events` 的旧条目：没有 `effects` 键
         let old: PlannedEvent = serde_json::from_value(serde_json::json!({
             "id": "mood.low", "category": "mood", "title": "有点低落",
             "text": "有点低落", "weight_used": 5.0, "at_secs": 1

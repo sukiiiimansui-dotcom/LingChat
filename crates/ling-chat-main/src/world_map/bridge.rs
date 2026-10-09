@@ -309,7 +309,7 @@ async fn run_stream(
     };
 
     // 先报 start：前端据此把阶段条推到「AI 思考中」，并校对网格大小。
-    // ⚠️ 重试时**不再补发** start：语义上还是「同一次生成」，前端已经把阶段条推上去了。
+    // 重试时**不再补发** start：语义上还是「同一次生成」，前端已经把阶段条推上去了。
     if !pump.send(Event::Start {
         area: area.clone(),
         size: base,
@@ -502,7 +502,7 @@ pub async fn world_map_district_stream(
     let sid_done = sid.clone();
     let cancel_done = cancel.clone();
     tokio::spawn(async move {
-        // ⚠️ 登记用 RAII 撤销，**不要**在末尾手写 `map.remove`（2026-09-14 修）：
+        // 登记用 RAII 撤销，**不要**在末尾手写 `map.remove`（2026-09-14 修）：
         // 原写法只在 `run_stream` 正常返回后才摘登记。若它 panic（展开）或这个 task
         // 被取消 / 运行时就地关闭（drop），那行永不执行 →
         //   ① 登记永久留在 `RUNNING` 里，`Arc<AtomicBool>` 无界累积；

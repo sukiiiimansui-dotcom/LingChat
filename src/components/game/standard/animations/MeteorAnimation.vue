@@ -194,7 +194,7 @@ function drawMeteor(meteor: ActiveMeteor, currentTime: number) {
   const headT = progress;
 
   // 尾巴起点的位置参数（向后偏移tailRatio）
-  // 由于我们希望尾巴长度固定，需要根据弧长计算
+  // 由于希望尾巴长度固定，需要根据弧长计算
   const tailT = Math.max(0, headT - tailRatio * 1.5); // 简化计算，经验系数
 
   // 获取头部和尾巴位置

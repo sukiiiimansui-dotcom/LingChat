@@ -14,20 +14,20 @@
 //        popup, bubble, speech_hint, memory_line }
 //      { ok:true, fired:false, reason:"no_candidate"|"throttled"|"no_scene", at, role, next_ok_in_secs }
 //    引擎自己的全局节流是 300 秒（`events::MIN_GAP_SECS`），所以调得再快也不会更密。
-//    ⚠️ `no_scene` = 前端没把场景推上去（`world_map_update_runtime` 的 `scene`），
+//    `no_scene` = 前端没把场景推上去（`world_map_update_runtime` 的 `scene`），
 //       这时后端**不写任何事件/记忆**（守「别污染对话记忆」的纪律）。
 //
 // ② Tauri 事件 `world_map:event`（与 tick 同时广播，抽中时才发）：
 //      载荷 = { event, popup, bubble, speech_hint, memory_line, at, role }
 //    —— 与 tick 的返回值**是同一件事的两条通路**，所以两边必须去重（见 `seenKeys`）。
-//    ⚠️ 只在真壳里 `listen`（`isTauriRuntime()` 守卫）：web 预览会抛。
+//    只在真壳里 `listen`（`isTauriRuntime` 守卫）：web 预览会抛。
 //
 // ③ `world_map_events_recent({limit?})` → `{ ok, items:[PlannedEvent], count, limit }`
 //    默认 20、上限 100，**时间正序的尾巴**（最早在前）—— 要「最新在上」得自己 reverse。
 //
 // ④ `world_map_pending_memory({role?})` → `{ ok, role, lines:[String], count,
 //    items:[{role,line,at}], pending_after, readonly:true }` —— **只读预览**（一行都不取走）。
-//    ⚠️ 消费权（期 1，2026-10-02）：待写记忆队列的**唯一消费方是注入路径**
+//    消费权（2026-10-02）：待写记忆队列的**唯一消费方是注入路径**
 //    （Rust `state.rs::injection_text` —— 它把行交付给模型之后才删，`summary::memory_block`
 //    的注释写死了「交付即消费」）。前端原来调的是 `world_map_take_pending_memory`
 //    （drain：取走即清空）⇒ 两边抢同一个队列，前端一取走，AI 那一轮注入就**静默**少一段
@@ -85,9 +85,9 @@ export interface WsEventItem {
   weight_used?: number;
   at_secs: number;
   /**
-   * 事件对心情/体力的**副作用**（Rust `events.rs::NeedEffect` 的序列化形状）—— 期 2。
+   * 事件对心情/体力的**副作用**（Rust `events.rs::NeedEffect` 的序列化形状）—— 。
    *
-   * `undefined` = **这份数据没有**（期 2 之前的老壳 / 老事件条目）；
+   * `undefined` = **这份数据没有**（之前的老壳 / 老事件条目）；
    * `[]` = 表里明写"这条不改需求"。两者不是一回事 ⇒ 原样透传，**不在这里补默认值**。
    * 应用它的地方只有一处（`wsNeeds.applyEventToImpulses`），页面里 0 处算术。
    */
@@ -188,7 +188,7 @@ export interface WsEventChannels {
   speech: boolean;
 }
 
-/** 三路**默认全开**（机主定的：三种都要，且用户可选） */
+/** 三路**默认全开**（既定的：三种都要，且用户可选） */
 export const WS_CHANNEL_DEFAULTS: WsEventChannels = { bubble: true, popup: true, speech: true };
 
 /** 通道 key 的固定顺序（面板按它排按钮，自检按它遍历） */
@@ -252,7 +252,7 @@ export function normalizeEvent(raw: unknown): WsEventItem | null {
   // id 都没有的条目对「去重 / 冷却」毫无意义（与后端 `recent_one` 同款判断）
   if (!id) return null;
   const w = Number(o.weight_used);
-  // 期 2：`effects` **原样透传**（数组才认；缺字段就是缺 —— 别在这里补 `[]`，
+// `effects` **原样透传**（数组才认；缺字段就是缺 —— 别在这里补 `[]`，
   // 「没有这份数据」与「表里说不改」在下游是两条不同的路，见 `wsNeeds.effectOfEvent`）
   const fx = Array.isArray(o.effects) ? (o.effects as WsEventItem["effects"]) : undefined;
   return {
@@ -757,7 +757,7 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
   /**
    * 订阅代号：每次 `subscribe()` / `stop()` 都自增。
    *
-   * ⚠️ **为什么需要它**（2026-09-14 修的竞态）：
+   * **为什么需要它**（2026-09-14 修的竞态）：
    * `listen()` 是**异步**的。原来的写法是「先同步置 `bound = true`，再 `await listen(...)`
    * 把返回的 unlisten 直接赋值」。如果组件在 `await` 期间卸载 → `stop()` 跑的时候
    * `unlisten` **还是 null** → 它什么都摘不掉；等 Promise resolve 后，那个监听器
@@ -927,7 +927,7 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
   }
 
   /* ── 待写记忆（**只读预览**）───────────────────────────────────────────
-   * 🔴 期 1（2026-10-02）把这里从 `drainMemory`（`world_map_take_pending_memory`，
+   * （2026-10-02）把这里从 `drainMemory`（`world_map_take_pending_memory`，
    *    取走即清空）改成 `previewMemory`（`world_map_pending_memory`，一行不取走）：
    *    那个队列的**唯一消费方是 Rust 注入路径**（`state.rs::injection_text`）——
    *    它才是把行交付给模型的那条路（`summary::memory_block`：「交付即消费」）。
@@ -967,7 +967,7 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
       const off = await listen<unknown>("world_map:event", (ev) => {
         applyFired(firedFromPayload(ev?.payload));
       });
-      // ⚠️ await 期间可能已经 stop()（代号变了）或又 subscribe 了一次 ——
+      // await 期间可能已经 stop（代号变了）或又 subscribe 了一次 ——
       //    那就【立刻摘掉】，否则它永远留在窗口上（孤儿回调）。
       if (gen !== subGen || !bound) {
         try {
@@ -990,8 +990,8 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
   /**
    * 拨一个通道。
    *
-   * ⚠️ **为什么这里没有 `world_map_update_runtime`**（原设计说「推一个标记」）：
-   *    我逐字读了 Rust 侧认的 patch 键（`state.rs::apply_patch`：scene / me / actors /
+   * **为什么这里没有 `world_map_update_runtime`**（原设计说「推一个标记」）：
+   *    了 Rust 侧认的 patch 键（`state.rs::apply_patch`：scene / me / actors /
    *    events / weather / facilities / cell_m / current_role / pending_move / clear_events）
    *    与事件引擎读的字段（`event_cmd.rs::build_context`），**没有任何一个能表达
    *    「别让角色提这件事」**：`scene` 虽然会字段级合并、塞什么键都存得下，
@@ -1094,7 +1094,7 @@ export function useWorldEvents(opts: UseWorldEventsOptions = {}) {
     stop,
     poll,
     refreshHistory,
-    /** 🔴 只读预览（不再消费队列）；原来叫 `drainMemory`，见函数体上的裁定注释 */
+    /** 只读预览（不再消费队列）；原来叫 `drainMemory`，见函数体上的裁定注释 */
     previewMemory,
     // 开关
     setChannel,

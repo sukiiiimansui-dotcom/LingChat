@@ -49,7 +49,7 @@ export const PARTICLE_EFFECTS: ParticleEffect[] = [
  *
  * 雨和雪从氛围层挪到了这里：同一种天气的不同档位分属两层，
  * 就会出现「小雨和雷阵雨同时开着」这种没人想要的状态。把同一族放在一起，
- * 单选本身就替我们排除了这种组合。
+ * 单选本身就替排除了这种组合。
  */
 export const WEATHER_EFFECTS: ParticleEffect[] = [
   { key: "Drizzle", label: "小雨", i18n: "drizzle" },

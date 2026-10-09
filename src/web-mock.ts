@@ -23,15 +23,15 @@
  * · 这些假数据**绝不能**被当成真实行为来验证业务逻辑
  */
 
-/* 🧪 App 自拍的开关：**只借这个纯函数**（键名/正则都在那边，别在这里再写一份字面量 —— 会漂移） */
+/* App 自拍的开关：**只借这个纯函数**（键名/正则都在那边，别在这里再写一份字面量 —— 会漂移） */
 import { appSelfShotMaybeArmFromUrl } from "@/components/views/worldsim/wsSelfShot";
 
 declare global {
   interface Window {
-    // ⚠️ 这里**不能**重新声明 `__TAURI_INTERNALS__` 的类型 ——
+    // 这里**不能**重新声明 `__TAURI_INTERNALS__` 的类型 ——
     //    `@tauri-apps/api` 已经把它声明成 `any` 了，再声明一次会撞
     //    TS2717（"Subsequent property declarations must have the same type"）。
-    //    我们只声明自己新增的那两个。
+    //    只声明自己新增的那两个。
     /** 前端可读：判断当前是不是 web 预览（供组件显示提示条用） */
     __LINGCHAT_WEB_MOCK_INFO__?: { httpBase: string; startedAt: number };
     /**
@@ -90,12 +90,12 @@ const EMPTY_ANSWERS: Record<string, () => unknown> = {
 };
 
 async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
-  // ⚠️ 地图相关一律 undefined —— 让前端走 HTTP 通路（`isTauriRuntime()` 也会因
+  // 地图相关一律 undefined —— 让前端走 HTTP 通路（`isTauriRuntime` 也会因
   //    `__LINGCHAT_WEB_MOCK__` 直接判 false，这里只是双保险）
   if (cmd.startsWith("world_map_")) return undefined;
 
   // ── 事件订阅：登记「事件名 → 回调 id」，供 __MOCK_FIRE__ 手动派发 ────────────
-  // ⚠️ 必须放在下面 `plugin:` 那条兜底**之前** —— `plugin:event|listen` 也以
+  // 必须放在下面 `plugin:` 那条兜底**之前** —— `plugin:event|listen` 也以
   //    `plugin:` 开头，否则会被当成普通插件命令返回 undefined，登记表永远是空的。
   if (cmd === "plugin:event|listen") {
     const ev = args?.event;
@@ -115,9 +115,9 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
   // ── 语言词条：这是最巧的一处 ──────────────────────────────────────────────
   // `locales/index.ts` 调 `get_locale_messages(locale, seedContent)` 时**自己把
   // 完整的词条 JSON 传了进来**（`seedContent`），期望后端把它落盘再读回。
-  // 我们直接回传 seedContent —— 于是浏览器里**四种语言都完整可用**，
+  // 直接回传 seedContent —— 于是浏览器里**四种语言都完整可用**，
   // 不会退化成"加载语言文件失败（使用内置词条）"。
-  /* 🔴 `get_character_list`：**必须给真数据，不能给空数组**（2026-09-18，P2-5 代理发现的洞）。
+  /* `get_character_list`：**必须给真数据，不能给空数组**（2026-09-18，P2-5 已确认的洞）。
    *
    * 现象：浏览器预览里地图上**恒 0 个角色**，所有"点头像开面板"的验证都做不了。
    * 根因：`loadWorldCharacters()` 只在**抛异常**时才往下一级兜底（HTTP `/api/schedule/chars`），
@@ -133,11 +133,11 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const arr = box?.characters ?? box?.items;
       return Array.isArray(arr) ? arr : null;
     };
-    /* 🔴 形状必须与 `characterGetAll()` 的返回类型**逐字一致**
+    /* 形状必须与 `characterGetAll` 的返回类型**逐字一致**
        （`CharacterPageResult` = `{ items, total, page, page_size, total_pages }`）。
-       2026-10-01 实测（切片② 真页面验收代理发现）：这里原来回的是**裸数组**
+       2026-10-01 实测（真页面验收已确认）：这里原来回的是**裸数组**
        ⇒ `loadWorldCharacters()` 读 `res.items` 拿到 undefined ⇒ **预览里角色名单恒空**，
-       地图上只剩 `roster:` 兜底钉、点谁都不能开面板（切片② 的 `+6` 因此一度没法验）。
+       地图上只剩 `roster:` 兜底钉、点谁都不能开面板（`+6` 因此一度没法验）。
        真机走 Tauri 真命令、**没有这个问题** ⇒ 这是**预览壳**的 bug，修这里不影响真机。 */
     const pageOf = (list: unknown[]) => ({
       items: list,
@@ -146,7 +146,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       page_size: list.length || 6,
       total_pages: 1,
     });
-    // ① 先试前端约定的那条（⚠️ 实测调试服务上**是 404**，见本文件末尾备注）
+    // ① 先试前端约定的那条（实测调试服务上**是 404**，见本文件末尾备注）
     try {
       const r = await fetch("http://127.0.0.1:8791/api/schedule/chars");
       if (r.ok) {
@@ -248,7 +248,7 @@ function installMock(): void {
     return delivered;
   };
 
-  // ── ⚠️ 必须做的一步：把 URL 改写成根路径 ──────────────────────────────────
+  // ── 必须做的一步：把 URL 改写成根路径 ──────────────────────────────────
   // `webdev.html` 这个路径**不匹配任何路由**（router 是 history 模式），
   // 结果是 `<router-view>` 渲染空 → 看起来像"白屏"，但其实应用已经起来了。
   // 本文件比 `main.ts` 先执行（见 webdev.html 的加载顺序），所以在这里改写来得及 ——
@@ -260,14 +260,14 @@ function installMock(): void {
   }
 
   /**
-   * 🧪 **App 自拍**的开关（`?selfshot=1`）必须在这里"落地"——**在应用启动那一刻**。
+   * **App 自拍**的开关（`?selfshot=1`）必须在这里"落地"——**在应用启动那一刻**。
    *
    * 为什么不能只靠小区级组件自己读 URL：小区级藏在 App 里（进世界 → 走到小区要点好几下），
    * 而 URL 上的 query 在**一次路由跳转后就没了**。在这里把它写进 `localStorage`（sticky），
-   * 机主就只需要"**在任意一页带着 `?selfshot=1` 刷新一次**"，之后走到小区级会自动拍
+   * 用户就只需要"**在任意一页带着 `?selfshot=1` 刷新一次**"，之后走到小区级会自动拍
    * （触发点在 `WsDistrictMapLibre.vue`，两条渲染路都挂了）。
    *
-   * ⚠️ 这是**自用层**（本文件只在纯浏览器预览入口 `webdev.html` 里加载，真壳 `index.html` 没有它），
+   * 这是**自用层**（本文件只在纯浏览器预览入口 `webdev.html` 里加载，真壳 `index.html` 没有它），
    *    所以"给页面加一个调试开关"不会进 PR、也不影响真壳。
    */
   try {

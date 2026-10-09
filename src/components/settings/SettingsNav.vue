@@ -345,7 +345,7 @@ const removeMoreMenu = () => {
     btnEl.classList.remove("moreMenu");
   }
 
-  // 向父组件发送事件，告知“我这边已经执行了 remove”
+  // 向父组件发送事件，告知“已经执行了 remove”
   emit("remove-more-menu-from-a");
 };
 

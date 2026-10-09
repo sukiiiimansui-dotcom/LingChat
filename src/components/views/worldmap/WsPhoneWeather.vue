@@ -124,7 +124,7 @@
     }
   }
   /** 跟随定位时用的城市名：取定位 `area` 的最后一段（`中国·重庆市·500100` → `重庆市`）
-   *  ⚠️ 只用于**显示**；请求时仍然传空 city，由后端按坐标/默认来给，避免两处各判一次城市。 */
+   *  只用于**显示**；请求时仍然传空 city，由后端按坐标/默认来给，避免两处各判一次城市。 */
   const locCity = computed(() => {
     const a = String(geo.me.value?.area || "");
     const parts = a.split(/[·・>]/).map((s) => s.trim()).filter(Boolean);

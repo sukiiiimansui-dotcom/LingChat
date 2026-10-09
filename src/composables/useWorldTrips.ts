@@ -21,7 +21,7 @@
 //    回到前台时累加值停在半路，人就会「原地站着」直到下一次快照 —— 而按时间戳算，
 //    回到前台的那一帧就是**正确位置**（"回到前台立即对齐"）。
 //
-// ③ **位置回推要克制**（机主与 P2 的约定，改之前先读）：
+// ③ **位置回推要克制**（用户与 P2 的约定，改之前先读）：
 //    后端**不写** `actors` —— 移动中注入给 AI 的「角色在哪」还是旧位置，直到前端推回去。
 //    但 P2（`useWsActors`）也在推**静态**位置，两边各自定时推就会互相覆盖
 //    （表现为「角色走两步被拉回去、在地图上抖」）。所以本文件：
@@ -99,7 +99,7 @@ export interface WsTrip {
   arrived_ms: number | null;
   cancelled_ms: number | null;
   /**
-   * ⚠️ **前端加的**字段（后端没有）：拿到这份快照时的后端时间（响应里的 `now_ms`）。
+   * **前端加的**字段（后端没有）：拿到这份快照时的后端时间（响应里的 `now_ms`）。
    * 插值的锚点就是它 —— 没有它就只能用后端算好的 `progress`（外推会算错，见 tripProgress）。
    */
   at_ms?: number;
@@ -169,7 +169,7 @@ export function isTripLive(t: WsTrip | null | undefined): boolean {
  *     比如轮询赶在出发前），等待的那段不能算成走路，否则 `done_m + 等待时长×速度`
  *     会凭空多走一截。
  *
- * ⚠️ 只有 `depart_ms`、没有 `at_ms` 时**故意返回 0**（不自作主张拿出发时刻当锚点）：
+ * 只有 `depart_ms`、没有 `at_ms` 时**故意返回 0**（不自作主张拿出发时刻当锚点）：
  * 那份 `done_m` 可能是「半路拍的」，再按「从出发算起」推一遍就是**双倍计数**，
  * 人会提前飞到头。宁可画面不动（退回后端算好的 progress），也不要算错。
  */
@@ -307,7 +307,7 @@ export const FINAL_PUSH_AT = 0.999;
  * 再退 `gx/gy`，而前端 `wsActors.readRuntimePos` **只读 `x/y`**；
  * 两种拼法都写上，两边读到的才是同一个位置。
  *
- * ⚠️ 只推坐标，**不碰** `facility` / `place` / `since` 等字段（那些归 P2 管）——
+ * 只推坐标，**不碰** `facility` / `place` / `since` 等字段（那些归 P2 管）——
  * `state.rs` 的 `apply_patch` 是按角色名逐字段合并，没给的字段不会被抹掉。
  */
 export function actorPatchOf(t: WsTrip, pos: WsTripPos): Record<string, unknown> {
@@ -403,7 +403,7 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
   /**
    * 订阅代号：每次 `subscribe()` / `stop()` 都自增。
    *
-   * ⚠️ **为什么需要它**（2026-09-14 修的竞态，与 `useWorldEvents.ts` 同一处病）：
+   * **为什么需要它**（2026-09-14 修的竞态，与 `useWorldEvents.ts` 同一处病）：
    * `listen()` 是异步的，而原写法是「先同步置 `bound = true`，再 `await listen(...)`
    * 直接赋值给 `unlisten`」。若组件在 `await` 期间卸载 → `stop()` 时 `unlisten` **还是 null**
    * → 什么都摘不掉；Promise resolve 后监听器又被赋回去 → **永久留在窗口上**。
@@ -526,7 +526,7 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
     for (const t of Array.isArray(r.arrived_now) ? r.arrived_now : []) {
       noteArrive(stamp(t, at));
     }
-    // ③ 兜底：状态已经是 arrived / cancelled 但我们还没回调过（事件丢了/错过了一轮）
+    // ③ 兜底：状态已经是 arrived / cancelled 但还没回调过（事件丢了/错过了一轮）
     for (const t of list) {
       if (t.status === "arrived") noteArrive(t);
       else if (t.status === "cancelled") noteCancel(t);
@@ -638,7 +638,7 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
         // 事件的 trip 可能没带 `now_ms` 的上下文，顺手再对齐一次轮询数据
         void refresh().finally(schedule);
       });
-      // ⚠️ await 期间可能已经 stop()（代号变了）或又 subscribe 了一次 ——
+      // await 期间可能已经 stop（代号变了）或又 subscribe 了一次 ——
       //    那就【立刻摘掉】。不这么做的话，这个监听器会永久留在窗口上，
       //    每次事件都跑孤儿回调 —— 而它里面还会 `void refresh()`（invoke + 重排定时器），
       //    等于脱离组件生命周期的后台循环。弱网下快速离开页面就会撞上，且完全静默。
@@ -722,7 +722,7 @@ export function useWorldTrips(opts: UseWorldTripsOptions = {}) {
   /**
    * 拨加速开关。
    *
-   * ⚠️ **不本地乐观更新**：先把意图发给后端，再用返回值（`speedup` 权威值）
+   * **不本地乐观更新**：先把意图发给后端，再用返回值（`speedup` 权威值）
    * 与随后的**重读**（`world_map_trip_speedup` 会重锚行程、重挂定时器，
    * `changed`/`rearmed` 是这次拨动到底生效没有的唯一凭据）覆盖本地。
    * 传 `true/false` 走后端的 `enabled`（= 100×/1×），传数字走 `speedup`。

@@ -43,7 +43,7 @@ const API_BASE = (import.meta.env?.VITE_WORLD_MAP_API as string) || "http://127.
  * **第二数据源（Overture，ODbL）的服务地址**。
  *
  * 它和 `API_BASE`（Rust 那个 8791）是**两个不同的进程**：这个是 Termux 上的
- * Python 服务（`world_map/overture_api.py`，8792），负责按 bbox 读公开 S3 上的
+ * Python 服务（离线数据生成脚本，8792），负责按 bbox 读公开 S3 上的
  * GeoParquet 并落盘缓存。分开是有意的 —— 它挂了不该影响 8791 的任何功能。
  */
 const OVERTURE_BASE = (import.meta.env?.VITE_OVERTURE_API as string) || "http://127.0.0.1:8792";
@@ -368,14 +368,14 @@ export const worldMapApi = {
     return unwrapBuildingsGeo(raw);
   },
   /**
-   * **真实路网**（`/api/roads`）—— 机主 2026-09-20：「在地图上把道路和设施全部勾出来
+   * **真实路网**（`/api/roads`）—— 2026-09-20 「在地图上把道路和设施全部勾出来
    * （方便将行人啥的挪出来）」。
    *
    * 返回**已解包的 FeatureCollection**（`LineString`，`properties.rank` 是归一化档次
    * 0~5，见 Rust `osm::road_rank`）。刻意与 `buildings` **同一个壳**：
    * 同一个 `unwrapBuildingsGeo` 就能解，错误处理也不用再来一套。
    *
-   * ⚠️ 后端是**现问 Overpass**（冷查询 15~90 秒，实测涪陵 800m 用了 **14.7 秒**）⇒
+   * 后端是**现问 Overpass**（冷查询 15~90 秒，实测涪陵 800m 用了 **14.7 秒**）⇒
    * 调用方必须**自己带超时**，而且**别在拖动过程中反复取**（按中心+半径做去抖与缓存）。
    * 半径上限 2000m（更大后端会直接拒掉）。
    */
@@ -387,11 +387,11 @@ export const worldMapApi = {
    * **第二数据源：Overture Maps Buildings（ODbL）** —— 只补 OSM 没有的楼。
    *
    * 为什么走 HTTP 而不是 invoke：这个源是 Termux 上的一个 **Python 服务**
-   * （`world_map/overture_api.py`，按 bbox 读公开 S3 上的 GeoParquet + 落盘缓存）。
+   * （离线数据生成脚本，按 bbox 读公开 S3 上的 GeoParquet + 落盘缓存）。
    * 真壳（APK）里**没有 Python** ⇒ 这个请求必然失败 ⇒ 调用方照旧只用 OSM。
    * 这是**有意为之**的降级路径：拿不到就少一层楼，绝不让页面崩。
    *
-   * ⚠️ 许可：Overture 是 **ODbL**，返回里带 `meta.attribution`，**前端必须显示**。
+   * 许可：Overture 是 **ODbL**，返回里带 `meta.attribution`，**前端必须显示**。
    */
   overtureBuildings: async (opts: { lat: number; lng: number; r: number }): Promise<BuildingsGeo | null> => {
     const q = new URLSearchParams({ lat: String(opts.lat), lng: String(opts.lng), r: String(opts.r) });
@@ -475,7 +475,7 @@ export const worldMapApi = {
   /**
    * 日程（谁现在该在哪）。
    *
-   * ⚠️ `facilities` **必须传**（从 `world_map_runtime` 里那份设施表原样带回去）：
+   * `facilities` **必须传**（从 `world_map_runtime` 里那份设施表原样带回去）：
    * 后端 `schedule::role_place(kind, facilities, seed)` 只有在拿到设施表时才能把
    * "商业区"这种**类型**落到**具体设施点**上（给 `place.name`）。
    * 不传的话后端返回的是 `placeSource: "kind-only"`、`place.name` 为空，于是：
@@ -720,7 +720,7 @@ export interface RenderProbeOpts {
   size?: number;
   seed?: number;
   /**
-   * 区域名「广州市·越秀区」——⚠️ **它参与布局播种，不只是文案**。
+   * 区域名「广州市·越秀区」——**它参与布局播种，不只是文案**。
    *
    * 后端 `sketch::seed_of(area, seed) = sha256("{area}|{seed}")`：区域名是种子的**一部分**。
    * 所以「同一张草图」的身份 = (area, size, seed) 三元组；少传 `area`，
@@ -1043,7 +1043,7 @@ function startHttpDistrictStream(
     //   ① 后端没配 LLM 时这个路由回的是 **JSON**（不是 text/event-stream），
     //      浏览器按规范把连接判死（readyState=CLOSED）→ 再 fetch 一次把 JSON 里的
     //      error 读出来给用户看（这条路径后端不会调 LLM，不花钱）；
-    //   ② 网络/服务问题 → 浏览器会一直重连，必须我们主动 close，否则页面看起来卡死。
+    //   ② 网络/服务问题 → 浏览器会一直重连，必须主动 close，否则页面看起来卡死。
     const wasClosed = es.readyState === EventSource.CLOSED;
     const got = received;
     stopped = true;
@@ -1117,7 +1117,7 @@ export function startDistrictStream(
 // 真壳里改走 Tauri 命令 `world_map_geo_svg`（Rust 本地渲染，不需要端口、不需要网络），
 // 拿回的 SVG 文本转成 data URL 再塞进 `<img>` —— 组件那套 @error / 刷新逻辑一行都不用改。
 //
-// **尺寸必须跟着容器走**（机主专门提过）：SVG 里字号是「固定 px」（见 Rust 侧
+// **尺寸必须跟着容器走**（提到过）：SVG 里字号是「固定 px」（见 Rust 侧
 // render_geo.rs 的 level_style：全国 13.5 / 省 12 / 市 11 / 区县 10.5，再乘各区面积占比
 // 0.75~1.6，实测最小 8.2px），跟画布尺寸无关。
 // 若固定按 1000×760 画、在手机上被缩到 360px 显示，8~12px 的字实际只剩 3~4px，完全看不清；
@@ -1360,7 +1360,7 @@ export async function maplibStatsAuto(): Promise<MapLibStats> {
  *     app: AppHandle, max_mb: Option<f64>, dry_run: Option<bool>, dry: Option<bool>,
  *   ) -> Result<Value, String>          // { removed, freed, freed_mb, dry_run, victims? }
  *
- * ⚠️ 干跑参数在 Rust 侧叫 `dry_run`，JS 侧必须写 **camelCase `dryRun`**。
+ * 干跑参数在 Rust 侧叫 `dry_run`，JS 侧必须写 **camelCase `dryRun`**。
  * 写错成 `dry_run` 不会「变成真删」——Tauri 忽略不认识的键，Rust 侧 `dry_run` 收到 None，
  * 于是走 `dry_run.or(dry).unwrap_or(true)` = **true**（干跑），属于失败安全；
  * 但那样「真删」按钮会永远删不掉东西、又没人发现，所以这里**显式**把布尔传全，
@@ -1460,7 +1460,7 @@ export async function geoSvgText(
   // ── ② 浏览器 / 局域网调试：/api/geo_svg ──
   // 这条路由**不认 zoom 之外的东西**也一样能用；出错时 fetchSvgText 会把 JSON 翻译成人话。
   //
-  // ⚠️ `hydro` / `elevation` 目前**只有 Rust 侧认**（Python 侧车 `hier_api.py` 的 `/api/geo_svg`
+  // `hydro` / `elevation` 目前**只有 Rust 侧认**（Python 侧车 离线数据生成脚本 的 `/api/geo_svg`
   // 还没实现这两个图层，多传的参数会被它忽略）→ 浏览器预览看不到河湖与地形，真机才看得到。
   // 这是已知差异，不影响真机；要消除得同步改 Python 原型（不在本次范围）。
   const url =
@@ -1480,7 +1480,7 @@ export async function geoSvgText(
 // `/api/location?ad=` 会忽略 ad）→ 只能拿该区县的 GeoJSON 自己算面积质心。
 // 目的地候选则来自 `/api/geo/children`。
 //
-// 🔴 **真壳侧的命令还不存在**（`world_map_geo_json` / `world_map_geo_children` 未注册）。
+// **真壳侧的命令还不存在**（`world_map_geo_json` / `world_map_geo_children` 未注册）。
 //    这与 wsenter 交付里指出的是同一个缺口。**在 Rust 补上之前，真壳里这两个调用会 reject**，
 //    所以调用方必须 catch 并**优雅降级**（提示"真实机需要补命令"，而不是卡住/白屏）。
 //    浏览器/调试通路是通的（8791 的孪生路由），所以网页预览能完整验证。
@@ -1489,7 +1489,7 @@ export async function geoSvgText(
 export async function geoJson(ad: string): Promise<unknown> {
   const code = String(ad || "").trim() || "100000";
   if (isTauriRuntime()) {
-    // ⚠️ 待 Rust 侧补 `world_map_geo_json`（见上方说明）
+    // 待 Rust 侧补 `world_map_geo_json`（见上方说明）
     return await invoke("world_map_geo_json", { ad: code });
   }
   const r = await fetch(`${API_BASE}/api/geo_json?ad=${encodeURIComponent(code)}`);
@@ -1501,7 +1501,7 @@ export async function geoJson(ad: string): Promise<unknown> {
 export async function geoChildren(ad: string): Promise<Array<{ name: string; adcode: string }>> {
   const code = String(ad || "").trim() || "100000";
   if (isTauriRuntime()) {
-    // ⚠️ 待 Rust 侧补 `world_map_geo_children`（见上方说明）
+    // 待 Rust 侧补 `world_map_geo_children`（见上方说明）
     const d = (await invoke("world_map_geo_children", { ad: code })) as { children?: unknown };
     return Array.isArray(d?.children) ? (d.children as Array<{ name: string; adcode: string }>) : [];
   }
@@ -1522,7 +1522,7 @@ export async function geoChildren(ad: string): Promise<Array<{ name: string; adc
 //   —— 那几条路由调的**就是 transport.rs 里同一份 start_trip/tick_trip**，
 //      所以「浏览器里验过的行程逻辑」与真壳是同一份代码，不是仿制。
 //
-// ⚠️ **推进方式不同**：真壳里由 Rust 侧按真实时间推进（`tick_to_now`）；
+// **推进方式不同**：真壳里由 Rust 侧按真实时间推进（`tick_to_now`）；
 //    浏览器里由**客户端推时钟**（`tripTick(dt)` 传"推进多少秒"），这样才能几秒走完几小时的行程。
 //    这只是"谁来打拍子"的差别，**状态推进逻辑仍是 Rust 的**。
 
@@ -1618,14 +1618,14 @@ export async function tripCancel(reason = ""): Promise<void> {
 //     （定义在 `src-tauri/src/world_map/mod.rs` 末尾）
 //   · 浏览器：`/api/facilities` / `/api/facilities/types` / `/api/facility_at`
 //     （定义在 `world_map_rs/src/main.rs`，**与真壳同形**，两边的字段契约由
-//      `~/rikka/Dsh-SYuki/world_map/facilities_layer_selftest.mjs` 的断言守着）
+//      设施层回归测试 的断言守着）
 //
-// ⚠️ 坐标不是经纬度：`gx/gy` 是**小区图的格点**（与 `WorldSim.vue` 的 `WS_GRID=28`、
+// 坐标不是经纬度：`gx/gy` 是**小区图的格点**（与 `WorldSim.vue` 的 `WS_GRID=28`、
 //    `WsDistrict` 的 `SKETCH_SIZE=28` 同一套）。设施图层要铺在 `#pin` 插槽里
 //    （`.ws-neigh__pan` 那个手势变换容器内），**不要**往 GeoJSON 画布上按经纬度投影 ——
 //    那是行政区划图的坐标系，两套东西。
 //
-// ⚠️ 确定性：同 `area`+`size`+`seed` 永远同一批落点（后端 sha256 播种）。
+// 确定性：同 `area`+`size`+`seed` 永远同一批落点（后端 sha256 播种）。
 //    前端每次都传同一个 `seed`（`WsDistrict` 画草图用的是 `hash32(area)`），
 //    所以「刷新后设施位置不变」；反过来，传 `Date.now()` 会让设施每次刷新乱跳。
 
@@ -1827,7 +1827,7 @@ function assertFacPayload(r: unknown): FacPayload {
 //   · **三级对比**（社区 8 / 区县 13 / 城市 23，种类也不同）—— 卡片要求"能看出差别"，
 //     数量与种类由后端按 `LEVEL_PLAN` 算好，前端**不写第二份**（两份必然漂移）。
 //
-// ⚠️ 坐标：`gx/gy` 是小区图**格点**（图层用这个画）；`lng/lat` 只在给了锚点时才有
+// 坐标：`gx/gy` 是小区图**格点**（图层用这个画）；`lng/lat` 只在给了锚点时才有
 //    （`geo === false` 时**一个经纬度字段都没有** —— 这是如实标注，不是缺字段）。
 //
 // 真壳命令：`world_map_transport_nodes`（src-tauri/src/world_map/mod.rs）

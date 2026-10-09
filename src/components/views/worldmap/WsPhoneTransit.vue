@@ -2,11 +2,11 @@
   WsPhoneTransit.vue —— 手机里的「公交 / 地铁 / 火车查询」（T5-4）
 
   ## 卡片四条对应
-  1) **查询接 `transport_plan(prefer=bus|subway|transit)`** ✅
+  1) **查询接 `transport_plan(prefer=bus|subway|transit)`**
   2) **展示：线路、换乘点、耗时、票价、步行段** —— 全部来自 `route.steps`（逐段：mode/mode_name/
      icon/duration_min/distance_m/note/from/to），**不是自己拼的假数据**；
      另有 `transfer_text`（"直达"/"换乘 N 次"）、`cost_text`、`fare_note`、`reason`
-  3) **依赖 T2-2（站点落在真实交通设施上）** —— 🔴 T2-2 **还在 todo**，所以现在的站点是
+  3) **依赖 T2-2（站点落在真实交通设施上）** —— T2-2 **还在 todo**，所以现在的站点是
      `transport.rs` **几何估计的虚拟站点**（steps 的 `from`/`to` 就是那些估计点）。
      本组件**如实标注**这一点，不假装站点是真的。
   4) **空结果处理** —— 该方式没有方案时，**自动查一次打车做对比建议**（"不通公交 → 建议打车 ¥x / x 分"），
@@ -167,8 +167,8 @@
         pref.value
       )) as unknown as { ok?: boolean; error?: string; route?: Plan; options?: Plan[] };
       if (res?.ok === false) throw new Error(res.error || "查询失败");
-      /* 🔴 踩过的坑（自测抓到的真 bug）：原来直接取 `res.options` —— 那是后端**自己排名**的前三个，
-         与用户选的 `prefer` **无关**：点「公交」结果第一行是「🚄 火车/高铁」。
+      /* 踩过的坑（自测抓到的真 bug）：原来直接取 `res.options` —— 那是后端**自己排名**的前三个，
+         与用户选的 `prefer` **无关**：点「公交」结果第一行是「火车/高铁」。
          尊重用户选择的那个方案在 `route` 里（`prefer` 只作用于它）。
          正确做法：**route 排第一**，后面接上"不同方式"的备选。 */
       const route = res?.route;

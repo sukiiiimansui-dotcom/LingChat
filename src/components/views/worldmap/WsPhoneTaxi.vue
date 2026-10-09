@@ -149,7 +149,7 @@
   /**
    * MG 切片 C（2026-09-19）：右边那个百分比让它**滚**起来。
    * 行程是按 tick 推进的，一次跳 3~8% 看起来就是"闪一下"，滚上去才知道"在往前走"。
-   * ⚠️ 配套要求：`.taxi__pct` 必须写 `font-variant-numeric: tabular-nums` ——
+   * 配套要求：`.taxi__pct` 必须写 `font-variant-numeric: tabular-nums` ——
    *    等宽数字，滚动时那一行不会左右抖（不然数字一变宽就把旁边的字挤一下）。
    */
   const progPct = computed(() => Math.round(prog01.value * 100));

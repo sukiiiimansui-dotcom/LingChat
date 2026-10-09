@@ -9,7 +9,7 @@
   ## 一个值得记的发现
   `/api/schedule` 里**已经带了角色清单**（`characters[]`：name / folder / subtitle /
   avatarCount / hasAvatar / info）—— 这正是 T5-5（手机·通讯）卡在"拿不到角色列表"时缺的东西。
-  ⚠️ 但注意：这里给的是**元数据**，**头像图片本身**仍要 `get_avatar_file`（真壳命令），
+  但注意：这里给的是**元数据**，**头像图片本身**仍要 `get_avatar_file`（真壳命令），
   浏览器通路拿不到 → 所以本组件显示 `avatarCount` 这类可得的真实信息，**不画假头像**。
 
   ## 空结果如实

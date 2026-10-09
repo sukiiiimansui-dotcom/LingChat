@@ -37,7 +37,7 @@ const RETRY_MS = 2 * 60 * 1000;
 /**
  * 从接口返回里抠出「可用的天气」；拿不到就给出降级原因（人工可读，不编）。
  *
- * 🔴 返回值必须是**能区分成功/失败**的判别式。这里踩过一次：
+ * 返回值必须是**能区分成功/失败**的判别式。这里踩过一次：
  *    原来签名是 `WsWeatherState | { reason: string }`，调用方用 `"reason" in got` 判成功 ——
  *    而 `normalize()` 产出的状态**自己就带 `reason: ""` 字段**（见 `wsWeather.ts`），
  *    于是 `"reason" in got` **恒为真** → 每一次成功拿到的天气都被当成失败，
@@ -45,7 +45,7 @@ const RETRY_MS = 2 * 60 * 1000;
  *    bug 被 wttr.in 的证书过期（2026-09-15 起，约两天）**掩盖**了：那期间"不可用"恰好是对的。
  *    证书恢复、后端能返回真数据后才在浏览器里量出来（页面确实收到 200 + 霾 23°C，
  *    角标仍是 `is-degraded`、title 只有「天气不可用」）。
- *    自检用例：`~/rikka/Dsh-SYuki/world_map/weather_selftest_t2.mjs`。
+ *    自检用例：天气回归测试。
  */
 function usable(raw: unknown): { state: WsWeatherState } | { reason: string } {
   if (!raw || typeof raw !== "object") return { reason: "接口没有返回天气数据" };
@@ -74,7 +74,7 @@ export interface UseWorldWeather {
 }
 
 /*
- * ⚠️ 这里**刻意没有**「手动指定天气」的入口（曾经有过 `manualState()` + `setManual()`，已删）。
+ * 这里**刻意没有**「手动指定天气」的入口（曾经有过 `manualState` + `setManual`，已删）。
  *
  * 删它的三个理由，缺一都不够：
  *   ① **没有调用方**：全仓 grep（含 `wsfx.html` 与仓库外的自检脚本）只有定义与内部互调，
@@ -90,7 +90,7 @@ export interface UseWorldWeather {
 
 /**
  * @param opts.city 当前应查的城市（跟随定位）。
- *   🔴 为什么必须能传：后端在没有 city 时会**回落到"最近一次定位到的城市"**，
+ *   为什么必须能传：后端在没有 city 时会**回落到"最近一次定位到的城市"**，
  *   而页面加载时天气请求**早于**定位完成 → 角标会先缓存成默认城市（北京）的天气，
  *   而且要等 30 分钟 TTL 才纠正。实测过：定位行写「当前：重庆市」、角标却是北京的「晴 29°C」。
  *   传了 city 之后，定位一出来（city 变化）就立刻重拉，角标与定位永远一致。

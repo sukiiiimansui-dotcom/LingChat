@@ -2,7 +2,7 @@
   <div class="main-box">
     <!-- 主界面始终渲染，加载动画期间在后台初始化 -->
     <FreeModeTools />
-    <!-- 悬浮手机**不在这里**：机主 2026-09-18 明确「手机是仅在地图里的功能」，
+    <!-- 悬浮手机**不在这里**：2026-09-18 明确「手机是仅在地图里的功能」，
          所以它挂在 `/worldsim`（见 WsCityEntry.vue）。聊天页保持干净。 -->
     <FullAccessWarning />
     <GameBackground></GameBackground>
@@ -72,7 +72,7 @@ import GameExtraUI from "../game/standard/GameExtraUI.vue";
 
 /* T5-1 的 8 个应用位：T5-2~T5-8 各自接进来之前，**如实提示"还没接"**，不假装能用。
    用项目里已有的 wsToast（世界模拟那套轻提示），不新造 API。
-   ⚠️ 后来手机入口整体搬到地图页（`d5b0a9bb`），这里只留标签表与回调。 */
+   后来手机入口整体搬到地图页（`d5b0a9bb`），这里只留标签表与回调。 */
 const PHONE_APP_LABEL: Record<string, string> = {
   map: "地图/导航（T5-2）",
   taxi: "打车（T5-3）",

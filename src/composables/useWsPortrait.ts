@@ -1,6 +1,6 @@
 // 「世界模拟」P2-2：立绘的**按需加载器**（性能红线的守门人）
 //
-// 机主给的红线（必须逐条守住，改之前先读）：
+// 给定的红线（必须逐条守住，改之前先读）：
 //   ① 只在侧边栏**真正打开**时才加载 —— 本 composable 的 `open` 为 false 时，一个命令都不发；
 //   ② 关闭时**释放** —— 把 url 置空（`<img src="">` 会让浏览器丢掉那份解码位图），
 //      并且把 in-flight 的结果作废（回到面板晚了不能把图又贴上去）；
@@ -54,10 +54,10 @@ export function useWsPortrait(opts: UseWsPortraitOptions) {
     missingClothes.value = false;
     const clothesName = String(opts.clothes.value || "default") || "default";
     const emotion = opts.mapEmotion(opts.emotion.value);
-    /* 🖼 2026-10-03：**纯 web 预览**不走 Tauri（预览里 `get_avatar_file` 恒失败 ⇒ 面板永远空着）。
+    /* 2026-10-03：**纯 web 预览**不走 Tauri（预览里 `get_avatar_file` 恒失败 ⇒ 面板永远空着）。
        改走预览直通 `/char/<目录>/avatar/[<服装>/]<情绪>.webp`（`webdev-preview-server.py` 只读直通官方素材，
        原型页一直用的就是这条）。认不出目录 ⇒ 空串 ⇒ 面板画空态（**不报错、不猜路径**）。
-       ⚠️ 真机的解析规则仍只有 Rust 一份（`src-tauri/src/api/character.rs`），这里不重写它。 */
+       真机的解析规则仍只有 Rust 一份（`src-tauri/src/api/character.rs`），这里不重写它。 */
     if (!isTauriRuntime()) {
       const u = previewCharAssetUrl(folder, emotion, clothesName);
       if (my !== seq || !opts.open.value) return;

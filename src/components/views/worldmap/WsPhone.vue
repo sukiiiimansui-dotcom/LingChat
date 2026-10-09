@@ -20,7 +20,7 @@
 
   ## 收放记忆（卡片第 3 条）
   用户的展开/收起偏好写 localStorage（`ws.phone.open`），跨会话记住。
-  ⚠️ 只记"偏好"，**不自动弹出** —— 打开应用时手机不该自己跳出来挡聊天。
+  只记"偏好"，**不自动弹出** —— 打开应用时手机不该自己跳出来挡聊天。
 
   ## 安全区（卡片第 4 条）
   按钮与面板都用 `env(safe-area-inset-*)` 让开刘海与手势条。
@@ -116,7 +116,7 @@
 
   /**
    * 八项功能 = T5-2~T5-8 的落点。
-   * `todo` 字段是**诚实的占位标记**：卡片还没做就不假装能用（机主明确讨厌假数据）。
+   * `todo` 字段是**诚实的占位标记**：卡片还没做就不假装能用（不接受假数据）。
    */
   const APPS = [
     { key: "map", icon: "🗺", name: "地图/导航", todo: "T5-2", hint: "地图与真实路径规划（T5-2）" },
@@ -148,7 +148,7 @@
   /**
    * 转场方向（MG 切片 B）：`in` = 进应用（往左走），`back` = 返回首页（往右走）。
    *
-   * ⚠️ 为什么用一个变量记方向，而不是让 CSS 自己猜：
+   * 为什么用一个变量记方向，而不是让 CSS 自己猜：
    *    `<Transition>` 的 `name` 是**响应式读的**，`app` 一变、name 立刻就是新值 ——
    *    离开和进入会同时用上新方向，方向感就丢了。所以方向必须在**改 `app` 之前**定好。
    *    这不是绕路：真实产品里"往哪走"本来就是一次导航的意图，本来就该在动作发生时定下来。
@@ -183,7 +183,7 @@
 
   onMounted(() => {
     /* 可访问性/可预期性：**不自动展开**。
-       记忆的是"用户上次的偏好"，下次他再点开时我们仍然从收起态开始 ——
+       记忆的是"用户上次的偏好"，下次他再点开时仍然从收起态开始 ——
        一个会自动弹出来挡聊天的手机，比没有手机更烦。 */
     open.value = false;
     savedPref = readSaved();
@@ -220,13 +220,13 @@
     border: 0;
     cursor: pointer;
     background: rgba(18, 26, 36, 0.72);
-    /* 🔴 2026-10-02（UI 方案 `PLAN-UI.md` P1 抓到）：**写死的毛玻璃令牌管不到**，
+    /* 2026-10-02（UI 方案 P1 抓到）：**写死的毛玻璃令牌管不到**，
        而项目红线是「`backdrop-filter` 只要不是 `none`，浏览器就每帧把底下像素读回来重合成」
        （`worldsim.css:198-201`）——手机这颗按钮**浮在每帧都在重画的 WebGL 地图**上，
        写死 `blur(12px)` 等于每帧白读一次像素。
        ⇒ 改走令牌：世界观那一屏（`WsCityEntry`）把 `--ws-blur` 置 `none` ⇒ `blur(none)` 在计算值阶段非法
          ⇒ 整条声明退回 `none`（不建 backdrop 层）；别的宿主里令牌有值就照旧毛玻璃。
-       ⚠️ **别写成 `blur(var(--ws-blur, 0px))`**：`blur(0px)` 不是"没有模糊"，照样建层（红线原文）。 */
+       **别写成 `blur(var(--ws-blur, 0px))`**：`blur(0px)` 不是"没有模糊"，照样建层（红线原文）。 */
     backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
     -webkit-backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
     box-shadow:
@@ -256,7 +256,7 @@
     border-radius: 22px;
     padding: 12px;
     background: rgba(14, 20, 28, 0.9);
-    /* 同上（`PLAN-UI.md` P1）：令牌驱动，世界观那一屏解析成 `none` ⇒ 不每帧读回像素。 */
+    /* 同上（：令牌驱动，世界观那一屏解析成 `none` ⇒ 不每帧读回像素。 */
     backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
     -webkit-backdrop-filter: saturate(1.2) blur(var(--ws-blur, none));
     box-shadow:
@@ -269,7 +269,7 @@
         按钮底边与面板底边同在 96px，所以圆心比面板底边矮 26px）。
        于是展开时手机像是"从按钮里长出来"的 —— 这正是 MD3 说的 Container Transform：
        用户一眼看出"这块面板和那个按钮是同一个东西"。
-       ⚠️ 别改成 right bottom：那样是从角落硬撑开，和按钮没有关系。 */
+       别改成 right bottom：那样是从角落硬撑开，和按钮没有关系。 */
     transform-origin: calc(100% - 26px) calc(100% + 26px);
   }
   .wsphone__bar {
@@ -305,7 +305,7 @@
     flex-direction: column;
     gap: 8px;
     min-height: 0;
-    /* 🔴 必须能滚：手机面板的 `max-height: min(430px, 100vh-140px)` 会裁掉超高内容，
+    /* 必须能滚：手机面板的 `max-height: min(430px, 100vh-140px)` 会裁掉超高内容，
        而天气（T5-7）比面板高 —— 不滚的话下半截（六格数据 + 数据源 + 「在地图上看」）
        在 DOM 里有、屏幕上够不着（2026-09-18 实测：932×430 里只看到主卡的上半部分）。
        这是**外壳**的修正，T5-2~T5-8 的所有应用一起受益。 */
@@ -423,7 +423,7 @@
 
   /* 收放动画：只动 transform / opacity（GPU 合成），进入 decelerate、离开 accelerate */
   /* MG 切片 B：展开曲线带**过冲**（0.34, 1.4, 0.64, 1 里的 1.4 > 1 就是过冲）——
-     手机"弹"出来一点点再落定，就是机主要的"惯性/回弹"。
+     手机"弹"出来一点点再落定，就是"惯性/回弹"。
      回落只有 0.2s 且用加速曲线：关掉要干脆，不要拖泥带水。 */
   .wsphone-enter-active {
     transition:

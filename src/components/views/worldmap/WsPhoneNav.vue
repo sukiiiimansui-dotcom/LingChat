@@ -108,7 +108,7 @@
   const flat = (ring: number[][]) => ring.flatMap(([lng, lat]) => [lng, lat]);
 
   /** 目的地坐标：抓该区县的 GeoJSON，算面积质心。
-   *  ⚠️ 走 `geoJson()` 的**双通路**（真壳 invoke / 浏览器 HTTP），不要在组件里直连 8791 ——
+   *  走 `geoJson` 的**双通路**（真壳 invoke / 浏览器 HTTP），不要在组件里直连 8791 ——
    *  那是本地调试端口，装进 APK 必然失败（我自己先犯过这个错，已改）。 */
   async function destLatLng(ad: string): Promise<{ lat: number; lng: number } | null> {
     try {

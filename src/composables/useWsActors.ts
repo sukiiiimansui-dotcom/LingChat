@@ -6,7 +6,7 @@
 //     Tauri 命令）汇成一张「地图上的人」的清单，并把 UI 状态（选中谁、面板开不开）管起来
 //   · 组件只负责画
 //
-// ⚠️ 性能红线（机主明确要求，改之前先读）：
+// 性能红线（要求，改之前先读）：
 //   角色立绘是 3511×5242 的 webp（**解码后 ≈73MB 一张**）。所以：
 //     ① 地图上的头像**绝不**用立绘 —— 走 `get_avatar_file`，并且优先要
 //        `avatar/头像.webp`（LingChat 素材里每套立绘都自带的小方图，≈45KB）；
@@ -285,7 +285,7 @@ export function useWsActors(opts: UseWsActorsOptions = {}) {
 
       /* ② 日程（拿「现在在做什么 / 在哪个设施」）——失败不影响出人
        *
-       * ⚠️ 必须把 runtime 里那份**设施表**带回去：后端只有拿到它，才能把日程里的
+       * 必须把 runtime 里那份**设施表**带回去：后端只有拿到它，才能把日程里的
        * "商业区/住宅区"这种**类型**落到**具体设施点**上（给 `place.name`）。
        * 不带的话 `place` 恒为空 → 推给 Rust 的 `facility` 也是空 →
        * 事件引擎判室内外恒为「户外」→ 停电/失眠那批仅室内事件永不触发（静默）。
@@ -304,7 +304,7 @@ export function useWsActors(opts: UseWsActorsOptions = {}) {
       const sch = schedule.value;
       /* 可玩性切片 A：日程**数据**里也留一条"今日改道"（只有够好感的角色），
          让因果链每一环都能被读到；地图位置由下面的 applyAffinityVisit 负责。
-         ⚠️ 这不是"改写明天的日程"——那需要世界时间轴（BORROW-LIST §7 P1），尚未做。 */
+         这不是"改写明天的日程"——那需要世界时间轴，尚未做。 */
       if (opts.affinityOf && sch?.roles?.length) {
         sch.roles = applyAffinityToRoles(sch.roles, opts.affinityOf).roles;
       }

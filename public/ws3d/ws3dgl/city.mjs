@@ -79,7 +79,7 @@ export function buildCity(opts) {
   const allRoads = realRoads.concat(procRoads);
   // 净空守卫：落位时卡"楼到路中心线 ≥ 路面半宽 + 0.5m"。opts.clearance === false 时整段跳过
   // （自检要拿"改之前"的数对照，所以留了这个开关）。
-  // legacy：把"落位约束"退回改之前那套（5 探针 + depth 4 + 不看归属），只为复现改之前的实测数。
+  // legacy：把"落位约束"退回改之前那套（5 点采样 + depth 4 + 不看归属），只为复现改之前的实测数。
   const legacy = opts.legacy === true;
   const guard = (opts.clearance === false || legacy) ? null : buildRoadIndex(allRoads);
   const scratch = [];
@@ -93,7 +93,7 @@ export function buildCity(opts) {
       if (!parcelUsable(rc, owner, blk.id, gx, gz, N, occ, legacy)) continue;
       const b = buildingFromParcel(rc, blk, brng, radius);
       if (!b) continue;
-      // 栅格掩码是 4m 粗格 + 5 个探针 ⇒ 斜穿地块的窄路会漏；这里用**精确距离**再卡一遍
+      // 栅格掩码是 4m 粗格 + 5 个采样点 ⇒ 斜穿地块的窄路会漏；这里用**精确距离**再卡一遍
       if (guard) {
         const fit = fitToRoads(b, guard, scratch);
         if (!fit.ok) { rejected++; continue; }
@@ -274,8 +274,8 @@ function splitRect(rc, depth, rng, maxDepth = MAX_SPLIT_DEPTH) {
 
 /** 地块够不够"干净"：footprint 范围内的**每一个格**都得是"本街区自己的空地"。
  * 两条都是这轮实测撞出来的：
- *   ① 原来是"四角 + 中心 5 个探针"：4m 粗格 + 只探 5 点 ⇒ 斜穿地块的窄路（service 4.5m）
- *      正好落在探针之间就漏了，楼直接压上街（实测楼到路中心线最小距离 = 0m，违规 475 处）；
+ *   ① 原来是"四角 + 中心 5 个采样点"：4m 粗格 + 只探 5 点 ⇒ 斜穿地块的窄路（service 4.5m）
+ *      正好落在采样点之间就漏了，楼直接压上街（实测楼到路中心线最小距离 = 0m，违规 475 处）；
  *   ② 只看"格是空的"不够：街区 bbox 会盖住**别的**连通域（斜长条的 bbox 铺满全图、
  *      或者被路围住的院子）⇒ 两栋不同街区的楼叠在一起（实测楼间距 = 0m）。
  *      owner[] 是格→街区的归属，格号对不上就不是当前街区的地。 */
@@ -284,7 +284,7 @@ function parcelUsable(rc, owner, id, gx, gz, N, occ, legacy) {
   const w = rc.w - pad * 2, d = rc.d - pad * 2;
   if (w < 7.5 || d < 7.5) return false;
   if (legacy) {
-    // 改之前的判据：四角 + 中心 5 个探针（只为自检能复现"改之前"的数，正常生成用不到）
+    // 改之前的判据：四角 + 中心 5 个采样点（只为自检能复现"改之前"的数，正常生成用不到）
     const probes = [
       [rc.x + pad, rc.z + pad], [rc.x + rc.w - pad, rc.z + pad],
       [rc.x + pad, rc.z + rc.d - pad], [rc.x + rc.w - pad, rc.z + rc.d - pad],

@@ -15,7 +15,7 @@
 //   ZaneAtega/Three-js-Anime-Shader **无 LICENSE** ⇒ 一个字符都没用（只在 ART-PLAN 里当思路索引）。
 import { TOON, OUTLINE, toRgb } from './palette.mjs';
 
-/** 三色染色的参数名（selftest 拿它断言"每路都齐、都是合法数"） */
+/** 三色染色的参数名（测试拿它断言"每路都齐、都是合法数"） */
 export const TINT_KEYS = ['lit', 'litStrength', 'shadow', 'shadowStrength', 'ambient', 'ambientStrength'];
 /** 边缘光的参数名 */
 export const RIM_KEYS = ['color', 'threshold', 'strength', 'power'];

@@ -5,7 +5,7 @@
 //   ① 量：楼体 footprint 到道路中心线的最小距离、楼与楼的最小间距（把数报出来，不靠感觉）；
 //   ② 修：压线的楼按需要的量缩进去，缩不动（<7m）就删掉；贴太近的楼让矮的那栋退一步；
 //   ③ 试：从出生点沿真实街道走 200m，每步都过一遍 resolve()，看会不会被卡住。
-// 全部纯函数：selftest 与 probe 都能跑，不依赖浏览器。
+// 全部纯函数：测试能跑，不依赖浏览器。
 import { buildCollider, resolve } from '../player.mjs';
 import { worldToLocal } from '../util.mjs';
 import { roadSpec } from '../city.mjs';
@@ -130,7 +130,7 @@ export function sanitizeLayout(buildings, roads, opts = {}) {
   for (const src of buildings) {
     if (!(src.w > 1) || !(src.h > 1)) continue;
     // 超大/超细的楼先扔（style.mjs 已把最长边切到 ≤90m，这里只是兜底；
-    // 留着它们会压在路上、把整条街堵死 —— 探针里"走 200m 只走了 51m"就是这么来的）
+    // 留着它们会压在路上、把整条街堵死 —— "走 200m 只走了 51m"就是这么来的）
     if (Math.max(src.w, src.d) > (opts.maxSide || 120)) { removed++; continue; }
     let b = src, ok = false;
     for (let attempt = 0; attempt < 3 && !ok; attempt++) {

@@ -170,7 +170,7 @@
 
       /**
        * 底图自愈：本轮实测到 MapLibre 在**软件 WebGL / 上下文丢失**的环境里会把样式重置成
-       * "只剩后加的那层"（探针实测 `srcIds:["contour"]`、`nLayers:1`，
+       * "只剩后加的那层"（实测 `srcIds:["contour"]`、`nLayers:1`，
        * 而底图瓦片此前明明抓了 24 张）。真机（有 GPU）不会这样，但**页面不该假设样式不会被重置**。
        */
       function ensureBase(map, styleReady, say) {
@@ -226,7 +226,7 @@
       }
 
       /* 先预检 WebGL 再建图：`new Map()` 在没有 WebGL 时**不一定抛**（可能异步失败），
-         于是 `load` 永不触发 ⇒ 整条链卡死、页面白屏且不报错（本轮实测踩到，第二次探针停在 booting）。 */
+         于是 `load` 永不触发 ⇒ 整条链卡死、页面白屏且不报错（本轮实测踩到，第二次读取停在 booting）。 */
       const webglOk = (() => {
         try {
           const t = document.createElement("canvas");

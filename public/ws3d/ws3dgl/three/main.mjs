@@ -99,9 +99,9 @@ function showDiag(reason) {
     ['可通行自测', r.walk ? `沿街走 ${r.walk.covered}m / 目标 ${r.walk.target}m · 卡住 ${r.walk.stuck} 次` : '未测'],
     ['报错', r.errors.length ? r.errors.join(' | ') : '无'],
   ];
-  d.innerHTML = '<h3>诊断（无头/无 GPU 环境的预期结果）</h3><table>'
+  d.innerHTML = '<h3>诊断（无 GPU 环境的预期结果）</h3><table>'
     + rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join('') + '</table>'
-    + '<p class="hint">这台机器上无头 Chromium 默认拿不到 WebGL2（第 2 帧还会丢上下文，属环境限制）。'
+    + '<p class="hint">无 GPU 的软件渲染环境默认拿不到 WebGL2（第 2 帧还会丢上下文，属环境限制）。'
     + '真机（手机浏览器）能拿到 WebGL2，画面才出得来 —— 上面每一行数据都是真取到的。</p>';
 }
 
@@ -247,7 +247,7 @@ function onGlLost(e) {
   state.glLostCount++;
   if (state.glLostCount === 1 && state.shadows) {
     state.shadows = false; state.autoShadowOff = true;
-    state.diag.push('⚠️ WebGL 上下文丢失 ⇒ 自动关掉阴影继续（本机无头就是这个行为）');
+    state.diag.push('⚠️ WebGL 上下文丢失 ⇒ 自动关掉阴影继续（软件渲染环境就是这个行为）');
     setTimeout(() => {
       const r = mountRenderer(false);
       if (r.ok) { state.glEverOk = true; state.gl = { ok: true, renderer: r.rendererName, attrs: r.attrs }; applyStyle(); sizeRenderer(); startLoop(); }
@@ -669,7 +669,7 @@ function tick(dt, now) {
     sun.position.set(sn.position[0], sn.position[1], sn.position[2]);
     sun.target.position.set(sn.target[0], sn.target[1], sn.target[2]);
     sun.target.updateMatrixWorld();
-    // 读数只给快照/探针看（每帧原地改，别在渲染循环里造垃圾）
+    // 读数只给快照/外部读取用（每帧原地改，别在渲染循环里造垃圾）
     const ss = state.shadowSnap || (state.shadowSnap = { on: true, texel: 0, area: 0, res: 0, offset: [0, 0] });
     ss.on = sn.snapped; ss.texel = sn.texel; ss.area = shadowArea; ss.res = sun.shadow.mapSize.x;
     ss.offset[0] = sn.offset[0]; ss.offset[1] = sn.offset[1];
@@ -842,7 +842,7 @@ export async function boot() {
   //    下游函数（doAction/setStyle/setShadowSize/sizeRenderer/applyStyle）都已对"没有 renderer"做了空值保护。
   // data-ui 上的触摸不算摇杆/视角（按按钮不会甩镜头）；摇杆底盘位置交给 player.mjs
   input = createInput(document.body, { onKey: onHotkey, onStick, stickAnchor });
-  state.input = input;                   // 探针读输入态用（v1 也是 state.input）
+  state.input = input;                   // 外部读取输入态用（v1 也是 state.input）
   for (const el of document.querySelectorAll('[data-act]')) {
     el.addEventListener('click', (ev) => { ev.preventDefault(); doAction(el.dataset.act); });
   }
@@ -944,10 +944,10 @@ export function nextCharacter() {
   return c;
 }
 
-/** 自动化探针用：把状态吐成 JSON（字段名与 v1 对齐，方便 A/B 同一套断言） */
+/** 自动化读数用：把状态吐成 JSON（字段名与 v1 对齐，方便 A/B 同一套断言） */
 export function snapshot() {
   try { return buildSnapshot(); } catch (e) {
-    // 探针最怕"快照函数自己抛异常"：那边只会看到一堆 undefined，像"页面全挂了"。
+    // 读数函数最怕"快照函数自己抛异常"：那边只会看到一堆 undefined，像"页面全挂了"。
     // 所以这里必须把异常原文带出去。
     return { ready: state.ready, errors: (state.errors || []).concat(['snapshot 异常：' + (e && e.stack || e)]), snapshotError: String(e && e.message || e) };
   }
@@ -985,7 +985,7 @@ function buildSnapshot() {
       loaded: r.charState.loaded, width: r.charState.width, height: r.charState.height,
       layers: r.charState.layers, url: r.charState.url, error: r.charState.error,
     }, r.charState.kind === 'skinned' ? {
-      // 骨骼角色额外报这几个数（探针的 skinned 断言看的就是它们）；billboard 下**一个字段都不多**，读数逐项不变
+      // 骨骼角色额外报这几个数（外部断言的 skinned 读数看的就是它们）；billboard 下**一个字段都不多**，读数逐项不变
       clips: r.charState.clips, clipCount: r.charState.clipCount, clip: r.charState.clip,
       mixerTime: r.charState.mixerTime === undefined ? null : +r.charState.mixerTime.toFixed(3),
       skinnedMeshes: r.charState.skinnedMeshes, bones: r.charState.bones, meshes: r.charState.meshes,

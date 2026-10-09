@@ -11,7 +11,7 @@
 // 开启方式：页面挂 `?char=skinned`。**不挂就是老的 billboard ⇒ 默认路径一个字节都不变。**
 //
 // 能纯算的东西全抽成纯函数放在文件上半部（GLB 容器解析 / 包围盒→缩放·贴地 / 最短弧插值 /
-// clip 挑名字）—— 这些在 node 里就能断言，不用开浏览器（见 selftest.mjs 第 7 节）。
+// clip 挑名字）—— 这些在 node 里就能断言，不用开浏览器（见测试第 7 节）。
 //
 // 出厂的那个 glTF 里有 14 段动画，走 / 跑 / 站的名字见 CLIP_WANT；
 //    模型是"骨架节点 + 两块真蒙皮手掌"，不是全身 SkinnedMesh。
@@ -105,7 +105,7 @@ export function glbInfo(json) {
   };
 }
 
-/** 一步到位：字节 → { 容器, 信息 }（selftest 与诊断面板都用它） */
+/** 一步到位：字节 → { 容器, 信息 }（测试与诊断面板都用它） */
 export function parseGlbInfo(buf) {
   const c = parseGlbContainer(buf);
   return { container: { version: c.version, declared: c.declared, chunks: c.chunks }, info: glbInfo(c.json), json: c.json };
@@ -265,7 +265,7 @@ function gltfLoad(url, onOk, onErr) {
 /**
  * 建一个骨骼角色。返回的东西与 character.mjs 的工厂**同形**：
  *   { object3D, update, setEmotion, setIndex, dispose, state, next, current, kinds }
- * 额外多一个 `mixer`（探针要看 mixer.time 有没有推进）。
+ * 额外多一个 `mixer`（读数要看 mixer.time 有没有推进）。
  *
  * @param {object} opts
  *   model       GLB 路径（默认 DEFAULT_MODEL）
@@ -273,7 +273,7 @@ function gltfLoad(url, onOk, onErr) {
  *   name        显示名（默认取文件名）
  *   yawOffset   模型自身朝向修正（弧度）：模型正面不是 +Z 时用它掰（默认 0）
  *   strideWalk / strideRun  走路·跑步 clip 的"基准速度"（米/秒），用来算 timeScale
- *   load        注入加载器（签名 (url, onOk, onErr)）—— selftest 用假加载器，不联外网
+ *   load        注入加载器（签名 (url, onOk, onErr)）—— 测试用假加载器，不联外网
  */
 export function createSkinnedCharacter(opts = {}) {
   const model = opts.model || DEFAULT_MODEL;
@@ -341,7 +341,7 @@ export function createSkinnedCharacter(opts = {}) {
     try {
       root = gltf && (gltf.scene || (gltf.scenes || [])[0]);
       if (!root) { state.error = loadErrorText(model, new Error('glTF 里没有 scene')); return; }
-      // ① 数一数拿到了什么（探针要这几个数）
+      // ① 数一数拿到了什么（读数要这几个数）
       root.traverse((o) => {
         if (o.isSkinnedMesh) { state.skinnedMeshes++; o.frustumCulled = false; }   // 蒙皮网格的包围球不跟着骨骼走，关掉视锥剔除免得走两步就消失
         else if (o.isMesh) state.meshes++;

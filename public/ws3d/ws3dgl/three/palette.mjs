@@ -2,7 +2,7 @@
 //
 // 为什么单独一个文件：v1 的配色是散在 gl.mjs 的着色器常量里的，
 // 换渲染层时没法对比"是不是同一套颜色"。这里把**两档风格 + 楼体三档基色**
-// 收成一份可被 selftest 断言的纯数据，three 版和手写版可以拿同一份来对色。
+// 收成一份可被测试断言的纯数据，three 版和手写版可以拿同一份来对色。
 //
 // 颜色一律写 `#rrggbb` 字符串（canvas 贴图与 THREE.Color 都吃得下）。
 
@@ -123,7 +123,7 @@ export const STYLES = {
   },
 };
 
-/** HUD 的循环顺序（Object.keys(STYLES) 的插入序就是它；selftest 拿它断言"顺序稳定"） */
+/** HUD 的循环顺序（Object.keys(STYLES) 的插入序就是它；测试拿它断言"顺序稳定"） */
 export const STYLE_ORDER = Object.keys(STYLES);
 
 /**
@@ -169,13 +169,13 @@ export function toonGradientData({ levels = TOON.levels, soft = TOON.soft, n = T
   return out;
 }
 
-/** 风格里所有颜色字段的名（selftest 用它确保每档都齐） */
+/** 风格里所有颜色字段的名（测试用它确保每档都齐） */
 export const STYLE_COLOR_KEYS = ['zenith', 'horizon', 'skyGround', 'sunColor', 'hemiSky', 'hemiGround', 'ambient', 'fogColor', 'sunDisc'];
 export const STYLE_NUM_KEYS = ['sunIntensity', 'hemiIntensity', 'ambientIntensity', 'envIntensity', 'fogDensity', 'windowEmissive', 'lampGlow', 'stars', 'exposure', 'bloomStrength', 'sunSize'];
 
 /**
  * 贴图 tile 的"米"尺寸 —— **纯数据，故意放这里而不是 textures.mjs**：
- * textures.mjs 要 import three（CanvasTexture），而 build.mjs / selftest.mjs 必须在 node 里跑得起来。
+ * textures.mjs 要 import three（CanvasTexture），而 build.mjs / 测试脚本必须在 node 里跑得起来。
  * 常量放这份无依赖的文件里，几何那边就不用为了一个数字把 three 拖进 node。
  */
 export const TILE = { w: 16, h: 13.2, roof: 8, road: 8, roadWide: 9, walk: 4, ground: 32 };

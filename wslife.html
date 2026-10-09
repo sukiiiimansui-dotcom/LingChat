@@ -9,7 +9,7 @@
       wslife.html —— 「世界模拟」原型 **v2：按修正后的概念重做**（自用层，不进 PR）
       ════════════════════════════════════════════════════════════════════════
 
-      机主 2026-09-16 的判断：「**那个模拟的完全不对**」—— 他是对的。我去看了两处：
+      2026-09-16 的判断：「**那个模拟的完全不对**」—— 这个判断是对的。复核了两处：
 
         ① 真实聊天页（`MainChat.vue` 截图）：**角色立绘占满整屏** + 底部悬浮输入抽屉
         ② 代码里的世界模拟（`WorldSim.vue` 的 neighborhood 阶段）：
@@ -18,7 +18,7 @@
            「去找他聊聊」→ 进对话
 
       ⇒ LingChat 的「世界」= **角色生活的小区**，不是一张中国省界图。
-        我的 v1（`wsgame.html`）做成了**导航 App 式的全国地图**、把角色缩在角落当装饰，
+        v1（`wsgame.html`）做成了**导航 App 式的全国地图**、把角色缩在角落当装饰，
         **主次完全反了**。这一版把它翻过来：
 
           · **角色是主角**：Live2D 立绘占主体，带呼吸/眨眼，可点（触发表情）
@@ -359,7 +359,7 @@
         bindInput();
         startClock();
         placeBubble();
-        (Promise.reject(new Error("Live2D 已按机主要求在地图上禁用（2026-09-18）；立绘改走 PNG 模式")))
+        (Promise.reject(new Error("Live2D 已按既定口径在地图上禁用（2026-09-18）；立绘改走 PNG 模式")))
           .catch((e) => { charErr = String(e?.message || e); console.warn("[wslife] 角色没加载出来：", e); });
 
         console.log(`[wslife] 首屏 ${Math.round(performance.now() - t0)} ms，后端=${backend.kind}`);

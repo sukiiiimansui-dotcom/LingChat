@@ -7,7 +7,7 @@
 // 可 **APK 里没有 8790**（没人监听那个端口），而路网本来就在 App 自己的 `public/roadsbundle/` 里
 // （69 格 / 5.92 MB / 24,704 条，schema `{key, roads:[{i,r,n,p}]}`）。所以这一层把请求就地答掉：
 //
-//   · `:8790/api/*`              → **全部本地应答**（一个包都不出网；探针判据「:8790 命中 0 次」就靠这条）
+//   · `:8790/api/*`              → **全部本地应答**（一个包都不出网；读数判据「:8790 命中 0 次」就靠这条）
 //   · `/api/osm_cache`           → `./roads-index.json`（由索引脚本从 roadsbundle 生成）
 //   · `worlddata/osm/<键>.json`  → `/roadsbundle/<格>.json` + **schema 转换**（下面是逐字段对照）
 //   · 其它一切（`three.min.js`、`*.mjs`、`/roadsbundle/…`）原样放行 `fetch`

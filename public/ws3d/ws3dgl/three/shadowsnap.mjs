@@ -17,7 +17,7 @@
 //   → Object3D.lookAt → Matrix4.lookAt(eye, target, up)：
 //       z = normalize(eye - target)，x = normalize(cross(up, z))，y = cross(z, x)
 //   up = shadowCamera.up = (0,1,0)（退化时 three 会把 z 抖 1e-4，此处照抄，见 lightBasis）。
-//   ⇒ 验收判据（selftest_shimmer.mjs）直接拿真 three 的 `light.shadow.matrix` 对拍，不靠嘴说。
+//   ⇒ 判据直接拿真 three 的 `light.shadow.matrix` 对拍，不靠嘴说。
 //
 // 本文件**不 import three**（纯数学，node 里能直接断言、能在无浏览器的机器上量的就是这个）。
 import { STYLES } from './palette.mjs';

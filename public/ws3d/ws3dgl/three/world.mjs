@@ -103,7 +103,7 @@ export const LOD_HYSTERESIS = 1.12;
  * 分块记录：meshData.chunks（build.mjs 的产物）→ 带 AABB 与可见状态的记录。
  * **格边长取真的**：`opts.cell` 显式优先，其次读 `buildWorld` 写进 `stats.opts.cell` 的那个数。
  * （以前这里硬编码 256：build 那边一换 cell，距离这把尺子就悄悄错了，画面上只会看到"开关位置不对"。）
- * 纯逻辑、不 import three ⇒ `selftest_shimmer.mjs` 能直接在 node 里量翻转次数。
+ * 纯逻辑、不 import three ⇒ 测试能直接在 node 里量翻转次数。
  */
 export function resolveChunkRecords(meshData, opts = {}) {
   const fromStats = meshData && meshData.stats && meshData.stats.opts ? Number(meshData.stats.opts.cell) : NaN;
@@ -505,7 +505,7 @@ export function createWorld(meshData, opts = {}) {
    * 不传 spec 时退到 palette.OUTLINE（老调用点 `setOutline(true)` 的行为逐字不变）。
    */
   let outlineOn = false;
-  // 描边当前实际生效的那份参数（探针/HUD 读它，证明"粗细颜色真的来自风格档"）
+  // 描边当前实际生效的那份参数（外部读取/HUD 读它，证明"粗细颜色真的来自风格档"）
   let outlineSpec = { thickness: OUTLINE.thickness, color: OUTLINE.color, alpha: 1 };
   const setOutline = (on, spec = null) => {
     outlineOn = !!on;
@@ -533,10 +533,10 @@ export function createWorld(meshData, opts = {}) {
     setOutline, isOutline: () => outlineOn,
     outlineSpec: () => ({ ...outlineSpec, on: outlineOn }),
     setToonSunDirView, applyToonParams,
-    // 动画感三件的读数（探针/HUD 读）：染色边缘光开没开、补丁锚点找到了没有
+    // 动画感三件的读数（外部读取/HUD 读）：染色边缘光开没开、补丁锚点找到了没有
     toonFx: () => toonFx(),
     isClean: () => texClean, texMs: () => texMs, applyTextures,
-    // 半卡通读数（探针/自检读）：当前是不是 toon、五个桶各自用的哪种材质
+    // 半卡通读数（外部读取/测试读）：当前是不是 toon、五个桶各自用的哪种材质
     isToon: () => toonNow,
     bucketKinds: () => Object.fromEntries(TOON_BUCKETS.map((b) => [b, materials[b] && materials[b].isMeshToonMaterial ? 'toon' : 'standard'])),
     materialOf: (b) => materials[b],

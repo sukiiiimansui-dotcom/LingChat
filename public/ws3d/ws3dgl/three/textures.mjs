@@ -10,7 +10,7 @@ import { CanvasTexture, RepeatWrapping, SRGBColorSpace } from '../vendor/three.m
 import { TIERS, GROUND, ACCENT, TILE, SHOP_H, toRgb, hex, shade, vivid, mix } from './palette.mjs';
 import { rngOf, hashSeed } from '../util.mjs';
 
-// tile 尺寸与底商层高定义在 palette.mjs（那份不依赖 three，node 里能被 build/selftest 直接用）
+// tile 尺寸与底商层高定义在 palette.mjs（那份不依赖 three，node 里能被 build/测试直接用）
 export { TILE, SHOP_H };
 const BAY = TILE.w / 4;               // 一个开间 4m
 const FLOOR = TILE.h / 4;             // 一层 3.3m

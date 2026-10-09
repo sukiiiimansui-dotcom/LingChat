@@ -1,5 +1,5 @@
 // util.mjs —— 纯工具：确定性随机 / 哈希 / 几何小函数。
-// 这个文件**不碰 DOM**，所以 node 里能直接 import 跑自检（selftest.mjs）。
+// 这个文件**不碰 DOM**，所以 node 里能直接 import 跑测试。
 
 /** 32 位确定性伪随机（同一 seed ⇒ 同一座城；换 seed 就换一座城） */
 export function mulberry32(a) {

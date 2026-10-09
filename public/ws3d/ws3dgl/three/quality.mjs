@@ -3,7 +3,7 @@
 // 为什么单独一个文件：这些"旋钮往哪拧"的判断原来长在 main.mjs 里，而 main.mjs 一 import 就碰
 // window/document（`window.addEventListener('error', …)`）⇒ node 里根本 import 不了，
 // 于是"自适应会不会偷偷降 dpr"这种事**只能靠真机看**。搬到这份无依赖模块之后，
-// selftest_anime.mjs 能在 node 里直接喂坏帧时间断言它（不吃 GPU、不开浏览器）。
+// 测试能在 node 里直接喂坏帧时间断言它（不吃 GPU、不开浏览器）。
 //
 // 口径（2026-10-06 定）：
 //   · dpr 默认 = min(devicePixelRatio, 3)，**自适应画质不许动 dpr**（要的就是这个清晰度）；

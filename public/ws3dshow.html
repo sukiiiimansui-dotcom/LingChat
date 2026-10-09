@@ -9,7 +9,7 @@
 
       ## 为什么单独开一页（2026-09-19）
       需求：2d 小区观感不佳，改试 3d 路线。
-      本机无头浏览器**看不到 WebGL**（GPU 上下文首帧后必丢，6 种图形栈实测过），
+      无 GPU 的环境**看不到 WebGL**（GPU 上下文首帧后必丢），
       所以"好不好看"这件事**只能在真机上调**。而真机上走 App 到小区级要点好几下、
       还要等 AI 精绘 ⇒ 一轮迭代几分钟。
       这一页把"调观感"需要的三件事压到一屏：**真底图 + 真楼房挤出 + 一组能点的档位**。
@@ -481,7 +481,7 @@
       function fail(why) {
         const el = $("fb"); el.style.display = "grid";
         if (el) el.className = "";                // 别让加载态的转圈盖在错误信息上
-        el.textContent = "3D 调参台起不来：" + why + "（本机无头看不到 WebGL 是已知的，真机才有）";
+        el.textContent = "3D 调参台起不来：" + why + "（无 WebGL 环境下看不到是已知的，真机才有）";
         window.__w3d = { ok: false, why, errs: errs.slice(0, 5) };
       }
       /** 主题那句提示的安全取值（HUD 元素可能还没建） */
@@ -661,7 +661,7 @@
             lookState = g
               ? "已用派生主题（looks." + LOOK_ID + "." + THEME_ID + "）"
               : "回退：快照里没有 looks." + LOOK_ID + "." + THEME_ID +
-                "（多半是 /wstheme.json 是旧的 ⇒ 跑 node ws_map_theme_selftest.mjs --write-theme-json，或强刷）";
+                "（多半是 /wstheme.json 是旧的 ⇒ 重新生成 /wstheme.json，或强刷）";
           }
           /* 候选底图 `?bm=<id>`：同一份快照、**同一个形状**，只是换成 `basemaps.<id>.<主题id>` 那一份。
              快照里没有这一档（老 /wstheme.json / 认不出的 id）⇒ **如实回退基准主题**并把原因写进徽标
@@ -672,7 +672,7 @@
             bmState = bmT
               ? "已换底图（basemaps." + BM_ID + "." + THEME_ID + "）"
               : "回退：快照里没有 basemaps." + BM_ID + "." + THEME_ID +
-                "（老的 /wstheme.json ⇒ 跑 node ws_map_theme_selftest.mjs --write-theme-json，或强刷）";
+                "（老的 /wstheme.json ⇒ 重新生成 /wstheme.json，或强刷）";
           }
           /* 优先级：底图（`?bm=`）> 观感（`?look=2`）> 基准主题。
              `?bm` 与 `?look=2` **叠加这一版没做**（候选表是按基准主题派生的）⇒
@@ -680,7 +680,7 @@
           if (BM_ID && LOOK === 2 && bmT) lookState = "未叠（?bm= 优先）：" + lookState;
           THEME = bmT || g || t;
           THEME_BASE = t; // 基准那一份永远留着（回证要能对比"改了什么"）
-          /* 底图自证（探针读它）—— **读的是真·主题对象里的值**，不是页面自己的变量 */
+          /* 底图自证（外部读取用它）—— **读的是真·主题对象里的值**，不是页面自己的变量 */
           try {
             const sb = (THEME && THEME.sources && THEME.sources.base) || null;
             window.__BM__ = {
@@ -785,7 +785,7 @@
        * 为什么搬（真机反馈：**App 页用的建筑模型不是 art1**）：本页原来有一份内联实现
        * （`?look=2` ⇒ 硬边 `step`，否则 `interpolate`），而 **App 宿主一份都没有** ⇒ 同一个主题、同一个
        * `?look=`，两页出来的 `fill-extrusion-color` 不是一个东西。判据是"换宿主、调同样的函数"。
-       * 自检 `ws_art_params_selftest.mjs` 第②组把这一段的**旧实现原文**（git 锚点）与共享版逐字段对拍过。
+       * 测试第②组把这一段的**旧实现原文**（git 锚点）与共享版逐字段对拍过。
        */
 
       /**
@@ -1015,7 +1015,7 @@
          2026-09-26 真机事故（z12 截图「整屏空」）——本页曾经把这两个数**各写死一份**：
          图层 `minzoom: 14`（9 处）+ 挑楼闸门 `12.8`，注释还写着"与共享常量统一"（其实从没读过它）。
          共享真源改成 11 之后，页面**静默退回自己的 14**，而预渲染瓦片已撤到 z<11
-         ⇒ **z11~13：瓦片没了、楼也不画** ⇒ 一栋楼都看不见（自检 `ws_bld_page_selftest`
+         ⇒ **z11~13：瓦片没了、楼也不画** ⇒ 一栋楼都看不见（测试
          的"页面依赖契约"早就报"缺 WS_BLD_VECTOR_MINZOOM"——那次没有处理，教训）。
          ⇒ 现在：**只读真源**，三态如实：
            ① 首选 `TF.WS_BLD_VECTOR_MINZOOM`（App 同一常量）；
@@ -1274,13 +1274,13 @@
              （"显示哪些楼定下来"这批改动）之后**改名成 `bldMaxDrawnOf(mode)`** ——
              集合改由**数据**（按离线包格 top-K）决定，不再吃相机/缩放 ⇒ 旧名字在新产物里**已不存在**。
              表里必须跟着改：还写旧名字 ⇒ `tfMissing()` 永远非空 ⇒ 每轮白打三趟 vendor，且"自愈成功"那类闸永远红
-             （本轮 `ws_bld_page_selftest` 就这么被judged红过 5 条）。
+             （本轮页面测试就是这么被判红的）。
              它是**函数** ⇒ 可以进这张表（常量那两个走下面的 `BLD_CONSTS`）。
          2026-10-03 第四条本页又依赖两个**函数**：`bldTierOfZoom`（分界线 +
             0.25 滞回）与 `bldMetersPerCssPixel`（静态路的尺子）。
             **它们故意不进这张表**（与上面那条惯例的一次**有记录**的例外）：本页是**先接线、
             vendor 后重建**（`bash scripts/build-ws-vendor.sh`）⇒ 重建之前这两个符号必然不在，
-            进表就会让每次开页都白打三趟 vendor、`tfState` 常驻"重取后仍缺"，而 `ws_bld_page_selftest`
+            进表就会让每次开页都白打三趟 vendor、`tfState` 常驻"重取后仍缺"，而页面测试
             的"自愈"那几条也会当场变红（那个夹具里的"新产物"就是 `public/vendor/wsScene.mjs`）。
             传播机制本来就不靠它：`VENDOR_VER` 是**产物内容哈希**，重建后 URL 必换 ⇒ 一定拿到新的。
             读不到时页面各自退回**改造前的行为**（`bldTierAt` / `bldMetersPerPixelAt` 里的兜底），
@@ -1448,7 +1448,7 @@
       /**
        * 楼体色阶：art=2 把高段推到近白（**不动主题基准**，只换这一屏用的那一份拷贝）。
        * **已搬到共享真源**（`wsArtParams.artRamp`）—— `art=1` 时**恒等返回**（同一个引用），
-       * 所以"不给参数 = 旧版一个字节都不变"这条有 `ws_art_params_selftest.mjs` 第①组钉着。
+       * 所以"不给参数 = 旧版一个字节都不变"这条有测试第①组钉着。
        * 页面这一层只是"按 art 档取参"：`bldArtRamp()`（模块没到 ⇒ 返回 null，调用点各自如实判词）。
        */
       function bldArtRamp() {
@@ -1772,7 +1772,7 @@
 
       /* ══ **名字层（DOM）** —— 2026-09-26 需求：**每个显示的楼房都要有名字**，
          如果太密集了就根据类型划定区域（如经济区，美食区），**每个名字和楼房都能点击查看信息** ══
-         **本页只接线**（PR 门禁 C1）：取数 / 真名标签（48px 避让 + 优先级 + 上限）/ 区名聚合
+         **本页只接线**（PR 约束 C1）：取数 / 真名标签（48px 避让 + 优先级 + 上限）/ 区名聚合
          （0.01° 子格 · 真名优先 · 过半才算数据驱动）/ 密集迟滞闸门 / 动效参数 —— **全在共享真源**
          `wsNameLayer`（它再用 `wsLabels` + `wsZoneNames`），卡片字段与动效令牌在 `wsBuildingCard`，
          两者都经 `/vendor/wsScene.mjs` 供给（App 宿主接的是**同一份**）。
@@ -1789,7 +1789,7 @@
             与 `?labels=0`（连片区包都不取）。 */
       const LABELS_ON = (function () { try { return !/[?&]labels=0\b/.test(location.search); } catch (e) { return true; } })();
       const NAMES_ON = (function () { try { return !/[?&]names=0\b/.test(location.search); } catch (e) { return true; } })();
-      /* 自证出口（形状变了，名字沿用 ⇒ 老探针不会读到 undefined 而误判"没实现"） */
+      /* 自证出口（形状变了，名字沿用 ⇒ 老的外部读取不会读到 undefined 而误判"没实现"） */
       let labelShown = [];
       let labelStat = { shown: 0, dropped: 0, cap: 0, capped: false, ms: null, err: "" };
       let labelItems = { admin: [], road: [], bld: [], place: [] };
@@ -1880,7 +1880,7 @@
         const el = $("m-labels");
         if (el) { el.textContent = line; el.title = "共享真源 `wsNameLayer.nameVerdictLine()` 的原话（三态：正数 / 0（已量）/ 数不出来）\n"
           + "· 显示 = 标签层成功放置数（`pickLabels.shown`）· 丢弃(避让) · 超上限 = 同一批的三个数\n"
-          + "· 🚫 生成名上屏恒为 0：机主拍板「屏上只给真名 + 区名，生成名只进信息卡」\n"
+          + "· 生成名上屏恒为 0：屏上只给真名 + 区名，生成名只进信息卡\n"
           + "· 只在 moveend/zoomend/新数据到达时重排（render 循环里不碰 DOM）"; }
       }
 
@@ -1919,7 +1919,7 @@
            `gwEnsure()` 会当场判「模块缺 createGwLayer（未取）」并返回 null ⇒ **这一辈子都不建层**
            （开页 kick 是唯一触发点，之后没人再叫它；屏幕上水/绿地永远缺席，而 HUD 那句话还被当成"真没有"）。
            ⇒ 缺符号时先 `await ensureVendor()` 自愈一次（口径与 `refreshLabels` 完全一致）。
-           证据：`ws_bld_page_selftest` 的「确定性」那条 —— 同一 URL 两次跑，一次 20 层、一次 22 层
+           证据：页面测试的「确定性」那条 —— 同一 URL 两次跑，一次 20 层、一次 22 层
            （差的就是 `gw-water`/`gw-green`），A 那次 `m-gw` 正写着「模块缺 createGwLayer（未取）」。 */
         try {
           const T0 = window.__TF__;
@@ -2057,7 +2057,7 @@
           el.id = "ws-card-scrim";
           /* **收起时必须真的不接事件**（真浏览器实测抓到的严重 bug）：原来收起只把 opacity 写成 0，
              节点仍 `pointer-events:auto` 且铺满整屏 ⇒ **关掉一张卡之后，地图再也点不动了**
-             （后续每一次点击都被遮罩吃掉 —— 探针表现为"点楼 25 次一个卡片都不弹"，
+             （后续每一次点击都被遮罩吃掉 —— 表现为"点楼 25 次一个卡片都不弹"，
              真机用户表现为"看过一次信息之后地图就死了"）。 */
           el.style.cssText = "position:absolute;inset:0;z-index:29;background:rgba(10,14,20,.32);opacity:0;display:none;"
             + "pointer-events:none;transition:opacity 160ms cubic-bezier(0.22,0.61,0.36,1);will-change:opacity";
@@ -2394,7 +2394,7 @@
         const plan = lodPlanCache;
         on("开关", "?lod", LOD_ON ? (LOD_SRC === "demo" ? "demo（示意瓦片，对照用）" : "1（真瓦片）") : "未开", 1, "`?lod=1` 真瓦片（默认）/ `?lod=demo` 示意瓦片（对照）/ `?lod=0` 显式关 / 不写 = 关");
         on("图层", "prerender 在", map.getLayer("prerender") ? "在" : "**不在**", "在", "由 lodPlan() 建；缺了就是没建成（看 errs/lodState）");
-        on("数据源", "prerender 源在", map.getSource("prerender") ? "在" : "**不在**", "在", "我们**自己的**瓦片源（`" + ((plan && plan.tilePath) || "?") + "`），不是 Esri");
+        on("数据源", "prerender 源在", map.getSource("prerender") ? "在" : "**不在**", "在", "本项目**自己的**瓦片源（`" + ((plan && plan.tilePath) || "?") + "`），不是 Esri");
         /* 层序：预渲染层必须在矢量层**之上**（远景要盖住实时层），否则过渡一淡就露出实时层 */
         const order = (map.getStyle().layers || []).map(function (l) { return l.id; });
         const iPre = order.indexOf("prerender");
@@ -2427,7 +2427,7 @@
           why: "**PR 阻断项**：Overture 派生瓦片按 ODbL 要求可见署名；MapLibre 的 attributionControl 关着 ⇒ HUD 那一行就是等价方案（文案取自清单，不抄第二份）",
         });
         rows.push({ id: "跳过", key: "真数据（重庆全市）", now: window.__LOD_REAL__ ? "是（管线瓦片）" : "未确认（清单里没有 data.buildings）", want: null, hit: null, skip: true, why: "全量全市真楼脚印**没做**（公网 S3 实测 4km 盘 224s ⇒ 全市是天级）；试点的真瓦片见 manifest.data.buildings" });
-        rows.push({ id: "跳过", key: "真机画面 / 帧率", now: "未验", want: null, hit: null, skip: true, why: "本机无头**没有 WebGL** ⇒ 「远处清不清楚、过渡跳不跳」只能机主真机看，我不下结论" });
+        rows.push({ id: "跳过", key: "真机画面 / 帧率", now: "未验", want: null, hit: null, skip: true, why: "**没有 WebGL** ⇒ 「远处清不清楚、过渡跳不跳」只能真机确认，此处不下结论" });
         return rows;
       }
 
@@ -2528,8 +2528,8 @@
         } catch (e) {
           lodManifest = null;
           lodManifestErr = String(e).slice(0, 60) + (LOD_SRC === "demo"
-            ? "（示意瓦片清单：跑 node world_map/make_prerender_tiles.mjs）"
-            : "（真瓦片清单：跑 python3 world_map/prerender_pipeline.py --pilot --disk-r 9000）");
+            ? "（示意瓦片清单：由预渲染瓦片脚本生成）"
+            : "（真瓦片清单：由预渲染管线生成，--pilot --disk-r 9000）");
         }
         try {
           if (!map.getSource(plan.sourceId)) map.addSource(plan.sourceId, plan.source);
@@ -2731,7 +2731,7 @@
             why: "**估算值，非事实**：没有高度数据时的兜底（HUD 单列「按类型估」，绝不并进「真高」）；真高与层数两档一律优先",
           });
           if (window.__BLD_FALLBACK__) rows.push({ k: "回退", v: String(window.__BLD_FALLBACK__), why: "取不到形体生成 ⇒ 如实退回基准版（回退必须有回执）" });
-          rows.push({ k: "未验", v: "真机观感", why: "本机无头无 WebGL ⇒ 这里只能回证「生成了什么、多少」；像不像真楼要机主真机刷新看" });
+          rows.push({ k: "未验", v: "真机观感", why: "**没有 WebGL** ⇒ 这里只能回证「生成了什么、多少」；像不像真楼要真机刷新看" });
           const bad = BLD === 2 && (!count || winState.indexOf("失败") === 0 || tfMissing(window.__TF__).length > 0);
           head.textContent = (bad ? "⚠️ " : "") + "🏢 " + (BLD === 2 ? "bld=2 · 档位=" + tier : "bld=1（基准版）");
           head.onclick = function () { box.classList.toggle("is-open"); };
@@ -2859,7 +2859,7 @@
           "地面色罩 = 派生主题的地面色（整屏近白就是这一条在治）");
         row("bg", "background-color", lay("bg", "background-color"), "底色（天空之外那圈）");
         row("base", "raster-brightness-max", lay("base", "raster-brightness-max"), "底图压暗（不压 ⇒ 地面比楼亮，楼会消失）");
-        row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "BA 的**平涂**（机主拍板的美术方向）⇒ 渐变保持关；受光/背光改由 cel 分档表达");
+        row("bld-ext", "fill-extrusion-vertical-gradient", THEME.verticalGradient, "BA 的**平涂**（已定的美术方向）⇒ 渐变保持关；受光/背光改由 cel 分档表达");
         row("bld-ext", "fill-extrusion-opacity", THEME.extrudOpacity, "远景淡出**已撤回基准值**（亮底上把远景调透明 = 楼化进地面，与「底要看得清」相反）");
         row("bld-line", "line-color", THEME.outline.color, "描边 = BA 的深藏青（**没有翻成亮线** —— 那是第一版改错的，已撤）");
         const celRaw = (function () { const p = live("bld-ext", "fill-extrusion-color"); return p.v; })();
@@ -2899,7 +2899,7 @@
               id: "地面明度", key: "派生 − 基准（🔴 不许为负）",
               now: (d >= 0 ? "+" : "") + d + "（" + m.groundHex + " " + m.groundLuma + " vs 基准 " + bm.groundHex + " " + bm.groundLuma + "）",
               want: "≥ 0 且 |Δ| ≤ " + eps, hit: d >= 0 && Math.abs(d) <= eps, red: d < 0,
-              why: "**派生观感只能加结构，不许改机主拍板的美术方向** —— 地面被压暗就是这条红了（第一版 -0.563 就是这么来的）",
+              why: "**派生观感只能加结构，不许改已定的美术方向** —— 地面被压暗就是这条红了（第一版 -0.563 就是这么来的）",
             });
           }
           rows.push({
@@ -2919,7 +2919,7 @@
             now: m.vignetteOpacity === null ? "数不出来（不是基准主题）" : m.vignetteOpacity,
             want: "0 < opacity ≤ 0.25", hit: m.vignetteOpacity !== null && m.vignetteOpacity > 0 && m.vignetteOpacity <= 0.25,
             red: m.vignetteOpacity !== null && m.vignetteOpacity > 0.25,
-            why: "**弱**暗角：第一版 0.5 被机主判「底都看不清了」⇒ 现在只压边角（阈值 0.25 写死在自检里）",
+            why: "**弱**暗角：第一版 0.5 的观感是「底都看不清了」⇒ 现在只压边角（阈值 0.25 写死在自检里）",
           });
         } else {
           rows.push({ id: "对比度", key: "—", now: "数不出来（快照里没有 metrics）", want: null, hit: null, why: "老 /wstheme.json 没有这一块 ⇒ 重新生成即可" });
@@ -3108,11 +3108,11 @@
            · 50,000 ⇒ 14 格 / +48.6MB / 热挑楼 185ms（区间高端**没批**：边际收益差、真机手感风险大）
          **保留半径 2km（默认机位）时上限根本不生效**：任何上限都是 2,544 栋 / 3 格
          ⇒ 翻这个默认**不影响默认机位的观感与内存**，只影响 z ≤ 13.5 那一档。
-         这个数**与共享真源的 `BLD_STORE_CAP` 必须同值**（`ws_app_offline_selftest` 第⑦组钉着），
+         这个数**与共享真源的 `BLD_STORE_CAP` 必须同值**（测试第⑦组钉着），
          两边一起改；`?cap=` 是 A/B 口（走 `resolveBldStoreCap()` 收进合法区间）。 */
       const BLD_STORE_CAP = 30000;
       /* `?cap=` **A/B 口**（排查用）：默认就是上面那个数，坏值/缺省 ⇒ 还是它。
-         上面那行必须保持**字面量**（`ws_app_offline_selftest` 第⑦组用 `const BLD_STORE_CAP = <数字>` 抓它，
+         上面那行必须保持**字面量**（测试第⑦组用 `const BLD_STORE_CAP = <数字>` 抓它，
          钉着"页面与共享真源同值"）—— 所以覆盖值另起一个名字，别把字面量包进函数里。 */
       const BLD_STORE_CAP_EFF = (function () {
         try {
@@ -3189,7 +3189,7 @@
         const T = window.__TF__;
         /* **首选 = 共享真源**（`wsDistrictScene.dressBase`，经 vendor 到手）——
            2026-10-02 起默认档也拆件（主体 + 女儿墙 + 设备箱 + 天线，按 zoom 固定分档），
-           而"怎么拆"只许有一份（PR 门禁 C1；App 宿主调的就是它）⇒ 本页**不再持有第二份形体逻辑**。
+           而"怎么拆"只许有一份（PR 约束 C1；App 宿主调的就是它）⇒ 本页**不再持有第二份形体逻辑**。
            窗口参数 `zoom` 决定**生成侧的档**（与图层侧 `minzoom` 同一份常量）：`z<14` 连女儿墙
            体块都不生成 ⇒ `setData` 的解析量与改造前同样轻。 */
         if (T && typeof T.dressBase === "function") {
@@ -3575,7 +3575,7 @@
           el.textContent = txt + (line ? " · " + line.replace(/^🏢 /, "") : "") + pk + minzWarn;
           el.title = [
             "🏢 离线楼房包：`/bldbundle/<格>.json`（静态文件，**不打 /api/buildings**）",
-            "由 `world_map/export_bld_bundle.py` 从**已缓存的 Overture 盘**导出：55 盘 → 720,087 栋 → 373 格 / 102.6MB",
+            "由**已缓存的 Overture 盘**导出：55 盘 → 720,087 栋 → 373 格 / 102.6MB",
             "🔴 包里全是 **Overture 真脚印（real · ODbL）**；**sketch 只在预渲染 PNG 的像素里**，绝不进数据",
             "为什么默认不发：现场一次只覆盖视野中心 **R≤2000m**（后端硬闸 `r ∈ (0,2000]`）且**冷查 27~33s**（最慢 91.7s）",
             "取数/计数/索引/署名**都走共享模块** `wsOfflineFeed.createBundleFeed`（页面里没有第二份实现）",
@@ -4286,7 +4286,7 @@
 
         /* 这里**故意不** `await ensureVendor()`（2026-09-26 试过，撤回）：
            `makeStyle()` 的取参现在只有共享真源那一份（`wsArtParams`），理论上"建图前等模块"更稳；
-           但实测两件事 ⇒ 撤：① `ws_bld_page_selftest.mjs` 的桩**假定建图不依赖 vendor**
+           但实测两件事 ⇒ 撤：① 页面测试的桩**假定建图不依赖 vendor**
            （先 import 页面 classic 块、再 import 模块块）⇒ 一 await 就变成"页面没有建图"；
            ② 那一 await 会在模块块还没跑时**用带版本号的 URL 再 import 一次** ⇒ 同一次会话里两份模块实例。
            实测模块块在 **9~11ms** 就绪（页面自己的日志 `vendor: 关键符号齐`），远早于 `loadTheme()` 的网络往返。
@@ -4308,7 +4308,7 @@
             const c = cam || { zoom: 16.4, pitch: 38, bearing: -18, maxPitch: 70, minZoom: 3, maxZoom: 19 };
             /* `?z=` 只覆盖**初始机位**这一个字段（其它仍全部取自真源）；
                不给 `?z` ⇒ `camZoom() === c.zoom`，逐字段与原来一样。
-               自证：`__CAM__` 让探针能读出"这个机位是哪来的"（真源 / 覆盖 / 页面兜底）。 */
+               自证：`__CAM__` 让外部读取能读出"这个机位是哪来的"（真源 / 覆盖 / 页面兜底）。 */
             const z = camZoom();
             window.__CAM__ = {
               source: cam ? "wsScene.cameraDefaults()" : "页面兜底（vendor 未就绪）",
@@ -4349,7 +4349,7 @@
         window.__w3d = { ok: true, map, stats, probe: () => probe(), spot: SPOT };
         /* 2026-09-26：**错误要能被整份读出来**（原来只有诊断图第一行）。
            真机「有名字，无建筑」那次，图层账上只剩 road-*，而 `errs` 只印第一条（还是个无关的 contrast）
-           ⇒ 在"样式是不是被换掉了"上排查了很久。规矩：`errs` 作为**活引用**露出来，探针能全量读。 */
+           ⇒ 在"样式是不是被换掉了"上排查了很久。规矩：`errs` 作为**活引用**露出来，外部读取能全量读。 */
         try { window.__W3D_ERRS__ = errs; } catch (e) { /* 忽略 */ }
         /* **样式账本**（2026-09-26 反馈「有名字，无建筑」查因用）：
            实测页面最后只剩 `road-*` 12 层、`style.name=null`（不是 `makeStyle()` 那份），而 `errs` 里
@@ -4599,7 +4599,7 @@
          * 事实基线（都实测过，不猜）：
          *  · LingChat 后端在 `http://127.0.0.1:8766`，且 **CORS 已放行** `http://127.0.0.1:5212`
          *    （`access-control-allow-origin` 实测有）⇒ 页面**直接调**，不需要代理。
-         *  · `GET /api/characters` → 角色（实测 1 个：SYuki）· `POST /api/chat {message}` →
+         *  · `GET /api/characters` → 角色（当前 1 个：SYuki）· `POST /api/chat {message}` →
          *    `{reply, affection, affection_delta, memory_count, chat_count, memory_saved}` ——
          *    **回复 + 好感 + 记忆都是真数值**，正好是"过日子"要的三样。
          *  · 失败**如实显示错误**，绝不编一句回复（红线：画面可以编，事实不许编）。
@@ -5457,7 +5457,7 @@
           ok = (await snap("show-side-nosat")) || ok;
           satOn = true; applySat();
           await postState("show-end");   // 拍完再记一份（对比"拍之前/之后"有没有变化）
-          $("m-msg").textContent = ok ? "代拍完成：4 张 + 图层账已回传 ~/chk/live/" : $("m-msg").textContent;
+          $("m-msg").textContent = ok ? "代拍完成：4 张 + 图层账已回传" : $("m-msg").textContent;
           try { localStorage.removeItem("wsm:v1:autoshot"); } catch {}
         }
         try {

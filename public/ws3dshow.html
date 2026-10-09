@@ -1077,7 +1077,7 @@
         } catch (e) { /* 落兜底 */ }
         return BLD_FOOT_OPACITY_FALLBACK;
       }
-      /每格取前几栋（K）**（共享真源 `wsBldBudget.bldMaxDrawnOf`，经 vendor 到手）。
+      /** **每格取前几栋（K）**（共享真源 `wsBldBudget.bldMaxDrawnOf`，经 vendor 到手）。
        *  页面**没有档位 UI** ⇒ 恒严格档（`"lean"`，与 App 的默认档同一个值）。
        * 2026-10-03 第五条起 **K 与 zoom 无关**（候选池 = 按离线包格已加载的楼，每格取前 K）——
        *  页面**不写** 3/4000、也不写 14、更不传任何相机参数给挑楼规则。
@@ -1094,7 +1094,7 @@
         } catch (e) { /* 落 undefined */ }
         return undefined;
       }
-      /上一次落图的形体档**（滞回判据的 prev；与 App 侧 `bldFlushedTier` 同一个角色）。 */
+      /** **上一次落图的形体档**（滞回判据的 prev；与 App 侧 `bldFlushedTier` 同一个角色）。 */
       let BLD_TIER_PREV = null;
       /**
        * **这一轮走哪一档形体**（`0` = 足迹 z<14 · `1` = 立体 z≥14 · `null` = 读不出来）——
@@ -1390,7 +1390,7 @@
           return (T && typeof T.bldArtParamsOf === "function") ? T : null;
         } catch (e) { return null; }
       }
-      /挑选/冻结编排器**（`wsBldPickStore`）：整页一份实例 ⇒ 冻结集跨帧、跨视野保持。
+      /** **挑选/冻结编排器**（`wsBldPickStore`）：整页一份实例 ⇒ 冻结集跨帧、跨视野保持。
           原来这段编排内联在本页（`const ckey = …` → `window.__BLD_PICK__`），App 侧因此**根本没有**它。
           `window.__BLD_FROZEN__` 就是模块内部那个冻结缓存对象**本身**（不是拷贝，形状与旧版逐字节相同）。 */
       let BLD_PICK_STORE = null;
@@ -2013,7 +2013,7 @@
         } catch (e) { errs.push("labels " + e); }
       }
 
-      /只挪位置**（缩放/旋转途中每帧调它；**不要**重建 DOM —— 那会每帧几十次样式重算）。
+      /** **只挪位置**（缩放/旋转途中每帧调它；**不要**重建 DOM —— 那会每帧几十次样式重算）。
           写的是 `transform`（合成属性），不是 left/top。 */
       function positionLabelNodes() {
         try {
@@ -3236,7 +3236,7 @@
         return acc[2] > 0 ? [acc[0] / acc[2], acc[1] / acc[2]] : null;
       }
 
-      /生成名的锚点 = 这一帧真正画出来的那批楼**（2026-09-26 反馈：「楼名对不上位置」）。
+      /** **生成名的锚点 = 这一帧真正画出来的那批楼**（2026-09-26 反馈：「楼名对不上位置」）。
           病根：生成名原来从**楼房仓库**（3210~12000 栋）里挑名字，而屏上按"每块 ≤100 栋"只画几百栋
           ⇒ 名字会指到**没画出来的楼**上（屏上就是"线指向空地"）。
           现在：只在**落图那一刻**（`setBldData`）把画出来的那批的代表点记下来，生成名只从这里挑 ⇒ 一一对应。

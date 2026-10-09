@@ -7,11 +7,11 @@
       拆成两个组件会多出一条「谁是当前角色 / 立绘展开没有」的同步链，
       而那条链一旦不同步，就会出现「面板关了立绘还在加载」这种最要命的性能 bug。
 
-    ⚠️ 性能红线：立绘（3511×5242 webp，解码 ≈73MB）只在 `portraitOpen` 为 true 时
+    性能红线：立绘（3511×5242 webp，解码 ≈73MB）只在 `portraitOpen` 为 true 时
        才由 useWsPortrait 去取，关掉立刻把 src 置空。缩略图是另一张图（头像小方图），
        不碰立绘文件。
 
-    ⚠️ 手势：整个面板挂 `data-no-gesture`（useWorldSimGestures 的 NO_GESTURE_SELECTOR
+    手势：整个面板挂 `data-no-gesture`（useWorldSimGestures 的 NO_GESTURE_SELECTOR
        认这个属性），并且内部滚动容器自己 stop 掉 pointer/wheel，
        保证在面板上拖动/滚动**不会**把地图拖走或缩放。
   -->
@@ -21,7 +21,7 @@
     data-no-gesture
   >
     <!-- 窄屏：半透明遮罩（点它 = 关闭）；宽屏不要遮罩（抽屉式，背后地图还能看）。
-         🔴 2026-10-01（机主：「点开面板后地图怎么滑动不了喵！」）：**手势的 `.stop` 从根元素挪到真正的面上**。
+         2026-10-01（点开面板后地图无法滑动）：**手势的 `.stop` 从根元素挪到真正的面上**。
          根 `.ws-drawer` 是 `inset:0`（全屏）—— 原来在它身上 `.stop` 掉 pointer/wheel/dblclick，
          等于**面板一开，整屏的手势都被吃掉**，地图再也拖不动（宽屏明明写着"背后地图还能看"）。
          现在：根 `pointer-events:none`（见样式），只有**遮罩**与**面板本体**接事件并 stop ——
@@ -118,13 +118,13 @@
           </div>
         </section>
 
-        <!-- 🕹 摇杆 · 近景漫游（2026-10-03 机主改的口径：「摇杆改成点击玩家头像，在面板里选择开启喵！」）
+        <!-- 摇杆 · 近景漫游（2026-10-03 摇杆改为点击玩家头像、在面板里选择开启）
              · **只在自己那一格出现**（点地图上「我」的钉子进来 ⇒ `actor.isMe`）——
                给别的角色看"要不要摇杆"没有意义，只会让那一格多一行看不懂的东西；
              · 面板**只 emit**，落盘与生效在页面（`WsCityEntry` → `wsJoystick.writeJoyStored`）：
                本组件一个 invoke / 一行 localStorage 都没有（与"谁的数据谁去取"同一条口径）；
              · **默认关** ⇒ 不打开时这一屏与改造前逐字相同（没有摇杆 DOM、俯角也还是原来的 38°）；
-             · 展开态与面板里另外两个带开关的小节一致（`default-open`）—— 机主要找得到它；
+             · 展开态与面板里另外两个带开关的小节一致（`default-open`）—— 需要找得到它；
              DOM 契约：`data-ws-joy="1|0"`（探针读这个；App 里不塞 `window.__*` 出口）。 -->
         <WsCollapse
           v-if="actor?.isMe"
@@ -234,12 +234,12 @@
           </div>
         </WsCollapse>
 
-        <!-- ⑥ 快捷动作（P2-5）
+        <!-- ⑥ 快捷动作（
              三个都有落地：
                · 打招呼   → 页面 onQuick('hi') → 复用「去找他聊聊」（跳 /chat，零副作用）
                · 约他出门 → 页面 onQuick('outing') → `world_map_trip_start` 让他动身来找你
                · 送礼物   → 就地打开 `WsGiftSheet`（方案 B：地图商店 → 本机背包 → 送出记账）
-             ⚠️ 说明文案不再用 `worldsim.action.hint` —— 那句还写着「送礼物还没定方案」，
+             说明文案不再用 `worldsim.action.hint` —— 那句还写着「送礼物还没定方案」，
                 已经不成立了（见 wsGift.ts 顶部的文案口径）。 -->
         <WsCollapse :title="t('worldsim.panel.actions')" icon="⚡" :default-open="true">
           <div class="ws-acts ws-acts--quick">
@@ -247,7 +247,7 @@
               👋 {{ t("worldsim.action.hi") }}
             </button>
             <!-- 可玩性切片 A：好感是**世界的状态**，不是装饰 —— 送礼会让它涨，面板立刻可见。
-                 切片②（2026-10-01）：给这一格加 `data-ws-affinity`（**DOM 契约**，供探针/自动化
+                 （2026-10-01）：给这一格加 `data-ws-affinity`（**DOM 契约**，供探针/自动化
                  读数值；App 里不许塞 `window.__*` 调试出口）—— 只有这一个属性，逻辑一行不动。 -->
             <div class="ws-aff" :title="`好感 ${affinity} / 100`" :data-ws-affinity="affinity ?? 0">
               <!-- i18n 纪律：可见文案不许硬编码（这一格原来直接写「好感」，是 2026-10-03
@@ -256,7 +256,7 @@
               <span class="ws-aff__k">{{ t("worldsim.panel.affinity") }}</span>
               <span class="ws-aff__v">{{ affinity ?? 0 }}</span>
               <span class="ws-aff__r">{{ affinityRank || "陌生" }}</span>
-              <!-- 🎬 动画预算·步①「清违禁」（2026-10-02）：好感条**不再动 `width`**（布局属性，
+              <!-- 动画预算·步①「清违禁」（2026-10-02）：好感条**不再动 `width`**（布局属性，
                    每帧重排这一行）—— 填充条静态满宽，进度 = `transform: scaleX(好感/100)`（合成属性）。
                    数值口径一字未动（仍是同一个 `Math.max(0, Math.min(100, …))` 夹取，只是 /100）。 -->
               <i class="ws-aff__bar"><b :style="{ transform: `scaleX(${Math.max(0, Math.min(100, affinity ?? 0)) / 100})` }" /></i>
@@ -268,7 +268,7 @@
               🚶 {{ t("worldsim.action.outing") }}
             </button>
           </div>
-          <!-- ❤️⚡ 期 2（2026-10-02）：心情 / 体力 —— 紧挨着好感（两者都是"世界的状态"，
+          <!-- （2026-10-02）：心情 / 体力 —— 紧挨着好感（两者都是"世界的状态"，
                不是装饰：它们**真的**被推给 Rust 并参与事件权重，见 `wsNeeds.ts` 头部）。
 
                三条口径（一字不改地照 `wsNeeds` 的判词）：
@@ -302,7 +302,7 @@
         </WsCollapse>
       </div>
 
-      <!-- ⑥.9 送礼物选择器（P2-5）
+      <!-- ⑥.9 送礼物选择器（
            弹层挂在抽屉内部：`.ws-drawer` 已有 data-no-gesture 与指针 stop，
            所以这里不会把事件漏给地图手势。真实的扣减/记账在 WsGiftSheet + wsGift.ts 里。 -->
       <WsGiftSheet
@@ -330,7 +330,7 @@
   import { emotionFile, type WsActors } from "@/composables/useWsActors";
   import type { PlacedActor, ActorPosSource } from "./wsActors";
   import { wsToast } from "./wsToast";
-  /* ❤️⚡ 期 2：进度条的夹取口径来自 `wsNeeds`（0–1 量程的唯一定义处），面板不重写判据 */
+/* 进度条的夹取口径来自 `wsNeeds`（0–1 量程的唯一定义处），面板不重写判据 */
   import { clampNeed } from "./wsNeeds";
 
   const props = withDefaults(
@@ -354,14 +354,14 @@
       /** 好感档位文案（页面用 `rankOf()` 算好传进来，面板不重复实现判据） */
       affinityRank?: string;
       /**
-       * ❤️⚡ 期 2：心情 / 体力（**0–1 的推导值**）。
+* 心情 / 体力（**0–1 的推导值**）。
        * `null`/不传 = 没有可显示的数值（页面会同时给 `needsNote` 说明为什么）。
        */
       needs?: { mood: number; energy: number } | null;
       /** 数值口径判词（页面用 `wsNeeds.compute()` 的 `why` 原样传进来；面板不重复实现判据） */
       needsNote?: string;
       /**
-       * 🕹 摇杆 · 近景漫游**现在开着没有**（默认 false = 关）。
+       * 摇杆 · 近景漫游**现在开着没有**（默认 false = 关）。
        * 真源是 `wsJoystick`（存储 `wsm:v1:joy` + `?joy=1/0` 逃生口），页面解析后传进来；
        * 面板只显示与上报，**不自己读存储、不自己判默认**（PR 门禁 C1：判据只有一处）。
        */
@@ -375,14 +375,14 @@
     (e: "portrait", v: boolean): void;
     (e: "goto-chat", a: PlacedActor): void;
     (e: "quick", action: string, a: PlacedActor): void;
-    /** P2-5：送礼弹层里真的送出了一件（本机已扣减+记账）—— 页面可据此接记忆/事件 */
+    /** 送礼弹层里真的送出了一件（本机已扣减+记账）—— 页面可据此接记忆/事件 */
     (e: "gift", p: { actor: PlacedActor; name: string; icon: string; role: string }): void;
     /** 好感（可玩性切片 A：由页面从 `wsRelation` 读出来传进来；不传 = 0） */
     // 说明：prop 声明在下方 defineProps 里，这里只是事件表的注释锚点
     /** P4-4：下一条「让他去某地」的指令（目的地是地名或设施名） */
     (e: "direct", to: string, a: PlacedActor): void;
     /**
-     * 🕹 摇杆 · 近景漫游的开关（**只有 `actor.isMe` 那一格会发**）。
+     * 摇杆 · 近景漫游的开关（**只有 `actor.isMe` 那一格会发**）。
      * 页面收到后：写存储（`wsm:v1:joy`）+ 改 `:joy` ⇒ 地图那边挂/卸摇杆、进/出近景。
      */
     (e: "toggle-joy", on: boolean): void;
@@ -396,7 +396,7 @@
   const clothesName = ref("default");
   const clothes = ref<string[]>(["default"]);
 
-  /* ❤️⚡ 期 2：进度条的填充比例 —— 直接用 `wsNeeds` 的夹取函数（**不在这里再写一次 0–1 判据**）。
+/* 进度条的填充比例 —— 直接用 `wsNeeds` 的夹取函数（**不在这里再写一次 0–1 判据**）。
      与好感条同一口径：`transform: scaleX(k)`（合成属性，不触发布局/重排）。 */
   const needPct = (v: number): number => clampNeed(v);
 
@@ -461,7 +461,7 @@
       scatter: t("worldsim.pos.scatter"),
       me: t("worldsim.pos.me"),
       affinity: t("worldsim.pos.affinity"),
-      /* 🆕 2026-09-20：位置是"吸附到真实路网/设施之后"的落点（`wsSnap`）。
+      /* 2026-09-20：位置是"吸附到真实路网/设施之后"的落点（`wsSnap`）。
          这两档**必须**在这里也有中文名 —— `Record<ActorPosSource, string>` 是**穷尽**映射，
          少一个键 tsc 直接报错（这是好事：加档位时不会漏掉展示它的地方）。
          文案直接内联中文而没走 i18n：`pos.*` 那几条在 zh-CN 词条里，
@@ -488,7 +488,7 @@
     emit("goto-chat", props.actor);
   }
 
-  /* ── ⑤ 快捷动作（P2-5：三个按钮都要有**真**行为或说清楚为什么没有）──────
+  /* ── ⑤ 快捷动作（三个按钮都要有**真**行为或说清楚为什么没有）──────
    *   · 打招呼  → emit('quick','hi')   → 页面里复用「去找他聊聊」那条路（跳 /chat）
    *   · 约他出门 → emit('quick','outing') → 页面里调 world_map_trip_start（角色动身）
    *   · 送礼物  → 就地打开 `WsGiftSheet`（**方案 B**：地图商店 → 本机背包 → 送出记账）；
@@ -532,7 +532,7 @@
   }
 
   /**
-   * 🕹 摇杆开关那一下（**只上报，不落盘**）。
+   * 摇杆开关那一下（**只上报，不落盘**）。
    * 为什么不在面板里写 `localStorage`：落盘口径（键名/格式/坏数据怎么办）是 `wsJoystick` 的**唯一真源**，
    * 页面已经拿着它了；面板再写一遍就等于第二份判据（PR 门禁 C1），而且"写了但没生效"最难查。
    */
@@ -579,7 +579,7 @@
     background: rgba(255, 255, 255, 0.16);
     overflow: hidden;
   }
-  /* ❤️⚡ 期 2：心情 / 体力那一行（与好感条同一套画法：静态满宽 + `transform: scaleX`） */
+/* 心情 / 体力那一行（与好感条同一套画法：静态满宽 + `transform: scaleX`） */
   .ws-need {
     display: flex;
     align-items: center;
@@ -618,12 +618,12 @@
 
   .ws-aff__bar > b {
     display: block;
-    /* 🎬 步①（2026-10-02）：填充条**静态满宽** —— `width` 从此不参与动画（只在首次布局算一次），
+    /* 步①（2026-10-02）：填充条**静态满宽** —— `width` 从此不参与动画（只在首次布局算一次），
        进度全部由 `transform: scaleX(k)` 表达（合成属性，不触发布局/重排）。 */
     width: 100%;
     height: 100%;
     background: var(--accent-color, #79d9ff);
-    /* 🔴 变换原点**必须是左端**：原来 `width:N%` 是**左对齐**生长（左边缘不动、只有右边缘走），
+    /* 变换原点**必须是左端**：原来 `width:N%` 是**左对齐**生长（左边缘不动、只有右边缘走），
        而 `transform-origin` 默认 `50% 50%` ⇒ 不改就成了"从中间往两边长"，与原来**不等价**。
        纯色填充 ⇒ `scaleX` 与 `width` 除亚像素外逐帧等价（渐变色见 WsCityGuide 那条注释）。 */
     transform-origin: left center;
@@ -633,8 +633,8 @@
     position: absolute;
     inset: 0;
     z-index: 30;
-    /* 🔴 2026-10-01：根元素是 `inset:0`（全屏），**它自己不许接事件** ——
-       否则面板一开，整屏（含左侧地图）的手势都被这层吃掉（机主：「点开面板后地图滑动不了」）。
+    /* 2026-10-01：根元素是 `inset:0`（全屏），**它自己不许接事件** ——
+       否则面板一开，整屏（含左侧地图）的手势都被这层吃掉（点开面板后地图滑动不了）。
        只有遮罩与面板本体 `pointer-events:auto`（见各自规则）。 */
     pointer-events: none;
   }
@@ -646,12 +646,12 @@
     position: absolute;
     inset: 0;
     background: rgba(20, 30, 32, 0.42);
-    /* 🔴 2026-10-01（真机「点了角色直接卡死」的调查结论）：**全屏遮罩上不许有 backdrop-filter**。
+    /* 2026-10-01（真机「点了角色直接卡死」的调查结论）：**全屏遮罩上不许有 backdrop-filter**。
        项目自己在 `assets/styles/worldsim.css:198-201` 写过这条规矩：值只要**不是 `none`**，
        浏览器就给这个元素建一层 backdrop 层、**每一帧把底下的像素读回来重合成一次**
        （`blur(0px)` 同样算）。而这一层：① 是全屏（窄屏实测 500×772，真机还要乘 DPR）
        ② 盖在一张**每帧都在重画的 WebGL 地图画布**上 ⇒ 代价最大。
-       实测（`~/chk/_freeze_probe.mjs --narrow`，同一台机器）：窄屏有遮罩 rAF 最差 **1025ms**、
+       实测（卡顿探针 --narrow`，同一台机器）：窄屏有遮罩 rAF 最差 **1025ms**、
        心跳断 **1033ms**、脚本 CPU 0.45s→**1.29s**；宽屏（`narrow=false`、无遮罩）上面这些都没有。
        原来这里用 `blur(var(--ws-blur-low, 1px))`，而 `--ws-blur-low` 只在 `.ws-perf-low` 里定义、
        这一屏又没有 `.ws-root` ⇒ **永远吃 1px 兜底** ⇒ 永远每帧读回。改成显式 `none`。 */
@@ -713,7 +713,7 @@
     /* 面板里滚动到底不该带动背后的地图 */
     overscroll-behavior: contain;
   }
-  /* 🔴 2026-10-01（机主：「按钮互相遮挡」的**真因**，探针在短视口下量出来）：
+  /* 2026-10-01（按钮互相遮挡的**真因**，探针在短视口下量出来）：
      body 是 flex 列，而**子项默认 `flex-shrink:1`** ⇒ 视口一变矮，每个 `.ws-cp`/`.ws-sec`
      就被**压到内容高度以下**；而 `WsCollapse` 的根带 `overflow:hidden` ⇒ 内容被自家裁掉，
      body 的 `scrollHeight` 却**不涨**（实测短视口 500×417：`scrollH 369 = clientH 369`）

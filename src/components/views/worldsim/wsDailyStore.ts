@@ -1,5 +1,5 @@
 /**
- * wsDailyStore.ts —— 「我的家 + 今日三件事」在 **App 里**的**落盘 + 跨天重置 + 编排**（切片③，2026-10-01）。
+ * wsDailyStore.ts —— 「我的家 + 今日三件事」在 **App 里**的**落盘 + 跨天重置 + 编排**（2026-10-01）。
  *
  * ## 这一层只做三件事（**规则一行不写**）
  *   ① 读盘 / 落盘（`localStorage["wsDaily.v1"]`，键名与形状与代拍页**逐字同名**）；
@@ -41,7 +41,7 @@ export const WS_DAILY_HOME_MAX_M = 3000;
 
 /**
  * 存储后端（注入的那道缝）。
- * ⚠️ 只有 `get`/`set` 两个方法（照施工图的签名清单）：清盘用 `set(KEY, "null")` ——
+ * 只有 `get`/`set` 两个方法（照施工图的签名清单）：清盘用 `set(KEY, "null")` ——
  *    那正是原型页"没有状态"时写下去的那个值（`ws3dshow.html:4505` 的三元）。
  */
 export interface DailyStorage {
@@ -138,7 +138,7 @@ export function createDailyStore(o: DailyStoreOptions = {}): DailyStore {
 
   /**
    * 读盘 → `prev`。
-   * 🔴 **只回读 `id` + `done`**：文本按 id 由 `planDaily` 重算（`wsDaily.ts:178-181` 按 id 对齐完成态），
+   * **只回读 `id` + `done`**：文本按 id 由 `planDaily` 重算（`wsDaily.ts:178-181` 按 id 对齐完成态），
    *    所以这里喂**占位字段**（照抄原型页 `ws3dshow.html:4525` 的喂法）。
    * 坏数据（不是 JSON / `day` 不是字符串）⇒ 当"没存过"（下一次 `build` 会覆盖），**不抛**。
    */
@@ -215,7 +215,7 @@ export function createDailyStore(o: DailyStoreOptions = {}): DailyStore {
     verdict() {
       if (home) return `我的家：${home.name}${home.kind ? `（${home.kind}）` : ""}`;
       /* 三态里"数不出来"那一支：**原因原样念出来**（原型页的兜底句 + 本 store 自己的"还没数过"）。
-         ⚠️ "还没数过"与"数过了、确实没有"是两件事，不许混成一句（本仓的三态纪律）。 */
+         "还没数过"与"数过了、确实没有"是两件事，不许混成一句（本仓的三态纪律）。 */
       const why = homeWhy || (state ? "附近没有有名片区" : "还没数过（地图中心/片区名还没到）");
       return `我的家：数不出来（${why}）`;
     },

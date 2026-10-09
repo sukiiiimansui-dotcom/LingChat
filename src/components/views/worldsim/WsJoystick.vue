@@ -1,5 +1,5 @@
 <!--
-  WsJoystick.vue —— 🕹 摇杆控件（**左下拇指区**；2026-10-03 机主裁决「街景不做，做近景」）。
+  WsJoystick.vue —— 摇杆控件（**左下拇指区**；2026-10-03 街景不做，做近景）。
 
   ## 这个组件做什么 / 不做什么
   · **做**：把指针/触摸变成"一个向量"，并把它交给 `wsJoystick.createJoyDriver()` ——
@@ -82,7 +82,7 @@
    * 世界尺度（宿主量好传进来）——本组件**一个换算都不做**（红线）：
    *   · `mpp`      ：米/像素（宿主的 `bldMetersPerCssPixel(zoom, lat)`）；
    *   · `speedMps` ：满推速度（**米/秒**，宿主的 `joySpeedMpsOf(zoom)` 选出来的档）；
-   *   · `zoomLevels`：🕹 推杆期间相机**拉近**多少级（宿主的 `JOY_ZOOM_PUSH_LEVELS`，量不到出发 zoom 时给 0）。
+   *   · `zoomLevels`：推杆期间相机**拉近**多少级（宿主的 `JOY_ZOOM_PUSH_LEVELS`，量不到出发 zoom 时给 0）。
    * 缺一个（宿主还没量到）⇒ `joyCtxOf` 归一化成 0 ⇒ 推杆无效 —— 那才是诚实的降级，
    * 总比按屏幕像素编一个世界速度快。`zoomLevels = 0` 则是"这条通路关掉"，摇杆照旧能用。
    */
@@ -91,7 +91,7 @@
   const baseEl = ref<HTMLElement | null>(null);
   const thumbEl = ref<HTMLElement | null>(null);
   const active = ref(false);
-  /** 🕹 "搬家"提示（长按命中的那一帧加一次 class：CSS 给一次极短的脉冲，不进每帧循环） */
+  /** "搬家"提示（长按命中的那一帧加一次 class：CSS 给一次极短的脉冲，不进每帧循环） */
   const moved = ref(false);
 
   const ariaLabel = computed(
@@ -100,12 +100,12 @@
 
   /**
    * 按下那一刻量到的底盘（中心 + 半径）。
-   * 🔴 为什么量一次就缓存：`clientWidth`/`getBoundingClientRect` 都是**强制布局**的读，
+   * 为什么量一次就缓存：`clientWidth`/`getBoundingClientRect` 都是**强制布局**的读，
    *   放在每帧（或每次 pointermove）里，就是每帧一次 layout —— 与"只动 transform"是同一条红线。
    *   转屏/改尺寸的代价：这一次按压的方向手感偏一点，下一次按下自动校准（可接受，且不改整体布局）。
    */
   let box = { cx: 0, cy: 0, radius: 0 };
-  /** 🕹 当前底盘直径（px，§15：按容器高度收；量不到 = 设计值 112）——行程与家都用它 */
+  /** 当前底盘直径（px，§15：按容器高度收；量不到 = 设计值 112）——行程与家都用它 */
   let basePx = 0;
   /** 这一次按压属于哪根手指（多指：第二根手指碰到摇杆不许把第一根的状态顶掉） */
   let pid = -1;
@@ -116,14 +116,14 @@
   let screenW = 0;
 
   /* ══════════════════════════════════════════════════════════════════
-   * 🕹 **摇杆的"家"**（2026-10-04 第四轮；机主：「这个摇杆位置太反人类了喵！」）
+   * **摇杆的"家"**（2026-10-04 第四轮；摇杆位置不顺手）
    * ══════════════════════════════════════════════════════════════════
    * 口径与理由全在 `wsJoystick.ts` 第八节。这里只做三件事，**都不进每帧循环**：
    *   ① 挂载时（以及窗口尺寸变了时）按记忆算一次家，写**一个** `translate3d`；
    *   ② 在地图容器上**被动**监听 pointerdown/move/up：长按（`JOY_HOME_HOLD_MS` 且位移 ≤ `JOY_HOME_SLOP_PX`）
    *      ⇒ 家搬到那个点、落盘、写**一个** `translate3d` + **一次** class（脉冲）；
    *   ③ 从不 `preventDefault`/`stopPropagation` —— 长按没触发时，那一次拖动照旧是**地图拖动**。
-   * ⚠️ 为什么不做"整片拇指区按下即生成"（机主也提过这个方向）：本屏地图的拖动/双指缩放都是
+   * 为什么不做"整片拇指区按下即生成"（提到过这个方向）：本屏地图的拖动/双指缩放都是
    *    MapLibre 挂在画布上的监听，盖一层透明区会把它们**全挡掉**（见 `wsJoystick.ts` 第八节的两条硬事实）。
    */
   /** 当前的家（容器坐标里的底盘中心）；`null` = 还没量到容器 ⇒ 保持 CSS 默认位置 */
@@ -147,7 +147,7 @@
     const w = hostEl?.clientWidth || 0;
     const h = hostEl?.clientHeight || 0;
     if (!w || !h) return;                     // 量不到容器 ⇒ 保持 CSS 默认位置（宁可不动，也不编一个坐标）
-    /* 🕹 §15：底盘尺寸**随容器高度收**（`16vh`，夹 [76,112]）—— 尺寸的唯一真源在
+    /* §15：底盘尺寸**随容器高度收**（`16vh`，夹 [76,112]）—— 尺寸的唯一真源在
        `wsJoystick.ts`，这里只把结果拿去算家与行程（CSS 变量由宿主用同一个函数写）。 */
     basePx = joyBasePxOf(h);
     home = joyHomeOf(w, h, homeStored, basePx);
@@ -213,7 +213,7 @@
   const driver = createJoyDriver({
     ctx: () => ({ screenW, mpp: props.mpp, speedMps: props.speedMps, zoomLevels: props.zoomLevels }),
     onFrame: (d, v, m, phase, dt) => emit("drive", d, v, m, phase, dt),
-    /* 🔴 `halt` **不再**在手指抬起那一刻发：那一刻相机可能还偏着 ~17px，先让它平滑贴回角色
+    /* `halt` **不再**在手指抬起那一刻发：那一刻相机可能还偏着 ~17px，先让它平滑贴回角色
        （`release()` 进入回中段，同一个 rAF 只动相机），贴回来了才发这一次 —— 宿主那一次重算
        因此**天然只发生一次、且发生在画面稳定之后**。手指的视觉复位（`active`/杆头）仍在 `onUp` 里当场做。 */
     onHalt: () => emit("halt"),
@@ -234,16 +234,16 @@
     const r = el.getBoundingClientRect();
     if (!(r.width > 0)) return;                   // 还没排版（0 尺寸）⇒ 这一次不接，别算出 NaN
     /* 屏宽取**地图容器**（`.ws-dml`）的宽 —— 地图不一定铺满窗口（将来嵌进卡片时也对）；
-       取不到就退回窗口宽。⚠️ 口径变了（2026-10-03 第二轮）：屏宽**不再是速度尺子**，
+       取不到就退回窗口宽。口径变了（2026-10-03 第二轮）：屏宽**不再是速度尺子**，
        它只决定"前瞻上限 = 屏宽 × 1/8"；真的是 0 也只是前瞻为 0（相机仍按米/秒跟），不会"推不动"。
-       🕹 第四轮：容器句柄**留一份**（长按搬家与家的夹取都要它），顺手把家重算一次 ——
+       第四轮：容器句柄**留一份**（长按搬家与家的夹取都要它），顺手把家重算一次 ——
        这一次按压本来就要读一次布局（`getBoundingClientRect`），多读两个尺寸不额外付钱。 */
     const hostNow = el.closest(".ws-dml") as HTMLElement | null;
     if (hostNow) hostEl = hostNow;
     screenW = hostEl?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 0) || 0;
     applyHome();
     box = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, radius: r.width / 2 };
-    /* 🕹 §15：`applyHome()` 刚量过容器高度 ⇒ 顺手把底盘尺寸也定下来（这一次按压本来就要读布局） */
+    /* §15：`applyHome` 刚量过容器高度 ⇒ 顺手把底盘尺寸也定下来（这一次按压本来就要读布局） */
     basePx = joyBasePxOf(hostEl?.clientHeight || 0);
     pid = e.pointerId;
     active.value = true;
@@ -261,7 +261,7 @@
   function onMove(e: PointerEvent): void {
     if (e.pointerId !== pid) return;
     const v = joyVectorFromPointer(e, box);
-    /* 🔴 输入路径只做两件事：① 写那**一个向量**；② 写杆头那**一个 transform**。
+    /* 输入路径只做两件事：① 写那**一个向量**；② 写杆头那**一个 transform**。
        相机、地图、投影一个字都不碰（它们只在 rAF 里，由 `drive` 事件带走）。 */
     const t = joyThumbOffset(e.clientX - box.cx, e.clientY - box.cy, box.radius, travelNow());
     writeThumb(t.x, t.y);
@@ -287,12 +287,12 @@
   }
 
   onMounted(() => {
-    /* 🕹 家的初始化（各一次，**都不在帧里**）：
+    /* 家的初始化（各一次，**都不在帧里**）：
        ① 读记忆（坏了就是 `null` ⇒ 默认左下角，与 `readJoyStored` 同款：绝不抛、绝不猜）；
        ② 找地图容器（找不到也不报错：那就退回"只能推、不能搬"，摇杆照常可用）；
        ③ 写**一个** `translate3d`；
        ④ 挂三支**被动**监听（capture 阶段：底盘自己的 pointerdown 也会被子节点吃掉冒泡，
-          而我们要的是"按在哪儿都算"，所以用 capture 先看到；**从不 preventDefault/stopPropagation**）。
+          而要的是"按在哪儿都算"，所以用 capture 先看到；**从不 preventDefault/stopPropagation**）。
        ⑤ 尺寸变了（转屏 / 面板摊开）⇒ 重算一次家（归一化坐标在这时候体现价值：位置跟着容器走）。 */
     homeStored = readJoyHome();
     hostEl = (baseEl.value?.closest(".ws-dml") as HTMLElement | null) || null;
@@ -324,7 +324,7 @@
 </script>
 
 <style scoped>
-  /* 🕹 底盘：几何全部来自 `wsJoystick.ts` 的常量（由宿主 `.ws-dml` 写成 CSS 变量继承下来）
+  /* 底盘：几何全部来自 `wsJoystick.ts` 的常量（由宿主 `.ws-dml` 写成 CSS 变量继承下来）
      ⇒ 这里**一个数字都不写死**（改大小只改真源一处；命中区/让位高度跟着一起变）。 */
   .ws-joy {
     position: absolute;
@@ -337,7 +337,7 @@
     /* 纯色 + 描边：**没有** backdrop-filter（红线：浮层模糊 = 每帧读回背后像素） */
     background: rgba(10, 16, 24, 0.34);
     border: 1px solid rgba(255, 255, 255, 0.28);
-    /* z-index 5：在名字层（3）之上、🔬（6）之下；验证面板（40）摊开时压住它 —— 与 🔬 的关系保持"面板最大" */
+    /* z-index 5：在名字层（3）之上、（6）之下；验证面板（40）摊开时压住它 —— 与 的关系保持"面板最大" */
     z-index: 5;
     /* 控件自己吃事件（地图容器上的拖动监听靠 `data-no-gesture` + `.stop` 拦住，不是靠这里不吃） */
     pointer-events: auto;
@@ -345,7 +345,7 @@
     -webkit-user-select: none;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
-    /* 只动 opacity 与**那一个** translate3d：transform 由 JS 写（🕹 第四轮 = "家"的位置），
+    /* 只动 opacity 与**那一个** translate3d：transform 由 JS 写（第四轮 = "家"的位置），
        所以这里**绝不能**给它加 transform 过渡 —— 有过渡的话"搬家"会滑过去，也会让
        `getBoundingClientRect()` 在按下那一刻读到动画中间的值（方向就偏了）。 */
     opacity: 0.86;
@@ -354,14 +354,14 @@
   .ws-joy.is-active {
     opacity: 1;
   }
-  /* 🕹 搬家命中：**一次**描边脉冲（class 只加 280ms，CSS 自己过渡回来）—— 告诉人"已经搬好了"。
+  /* 搬家命中：**一次**描边脉冲（class 只加 280ms，CSS 自己过渡回来）—— 告诉人"已经搬好了"。
      只动 `box-shadow`/`border-color`（绘制属性，非布局），且只在长按那一帧发生。 */
   .ws-joy.is-moved {
     border-color: rgba(255, 255, 255, 0.85);
     box-shadow: 0 0 0 6px rgba(121, 217, 255, 0.28);
   }
   /* 搬家手柄：**四颗点**（2×2），贴在底盘右上内侧 —— 告诉人"这块能搬"。
-     🕹 用伪元素画而不是加一个 `<span>`：判据 8 钉着"模板只有底盘 + 杆头两个元素、零插值文本"
+     用伪元素画而不是加一个 `<span>`：判据 8 钉着"模板只有底盘 + 杆头两个元素、零插值文本"
      （摇杆不许变成信息块）——伪元素不在模板里，两件事都不犯。`pointer-events` 也没有：
      伪元素本就不吃事件，命中区仍是整块 112 底盘。 */
   .ws-joy::after {
@@ -393,7 +393,7 @@
     /* 跟手一律瞬时（有过渡反而"黏"）；这里声明 will-change 是本项目对"每帧写 transform"的既有口径 */
     will-change: transform;
   }
-  /* ♿ 系统开了"减弱动效"⇒ 关掉那点淡入淡出（杆头跟手**不关**：那是输入，不是动效） */
+  /* 系统开了"减弱动效"⇒ 关掉那点淡入淡出（杆头跟手**不关**：那是输入，不是动效） */
   @media (prefers-reduced-motion: reduce) {
     .ws-joy {
       transition: none;

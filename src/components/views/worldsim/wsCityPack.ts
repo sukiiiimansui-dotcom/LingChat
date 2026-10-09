@@ -2,8 +2,8 @@
  * wsCityPack.ts —— 「城市数据包」的**协议解析唯一真源**（2026-09-26，App 入口替换 / 初始引导）
  *
  * ## 它负责什么
- * 机主拍板的数据路线：**城市数据从云端按城市下载**（「真正在安装包里的东西，选择从云端下载哪些城市数据，
- * 不过我们自己就用重庆的就行」+「下载源先用本机预览服务（5212）」）。
+ * 已定的数据路线：**城市数据从云端按城市下载**（「真正在安装包里的东西，选择从云端下载哪些城市数据，
+ * 不过自己就用重庆的就行」+「下载源先用本地预览服务（5212）」）。
  * 云端与本机之间只靠两样东西说话（**契约由导出器那边定，这里只按契约读**）：
  *
  *   ① 清单：`GET {BASE}/citypacks/cities.json`
@@ -12,16 +12,16 @@
  *      → 内含 `index.json` + 各格 `<格>.json`（`cellSize = 0.05`，与前端格口径同一套）
  *
  * 本文件是**纯函数 + 纯解析**：不碰 Vue、不碰 DOM、不发请求（取数在 `wsCityStore.ts`）。
- * 这样自检可以拿一个**自造的 zip** 把它整条路走一遍（`ws_city_store_selftest.mjs`）。
+ * 这样自检可以拿一个**自造的 zip** 把它整条路走一遍（回归测试）。
  *
- * ## 判词纪律（机主定的三态，绝不含糊）
+ * ## 判词纪律（既定的三态，绝不含糊）
  * 清单/包的任何一步只有三种结果：**正数 / 0（已量）/ 数不出来（写原因）**。
  * 「没取到」永远不许写成 0 —— 所以下面每个"读"函数返回的都是**带原因的联合类型**，
  * 而不是 `null` / `[]`（那两个东西在调用方看起来一模一样，是本项目反复栽的坑）。
  *
  * ## 不引新依赖
  * 解压走浏览器/Node 都自带的 `DecompressionStream("deflate-raw")`（Chrome 103+ / Node 18+），
- * 不引 jszip / fflate（PR 里多一个依赖要解释，而且我们只用得上 zip 的"读"这一半）。
+ * 不引 jszip / fflate（PR 里多一个依赖要解释，而且只用得上 zip 的"读"这一半）。
  * 解压不可用时**如实报错**（`数不出来：这个运行时不支持 …`），不静默返回空。
  */
 
@@ -62,7 +62,7 @@ function str(v: unknown): string | null {
 /**
  * 署名那一格：契约写的是字符串，但**真清单**（`export_city_pack.py` 产出）给的是**数组**
  * （每层一句，ODbL 要求原样带出）⇒ 两种都收，数组用 ` · ` 连起来。
- * ⚠️ 不做别的加工：具体句子是导出器的原话，这里只负责"别丢"。
+ * 不做别的加工：具体句子是导出器的原话，这里只负责"别丢"。
  */
 function attrOf(v: unknown): string | undefined {
   if (typeof v === "string") return v.trim() || undefined;
@@ -87,7 +87,7 @@ function bboxOf(v: unknown): [number, number, number, number] | undefined {
 /**
  * 把 `cities.json` 的 JSON 解析成三态。
  *
- * ⚠️ 为什么坏条目**丢掉但要报数**：清单是别人的导出器产的，一条缺 `id` 的记录不该让整个引导变砖，
+ * 为什么坏条目**丢掉但要报数**：清单是别人的导出器产的，一条缺 `id` 的记录不该让整个引导变砖，
  * 但也不能静默消失 —— `dropped` 里带着原因上屏（"清单里 2 条记录缺 id/name ⇒ 已忽略"）。
  */
 export function parseCityList(json: unknown): CityListState {
@@ -137,9 +137,9 @@ function typeOf(v: unknown): string {
 }
 
 /**
- * 默认选中哪个城市 —— 机主定的：「**我们自己就用重庆的就行**」。
+ * 默认选中哪个城市 —— **默认城市用重庆即可**。
  * 匹配口径：id / name 里含 `prefer`（默认"重庆"）或它的拼音 `chongqing`；匹配不到就返回 null
- * （**不擅自**把清单第一个当默认 —— 那是替用户做决定，"首屏显示的城市"正是机主要改的东西）。
+ * （**不擅自**把清单第一个当默认 —— 那是替用户做决定，"首屏显示的城市"正是需要改的东西）。
  */
 export function pickDefaultCity(cities: readonly CityPackInfo[], prefer = "重庆"): CityPackInfo | null {
   const want = prefer.trim().toLowerCase();
@@ -164,7 +164,7 @@ export function fmtBytes(n: number | null | undefined): string {
  * 二、zip 解包（只用标准库：DecompressionStream）
  * ════════════════════════════════════════════════════════════════════════════ */
 
-/** zip 中央目录里一条记录（只取我们真正要用的字段） */
+/** zip 中央目录里一条记录（只取真正要用的字段） */
 export interface ZipEntry {
   name: string;
   /** 0 = 不压缩（stored）/ 8 = deflate */
@@ -247,7 +247,7 @@ export async function readZipEntryBytes(bytes: Uint8Array, e: ZipEntry): Promise
   if (e.method !== 8) throw new Error("不认识的压缩方式 " + e.method + "（只支持 0=stored / 8=deflate）：" + e.name);
   if (!inflateAvailable()) throw new Error("这个运行时不支持解压（没有 DecompressionStream）⇒ 数不出来");
   const ds = new DecompressionStream("deflate-raw");
-  /* ⚠️ 用 `Blob` 而不是 `new Response(raw).body`：raw 是**视图**（subarray），
+  /* 用 `Blob` 而不是 `new Response(raw).body`：raw 是**视图**（subarray），
      直接喂给 Response 在部分实现里会把整个底层 buffer 当请求体（会把整包再复制一遍）。 */
   const stream = new Blob([raw as BlobPart]).stream().pipeThrough(ds);
   const buf = await new Response(stream).arrayBuffer();
@@ -278,7 +278,7 @@ export interface PackContents {
   /**
    * 各层的格文件（`…/<格>.json`，**不含任何 `index.json`**）。
    *
-   * 🔴 真包的形状（2026-09-26 拿 `chongqing.zip` 实测）：**按层分目录**
+   * 真包的形状（2026-09-26 拿 `chongqing.zip` 实测）：**按层分目录**
    * `bldbundle/` · `roadsbundle/` · `placesbundle/` · `gwbundle/`，每层自己一个 `index.json`，
    * 根 `index.json` 再声明一份**去重后的格键表**（这就是清单里的 `cells`）。
    * ⇒ 于是"几格"有两个数：**文件数**（501，按层算）与**格键数**（372，去重）。
@@ -306,7 +306,7 @@ export interface PackContents {
   /**
    * **从格文件名/格键里读出来的**粒度集合（去重升序，如 `[0.01, 0.05]`）。
    *
-   * 🔴 为什么要这一份：粒度正在从 0.05° 改到 0.01°（父代理 2026-09-26 拍板），
+   * 为什么要这一份：粒度正在从 0.05° 改到 0.01°（2026-09-26 拍板），
    * 而且**层间可以不同** ⇒ 任何"只认包级 `cellSize`"的假设都会在下一版包上崩掉。
    * 这一份不依赖任何声明（文件名按 `<...>_<粒度>.json` / 格键 `..._<粒度>` 自带粒度），
    * 所以它是"包到底多细"的**兜底事实**；读不出来就是空数组（空 = 数不出来，不是 0）。
@@ -389,7 +389,7 @@ function centerFromIndex(index: unknown): [number, number] | null {  if (!index 
 /**
  * 把整包字节读成"内容"。
  *
- * 🔴 为什么把 `declared` / `cells` / `cellCount` / `cellsWhy` 都带出来：
+ * 为什么把 `declared` / `cells` / `cellCount` / `cellsWhy` 都带出来：
  * "包里到底有几格"有**两种来源**（格文件数、根 `index.json` 的声明），真包实测**它们不相等**
  * （505 个格文件 vs 372 个去重格键）—— 只报一个数就等于把口径藏起来。
  * 所以：`cellCount` 是**唯一定义**（优先用声明，与清单 `cells` 同口径），另两个原始数照旧带出来。

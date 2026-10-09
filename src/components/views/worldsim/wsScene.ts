@@ -10,7 +10,7 @@
  *   ② `SCENE_LAYER_ORDER` / `sceneLayerPlan()`：图层**顺序与 before 关系**（路网 → 楼体 → 设施 → 注记）；
  *   ③ `sceneSelfReport()`：**自证**（面板/自检那一行读它 —— 换用没有生效，页面上一眼可见）。
  *
- * ⚠️ 纪律：**只有一份**。页面/组件**不许**再写 `pitch: 38` 这类字面量；
+ * 纪律：**只有一份**。页面/组件**不许**再写 `pitch: 38` 这类字面量；
  *   要改默认相机，改这里的 `CAMERA_DEFAULTS`，两边一起变。
  */
 
@@ -25,7 +25,7 @@ export interface SceneCamera {
   bearing: number;
   minZoom: number;
   maxZoom: number;
-  /** 🔴 70：能给天空，但到不了"只剩一条线"（侧视角拖动倍率爆炸的护栏） */
+  /** 70：能给天空，但到不了"只剩一条线"（侧视角拖动倍率爆炸的护栏） */
   maxPitch: number;
 }
 
@@ -51,7 +51,7 @@ export interface SceneLayerPlanEntry {
   idPrefixes: readonly string[];
   /**
    * 额外**排除**的 id 前缀（在 `idPrefixes` 命中之后再剔掉）。
-   * 🌆 2026-10-03「按 zoom 分层」加这一项的唯一原因：足迹层 `bld-foot` 与楼体共用 `bld-` 前缀，
+   * 2026-10-03「按 zoom 分层」加这一项的唯一原因：足迹层 `bld-foot` 与楼体共用 `bld-` 前缀，
    * 但它是**贴在地面上的平面**（层序在路网**之下**），混进 `buildings`（"楼体在最上"）会让
    * `sceneOrderViolations()` 把正确的层序误报成"路网被楼体压住"。
    */
@@ -62,7 +62,7 @@ export interface SceneLayerPlanEntry {
 }
 
 export const SCENE_LAYER_ORDER: readonly SceneLayerPlanEntry[] = [
-  /* 🌆 **足迹层**（`bld-foot`，2026-10-03「按 zoom 分层」）：`z<14` 时屏上的"楼"就是这一层。
+  /* **足迹层**（`bld-foot`，2026-10-03「按 zoom 分层」）：`z<14` 时屏上的"楼"就是这一层。
      它是**贴在地面上的平面**（`fill`），与路网/水绿同一档 —— 也就是**在它们之下**。
      单列一组（而不是塞进 `buildings`）：混进去会让下面那条"路网被楼体压住"的判据**误报**
      （2026-10-03 加这一层时实测到：`firstOf("buildings")` 取到的是最下面那条 `bld-foot`）。 */
@@ -70,10 +70,10 @@ export const SCENE_LAYER_ORDER: readonly SceneLayerPlanEntry[] = [
   { group: "roads", idPrefixes: ["road-casing-", "road-line-"], beforeId: "bld-ext", why: "路是地面上的东西，压在楼上会像从楼顶穿过" },
   { group: "transport", idPrefixes: ["tf-"], beforeId: "bld-ext", why: "交通设施**贴在路之上**（先插路网、后插设施 ⇒ 设施在上）" },
   { group: "buildings", idPrefixes: ["bld-"], excludePrefixes: ["bld-foot"], beforeId: null, why: "楼体在最上（数据层，交互载体）" },
-  /* 🛰 LOD 第 1 步（2026-09-24）：预渲染瓦片层。**它在矢量层之上**是刻意的 ——
+  /* LOD 第 1 步（2026-09-24）：预渲染瓦片层。**它在矢量层之上**是刻意的 ——
      远景（z≤12）要让瓦片**盖住**实时层，中间靠 `raster-opacity` 随 zoom 淡到 0 把画面交还矢量层；
      反过来放（瓦片在下）就得给 12 条路网 + 楼体各写一份"淡入"，那才是新造一套机制。
-     ⚠️ 这条"在上"由 `sceneOrderViolations()` 守着（被矢量层压住 = 远景会露出实时层）。 */
+     这条"在上"由 `sceneOrderViolations` 守着（被矢量层压住 = 远景会露出实时层）。 */
   { group: "prerender", idPrefixes: ["prerender"], beforeId: "ref", why: "预渲染瓦片 = 远景替身，压在矢量层之上、注记之下（靠 zoom 淡出把近景交还实时层）" },
 ];
 
@@ -82,7 +82,7 @@ export function sceneLayerPlan(): SceneLayerPlanEntry[] {
   return SCENE_LAYER_ORDER.map((e) => ({ ...e }));
 }
 
-/** 🌆 某个图层 id 是否属于这一组（前缀命中 **且** 不在 `excludePrefixes` 里）。
+/** 某个图层 id 是否属于这一组（前缀命中 **且** 不在 `excludePrefixes` 里）。
  *  **判据只有这一处**：`sceneGroupOf()` 与 `sceneOrderViolations()` 都调它
  *  （各写一份就会漂 —— 2026-10-03 加足迹层时正是这里让"路网在楼体之上"被误报）。 */
 function planEntryHas(e: SceneLayerPlanEntry, id: string): boolean {
@@ -127,15 +127,15 @@ export function sceneOrderViolations(layerIds: readonly string[]): string[] {
   const tf = firstOf("transport");
   const bld = firstOf("buildings");
   const pre = firstOf("prerender");
-  /* 🌆 足迹层（地面肌理）必须在路网/交通设施/楼体**之下**：
-     它跑到上面去就是"一层半透明脏膜"（2026-10-03 机主原话：足迹是肌理，不许压住路网/水绿）。 */
+  /* 足迹层（地面肌理）必须在路网/交通设施/楼体**之下**：
+     它跑到上面去就是"一层半透明脏膜"（2026-10-03 需求：足迹是肌理，不许压住路网/水绿）。 */
   if (foot >= 0 && roads >= 0 && foot > roads) out.push("足迹层被路网压在上面（它是地面肌理，应在路网之下）");
   if (foot >= 0 && tf >= 0 && foot > tf) out.push("足迹层被交通设施压在上面（应在下方）");
   if (foot >= 0 && bld >= 0 && foot > bld) out.push("足迹层被楼体压在上面（应在下方）");
   if (roads >= 0 && tf >= 0 && roads > tf) out.push("路网被交通设施压在上面（应在下方）");
   if (roads >= 0 && bld >= 0 && roads > bld) out.push("路网被楼体压在上面（应在下方）");
   if (tf >= 0 && bld >= 0 && tf > bld) out.push("交通设施被楼体压在上面（应在下方）");
-  /* 🛰 只在**预渲染层真的在**时才判这条 —— 没开 `?lod` 的页面/App 里它压根不存在，
+  /* 只在**预渲染层真的在**时才判这条 —— 没开 `?lod` 的页面/App 里它压根不存在，
      这时报"违规"就是假报（三态纪律：不要把"没有这一层"说成"顺序错了"）。 */
   if (pre >= 0) {
     if (roads >= 0 && pre < roads) out.push("预渲染瓦片被路网压住（远景会露出实时路网）");
@@ -147,31 +147,31 @@ export function sceneOrderViolations(layerIds: readonly string[]): string[] {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   🛰 **LOD：近处实时渲染 / 远处预渲染** —— 第 1 步「切换骨架」的唯一真源
-   （机主 2026-09-24 原话：「采用**近距离渲染，远距离预渲染**的方式加载全国楼房数据和道路喵！」）
+   **LOD：近处实时渲染 / 远处预渲染** —— 第 1 步「切换骨架」的唯一真源
+   （2026-09-24 采用**近距离渲染，远距离预渲染**的方式加载全国楼房数据和道路）
 
    这一步**不依赖大数据**：瓦片由 `world_map/make_prerender_tiles.mjs` 在本地生成
    （骨架阶段是**示意**瓦片，只为证明"切换 / 过渡 / 回证"成立；真数据管线是第 2 步）。
 
-   🔴 **复用**既有那套机制，不新造：`wsMapTheme.themeStyleParts()` 里照片底图就是靠
+   **复用**既有那套机制，不新造：`wsMapTheme.themeStyleParts` 里照片底图就是靠
      `raster-opacity: ["interpolate",["linear"],["zoom"], z0, 1, z1, 0]` 淡出的
      （`theme.baseFade`）。这里**同一个形状**，只是换成预渲染层。
-   🔴 **阈值/层 id/表达式/瓦片键算法只有这一份**：页面与（将来的）App 都从这里取，
+   **阈值/层 id/表达式/瓦片键算法只有这一份**：页面与（将来的）App 都从这里取，
      两边各写一份就一定会漂 —— 这是这个项目反复付代价的那类问题。
-   🔴 图层顺序：预渲染层在**矢量层之上、注记之下**（见 `SCENE_LAYER_ORDER` 的那条）。
+   图层顺序：预渲染层在**矢量层之上、注记之下**（见 `SCENE_LAYER_ORDER` 的那条）。
    ══════════════════════════════════════════════════════════════════════════════ */
 
-/** 预渲染层/源/资源路径（**我们自己的瓦片**，不是 Esri） */
+/** 预渲染层/源/资源路径（**自己的瓦片**，不是 Esri） */
 export const PRERENDER_LAYER_ID = "prerender";
 export const PRERENDER_SOURCE_ID = "prerender";
 /**
- * 🔴 **真瓦片**（默认）：由 `world_map/prerender_pipeline.py` 用**真楼脚印（Overture，ODbL）+ OSM 道路**画的那批。
- * 机主 2026-09-25 拍板：「**占位瓦片默认不画**」+「取数半径跟随视野放大」。
+ * **真瓦片**（默认）：由 离线数据生成脚本 用**真楼脚印（Overture，ODbL）+ OSM 道路**画的那批。
+ * 2026-09-25 **占位瓦片默认不画**；取数半径跟随视野放大。
  */
 export const PRERENDER_TILE_PATH = "/prerender/{z}/{x}/{y}.png";
 export const PRERENDER_MANIFEST_PATH = "/prerender/manifest.json";
 /**
- * **示意/占位瓦片**（骨架阶段的假几何花纹）：机主在真机上看到「瓦片太难看了（覆盖全部地图）」
+ * **示意/占位瓦片**（骨架阶段的假几何花纹）：用户在真机上看到「瓦片太难看了（覆盖全部地图）」
  * —— 占位瓦片铺满整张图、而真数据只覆盖一小片 —— 所以把它挪到**单独目录**：
  *   · 默认（`?lod=1`）**一条都不请求**：真瓦片没覆盖到的地方**就空着**，绝不再拿花纹去补；
  *   · 只有显式 `?lod=demo` 才用它（对照 A/B、自检、复现第 1 步的过渡观感）。
@@ -184,21 +184,21 @@ export const PRERENDER_TILE_SIZE = 512;
 /** 瓦片金字塔的 zoom 上限（源级 `maxzoom`：更高的 zoom 由地图库放大复用 z13 那张） */
 export const PRERENDER_TILE_MAXZOOM = 13;
 /**
- * 🔴 **两条阈值（2026-09-26 收紧，别按旧注释理解）**：
+ * **两条阈值（2026-09-26 收紧，别按旧注释理解）**：
  *   · `z ≤ LOD_FAR_ZOOM` = 预渲染瓦片**独占**（不透明度 1：那一刻它是唯一的信息源）；
  *   · `FAR < z < NEAR` = 瓦片按 zoom **线性淡出**（就是 `LOD_OPACITY_STOPS` 的最后一段）；
  *   · `z ≥ LOD_NEAR_ZOOM` = 实时矢量独占（瓦片层在 `NEAR` 整层隐藏、不透明度正好 0）。
- * ⚠️ 改前是 `FAR=12 / NEAR=11`（**FAR 反而大于 NEAR**）⇒ `lodTierOf(11|12)` 报「预渲染（z≤12）」，
+ * 改前是 `FAR=12 / NEAR=11`（**FAR 反而大于 NEAR**）⇒ `lodTierOf(11|12)` 报「预渲染（z≤12）」，
  *   而那一刻瓦片层已被 `maxzoom=11` 藏起来、屏上画的是矢量楼 ⇒ **HUD 在撒谎**（红线：事实不许编）。
  *   现在 `FAR` 收到 **10**：与档位表里最后一个"满不透明"停靠点 `[10,1]` **逐字对齐**
  *   （自检钉着 `LOD_OPACITY_STOPS[-2][0] === LOD_FAR_ZOOM`，两边不许各自漂）。
  */
 export const LOD_FAR_ZOOM = 10;
-export const LOD_NEAR_ZOOM = 11;   /* 🔴 2026-09-26 机主：「这些白蓝的方片能去掉吗…楼直接永久显示就行了」⇒ 提前到 11 */
+export const LOD_NEAR_ZOOM = 11;   /* 2026-09-26 已定：去掉白蓝方片、楼永久显示 ⇒ 提前到 11 */
 /** 瓦片源：`real` = 真数据（默认）、`demo` = 示意/占位（只在 `?lod=demo` 下用） */
 export type PrerenderSource = "real" | "demo";
 /**
- * 源层署名（写进**样式 spec 的 `attribution`**）。⚠️ 画面上的**可见**署名不读这里：
+ * 源层署名（写进**样式 spec 的 `attribution`**）。画面上的**可见**署名不读这里：
  * `attributionControl` 是关的 ⇒ 由 HUD 那一行显示，文案**逐字取自清单 `manifest.attribution`**
  * （真数据那句 Overture ODbL 由管线的 `overture_api.ATTRIBUTION` 生成并写进清单，不在这里抄第二版）。
  */
@@ -210,7 +210,7 @@ export const LOD_VIEW_TILE_CAP = 2048;
 export type LodTier = "prerender" | "crossfade" | "vector";
 
 /** 当前 zoom 走哪条路（三态：预渲染瓦片 / 淡出窗口 / 实时矢量）。
- *  ⚠️ 中间那一档**不是"两个图层同时在画"**：矢量楼要到 `NEAR` 才建 ⇒ 那一段是瓦片**退场**、
+ *  中间那一档**不是"两个图层同时在画"**：矢量楼要到 `NEAR` 才建 ⇒ 那一段是瓦片**退场**、
  *  还没有接棒者。HUD 读的就是这个函数，措辞必须与事实一致（别读成"双份数据交叉"）。 */
 export function lodTierOf(zoom: number): LodTier {
   const z = Number.isFinite(zoom) ? Number(zoom) : LOD_FAR_ZOOM;
@@ -226,21 +226,21 @@ export function lodTierLabel(tier: LodTier): string {
 }
 
 /**
- * 🔴 **瓦片的不透明度分档**（机主 2026-09-25：「**路确实有了，但是瓦片太挡视野了喵**」）。
+ * **瓦片的不透明度分档**（2026-09-25 **路已经有了，但瓦片太挡视野**）。
  *
  * 现行口径（**以 `LOD_OPACITY_STOPS` 那张表为准**，别读旧版本的档位表）：
  *   · z ≤ 10 → **1.00**（全国/市区尺度：瓦片是唯一的信息源，"城市轮廓"靠它）
  *   · 10 < z < 11 → 线性淡出（**退场**，不是"交给谁"：矢量楼要到 11 才建）
  *   · z ≥ 11 → **0**（`LOD_OPACITY_ZERO_ZOOM`）+ 瓦片层整层隐藏 ⇒ 近景**不再请求瓦片**
- * 🔴 归零点必须与**矢量楼起点**同一个数（`LOD_OPACITY_ZERO_ZOOM === LOD_NEAR_ZOOM ===
- *   WS_BLD_VECTOR_MINZOOM`）—— 否则中间会出现「两层都不管」的空档（机主 2026-09-25 在 13.5 见过一次：
+ * 归零点必须与**矢量楼起点**同一个数（`LOD_OPACITY_ZERO_ZOOM === LOD_NEAR_ZOOM ===
+ *   WS_BLD_VECTOR_MINZOOM`）—— 否则中间会出现「两层都不管」的空档（2026-09-25 在 13.5 见过一次：
  *   「只有路线没有楼」）。自检钉的是这条**三向相等**，不只是"某档为 0"。
- * ⚠️ **不是删掉瓦片**：z<11 的远景仍靠它（没有实时数据时它是唯一的信息源）。
+ * **不是删掉瓦片**：z<11 的远景仍靠它（没有实时数据时它是唯一的信息源）。
  * 自检钉着：档位单调不增、`z ≥ LOD_OPACITY_ZERO_ZOOM` 必须为 0、`FAR` = 最后一个满档停靠点。
  */
 export const LOD_OPACITY_ZERO_ZOOM = 11;
 export const LOD_OPACITY_STOPS: ReadonlyArray<readonly [number, number]> = [
-  /* 🔴 2026-09-26 机主决定：**预渲染瓦片层（那些"白蓝方片"）不再作为主力**，
+  /* 2026-09-26 用户决定：**预渲染瓦片层（那些"白蓝方片"）不再作为主力**，
      楼改由**矢量层一直显示**（`WS_BLD_VECTOR_MINZOOM` 同步降到 11）。
      ⇒ 瓦片只服务 z<11 的远景，**在 11 严格归零**（与矢量层起点仍然严格对齐，
      自检那条"归零 zoom === 楼房矢量 minzoom"的不变量**继续成立**，没有"两层都不管"的空档）。 */
@@ -298,7 +298,7 @@ export function prerenderSourceOf(src: PrerenderSource = "real"): {
   };
 }
 
-/** 预渲染层的栅格源（**我们自己的瓦片路径**；`maxzoom` = 金字塔上限，更高的 zoom 放大复用） */
+/** 预渲染层的栅格源（**自己的瓦片路径**；`maxzoom` = 金字塔上限，更高的 zoom 放大复用） */
 export function lodSourceSpec(src: PrerenderSource = "real"): Record<string, unknown> {
   const s = prerenderSourceOf(src);
   return {
@@ -362,21 +362,21 @@ export function lodPlan(src: PrerenderSource = "real"): {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   🔭 **取数半径**（机主 2026-09-25 拍板：「取数半径跟随视野放大到 2~8km」）
+   **取数半径**（2026-09-25 取数半径跟随视野放大到 2~8km）
 
    病根：半径以前被写死在很小的值（楼 350~2000m、路固定 600m），而手机横屏 z15
    一眼就能看到 ~4km 宽 ⇒ 半径之外**必然是空的**，看起来就是「楼房只有这一块」
    「剩下的路没画」。这两条反馈同源。
 
-   🔴 三条口径（都在这里定，页面/App 只调用）：
+   三条口径（都在这里定，页面/App 只调用）：
      ① **近景 2km 起、远景最多 8km**（阶梯见 `WS_FETCH_R_LADDER`）；
      ② **封顶 8km**：请求再大也不会超过它（`clamp` 在函数里，调用方拿不到超标值）；
      ③ 视野比档位更大时**按视野取大者**（`decidedBy: "view"`）—— 否则"看得见的地方没数据"。
-   ⚠️ 代价要如实报：半径翻倍 ⇒ 取数时间与要素数都涨（Overpass 冷查十几秒到分钟级）。
+   代价要如实报：半径翻倍 ⇒ 取数时间与要素数都涨（Overpass 冷查十几秒到分钟级）。
      所以 HUD 必须回证「半径 R / 要素数 / 是否命中缓存 / 花了多久」，页面不许自己编。
    ══════════════════════════════════════════════════════════════════════════════ */
 export const WS_FETCH_R_MIN = 2000;
-/** 机主拍板的**策略上限**（将来源支持时用；当前被下面的源上限夹住） */
+/** 已定的**策略上限**（将来源支持时用；当前被下面的源上限夹住） */
 export const WS_FETCH_R_MAX = 8000;
 /**
  * **后端单次查询的硬上限**（实测事实，不是策略）：`/api/buildings` 与 `/api/roads` 在调试服务里
@@ -385,7 +385,7 @@ export const WS_FETCH_R_MAX = 8000;
  */
 export const WS_FETCH_R_BACKEND_MAX = 2000;
 /**
- * 🔴 **数据源自己的上限 = 真正卡住的那一层**（2026-09-25 带对照组的 A/B 实测，不是拍脑袋）。
+ * **数据源自己的上限 = 真正卡住的那一层**（2026-09-25 带对照组的 A/B 实测，不是拍脑袋）。
  *
  * 同一个端点（overpass-api.de）、相差 22 秒的两发，只有半径不同：
  * | R | 结果 |
@@ -395,14 +395,14 @@ export const WS_FETCH_R_BACKEND_MAX = 2000;
  * | 4000m | 连接被掐（`OpenSSL SSL_read`）/ 另一端点 504 |
  * | 8000m | 一次 200，但只回 **5,651** 个要素（同一片区域 Overture 有 **10.8 万栋**）⇒ **结果被截断** |
  *
- * 外加两条机制性事实：query 里 `[out:json][timeout:40]` 是**服务端**超时（我们改不了），
+ * 外加两条机制性事实：query 里 `[out:json][timeout:40]` 是**服务端**超时（改不了），
  * 公共实例还有按 IP 的限流 ⇒ **不是"改大 Rust 的闸门就能拿"**。
  * ⇒ 结论：**不放开**。放开只会把"明确的 `半径非法`"换成"慢失败 + 可能**静默截断**的错数据"，
  *   而截断正是本项目最忌讳的那种错（看起来像"这一带楼少"）。
  * ⇒ 远景**靠预渲染瓦片**（LOD 本来的设计），实时矢量只服务近景 2km。
  */
 export const WS_FETCH_R_SOURCE_MAX = 2000;
-/* ══ 🛣 路网（**另一条源上限**：比楼更严 —— 2026-09-25 真机回归「道路全没了喵」）════════
+/* ══ 路网（**另一条源上限**：比楼更严 —— 2026-09-25 真机回归「道路全没了」）════════
    后端实测（`/api/roads`，渝中 29.5567,106.5629；主会话与我各测一次，数字一致）：
      r=600m  → **197 条 / 0~1s**（缓存命中）
      r=800m  → `ok:false` / **0 条 / 99s**   ← 悬崖就在 600 与 800 之间
@@ -414,7 +414,7 @@ export const WS_FETCH_R_SOURCE_MAX = 2000;
      这正是 LOD 的分工（近处实时 / 远处预渲染）。 */
 export const WS_ROADS_R_MAX = 600;
 /**
- * 🔴 **分块取数（多打几次小半径）也实测过 —— 不划算**（2026-09-25 任务 A，同一后端）。
+ * **分块取数（多打几次小半径）也实测过 —— 不划算**（2026-09-25 任务 A，同一后端）。
  *
  * 做法：把 600m 的块按 850m 间距（= R×√2，格心圆盖满整格）铺满"覆盖半径 ≈1.3km"的 3×3，
  * 每块一条 `/api/roads?r=600`，**串行冷启**实测：
@@ -427,14 +427,14 @@ export const WS_ROADS_R_MAX = 600;
  * | (0,0)（早先暖过）| **0.13s** | 197 条 · `cached` |
  *
  * ⇒ 三条结论：
- *   ① **冷块跟"一次要个大半径"一样慢**（瓶颈在 Overpass 侧，不在我们请求的形状）；
+ *   ① **冷块跟"一次要个大半径"一样慢**（瓶颈在 Overpass 侧，不在请求的形状）；
  *   ② **缓存救不了移动的视野**：后端缓存键是"纬度/0.002、经度/0.002、半径"的格子
  *      （`osm.rs::grid_key`），视野一平移就换一批冷格子；
  *   ③ 9 块 ≈ **3~8 分钟**，且本轮 4 个冷块里 **1 个直接失败**（约 1/4 失败率）——
  *      拿这个喂"实时层"不合适（首屏等它 = 又回到"链被堵住"的老问题）。
  *
  * ⇒ 决定：**不做分块**。live 层就一个 600m 的圆（近景够用），**远处的路交给预渲染瓦片**。
- * ⚠️ 这段数字留着是为了让下一个人**不必再试一遍**，也**别偷偷加 9 个请求**（自检里有断言钉着）。
+ * 这段数字留着是为了让下一个人**不必再试一遍**，也**别偷偷加 9 个请求**（自检里有断言钉着）。
  */
 export const WS_ROADS_CHUNKING_VERDICT =
   "分块实测不划算：冷块 17.6~56.2s、4 块里 1 块 ok:false；只有缓存命中那块 0.13s（视野一平移就换冷格子）"
@@ -453,9 +453,9 @@ export function roadsRadiusFor(buildingsRadius: number | null | undefined): {
   return { radius: WS_ROADS_R_MAX, wanted: capped ? want : WS_ROADS_R_MAX, capped, why: capped ? WS_ROADS_LIMIT_WHY : null };
 }
 
-/* ══ 🛣 live 取路的**开关策略**（2026-09-25 机主第二张截图：live 超时 ⇒ 路又没了）════════
-   机主截图里的 HUD 原文：
-     「路 失败：Error: 超时 12s（撞可用上限）⚠ 策略要 7350m ⇒ 源上限 2000m，"远景不取数"」
+/* ══ live 取路的**开关策略**（2026-09-25 用户第二张截图：live 超时 ⇒ 路又没了）════════
+   截图里的 HUD 原文：
+     「路 失败：Error: 超时 12s（撞可用上限）策略要 7350m ⇒ 源上限 2000m，"远景不取数"」
    两条实测摆在一起看：
      · 600m **命中缓存** 0.1~1s（暖格），但**冷查是分钟级** —— 分块实测 17.6~56.2s/块，且 4 块里 1 块直接 `ok:false`；
      · 所以"先打一条 600m 试试"在**冷缓存/新区域**下必然撞 12s 超时 ⇒ 用户看到的就是"路没了"。
@@ -463,7 +463,7 @@ export function roadsRadiusFor(buildingsRadius: number | null | undefined): {
      · **默认 0 条 Overpass**：路从**离线路面包**（静态 `/roadsbundle/<格>.json`，69 格/23,984 条/5.9MB）
        与**预渲染瓦片**来 —— 这两条都是"本地/静态"，耗时与失败都可控；
      · 想现场取数（补新区域、调试）：**`?live=1` 显式开**，且照旧**不阻塞**别层（12s 超时后如实报失败）。
-   🔴 不许把默认再改回"先打一条试试" —— 冷缓存下它做的就是**堵住首屏 + 把"没取到"呈现成"路没了"**。 */
+   不许把默认再改回"先打一条试试" —— 冷缓存下它做的就是**堵住首屏 + 把"没取到"呈现成"路没了"**。 */
 export const WS_ROADS_LIVE_DEFAULT = false;
 export const WS_ROADS_LIVE_VERDICT =
   "默认不发 /api/roads：现场 Overpass 冷查是分钟级（分块实测 17.6~56.2s/块、4 块 1 失败）"
@@ -477,15 +477,15 @@ export function roadsLiveDecision(input?: { forceLive?: boolean | null }): { liv
   return { live: false, why: WS_ROADS_LIVE_VERDICT };
 }
 
-/* ══ 🏢 live 取**楼**的开关策略（与路同一套思路；机主 2026-09-25 截图：「楼房只有中间一块」）════
+/* ══ live 取**楼**的开关策略（与路同一套思路；2026-09-25 楼房只有中间一块）════
    证据与算术：
      · `/api/buildings` 一次只覆盖视野中心 **R≤2000m**（后端硬闸 `r ∈ (0,2000]`；实测 r=2000 常 504）；
      · 冷查 **27~33s**（最慢见过 91.7s）—— 与"路 超时 12s"同源的毛病；
-     · 而**已缓存的 Overture 盘**能导出**离线楼房包**（`world_map/export_bld_bundle.py`）：
+     · 而**已缓存的 Overture 盘**能导出**离线楼房包**（离线数据生成脚本）：
        实测 **55 盘 → 720,087 栋 → 373 格 / 102.6 MB**，单格中位 **205 KB** / 最大 **1.9 MB**（静态文件）。
    ⇒ 结论：**默认不发 `/api/buildings`**，楼从**离线楼房包**来（按视野取最近的几格、并进累积仓库）；
      现场取数只在 `?live=1` 时打（补新区域/调试），失败照旧**可见**。
-   🔴 包外（没有离线格的区域）**必须如实写「包外」** —— 不许让"我们没数据"看起来像"这里没有楼"。 */
+   包外（没有离线格的区域）**必须如实写「包外」** —— 不许让"没数据"看起来像"这里没有楼"。 */
 export const WS_BLD_LIVE_DEFAULT = false;
 export const WS_BLD_LIVE_VERDICT =
   "默认不发 /api/buildings：现场一次只有 R≤2000m（后端硬闸）且冷查 27~33s（最慢 91.7s）"
@@ -502,14 +502,14 @@ export function bldLiveDecision(input?: { forceLive?: boolean | null }): { live:
 /**
  * 楼房那一格的**判词**（"没离线格/包外"与"这里没有楼"必须分得开）。
  *
- * 机主 2026-09-25 截图的现象是"楼房只有中间一块"——根因是**现场取数的半径上限**，
+ * 2026-09-25 已报的现象是"楼房只有中间一块"——根因是**现场取数的半径上限**，
  * 而不是"外面没有楼"。所以：
  *   · `bundle`  = **离线包优先**（默认：仓库里有 N 栋，来自离线格）；
  *   · `outside` = **包外**（这一带没有离线格，且没开 live ⇒ 如实写"包外"，不写 0、不写"没有楼"）；
  *   · `pending` / `ok` / `empty` / `failed` / `off` 与路同一套语义。
  */
 export function bldVerdictText(input: {
-  /* 🔴 第七态 `sizemismatch` = **格尺寸口径不符**（包按 X° 分格、前端按 Y° 算键 ⇒ 拒绝取数）：
+  /* 第七态 `sizemismatch` = **格尺寸口径不符**（包按 X° 分格、前端按 Y° 算键 ⇒ 拒绝取数）：
      它与"包外 / 取数失败 / 这里没有楼"**四者互不混淆** —— 说错任何一种是撒谎。 */
   state: "bundle" | "outside" | "pending" | "ok" | "empty" | "failed" | "off" | "sizemismatch";
   n?: number | null;
@@ -544,7 +544,7 @@ export function bldVerdictText(input: {
 /**
  * 取路那一格的**判词**（"没取"与"没数据"必须分得开）。
  *
- * 机主真机回归的第二个坑：路取不到时页面写的是「这一带没有路网数据」——**把"没取到"说成了"没有"**。
+ * 真机回归的第二个坑：路取不到时页面写的是「这一带没有路网数据」——**把"没取到"说成了"没有"**。
  * 六态各说各的话：`pending` 取数中 / `ok` 正数 / `empty` 0（已量：后端在这些块都回 0）/
  * `failed` 取数失败（带原因）/ `off` 未开（?roads=0）/
  * `bundle` **live 未开**（默认：路走离线路面包 + 预渲染瓦片 —— 不是"没有路"，也不是"取失败"）。
@@ -564,7 +564,7 @@ export function roadsVerdictText(input: {
   const cap = input.capped ? `（半径已封顶；本想要 ${Math.round(Number(input.wanted) || 0)}m —— ${input.why || ""}）` : "";
   if (input.state === "off") return "🛣 未开（?roads=0）";
   if (input.state === "bundle") {
-    /* ⚠️ 这一态**必须**与"没有路""取失败"分得开：它说的是"我们没发现场请求，路在离线包里" */
+    /* 这一态**必须**与"没有路""取失败"分得开：它说的是"没发现场请求，路在离线包里" */
     const nb = input.n === null || input.n === undefined ? "数不出来" : String(input.n);
     return `🛣 离线包 offline-first（仓库 ${nb} 条；**默认不发 /api/roads**：冷查分钟级 ⇒ 要现场取数加 ?live=1）`;
   }
@@ -577,12 +577,12 @@ export function roadsVerdictText(input: {
 }
 
 /**
- * 📱 **像素比**：低档机收敛到 ≤1.5，其余 ≤2（上限来自 `devicePixelRatio`，取不到按 1 算）。
+ * **像素比**：低档机收敛到 ≤1.5，其余 ≤2（上限来自 `devicePixelRatio`，取不到按 1 算）。
  *
  * 为什么放在真源里：`ws3dshow.html` 的地图构造要用它，App 侧将来也要用 —— **规则只写一份**。
  * 为什么低档要收：像素比直接乘**填充率**（`pixelRatio²`），而 2D/3D 地图的瓶颈正是填充率；
  * 低档机（`wsCaps.render.perf === "low"`，由 `wsPerf` 按实测帧率写回）用 1.5 换帧率。
- * ⚠️ 具体数字**未在真机测过**（本机无头无 WebGL）—— 这是"宁可少画一点也别掉帧"的保守选择。
+ * 具体数字**未在真机测过**（无头环境没有 WebGL）—— 这是"宁可少画一点也别掉帧"的保守选择。
  */
 export function pixelRatioForTier(perfTier: string | null | undefined, dpr?: number | null): number {
   const d = Number.isFinite(dpr as number) ? Number(dpr) : 1;
@@ -590,7 +590,7 @@ export function pixelRatioForTier(perfTier: string | null | undefined, dpr?: num
   return String(perfTier) === "low" ? Math.min(1.5, base) : base;
 }
 
-/** 为什么只能到 2000m（HUD 要如实说出来，别让人以为是"我们不想给"） */
+/** 为什么只能到 2000m（HUD 要如实说出来，别让人以为是"不想给"） */
 export const WS_FETCH_R_LIMIT_WHY =
   "Overpass 公共实例实测：R=2000 起常 504、R=8000 会静默截断 ⇒ 远景改用预渲染瓦片";
 /** 实际可用的上限（策略与能力取小）—— 调用方只该用这个 */
@@ -764,7 +764,7 @@ export interface LodTileVerdict {
   fail: number | null;
   /**
    * 失败数的口径（同上）。
-   * 🔴 两个口径**看到的东西不一样**（读 vendored 源码确认）：
+   * 两个口径**看到的东西不一样**（读 vendored 源码确认）：
    *   · `cache` = 瓦片 `state === "errored"` —— **含 404**（`_loadTile` 的 catch 里先置状态）⇒ 这才是"真缺图"；
    *   · `events` = `map.on("error")` —— **收不到 404**（404 走的是 `this.update(...)`，不 fire）⇒ 会少报。
    * ⇒ 页面优先用 `cache`；拿不到 cache 时如实标 `events`，并另有 `absent`（清单对拍，确定性）。
@@ -794,7 +794,7 @@ export interface LodTileStates {
  *
  * 为什么**不能**直接报"命中 0"：`sourcedata` 事件在瓦片没加载完时一条都不来
  * ——那和"这张图不存在"是两件事（`AUDIT-STINK.md` 的判词纪律就是这么来的：
- * 当年把"数不出来"写成了"路网没画上"，机主屏幕上路明明在）。
+ * 当年把"数不出来"写成了"路网没画上"，用户屏幕上路明明在）。
  *
  * 证据优先级：**瓦片状态**（`states`，最硬）→ **事件计数**（`loaded`/`failed` 键表）→ `数不出来`。
  */
@@ -918,7 +918,7 @@ export function lodEventTileKey(e: unknown): string | null {
   return null;
 }
 
-/** 一张瓦片的**来源种类**（🔴 判词纪律：一张拼花里必须分得出哪张是真、哪张是占位） */
+/** 一张瓦片的**来源种类**（判词纪律：一张拼花里必须分得出哪张是真、哪张是占位） */
 export type LodTileKind = "real" | "placeholder" | "unknown";
 
 /** 清单里一条瓦片记录（**新格式**是对象；老格式是数字 = 字节数，视为 `placeholder`） */
@@ -1030,7 +1030,7 @@ export interface LodTileCacheMapLike {
 
 /**
  * 读**瓦片状态**（只读诊断口径，最硬的那条证据）。
- * 🔴 用 `getAllIds()`（视野里**全部**瓦片，含 `errored`）而不是 `getRenderableIds()`：
+ * 用 `getAllIds`（视野里**全部**瓦片，含 `errored`）而不是 `getRenderableIds`：
  *    读 vendored 源码确认后者只返回 `isRenderable()` 的瓦片 ⇒ **errored 会被漏掉**，
  *    那样"缺图数"永远是 0（把"数不出来"变成"确实没有"—— 判词纪律最防的那种误报）。
  *    404 的瓦片同样是 `state="errored"`（`_loadTile` 的 catch 里先置状态）⇒ 这一条能数出真缺图。
@@ -1092,7 +1092,7 @@ export function lodLiveVerdictOf(map: LodQueryMapLike | null | undefined): LodLi
     rendered = null;
   }
   try {
-    /* 退路：数据源要素（⚠️ 瓦片没加载完时会数出 0 ⇒ 不能当"没有"）
+    /* 退路：数据源要素（瓦片没加载完时会数出 0 ⇒ 不能当"没有"）
        一个源都查不到（还没建）⇒ 给 `null`（"数不出来"），**不是 0**。 */
     if ((rendered === null || rendered === 0) && typeof map.querySourceFeatures === "function") {
       let n = 0;
@@ -1131,7 +1131,7 @@ export function lodHudLine(input: {
   if (!input.enabled) return "🛰 LOD 未启用（URL 加 `?lod=1`；当前未建预渲染层）";
   const t = lodTierOf(input.zoom);
   const v = input.tiles;
-  /* 🔴 判词不许含糊（机主看到的可能是"一张拼花"）：**真 / 占位 / 缺** 三样分列，
+  /* 判词不许含糊（屏幕上的可能是"一张拼花"）：**真 / 占位 / 缺** 三样分列，
      不许只报一个"命中 N 张"（那样分不出哪张是真数据、哪张是骨架阶段的占位花纹）。 */
   const tileTxt =
     `瓦片 命中 ${lodNum(v.hit)}（口径=${v.hitGauge}） · 失败 ${lodNum(v.fail)}（口径=${v.failGauge}）` +
@@ -1146,20 +1146,20 @@ export function lodHudLine(input: {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   🎬 侧视角（近地平线）**倍率爆炸**的护栏 —— 机主 2026-09-21：「一下划不见」。
+   侧视角（近地平线）**倍率爆炸**的护栏 —— 2026-09-21 一下划不见。
 
    根因：pitch 越大，地面与视线越接近平行 ⇒ **同样的手指位移对应巨大的地面距离**。
    做法（与代拍页 `ws3dshow.html` 里那套**同一套数值**；这里是唯一真源，App 侧照它接线）：
      ① `maxPitch` 85 → 70（见上面的 `CAMERA_DEFAULTS`：能给天空，但到不了"只剩一条线"）；
      ② pitch > 55° 之后**按比例降拖动/滚轮速度**（MapLibre 的公开口子）；
      ③ 系数可被读出（HUD 自证：能看出护栏在不在工作）。
-   ⚠️ 触屏"捏合缩放"**没有** rate 口子（`touchZoomRotate` 不暴露）⇒ 那一项**没做**，如实记。
-   ⚠️ **为什么可以每次 pitch 变化都重设**（读过 vendored maplibre 源码才敢写）：
+   触屏"捏合缩放"**没有** rate 口子（`touchZoomRotate` 不暴露）⇒ 那一项**没做**，如实记。
+   **为什么可以每次 pitch 变化都重设**（读过 vendored maplibre 源码才敢写）：
      `dragPan.enable(o)` 是 `this._inertiaOptions = o || {}`（**无条件重写、没有"已启用就早退"**），
      而惯性在**手势结束时**才读：`this._inertia._onMoveEnd(this._map.dragPan._inertiaOptions)`；
      `scrollZoom.setWheelZoomRate(e)` 也只是 `this._wheelZoomRate = e`（滚轮时读）。
      ⇒ 重设**真的会生效**，不是空操作。
-   ⚠️ 本函数**幂等且容错**：地图半初始化 / 没挂这些句柄 / 抛错 ⇒ 只是这次护栏不生效，**绝不影响地图**。
+   本函数**幂等且容错**：地图半初始化 / 没挂这些句柄 / 抛错 ⇒ 只是这次护栏不生效，**绝不影响地图**。
    ══════════════════════════════════════════════════════════════════════════════ */
 export const PITCH_SOFT = 55;
 /** 未阻尼时的拖动惯性上限（MapLibre `dragPan` 的 `maxSpeed`，px/s 量级） */

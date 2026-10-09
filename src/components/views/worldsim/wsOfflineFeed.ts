@@ -1,7 +1,7 @@
 /**
  * wsOfflineFeed.ts —— App 侧的 **offline-first 取数管道**：离线包 → 累积仓库 → **一次** `setData`。
  *
- * ## 为什么有这一份（机主 2026-09-25 的三条真机反馈）
+ * ## 为什么有这一份（2026-09-25 的三条真机反馈）
  * 「**楼只有一块**」「**加载慢**」「**路时有时无**」——三条同源：App 侧一直在走"现场取数 + 整份替换"：
  *   · `/api/buildings` 一次只覆盖视野中心 **R≤2000m**（后端硬闸）且冷查 **27~33s**（最慢见过 91.7s）；
  *   · `/api/roads` 600m 冷查 **32.5s**，默认打一条必然撞超时 ⇒ 屏幕上就是"路没了"；
@@ -9,19 +9,19 @@
  * 而离线包是**静态文件**（`/bldbundle/<格>.json`、`/roadsbundle/<格>.json`）：快、可预期、不碰 Overpass。
  *
  * ## 这一份的边界（PR 标准：运行期逻辑只允许一份）
- * ✅ 这里放：按视野取格 → **串行**取数（每格**独立超时**）→ 并进累积仓库 → 淘汰 → 一次 flush。
- * 🔴 **判词 / 决策 / 半径 / 格子数学全在真源**，这里一个都不重写：
+ * 这里放：按视野取格 → **串行**取数（每格**独立超时**）→ 并进累积仓库 → 淘汰 → 一次 flush。
+ * **判词 / 决策 / 半径 / 格子数学全在真源**，这里一个都不重写：
  *   · `wsScene.bldLiveDecision()` / `roadsLiveDecision()` —— 默认发不发 `/api/*`；
  *   · `wsScene.bldVerdictText()` / `roadsVerdictText()` —— 三态判词；
  *   · `wsScene.fetchRadiusForView()` / `fetchRadiusLadder()` / `viewHalfMetersOf()` —— live 取数半径；
  *   · `wsFeatureStore.bldBundleCellsForView()` / `roadsBundleCellsForView()` / `createFeatureStore()` ——
  *     格键、格数学、去重与淘汰。
- * ⚠️ 代拍页 `public/ws3dshow.html` 里那套**内联**同类循环是**原型/试验台**的写法（页面 = 试验台）；
+ * 代拍页 `public/ws3dshow.html` 里那套**内联**同类循环是**原型/试验台**的写法（页面 = 试验台）；
  *   App 侧一律走这里，**不许在 `.vue` 里再抄一遍**（自检会钉）。
  *
  * ## 三态纪律
  * `facts()` 里的 `n` 是**数得出来才给数**：仓库缺符号/没有仓库 ⇒ `null`（判词会写「数不出来」），
- * **绝不写 0 冒充"这里没有"**。而 **包外（404）与失败分开计**：包外是"我们没这个包"，
+ * **绝不写 0 冒充"这里没有"**。而 **包外（404）与失败分开计**：包外是"没这个包"，
  * 不是"这里没有楼/没有路"（`ROUTE.md`：画面可以编，事实不许编）。
  */
 
@@ -29,12 +29,12 @@ import type { FeatureStore, LngLat } from "./wsFeatureStore";
 import {
   BLD_BUNDLE_CELL_DEG, PLACES_BUNDLE_CELL_DEG, ROADS_BUNDLE_CELL_DEG,
   bldBundleCellsForView, placesBundleCellsForView, roadsBundleCellsForView,
-  /* 🌊 水/绿地与别的包**同一套格数学**（`floor(x/deg)*deg`）；它没有自己的 `*BundleCellsForView`
+  /* 水/绿地与别的包**同一套格数学**（`floor(x/deg)*deg`）；它没有自己的 `*BundleCellsForView`
      包装（不加第二个名字 = 少一处能写歪的地方），直接在 `SPECS.gw.plan` 里传格边长。 */
   bundleCellsForView,
 } from "./wsFeatureStore";
 /* ⏱ 计时尺子（唯一一份，见 `wsPerfMeter`）：管道里"每格取多久 / 解析多久 / 并仓多久"必须可数，
-   否则机主那句「加载慢」只能靠感觉 —— 有了它，首屏能拆成"网络 vs 解析 vs 计算"三段。 */
+   否则用户那句「加载慢」只能靠感觉 —— 有了它，首屏能拆成"网络 vs 解析 vs 计算"三段。 */
 import { pmMark, pmNow, pmSetContext, pmSpan, pmTimeAsync } from "./wsPerfMeter";
 
 /**
@@ -53,9 +53,9 @@ function netBytesOf(url: string): number | null {
   } catch { return null; }
 }
 
-/* 🌊🌳 **水/绿地**也走同一条管道（2026-09-26「搬进 lingchat」）：它是**第四种离线包**，不是特例 ——
+/* **水/绿地**也走同一条管道（2026-09-26「搬进 lingchat」）：它是**第四种离线包**，不是特例 ——
    目录名 / 格尺寸 / 计划 / 解析 / 预算全在下面 `SPECS.gw` 里，于是"索引优先 / 串行取格 / 每格独立超时 /
-   包外与失败分开计"这些规矩**一份都不用再写**（机主选的方向是「自己画」：Esri 底图在这一带
+   包外与失败分开计"这些规矩**一份都不用再写**（选定的方向是「自己画」：Esri 底图在这一带
    两个服务都只给占位图，屏上就没有水也没有绿植）。 */
 export type BundleKind = "bld" | "roads" | "places" | "gw";
 
@@ -73,12 +73,12 @@ export const ROADS_BUNDLE_PER_REFRESH = 2;
 export const BLD_BUNDLE_MAX_CELLS = 6;
 export const ROADS_BUNDLE_MAX_CELLS = 8;
 /** 帧率护栏：仓库上限（超了按"离视野中心距离"淘汰）。与代拍页同值；真能画多少**只有真机可判**。 */
-/** 🏘 片区名的取数节奏/上限（点很稀、文件只有几 KB ⇒ 一次可以多取几格） */
+/** 片区名的取数节奏/上限（点很稀、文件只有几 KB ⇒ 一次可以多取几格） */
 export const PLACES_BUNDLE_PER_REFRESH = 4;
 export const PLACES_BUNDLE_MAX_CELLS = 6;
 export const PLACES_STORE_CAP = 3000;
-/* ══ 🏢 **楼房仓库上限**：机主 2026-09-26 拍板「远景容量放宽到 30000~50000 栋」═════════════
-   上限同时是**帧率护栏**的一半（另一半是保留半径）⇒ 不能拍脑袋加。实测（`~/chk/_cap_cost.mjs`，
+/* ══ **楼房仓库上限**：2026-09-26 已定「远景容量放宽到 30000~50000 栋」═════════════
+   上限同时是**帧率护栏**的一半（另一半是保留半径）⇒ 不能拍脑袋加。实测（上限代价测量脚本，
    真包 + 每档独立子进程 + gc；z13 样保留半径 14km，本机 aarch64）：
 
    | 上限   | 仓库占格 | heapUsed(稳态) | 淘汰/轮 | 挑楼(冷/热) | 画出去 | 视野内 |
@@ -98,7 +98,7 @@ export const PLACES_STORE_CAP = 3000;
    ⇒ **推荐值 30,000**（区间低端：+10.8MB 换 2.6 倍画出的楼，且挑楼比改前还快）；
      50,000 的边际收益只有 +27% 的格数，却要 ~3 倍的挑楼耗时。 */
 /**
- * 🧮 **一轮取数的字节预算**（默认 1.5MB）：格数不再是主要闸门 —— 细格包上一轮可以取十几格，
+ * **一轮取数的字节预算**（默认 1.5MB）：格数不再是主要闸门 —— 细格包上一轮可以取十几格，
  * 但"这一轮下多少字节"必须封顶（否则用户看到的就是"转圈半天"）。
  * 1.5MB 对老包（0.05°、单格中位 205KB / 最大 1.9MB）≈ 今天"一轮 2 格"的量级；
  * 对细格包（0.01°、单格中位 57KB）≈ 一轮十几到二十几格 ⇒ **同一条规则，两种粒度都对**。
@@ -108,9 +108,9 @@ export const BUNDLE_BYTES_PER_ROUND = 1.5 * 1048576;
 /** 一轮最多发几条格子请求（串行也有排队成本；细格包上"十几格"是合理的，几十条不是） */
 export const BUNDLE_REQ_PER_ROUND_MAX = 16;
 export const BLD_STORE_CAP = 30000;
-/** **实测推荐值**（机主给的区间低端）。改默认时要**页面与 App 一起改**（自检钉着"两处同值"）。 */
+/** **实测推荐值**（给定的区间低端）。改默认时要**页面与 App 一起改**（自检钉着"两处同值"）。 */
 export const BLD_STORE_CAP_RECOMMENDED = 30000;
-/** 机主给的上界（2026-09-26）：超过这个数不接受（再多人也看不完，内存先爆）。 */
+/** 给定的上界（2026-09-26）：超过这个数不接受（再多人也看不完，内存先爆）。 */
 export const BLD_STORE_CAP_MAX = 50000;
 /**
  * 把"想要的仓库上限"收进合法区间（**可配的唯一入口**：页面/App 都调它，别各自写 clamp）。
@@ -123,19 +123,19 @@ export function resolveBldStoreCap(requested?: number | null): number {
 }
 export const ROADS_STORE_CAP = 6000;
 
-/* 🌊🌳 水/绿地的**格边长**：0.05° —— 与 `public/gwbundle/*.json` 里每一格自报的 `cellSize` **实测一致**
-   （index 5 格 / 359 面）。🔴 这个数**只此一份**：前端算格键与"包自报口径"对拍都用它，
+/* 水/绿地的**格边长**：0.05° —— 与 `public/gwbundle/*.json` 里每一格自报的 `cellSize` **实测一致**
+   （index 5 格 / 359 面）。这个数**只此一份**：前端算格键与"包自报口径"对拍都用它，
    绝不允许"包里写多少就按多少算"（2026-09-25 那次 0.02/0.05 两套口径的事故，
    后果是把**有数据**的格说成「包外」—— 把有说成没有）。 */
-/* ══ 🔧 **两个耗时开关的默认值（唯一一份，两个宿主都不许再各写一遍）**════════════════════
-   机主 2026-09-26 硬指标：「**代拍页和 App 页完全一样**」，主对话拍板走
+/* ══ **两个耗时开关的默认值（唯一一份，两个宿主都不许再各写一遍）**════════════════════
+   2026-09-26 硬指标：「**代拍页和 App 页完全一样**」，主对话拍板走
    "同一实现 + 同一套参数 + **机器可查**的一致性检查"。
    这两个开关原来只由**页面**显式传（300 / 3），而 App 那两处 `createBundleFeed` 没传
    ⇒ App 实际是 **0 / 0（全关）**，与页面**不一致**（实测对照见
    `world_map/PERF-20260926b-capacity-and-fetch-plan.md` §⑥）。
    ⇒ 默认值搬到这里，**两个宿主都不再传**：由**构造**保证一致，且可用
    `feed.facts().coalesce.ms` / `feed.facts().cache.maxCells` **机器核**。
-   ⚠️ 逃生门不变：显式传 `0` 仍然是"关"（`??` 只替换 null/undefined，不吞 0）。 */
+   逃生门不变：显式传 `0` 仍然是"关"（`??` 只替换 null/undefined，不吞 0）。 */
 /** flush 合并窗口的默认值（ms）；`0` = 关（逐批 flush，老行为） */
 export const DEFAULT_FLUSH_COALESCE_MS = 300;
 /** 已解析要素缓存的默认格数；`0` = 关 */
@@ -154,7 +154,7 @@ export const GW_STORE_CAP = 4000;
 
 /**
  * 一格包的 URL。`kind` → 目录名，**一律查 `SPECS`**（三个包一套规则）。
- * 🔴 2026-09-25 真踩到：这里原来是 `kind === "bld" ? "bldbundle" : "roadsbundle"` 的**三元**
+ * 2026-09-25 真踩到：这里原来是 `kind === "bld" ? "bldbundle" : "roadsbundle"` 的**三元**
  * ⇒ 加了 `"places"` 之后，片区名的格子被拼成 `/roadsbundle/…`：请求发到了**路的包**，
  * 解析出来 0 个点（HUD 上看着像"包是空的"），而 `fetchLog` 里根本没有 `/placesbundle/`。
  * ⇒ 教训：**新加一种包时，凡是有"目录名"的地方都必须走同一张表**（自检里现在钉着这条）。
@@ -176,9 +176,9 @@ export function bundleIndexUrl(kind: BundleKind, dir?: string): string {
 }
 
 /**
- * 📦 **一种包可以有几个候选目录**（按优先级）：先来的先用，索引读不到就退下一个。
+ * **一种包可以有几个候选目录**（按优先级）：先来的先用，索引读不到就退下一个。
  *
- * 为什么需要（2026-09-26，机主拍板「按视野取格/分片」）：分片后**格尺寸会变小**（0.05° → 0.01°），
+ * 为什么需要（2026-09-26，按视野取格/分片）：分片后**格尺寸会变小**（0.05° → 0.01°），
  * 而"老包是唯一被端到端验过的一版"（App / 城市包 / 代拍页都在吃它）⇒ **两版必须能并存**：
  * 新版放自己的目录、索引里自报 `cellSize`，客户端**按索引里的数算格键**（不再写死），
  * 老包还在就继续能跑。真要指定目录：`?bdir=<名字>`（排查/A-B 用）。
@@ -203,12 +203,12 @@ export interface BundleResponse {
   ok: boolean;
   json(): Promise<unknown>;
   /**
-   * 🕒 **可选**：原始文本（给了它，管道就能把"读流"与"`JSON.parse`"**分开计时**）。
+   * **可选**：原始文本（给了它，管道就能把"读流"与"`JSON.parse`"**分开计时**）。
    *
    * 为什么值得拆（2026-09-26）：浏览器 A/B 里 `r.json()` 那一项只 −26%、纯 Node 是 −83% ——
    * 因为 `r.json()` **把读响应流和解析算在一起**，两个环境读流的成本差很多 ⇒ 对外报数会含糊。
    * 拆开之后才敢说"**纯解析**省了多少"。
-   * ⚠️ 不给这个方法的适配器（例如 App 宿主现在那份）**照旧走 `json()`**，行为不变。
+   * 不给这个方法的适配器（例如 App 宿主现在那份）**照旧走 `json`**，行为不变。
    */
   text?(): Promise<string>;
 }
@@ -274,12 +274,12 @@ function num(v: unknown): number | null {
 
 /**
  * 一格**楼房**包 → 要素。
- * 请求字段（见 `world_map/export_bld_bundle.py`）：`i` 短 id / `p` 各块外环 / `h` 真高(米) /
+ * 请求字段（见 离线数据生成脚本）：`i` 短 id / `p` 各块外环 / `h` 真高(米) /
  * `f` 层数 / `c` 类型 / `n` 名字。包里**全是 Overture 真脚印**（real，ODbL）。
  */
 export function bundleBuildingsOf(json: unknown): BundleBuildingFeature[] {
   const arr = (json as { bld?: unknown } | null)?.bld;
-  /* 🔴 缺 `bld` 字段 = **包坏了/取错了** ⇒ 抛错记 failed（可见）；空数组才是"这格确实 0 栋" */
+  /* 缺 `bld` 字段 = **包坏了/取错了** ⇒ 抛错记 failed（可）；空数组才是"这格确实 0 栋" */
   if (!Array.isArray(arr)) throw new Error("bldbundle 里没有 bld 数组");
   const out: BundleBuildingFeature[] = [];
   for (const raw of arr) {
@@ -351,8 +351,8 @@ export function bundleRoadsOf(json: unknown): BundleRoadFeature[] {
   return out;
 }
 
-/* ══ 🌊🌳 **水/绿地**：一格包 → 要素（与代拍页抽共享前那段内联代码**逐字同口径**） ═══════════
-   包里的形状（见 `world_map/gw_bundle.py`）：`{ key, cellSize, source, attribution, f: [{k, r, n}] }`
+/* ══ **水/绿地**：一格包 → 要素（与代拍页抽共享前那段内联代码**逐字同口径**） ═══════════
+   包里的形状（见 离线数据生成脚本）：`{ key, cellSize, source, attribution, f: [{k, r, n}] }`
      · `k` = `"water"` / `"green"`（**只认 water，其余一律算绿地** —— 与页面原实现同一条判断）；
      · `r` = 环数组；**扁形** = 一环一个要素（多边形），**嵌套形** = `[[外环, 洞…]]` 一组一个要素；
      · `n` = 名字（可空 —— 名字取不到就不编，填空）。
@@ -380,9 +380,9 @@ function closeRing(ring: number[][]): number[][] {
 export function bundleGwOf(json: unknown): BundleGwFeature[] {
   const j = json as { key?: unknown; cellSize?: unknown; f?: unknown } | null;
   const arr = j?.f;
-  /* 🔴 缺 `f` 字段 = **包坏了/取错了** ⇒ 抛错记 failed（可见）；空数组才是"这格确实没有水/绿" */
+  /* 缺 `f` 字段 = **包坏了/取错了** ⇒ 抛错记 failed（可）；空数组才是"这格确实没有水/绿" */
   if (!Array.isArray(arr)) throw new Error("gwbundle 里没有 f 数组");
-  /* 🔴 **单格口径对拍**：索引那一层已经拦过一次（`wsGwLayer`），这里再拦一次 ——
+  /* **单格口径对拍**：索引那一层已经拦过一次（`wsGwLayer`），这里再拦一次 ——
      因为"索引是旧的、格子文件被按新格尺寸重导过"这种情况只有逐格看才看得见。 */
   const cs = j?.cellSize;
   if (cs !== undefined && cs !== null && Math.abs(Number(cs) - GW_BUNDLE_CELL_DEG) > 1e-9) {
@@ -416,12 +416,12 @@ export function bundleGwOf(json: unknown): BundleGwFeature[] {
   return out;
 }
 
-/** 🌊 水/绿要素的 id（`bundleGwOf` 已经给了稳定 id；没有就返回 null ⇒ 仓库如实计 `noId`） */
+/** 水/绿要素的 id（`bundleGwOf` 已经给了稳定 id；没有就返回 null ⇒ 仓库如实计 `noId`） */
 export function gwIdOf(f: BundleGwFeature): string | null {
   return f && f.id ? String(f.id) : null;
 }
 
-/** 🌊 水/绿要素的代表点：**外环**各点平均（淘汰按"离视野中心多远"；取不到 ⇒ null，不参与淘汰也不丢） */
+/** 水/绿要素的代表点：**外环**各点平均（淘汰按"离视野中心多远"；取不到 ⇒ null，不参与淘汰也不丢） */
 export function gwPointOf(f: BundleGwFeature): LngLat | null {
   const ring = f?.geometry?.coordinates?.[0];
   if (!Array.isArray(ring) || !ring.length) return null;
@@ -435,7 +435,7 @@ export function gwPointOf(f: BundleGwFeature): LngLat | null {
 /* ══ 仓库的去重键 / 代表点（`createFeatureStore` 只吃这三个参数 —— 合并与淘汰规则不在这里） ══ */
 
 /** 楼房：稳定 id（取不到返回 null ⇒ 仓库如实计 `noId`，不去重也不丢） */
-/** 🏘 离线片区名包里的一条（`{n: 名字, k: place 类型, p: [lng,lat], i: 稳定 id}`） */
+/** 离线片区名包里的一条（`{n: 名字, k: place 类型, p: [lng,lat], i: 稳定 id}`） */
 export interface BundlePlaceFeature {
   n: string;
   k: string;
@@ -444,7 +444,7 @@ export interface BundlePlaceFeature {
 }
 
 /**
- * 解析片区名包。🔴 **没有名字的一条都不留**（`ROUTE.md` 铁律：缺名字就不显示、**绝不编**）；
+ * 解析片区名包。**没有名字的一条都不留**（`ROUTE.md` 铁律：缺名字就不显示、**绝不编**）；
  *    类型不认得的也留着（由 `wsLabels.placeTierOf` 决定显不显示 —— 这里不替它做判断）。
  */
 export function bundlePlacesOf(json: unknown): BundlePlaceFeature[] {
@@ -478,14 +478,14 @@ export function bldIdOf(f: BundleBuildingFeature): string | null {
   return id ? String(id) : null;
 }
 /**
- * 🔁 **代表点按要素对象记忆一次**（2026-09-26 性能实测）。
+ * **代表点按要素对象记忆一次**（2026-09-26 性能实测）。
  *
  * 为什么：`pointOf` 是仓库**淘汰**（`retainNear`）与**挑楼**都要用的回调，每次都得把外环顶点扫一遍求质心；
  * 而淘汰是**每一轮 flush 都跑一次全仓**（12,000~50,000 栋）⇒ 实测淘汰合计 **1.8~3.7s**（10 轮），
  * 是仅次于 `JSON.parse` 的一块。与 `wsBuildingPick.derivedOf` 同一套理由与前提：
  * **要素进仓库之后是只读的**（几何在解析时建好，之后没人原地改）⇒ 这个值只跟要素自身有关。
  * 用 **WeakMap** 记：不给要素加属性（不会被 `setData`/序列化带出去）、不阻止回收、不占生命周期。
- * 🔴 与挑楼那份缓存**不共用**：仓库淘汰按"到视野中心的距离"需要代表点，挑楼按"外环首点"分块，
+ * 与挑楼那份缓存**不共用**：仓库淘汰按"到视野中心的距离"需要代表点，挑楼按"外环首点"分块，
  * 两者口径不同（本文件早先就写明了"代表点 ≠ 首点"），别混成一个。
  */
 const PT_CACHE = new WeakMap<object, LngLat | null>();
@@ -531,12 +531,12 @@ export function roadsPointOfRaw(f: BundleRoadFeature): LngLat | null {
 
 interface BundleKindSpec<T> {
   dir: string;
-  /** 📦 候选目录（按优先级）：索引读不到就退下一个 ⇒ **不同格尺寸的包能并存**（老包不删也能跑）。 */
+  /** 候选目录（按优先级）：索引读不到就退下一个 ⇒ **不同格尺寸的包能并存**（老包不删也能跑）。 */
   dirs?: string[];
   /**
-   * 🔴 **兜底**格边长（**只在包自己没报 `cellSize` 时用**）。
+   * **兜底**格边长（**只在包自己没报 `cellSize` 时用**）。
    *
-   * 2026-09-26 改（机主拍板分片）：**格尺寸以 `index.json.cellSize` 为准**，不再拿这个常量去算格键。
+   * 2026-09-26 改（已定分片）：**格尺寸以 `index.json.cellSize` 为准**，不再拿这个常量去算格键。
    * 历史教训（2026-09-25）：包按 0.02 分格、前端按 0.05 算键 ⇒ 格键与索引零交集 ⇒
    * 每个格都被判"包外" ⇒ **把有数据说成没数据**。当时靠"两边同值 + 不一致就拒绝"防住；
    * 现在分片会让格尺寸**故意**变小 ⇒ 防线改成两条：
@@ -545,13 +545,13 @@ interface BundleKindSpec<T> {
    *      **仍然拒绝取数**并写 `sizemismatch`（"说成包外"这条路永远不许走）。
    */
   cellDeg: number;
-  /* 🔴 **格尺寸政策（2026-09-26 定案，别再改回去）**：**本管道（bld / roads / places）一律以包自报的 `index.json.cellSize` 为准**（⚠️ 范围仅限本管道：水/绿地在 `wsGwLayer` 里有自己的常量关卡） ——
+  /* **格尺寸政策（2026-09-26 定案，别再改回去）**：**本管道（bld / roads / places）一律以包自报的 `index.json.cellSize` 为准**（范围仅限本管道：水/绿地在 `wsGwLayer` 里有自己的常量关卡） ——
      0.05 / 0.02 / 0.01 的包都能跑（分片包 `bldbundle-002` 就是 0.01°）。
      唯一的防线是**调用方显式钉**（`BundleFeedOptions.expectCellDeg`；页面用 `?cell=` 给）：
      钉住的值与包不符 ⇒ **拒绝取数**（`sizemismatch`），绝不把"有数据"说成「包外」。
-     ⚠️ **已知缺口（如实记着）**：换了 index 却没换格子文件（或反过来）时，自报口径会自洽地算错键 ⇒
+     **已知缺口（如实记着）**：换了 index 却没换格子文件（或反过来）时，自报口径会自洽地算错键 ⇒
      表现是「包外」而不是报错；要防它只能**显式钉**（或将来给索引加"逐格尺寸自证"）。
-     ⚠️ 2026-09-30 我一度加过"逐目录隐式钉真值"——那等于把这条政策改回去，且会误杀合法分片包 ⇒ **已撤回**。 */
+     2026-09-30 加过"逐目录隐式钉真值"——那等于把这条政策改回去，且会误杀合法分片包 ⇒ **已撤回**。 */
   plan: (bounds: BundleBoundsLike | null, center: { lng: number; lat: number } | null, maxCells: number, sizeDeg: number) => {
     cells: Array<{ key: string; w: number; s: number }>;
     wanted: number;
@@ -569,7 +569,7 @@ interface BundleKindSpec<T> {
 const SPECS = {
   bld: {
     dir: "bldbundle",
-    /* 📦 **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
+    /* **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
        不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
     dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
@@ -600,7 +600,7 @@ const SPECS = {
     sourceKey: (k: string) => `bundle:${k}`,
     unit: "条",
   } as unknown as BundleKindSpec<BundleRoadFeature>,
-  /* 🌊🌳 **水/绿地**（第四种包）：目录 `gwbundle`、格边长 `GW_BUNDLE_CELL_DEG`（= 0.05°）、
+  /* **水/绿地**（第四种包）：目录 `gwbundle`、格边长 `GW_BUNDLE_CELL_DEG`（= 0.05°）、
      计划走**同一个** `bundleCellsForView` —— 也就是说"取哪些格"与楼/路/片区名是同一套格数学，
      差别只有"格边长"这一个参数（口径要漂就一起漂，不会各漂一半）。 */
   gw: {
@@ -630,41 +630,41 @@ export interface BundleFeedFacts {
   wanted: number | null;
   /** 这一轮计划是不是被 `maxCells` 截过 */
   capped: boolean;
-  /** 🔴 **口径不符 ⇒ 本轮拒绝取数**（`index.cellSize` ≠ 前端常量）：既不取格、也不写 `missing`。
+  /** **口径不符 ⇒ 本轮拒绝取数**（`index.cellSize` ≠ 前端常量）：既不取格、也不写 `missing`。
    *  为什么不能"退回试格子"：0.05 的键在 0.02 的包里**一个都不存在** ⇒ 全 404 ⇒ 照样把有数据说成包外。 */
   refused: boolean;
   /** **实际生效**的格边长（度）：包自报 `cellSize` 优先；包没报才用兜底常量 */
   cellDeg: number;
   /** 调用方**显式钉住**的格边长（`expectCellDeg`；没钉 ⇒ null）—— 与 `cellDeg` 不同就意味着已拒绝取数 */
   cellDegPin: number | null;
-  /** 🧷 **实际拿去对拍**的期望格边长（= 调用方**显式钉**的值；没钉 = null）—— 判词里的「前端 X°」念它 */
+  /** **实际拿去对拍**的期望格边长（= 调用方**显式钉**的值；没钉 = null）—— 判词里的「前端 X°」念它 */
   cellDegExpect: number | null;
   /** 这一场真正在用的包目录（多候选里选中的那个） */
   dir: string;
   /** 候选目录（按优先级）—— HUD 要能回答"为什么用的是这个目录" */
   dirs: string[];
-  /** 📐 **跟着格尺寸走的预算**（格越细，计划格数/一轮请求数越大；但**字节**由 `bytesPerRound` 封顶） */
+  /** **跟着格尺寸走的预算**（格越细，计划格数/一轮请求数越大；但**字节**由 `bytesPerRound` 封顶） */
   budget: { cellDeg: number; scale: number; maxCells: number; perRefresh: number; bytesPerRound: number };
-  /** 🗂 包里那张**索引**（`index.json`）的实况 —— HUD 要能回答"包外是读来的还是猜的" */
+  /** 包里那张**索引**（`index.json`）的实况 —— HUD 要能回答"包外是读来的还是猜的" */
   index: { state: "未读" | "读取中" | "已读" | "失败" | "口径不符"; cells: number | null; keys: number | null;
            why: string | null; attribution: string | null; real: boolean | null; cellSize: number | null };
   /** 累计并进仓库的要素数 */
   got: number;
   /** 有没有为这一种包**真的计划过取数**（false ⇒ HUD 写"未取"，而不是编一个 0） */
   asked: boolean;
-  /** 🔴 **被淘汰连累而作废、下一轮会重取的格数**（历史累计）。
+  /** **被淘汰连累而作废、下一轮会重取的格数**（历史累计）。
    *  为什么可数：这是"楼没了"的修复代价 —— 每次作废都意味着可能再来一次下载（有解析缓存则只并内存）。 */
   evictedSources: number;
-  /** ♻️ 已解析要素缓存实况（关着时 `maxCells=0`、命中恒 0 —— **不写"数不出来"**，因为它真是 0） */
+  /** 已解析要素缓存实况（关着时 `maxCells=0`、命中恒 0 —— **不写"数不出来"**，因为它真是 0） */
   cache: { cells: number; feats: number; hits: number; maxCells: number };
-  /** 🧊 flush 合并窗口实况（`ms=0` = 老行为：逐批 flush） */
+  /** flush 合并窗口实况（`ms=0` = 老行为：逐批 flush） */
   coalesce: { ms: number; merged: number };
 }
 
 export interface BundleRefreshReport {
   /** 视野算不出格（bounds 拿不到）⇒ 什么都没做 */
   planned: boolean;
-  /** 🔴 格尺寸口径不符 ⇒ **拒绝取数**（一个格都没取，也没写"包外"） */
+  /** 格尺寸口径不符 ⇒ **拒绝取数**（一个格都没取，也没写"包外"） */
   refused?: boolean;
   /** 这次真的取了几格 */
   batch: number;
@@ -680,13 +680,13 @@ export interface BundleFeed<T> {
   /** 视野需要的格（自检/面板回证用；不取数） */
   plan(): { keys: string[]; wanted: number; capped: boolean } | null;
   /**
-   * 🗂 **这一场那条 `index.json` 读取**（= `refresh()` 内部用的**同一条在飞 promise**，已读则直接回缓存）。
+   * **这一场那条 `index.json` 读取**（= `refresh` 内部用的**同一条在飞 promise**，已读则直接回缓存）。
    *
    * 给谁用：需要"先看索引再决定取不取数"的宿主（`wsGwLayer`：格尺寸对拍 / 缺色 / 格键计划都要在取数**之前**
    * 拿到索引）。**宿主必须用它**，不许自己再 `loadBundleIndex()` 一遍 ——
    * 2026-10-01 性能审计 F6 实测：`gwbundle/index.json` 被取两次，就是"宿主一条 + 管道一条"造成的。
    *
-   * ⚠️ **纯读取入口**：不改判词、不改去重、不改目录候选顺序（仍是 `dirsOf(spec)` 逐个试、第一个读出
+   * **纯读取入口**：不改判词、不改去重、不改目录候选顺序（仍是 `dirsOf(spec)` 逐个试、第一个读出
    * `cells` 的目录为"活目录"）。不使用它的宿主行为**逐字节不变**。
    */
   ensureIndex(): Promise<BundleIndexFact>;
@@ -703,34 +703,34 @@ export interface BundleFeedOptions<T> {
   /** 淘汰半径（米）：保留"视野外一圈" ⇒ 来回挪地图不该反复重取 */
   retainRadiusM: () => number;
   /**
-   * 📐 **显式钉住的格尺寸（度）**：给了它，而包自报的 `cellSize` 与它不同 ⇒ **拒绝取数**并写
+   * **显式钉住的格尺寸（度）**：给了它，而包自报的 `cellSize` 与它不同 ⇒ **拒绝取数**并写
    * `sizemismatch`（="把有数据说成包外"那条路永远不许走）。
    * 不给 ⇒ **按包自报的算**（0.05 / 0.02 / 0.01 的包都能跑）—— 这是 2026-09-26 分片改造后的默认。
    * 用途：`?cell=` 显式比对、自检里对拍两种包、以及将来"页面按哪个尺寸挑选"要对齐时。
    */
   expectCellDeg?: number | null;
-  /** 🧮 一轮取数的**字节预算**（默认 `BUNDLE_BYTES_PER_ROUND` = 1.5MB）；<=0 ⇒ 只看格数 */
+  /** 一轮取数的**字节预算**（默认 `BUNDLE_BYTES_PER_ROUND` = 1.5MB）；<=0 ⇒ 只看格数 */
   bytesPerRound?: number;
   /** 失败原文（给 HUD/面板 —— 不静默空着） */
   onError?: (why: string) => void;
   /**
-   * 🧊 **flush 合并窗口（ms）**：窗口内到齐的几批**只 flush 一次**（默认 `0` = 老行为，逐批 flush）。
+   * **flush 合并窗口（ms）**：窗口内到齐的几批**只 flush 一次**（默认 `0` = 老行为，逐批 flush）。
    *
-   * 为什么（2026-09-26 实测，`~/chk/_perf_base2.json`）：`flush` 是这条管道最贵的一段 ——
+   * 为什么（2026-09-26 实测，性能基线记录）：`flush` 是这条管道最贵的一段 ——
    * 页面侧一次 flush = **全仓库** `setData`（路实测中位 **637ms**、楼 **253ms**），
    * 而一次变焦会连着到好几批 ⇒ 同一份全量数据被反复交给 MapLibre（k 批 ⇒ 约 k²/2 份）。
    * 合并窗口把"到齐就画"改成"稍微等一下一起画"：**画出来的最终内容一模一样**，只是少做几次全量搬运。
-   * ⚠️ 窗口越大越省，但"楼出现"的延迟也越大 ⇒ 建议 200~400ms。
-   * 🔧 **不传 = `DEFAULT_FLUSH_COALESCE_MS`（300ms）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
+   * 窗口越大越省，但"楼出现"的延迟也越大 ⇒ 建议 200~400ms。
+   * **不传 = `DEFAULT_FLUSH_COALESCE_MS`（300ms）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
    */
   flushCoalesceMs?: number;
   /**
-   * ♻️ **已解析要素缓存（最多几格）**：淘汰之后回头再取同一格时，**直接从内存里拿**，
+   * **已解析要素缓存（最多几格）**：淘汰之后回头再取同一格时，**直接从内存里拿**，
    * 不重新下载、更不重新 `JSON.parse`（实测单格 1.78MB / 解析中位 350ms）。
    *
    * 为什么需要：仓库有上限（楼 12,000 栋 ≈ 2~4 格），一格被淘汰后回头就是一次完整的"下载 + 解析"。
-   * ⚠️ 这是**拿内存换时间**：以本机实测的楼包为例，一格 ≈ 3,000~11,000 个要素 ⇒ 建议 2~3 格封顶。
-   * 🔧 **不传 = `DEFAULT_PARSED_CACHE_CELLS`（3 格）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
+   * 这是**拿内存换时间**：以实测的楼包为例，一格 ≈ 3,000~11,000 个要素 ⇒ 建议 2~3 格封顶。
+   * **不传 = `DEFAULT_PARSED_CACHE_CELLS`（3 格）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
    */
   parsedCacheCells?: number;
 }
@@ -738,7 +738,7 @@ export interface BundleFeedOptions<T> {
 /**
  * 建一条离线包管道。
  *
- * 🔴 三条硬性质（自检逐条钉住）：
+ * 三条硬性质（自检逐条钉住）：
  *   ① **串行**：一次 refresh 里一格一格取（并发峰值 = 1），且**只打离线包**（不含 `/api/`）；
  *   ② **换视野要素数不减**：新数据是 `merge` 进仓库（去重并集），淘汰只丢"视野外一圈"与超上限的；
  *   ③ **并发刷新不重取同一格**：正在取时再来一次 ⇒ 只记一次"待补"，不重复下载（省流量、也不重复计数）。
@@ -755,7 +755,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   let asked = false;
   let busy = false;
   let queued = false;
-  /* 🗂 **索引优先**（父代理 2026-09-25 体检：index 早就生成了，页面却从不请求、靠试 404 猜）：
+  /* **索引优先**（2026-09-25 体检：index 早就生成了，页面却从不请求、靠试 404 猜）：
      先读一次 `<包>/index.json` ⇒ 只对"索引里有的格"发请求；索引里没有的格直接记 `missing`（**包外**，
      零请求、且是**读来的事实**）。索引取不到 ⇒ **如实退回**试格子（`indexState="失败"`，HUD 写出来）。 */
   let refused = false;
@@ -767,15 +767,15 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   let indexState: "未读" | "读取中" | "已读" | "失败" | "口径不符" = "未读";
   let indexWhy: string | null = null;
   let indexPromise: Promise<BundleIndexFact> | null = null;
-  /* 🧷 这一场**钉住的期望格尺寸**（= 调用方显式钉；**没有隐式钉**（曾有一版「逐目录真值」，已撤回））——
+  /* 这一场**钉住的期望格尺寸**（= 调用方显式钉；**没有隐式钉**（曾有一版「逐目录真值」，已撤回））——
      回证里要看得见"到底拿哪个数去对的"，判词里的「前端 X°」也念它（不能拿包自报的那个数冒充期望值）。 */
   let pinDeg: number | null = null;
 
-  /* ══ 🧊 flush 合并窗口（默认 0 = 老行为；见 `BundleFeedOptions.flushCoalesceMs`） ═══════════
+  /* ══ flush 合并窗口（默认 0 = 老行为；见 `BundleFeedOptions.flushCoalesceMs`） ═══════════
      为什么需要：一次 flush = 页面把**整个仓库**再交给 MapLibre 一次（路实测中位 637ms）。
      一次变焦会连着到好几批 ⇒ 同一份全量数据被搬 k 次（k 批时累计搬运量 ≈ k²/2 格）。
      合并窗口把"到齐就画"变成"稍等一起画"：**最终画面一模一样**，只是少搬几次。
-     ⚠️ 窗口里只保留**一条** pending 记录（把 why 串起来），不做队列 —— 队列会让延迟无界。 */
+     窗口里只保留**一条** pending 记录（把 why 串起来），不做队列 —— 队列会让延迟无界。 */
   const coalesceMs = Math.max(0, Math.floor(Number(
     opts.flushCoalesceMs === undefined || opts.flushCoalesceMs === null ? DEFAULT_FLUSH_COALESCE_MS : opts.flushCoalesceMs,
   )));
@@ -792,7 +792,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   }
   /**
    * 请求 flush：窗口为 0 ⇒ 立即（与老行为逐字节相同）；否则并进窗口。
-   * 🔴 **第一条不并**（`flushDone === 0`）：开页那一格是"首屏能不能看见楼"的关键路径，
+   * **第一条不并**（`flushDone === 0`）：开页那一格是"首屏能不能看见楼"的关键路径，
    * 合并窗口会白白把它推迟一个窗口（实测 300ms）。首屏要快、后面才谈省。
    */
   function requestFlush(why: string): void {
@@ -806,7 +806,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     }, coalesceMs);
   }
 
-  /* ══ ♻️ 已解析要素缓存（默认 0 = 关；见 `BundleFeedOptions.parsedCacheCells`） ═══════════════
+  /* ══ 已解析要素缓存（默认 0 = 关；见 `BundleFeedOptions.parsedCacheCells`） ═══════════════
      只缓存"取到并解析成功"的格子要素；**已经解析过的东西不该因为仓库淘汰而重来一遍**
      （实测单格 1.78MB / `JSON.parse` 中位 350ms）。Map 的插入序当 LRU 用（取用即刷新）。 */
   const cacheCells = Math.max(0, Math.floor(Number(
@@ -842,7 +842,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     if (indexPromise) return indexPromise;
     indexState = "读取中";
     /* ⏱ `index.json` 是**第一跳**（没有它连"哪些格存在"都不知道）⇒ 单独记时，别混进格子账里。
-       📦 **按候选目录逐个试**（`dirsOf`）：第一个能读出索引的目录就是这一场的"活目录" ⇒
+       **按候选目录逐个试**（`dirsOf`）：第一个能读出索引的目录就是这一场的"活目录" ⇒
        新细格包与老包**能并存**，谁在就用谁，页面/App 都不用改。 */
     const dirs = dirsOf(spec);
     indexPromise = (async (): Promise<BundleIndexFact> => {
@@ -855,17 +855,17 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         if (!f.cells) continue;                       // 这个目录没索引 ⇒ 试下一个
         activeDir = d;
         indexFact = f;
-        /* 🔴 **格尺寸以包自报的 `cellSize` 为准**（2026-09-26 分片改造）：
+        /* **格尺寸以包自报的 `cellSize` 为准**（2026-09-26 分片改造）：
            包按 0.05 / 0.02 / 0.01 分格都能跑，**不再拿前端常量去算格键** ——
            2026-09-25 那次"包 0.02 / 前端 0.05 ⇒ 格键零交集 ⇒ 把有数据说成包外"就是写死造成的。
            防线改成"**显式钉住的尺寸**对不上才拒绝"（见下），兜底常量只在包**没报**时用。 */
-        /* ⚠️ **坏值也算"没报"**：`cellSize: null` 经 `Number(null)` 会变 **0**（自检⑧D 抓到的坑），
+        /* **坏值也算"没报"**：`cellSize: null` 经 `Number(null)` 会变 **0**（自检⑧D 抓到的坑），
            而 0 会让格键计算除零 ⇒ **一个格都取不到**（比报错更难查）⇒ 只有"有限且 > 0"才算包自报。 */
         const rawSize = f.cellSize;
         const pkg = (typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0) ? rawSize : null;
         effCellDeg = (pkg === null ? spec.cellDeg : pkg);
-        /* 🔴 钉住的期望值 = **只有调用方显式钉**（`?cell=` / 自检）；政策见 `cellDeg` 那段注释（不设隐式钉）。
-           ⚠️ `Number(null)` 是 **0**（有限值）⇒ 必须用 `> 0` 挡掉，否则"没钉"会被当成"钉了 0°"（老坑）。 */
+        /* 钉住的期望值 = **只有调用方显式钉**（`?cell=` / 自检）；政策见 `cellDeg` 那段注释（不设隐式钉）。
+           `Number(null)` 是 **0**（有限值）⇒ 必须用 `> 0` 挡掉，否则"没钉"会被当成"钉了 0°"（老坑）。 */
         const callerPin = Number(opts.expectCellDeg);
         const pin = (Number.isFinite(callerPin) && callerPin > 0) ? callerPin : NaN;
         pinDeg = Number.isFinite(pin) ? pin : null;
@@ -884,7 +884,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
           return f;
         }
         if (Number.isFinite(pin) && Math.abs(pkg - pin) > 1e-9) {
-          /* 🔴 **口径对拍**（2026-09-25 事故的硬化，保留）：调用方**显式钉了**期望尺寸而包不符 ⇒
+          /* **口径对拍**（2026-09-25 事故的硬化，保留）：调用方**显式钉了**期望尺寸而包不符 ⇒
              键集与索引**零交集** ⇒ 若不拦，每个格都会被"读"成包外 —— 那是**把有数据说成没数据**。
              ⇒ **拒绝取数**（不取格、不写 missing），两个数字与目录名都写进 HUD/errs。 */
           indexState = "口径不符";
@@ -911,7 +911,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   /** 这一场**实际按多少度分格**（包自报优先；索引还没读到 ⇒ 兜底常量） */
   function effectiveDeg(): number { return effCellDeg === null ? spec.cellDeg : effCellDeg; }
 
-  /* ══ 📐 **预算跟着格尺寸走**（2026-09-26 分片改造）══════════════════════════════════════
+  /* ══ **预算跟着格尺寸走**（2026-09-26 分片改造）══════════════════════════════════════
      粗格（0.05°）时"一轮 2 格 / 计划 6 格"是合适的；格变细 25 倍之后，同样的**格数**只盖住 1/25 的视野 ——
      照抄格数会变成"一格一格慢慢啃"。而用户感知的成本是**字节**，不是格数。
      ⇒ 三个量都按"格面积的倒数"放大（`scale = (0.05/deg)²`），**并以字节为最终闸门**：
@@ -940,15 +940,15 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     return {
       n, have: have.size, missing: missing.size, failed: failed.size,
       pending, cap, wanted, capped, got, asked,
-      /* 🧷 钉住的值走**同一套校验**（有限且 > 0）—— 复核代理 2026-10-01 抓到：旧写法用
+      /* 钉住的值走**同一套校验**（有限且 > 0）——  2026-10-01 抓到：旧写法用
          `Number(opts.expectCellDeg)`，`?cell=0` 时 `Number(null)===0` 会被当成合法值 ⇒
          facts 里印「钉 0°」而 `cellDegExpect=null`，同一条回证自相矛盾。 */
       refused: refused, cellDeg: effectiveDeg(), cellDegPin: pinDeg,
-      /* 🧷 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
+      /* 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,
       dir: activeDir || dirsOf(spec)[0], dirs: dirsOf(spec),
-      /* 📐 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
+      /* 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
       budget: { cellDeg: effectiveDeg(), scale: Math.round(scaleOf() * 100) / 100, maxCells: maxCellsEff(), perRefresh: perRefreshEff(), bytesPerRound: Math.round(bytesThisRound) },
       evictedSources,
       cache: cacheStats(),
@@ -966,7 +966,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   }
 
   /**
-   * 视野需要哪些格。⚠️ `feed.plan()` 是**同步**的（页面/探针要随手读）⇒ 它用"当前已知的格尺寸"
+   * 视野需要哪些格。`feed.plan` 是**同步**的（页面/探针要随手读）⇒ 它用"当前已知的格尺寸"
    * （索引已读 ⇒ 包自报的；还没读 ⇒ 兜底常量）。**取数那条路（`runOnce`）一定先 `await ensureIndex()`**
    * ⇒ 真正去取格时用的永远是包自报的尺寸，不受这里影响。
    */
@@ -978,7 +978,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   }
 
   async function runOnce(why: string): Promise<BundleRefreshReport> {
-    /* 🗂 **先读索引**（一次；失败就退回试格子）—— 两件事都靠它：
+    /* **先读索引**（一次；失败就退回试格子）—— 两件事都靠它：
        ① 索引里没有的格 = **包外**，零请求；② **格尺寸以包自报为准** ⇒ 必须先读它再算格键
        （不然细格包会被按 0.05 算键 ⇒ 键与索引零交集 ⇒ 把有数据说成包外）。 */
     const idx = await ensureIndex();
@@ -988,7 +988,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     asked = true;
     wanted = p.wanted;
     capped = p.capped;
-    /* 🔴 口径不符 ⇒ **本轮什么都不做**（不取格、不写 missing）：把事情说成"包外"是最坏的那种谎 */
+    /* 口径不符 ⇒ **本轮什么都不做**（不取格、不写 missing）：把事情说成"包外"是最坏的那种谎 */
     if (refused) return { planned: true, batch: 0, got: 0, capped: p.capped, refused: true };
     /* 已经取过的格不重取；**包外**的也不重试（404/索引判包外 都是"包里没有"，重试只白费流量） */
     const todo: typeof p.cells = [];
@@ -1002,7 +1002,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       }
       todo.push(c);                          // 索引没读到：退回老办法（试）
     }
-    /* 🧮 **取哪几格**：先按"格数上限"截，再按**字节预算**截（索引里有每格字节 ⇒ 是算出来的，不是估的）。
+    /* **取哪几格**：先按"格数上限"截，再按**字节预算**截（索引里有每格字节 ⇒ 是算出来的，不是估的）。
        至少留一格（哪怕它自己就超预算）—— 否则极密的格会一条都不取、屏上永远空。 */
     const byteBudget = Number.isFinite(Number(opts.bytesPerRound)) && Number(opts.bytesPerRound) >= 0
       ? Number(opts.bytesPerRound) : BUNDLE_BYTES_PER_ROUND;
@@ -1022,13 +1022,13 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     let n = 0;
     for (const cell of batch) {
       /* ⏱ 每格四段拆开记：**网络 / 读流+JSON.parse / 紧凑字段→要素 / 并仓**。
-         为什么要拆：机主说的"加载慢"可能是网络（真慢），也可能是解析（我们自己写的循环慢）——
+         为什么要拆：用户说的"加载慢"可能是网络（真慢），也可能是解析（自己写的循环慢）——
          不拆开就会把锅甩给网络，那是猜。 */
       const url = bundleCellUrl(opts.kind, cell.key, activeDir || dirsOf(spec)[0]);
       const t0 = pmNow();
       try {
-        /* ♻️ **先看缓存**（默认关）：淘汰之后回头再取同一格 ⇒ 不下载、不解析，直接并回去。
-           ⚠️ 走缓存也要如实记一笔 span（不然"这一格花了多少"会凭空消失）。 */
+        /* **先看缓存**（默认关）：淘汰之后回头再取同一格 ⇒ 不下载、不解析，直接并回去。
+           走缓存也要如实记一笔 span（不然"这一格花了多少"会凭空消失）。 */
         const hit = cacheTake(cell.key);
         if (hit) {
           opts.store.merge(hit, spec.sourceKey(cell.key));
@@ -1050,7 +1050,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const by = netBytesOf(url);
         pmSpan(`feed.net:${spec.dir}`, tNet - t0, by);
-        /* 🕒 能拿到 `text()` 就**拆成两段**（读流 / 解析）；拿不到就退回 `json()`（合在一起计时，如实标 note） */
+        /* 能拿到 `text` 就**拆成两段**（读流 / 解析）；拿不到就退回 `json`（合在一起计时，如实标 note） */
         let j: unknown;
         let tJson: number;
         if (typeof r.text === "function") {
@@ -1070,7 +1070,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
         pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
-        /* ♻️ 存进"已解析"缓存（默认关）：下次这一格被淘汰后再入镜时，省掉下载 + 解析 */
+        /* 存进"已解析"缓存（默认关）：下次这一格被淘汰后再入镜时，省掉下载 + 解析 */
         cachePut(cell.key, feats);
         if (have.size === 0) pmMark(`feed.firstCell:${spec.dir}`, { cell: cell.key, bytes: by, n: feats.length });
         have.add(cell.key);
@@ -1086,7 +1086,7 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       }
     }
     /* 淘汰只在**超出保留半径/上限**时动手（保留"视野外一圈" ⇒ 来回挪不该重取）。
-       🔴 2026-09-26：仓库现在会**连被淘汰波及的来源键一起作废**（`wsFeatureStore.retainNear`）⇒
+       2026-09-26：仓库现在会**连被淘汰波及的来源键一起作废**（`wsFeatureStore.retainNear`）⇒
        下一轮 `todo` 会把那一格重新排进来（有解析缓存就直接从内存并回去）。 */
     try {
       const c = opts.view().center;
@@ -1126,13 +1126,13 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     },
     facts: counters,
     plan: planned,
-    /* 🔴 **F6（2026-10-01 性能审计 §5.5）**：把**本管道自己那条**索引 promise 露出来。
+    /* **F6（2026-10-01 性能审计 §5.5）**：把**本管道自己那条**索引 promise 露出来。
        宿主（`wsGwLayer`）原来**自己直连** `loadBundleIndex(fetchCell, "gw")`，而 `refresh()` 里
        还有一条 —— 两条各自独立 ⇒ 实测 `gwbundle/index.json` **被取了两次**（@7028.1 / @7130.1）。
        这里**只增加一个入口**：拿到的就是 `ensureIndex()` 内部**同一个** `indexPromise`（谁先到谁发起、
        后来的 await 同一份），**判词 / 去重口径 / 缓存策略 / 目录候选顺序一律没动** ——
        不调它的宿主看到的字节与本条改动之前**完全相同**。
-       ⚠️ 不许拿它当"预取"：它等于"把本来就要读的那一次提前到期"，不是多读一次。 */
+       不许拿它当"预取"：它等于"把本来就要读的那一次提前到期"，不是多读一次。 */
     ensureIndex,
   };
 }
@@ -1155,7 +1155,7 @@ export interface BundleIndexFact {
   /** 包自己的格边长（度）—— 与前端常量对拍用；缺字段 = null（老包） */
   cellSize: number | null;
   /**
-   * 🧮 **每一格的字节数与栋数**（`index.json` 的 `cells[key].bytes / .bld`；老包/缺字段 ⇒ null）。
+   * **每一格的字节数与栋数**（`index.json` 的 `cells[key].bytes / .bld`；老包/缺字段 ⇒ null）。
    *
    * 为什么值得单独留：① 报告要回答"这一趟要下多少 MB"（可数，不靠估）；
    * ② **取数预算改成"字节预算"**就靠它 —— 格数在细格包上会变成几百个，
@@ -1164,25 +1164,25 @@ export interface BundleIndexFact {
   cellBytes: Map<string, number> | null;
   cellBld: Map<string, number> | null;
   /**
-   * ✅ **这一趟索引到底读到了没有**（`false` ⇒ 后面那些字段**全是 null**，消费方据此走"数不出来"那条路）。
+   * **这一趟索引到底读到了没有**（`false` ⇒ 后面那些字段**全是 null**，消费方据此走"数不出来"那条路）。
    *
    * 为什么要有这个字段（2026-09-26 真 bug）：`loadBundleIndex()` 的返回类型曾经是"一个 fact"，
    * 但**"没读到"这件事在类型里没表达** ⇒ 直接调用它的消费方（`wsGwLayer`）要在"全 null"里自己猜，
    * 猜漏了就是 `Cannot read properties of null (reading 'cellSize')`（App 页实测抓到，
    * 每次开页少画水/绿 + HUD 一行红字）。⇒ 现在**显式给一个布尔 + 原因**，谁都不用猜。
-   * ⚠️ 字段只增不减：老消费者不看它也不会坏（与 `cellSize` 一样，null 一律表示"数不出来"）。
+   * 字段只增不减：老消费者不看它也不会坏（与 `cellSize` 一样，null 一律表示"数不出来"）。
    */
   ok: boolean;
   /** 没读到的**原句**（HTTP 状态 / 解析错 / 未知类型…）；读到了 ⇒ null */
   why: string | null;
   /**
-   * 🗂 **按层自报的格边长**（`index.json.cellSizeByLayer`：`{层名: 度}`；没有 ⇒ null）。
+   * **按层自报的格边长**（`index.json.cellSizeByLayer`：`{层名: 度}`；没有 ⇒ null）。
    *
    * 为什么要有（2026-09-26 主对话批，"只加字段、不改语义"）：**城市包**里不同层可能是不同粒度
    * （楼一档、路/水绿一档），那种包的**包级 `cellSize` 会是 null**（报不出来），而消费方
    * （入口/App）需要知道"我这一层按多少度算键"。以前谁需要谁自己再解析一遍索引 —— 那就是第二份实现。
    * ⇒ 在这里**加一个字段**，让索引事实仍然是唯一来源。
-   * ⚠️ **旧消费者不受影响**：字段只增不减，缺字段一律 `null`（不许拿它当 0 —— 与 `cellSize` 同一条纪律）。
+   * **旧消费者不受影响**：字段只增不减，缺字段一律 `null`（不许拿它当 0 —— 与 `cellSize` 同一条纪律）。
    */
   cellSizeByLayer: Record<string, number> | null;
     /** 包级 `cellSize` 为 null、但只有**一个**层报了尺寸时，把它当整体尺寸用（省得每个消费方各判一次） */
@@ -1195,7 +1195,7 @@ export interface BundleIndexFact {
  * 最不容易漂的做法就是**让导出脚本那句原话随包走**，页面照抄显示。
  */
 export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, dir?: string): Promise<BundleIndexFact> {
-  /* 🔴 **这个函数是 total 的：永不抛、永不返回 null**（2026-09-26 真 bug 的修法）。
+  /* **这个函数是 total 的：永不抛、永不返回 null**（2026-09-26 真 bug 的修法）。
      原来 `bundleIndexUrl()` 在 try **外面** ⇒ 它一抛（未知 kind / 目录表拿不到），
      调用方拿到的就是"什么都没赋值"（`indexFact` 仍是 null）⇒ 下一次调用（它自己的 `indexDone`
      已经置 true、跳过了加载）直接撞 `null.cellSize`。现在：连"算 URL"都在 try 里，
@@ -1207,7 +1207,7 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = (await r.json()) as { source?: unknown; cellCount?: unknown; cells?: unknown; attribution?: unknown; real?: unknown; cellSize?: unknown } | null;
     const rawCells = (j?.cells && typeof j.cells === "object") ? Object.keys(j.cells as Record<string, unknown>) : null;
-    /* 🧮 每格的 `bytes` / `bld`（两种包都有；缺了就 null ⇒ 字节预算退回"按格数"，如实） */
+    /* 每格的 `bytes` / `bld`（两种包都有；缺了就 null ⇒ 字节预算退回"按格数"，如实） */
     let cellBytes: Map<string, number> | null = null;
     let cellBld: Map<string, number> | null = null;
     if (rawCells) {
@@ -1218,7 +1218,7 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
         if (bd !== null && bd > 0) { if (!cellBld) cellBld = new Map(); cellBld.set(k, bd); }
       }
     }
-    /* 🗂 按层自报的格尺寸（城市包可能层间不同粒度；包级 `cellSize` 那种情况下是 null） */
+    /* 按层自报的格尺寸（城市包可能层间不同粒度；包级 `cellSize` 那种情况下是 null） */
     let cellSizeByLayer: Record<string, number> | null = null;
     let layerCellSizeSole: number | null = null;
     const rawLayers = (j as { cellSizeByLayer?: unknown } | null)?.cellSizeByLayer;
@@ -1240,7 +1240,7 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
       cells: rawCells ? new Set(rawCells) : null,
       attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
       real: typeof j?.real === "boolean" ? j.real : null,
-      /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
+      /* `cellSize` **不走 `num`**：`num(null)` 会回 0（`Number(null) === 0`），
          而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
       cellSize: (typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0) ? j.cellSize : null,
       cellBytes, cellBld, cellSizeByLayer, layerCellSizeSole,
@@ -1258,18 +1258,18 @@ export async function loadBundleIndex(fetchCell: BundleFetch, kind: BundleKind, 
 /* ══ HUD/面板那一行的**可数口径**（只这一份格式化 ⇒ 页面不自己拼数字，也不可能把"数不出来"写成 0） ══ */
 
 /**
- * `🏢 离线格 已取 x / 包外 y / 失败 z · 仓库 N 栋`（三态：数不出来照实写）。
- * @param icon HUD 图标（`🏢` / `🛣`）
+ * `离线格 已取 x / 包外 y / 失败 z · 仓库 N 栋`（三态：数不出来照实写）。
+ * @param icon HUD 图标（`` / ``）
  * @param unit `栋` / `条`
  */
 export function bundleCountsLine(f: BundleFeedFacts, icon: string, unit: string): string {
   if (!f.asked && f.have === 0 && f.missing === 0 && f.failed === 0) {
     return `${icon} 离线格 未取（还没要数据）`;
   }
-  /* 🔴 口径不符 ⇒ **只**说这一句（不许出现"包外 N" —— 那会把"有数据"说成"没有"） */
+  /* 口径不符 ⇒ **只**说这一句（不许出现"包外 N" —— 那会把"有数据"说成"没有"） */
   if (f.refused) {
     const pkgC = f.index && f.index.cellSize !== null && f.index.cellSize !== undefined ? f.index.cellSize + "°" : "?";
-    /* 🔴 2026-09-30：这里的「前端 X°」原来念的是 `f.cellDeg`（= **包自报**的尺寸）⇒
+    /* 2026-09-30：这里的「前端 X°」原来念的是 `f.cellDeg`（= **包自报**的尺寸）⇒
        拒绝取数时两个数字会**都等于包自己那个值**（"包 0.02° / 前端 0.02°"），事故现场就看不出来了。
        期望值应当念 `cellDegExpect`（= 调用方显式钉的那个值），没钉才退回 effectiveDeg。 */
     const expC = f.cellDegExpect !== null && f.cellDegExpect !== undefined ? f.cellDegExpect + "°" : `${f.cellDeg}°`;
@@ -1288,16 +1288,16 @@ export function bundleCountsLine(f: BundleFeedFacts, icon: string, unit: string)
 }
 
 /* ══ 判词用哪一个**态**（只选态；句子一律由 `wsScene.bldVerdictText/roadsVerdictText` 给） ══════
-   为什么"选态"也要单独一份：选错态的后果是**把"我们没这个包"说成"这里没有楼"**（反之亦然）——
+   为什么"选态"也要单独一份：选错态的后果是**把"没这个包"说成"这里没有楼"**（反之亦然）——
    那正是判词纪律要防的事。所以这条规则只有一个地方，并且自检逐态钉住。 */
 
 /** 楼房的态：`outside`（包外）与 `failed`（取数失败）必须分得开，也不许把"还在取"写成"没有" */
 export function bldVerdictState(f: BundleFeedFacts): "bundle" | "outside" | "pending" | "failed" | "sizemismatch" {
-  /* ⚠️ **`refused` 排在最前**：口径不符时"包外/失败/没有楼"三种说法**都不成立**，
+  /* **`refused` 排在最前**：口径不符时"包外/失败/没有楼"三种说法**都不成立**，
      说任何一种都是撒谎（这次事故就是把"有数据"说成"包外"）。 */
   if (f.refused) return "sizemismatch";
-  /* ⚠️ `missing` 现在有**两个来源**：索引说"包里没这格"（读来的）与 404（试出来的）——
-     两者都是**包外**，判词一视同仁（"我们没这个包"，不是"这里没有楼"）。 */
+  /* `missing` 现在有**两个来源**：索引说"包里没这格"（读来的）与 404（试出来的）——
+     两者都是**包外**，判词一视同仁（"没这个包"，不是"这里没有楼"）。 */
   if (f.pending > 0 && f.n === 0 && f.have === 0) return "pending";
   if (f.n === 0 && f.have === 0 && f.missing > 0) return "outside";
   if (f.n === 0 && f.have === 0 && f.failed > 0 && f.missing === 0) return "failed";

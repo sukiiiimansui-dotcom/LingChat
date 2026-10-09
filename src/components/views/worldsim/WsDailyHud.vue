@@ -1,5 +1,5 @@
 <!--
-  WsDailyHud.vue —— 「🏠 我的家 + 今日三件事」的**浮块本体**（切片③，2026-10-01）。
+  WsDailyHud.vue —— 「我的家 + 今日三件事」的**浮块本体**（2026-10-01）。
 
   ## 它是什么
   App 入口 `/worldsim` 上那张常驻小卡：一行"我的家"、三行可勾选的小事、一行脚注。
@@ -8,19 +8,19 @@
     · 家那一行 = 宿主给的 `verdict`（**共享真源 `wsDaily.pickHome` 的判词原文**，本组件不改写）；
     · 三行 = 宿主给的 `tasks`（文本含**真实**居民/设施名，由 `wsDaily.planDaily` 生成）；
     · 脚注 = `完成 N/3 · 日期 · <pickHome 的 why>`（与原型页同一句式的三段）。
-  ⚠️ 原型页的脚注里念的是 `wsDailyWhy`，而那个变量在它那儿装的是 **pickHome 的 why**（不是 planDaily 的），
+  原型页的脚注里念的是 `wsDailyWhy`，而那个变量在它那儿装的是 **pickHome 的 why**（不是 planDaily 的），
     所以这里也念 `why` —— **逐字同款**，不是抄错。planDaily 的 why（跨天重置/缺件）放在 `title` 里。
 
   ## 这一屏的四条红线（都在这张卡的样式里，改样式前先看）
-  ① 🔴 **不许 `backdrop-filter`**（值不是 `none` 就每帧读回底下像素，而底下是每帧重画的 WebGL 画布；
+  ① **不许 `backdrop-filter`**（值不是 `none` 就每帧读回底下像素，而底下是每帧重画的 WebGL 画布；
      `assets/styles/worldsim.css:198-201`）。"浮起来"靠**底色 + 边框 + 阴影** ⇒ 见 `.wsdaily`。
      本屏的 `--ws-blur` 已被宿主显式置成 `none`（`WsCityEntry.vue` 的 `.wsce.ws-root`），这里也不写死 blur。
-  ② 🔴 **不许"全屏根元素 + 自己 `.stop` 掉 pointer 事件"**：本组件根元素是**一张小卡**（不是 `inset:0`），
+  ② **不许"全屏根元素 + 自己 `.stop` 掉 pointer 事件"**：本组件根元素是**一张小卡**（不是 `inset:0`），
      地图手势照旧落在卡外；卡内只有真实的面（勾选行）吃事件 —— 今晚刚修过 `WsCharPanel` 那个同类 bug。
-  ③ 🔴 **flex 列里的子项一律 `flex: none`**：默认 `flex-shrink:1` 会在矮视口把内容压扁、再被自己的
+  ③ **flex 列里的子项一律 `flex: none`**：默认 `flex-shrink:1` 会在矮视口把内容压扁、再被自己的
      `overflow:hidden` 裁掉、`scrollHeight` 不涨 ⇒ **既放不下又滚不动**（今晚修过）。所以行/脚注都是 `none`，
      容器用 `max-height` + `overflow-y:auto` 兜底（内容不缩 ⇒ 真的能滚）。
-  ④ 🔴 **触控目标 ≥44×44**（`UI-DESIGN-SPEC.md:112`）：勾选行 `min-height:44px` 且整行可点（`<label>` 包着
+  ④ **触控目标 ≥44×44**：勾选行 `min-height:44px` 且整行可点（`<label>` 包着
      `<input>`）—— 原型页那行 `row.style.cssText`（`ws3dshow.html:4488`）**没写高度**，别照抄它。
 -->
 <template>
@@ -30,13 +30,13 @@
     :aria-label="t('worldsim.daily.tasks')"
     :title="titleText"
   >
-    <!-- 🏠 家那一行：判词原文（宿主从 `wsDailyStore.verdict()` 拿来，本组件不改写） -->
+    <!-- 家那一行：判词原文（宿主从 `wsDailyStore.verdict` 拿来，本组件不改写） -->
     <div class="wsdaily__home" :data-ws-daily-home="home || ''">
       <span class="wsdaily__ico" aria-hidden="true">🏠</span>
       <span class="wsdaily__htxt">{{ homeLine }}</span>
     </div>
 
-    <!-- 📋 三件事：整行是一个 `<label>`（点哪儿都能勾），行高 ≥44 -->
+    <!-- 三件事：整行是一个 `<label>`（点哪儿都能勾），行高 ≥44 -->
     <label
       v-for="task in tasks"
       :key="task.id"
@@ -48,7 +48,7 @@
       <span class="wsdaily__txt" :class="{ 'is-done': task.done }">{{ task.text }}</span>
     </label>
 
-    <!-- 🧾 脚注：完成 N/3 · 日期 · why（三段与原型页同一句式） -->
+    <!-- 脚注：完成 N/3 · 日期 · why（三段与原型页同一句式） -->
     <div class="wsdaily__foot" data-ws-daily-foot>{{ footText }}</div>
   </section>
 </template>
@@ -100,8 +100,8 @@
 <style scoped>
   /* 浮块本体：**小卡**（不是全屏层 ⇒ 不吃地图手势）。
      位置在顶栏之下、右上角：那里没有别的常驻件（左下是地图自己的指标条 `.ws-dml__hud`，
-     右下是手机 📱 + 缩放 `.ws-dml__zoom`，右侧宽屏会被角色抽屉盖住 —— 都是刻意避开的）。
-     ⚠️ `top: 82px` 不是随手写的：顶栏占 0~56px，而"未装城市"那条 chip（`WsCityEntry.vue` 的
+     右下是手机 + 缩放 `.ws-dml__zoom`，右侧宽屏会被角色抽屉盖住 —— 都是刻意避开的）。
+     `top: 82px` 不是随手写的：顶栏占 0~56px，而"未装城市"那条 chip（`WsCityEntry.vue` 的
      `.wsce__chip`）在 `top:46px`、高约 29px ⇒ 到 ~75px。卡片从 82px 起才不会在**窄屏**上和它叠
      （窄屏时 `62vw` 的卡左边缘会伸到 chip 那一片去）。改这两个数之前先看这条。 */
   .wsdaily {
@@ -140,12 +140,12 @@
     line-height: 1.5;
   }
   .wsdaily__row {
-    /* 🔴 `flex: none`：矮视口下不许被压扁（压扁 + 自己的 overflow 会变成"既放不下又滚不动"） */
+    /* `flex: none`：矮视口下不许被压扁（压扁 + 自己的 overflow 会变成"既放不下又滚不动"） */
     flex: none;
     display: flex;
     align-items: center;
     gap: 8px;
-    /* 🔴 触控目标 ≥44×44：行高 44，整行是 `<label>` ⇒ 点哪儿都能勾 */
+    /* 触控目标 ≥44×44：行高 44，整行是 `<label>` ⇒ 点哪儿都能勾 */
     min-height: 44px;
     cursor: pointer;
   }
@@ -170,7 +170,7 @@
     margin-top: 2px;
     padding-top: 4px;
     border-top: 1px solid var(--ws-border);
-    /* 🔴 用 `--ws-fg`（不是 `--ws-fg-dim`）：这张卡是 `--ws-panel`（86% 白）**浮在每帧重画的地图上**，
+    /* 用 `--ws-fg`（不是 `--ws-fg-dim`）：这张卡是 `--ws-panel`（86% 白）**浮在每帧重画的地图上**，
        最坏情形（底下是全黑地图）合成出来的底约 #dbdbdb —— `--ws-fg-dim` 对它是 3.5:1，**不达 4.5**；
        `--ws-fg` 对它是 5.1:1（对纯白 7.0:1）⇒ 次要感靠字号与字重，不靠把字调淡。 */
     color: var(--ws-fg);

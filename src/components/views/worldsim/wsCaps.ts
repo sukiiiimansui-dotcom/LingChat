@@ -1,7 +1,7 @@
 /**
  * wsCaps.ts —— 「世界模拟」的**唯一能力矩阵**（single source of truth）
  *
- * ## 为什么会有这个文件（机主原话：「降级乱降」）
+ * ## 为什么会有这个文件（降级乱降）
  * 2026-09-19 体检实测：同一件事——「要不要降级」——在仓库里被**七套互不相干的开关**各判一次：
  *
  * | 开关 | 处数 | 在哪判 |
@@ -21,7 +21,7 @@
  * - `render`：**设备能力**（有没有 WebGL / 性能档 / 要不要减动效）—— 机器说了算，人不插手；
  * - `layers`：**每个图层走哪条路**（`maplibre` / `legacy` / `off`）—— 按层表达，**不是一个全局布尔**。
  *
- * ## 🔴 为什么图层必须"按层"说，不能用一个大开关（这条别改回去）
+ * ## 为什么图层必须"按层"说，不能用一个大开关（这条别改回去）
  * 小区级有**两套坐标系**：
  *   · 新路 = MapLibre + **真实经纬度**（`WsDistrictMapLibre.vue`）；
  *   · 老路 = 小区草图网格 → **CSS transform**（`#pin` 槽里的那五层）。
@@ -100,7 +100,7 @@ export interface LayerSpec {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * ⚠️ 这张表就是「P1b 图层搬迁」的进度表。
+ * 这张表就是「P1b 图层搬迁」的进度表。
  * `migrated: false` 的图层在 `maplibre` 模式下**必须**是 `off` —— 打开就是位置漂移。
  * 迁移完一层，把这里改成 `true`（**只改这一个地方**），对该层的开关就自动全程生效。
  */
@@ -109,13 +109,13 @@ export const WS_LAYERS: readonly LayerSpec[] = [
   // 且无 WebGL 时也有 DOM 钉子（`domPins`）⇒ 两条路都对，是**样板层**。
   { id: "avatar", zh: "人物头像", migrated: true, legacyAvailable: true },
   // 下面四层仍只有老路（草图网格 → CSS transform）⇒ 在 maplibre 模式下必须关。
-  // 机主反馈「全区点不动/人物看不到」时不要急着打开它们 —— 先按 P1b 逐层迁移。
+  // 全区点不动/人物看不到时不要急着打开它们 —— 先按 P1b 逐层迁移。
   { id: "facility", zh: "生活设施", migrated: false, legacyAvailable: true },
   { id: "transit", zh: "交通站点", migrated: false, legacyAvailable: true },
   { id: "windowLight", zh: "窗户光", migrated: false, legacyAvailable: true },
   { id: "vehicle", zh: "交通工具", migrated: false, legacyAvailable: true },
   // AI 精绘：产出用的是"28×28 草图网格 → 整个区县 bbox"的**示意映射**，
-  // 一栋"楼"落到真地图上有几百米宽 ⇒ 盖在真楼房上只会弄脏画面（机主：「这个 ai 2d 小区好丑」）。
+  // 一栋"楼"落到真地图上有几百米宽 ⇒ 盖在真楼房上只会弄脏画面（这个 ai 2d 小区好丑）。
   // 所以只有 `sketch` 引擎（无 WebGL 的示意模式）下才允许开。
   { id: "ai", zh: "AI 精绘示意", migrated: false, legacyAvailable: true },
   // 老草图底图本体：整张 78KB 的 SVG data-url，手势变换时每次都要重新合成 ⇒ 卡顿主因。
@@ -146,7 +146,7 @@ export function readDeviceEnv(): DeviceEnv {
 /**
  * 核数 / 内存这一路的"这台机器是不是弱"判定。
  *
- * ⚠️ **这是全仓库唯一一份**。历史上同一个问题有两个答案（这就是"降级乱降"的根）：
+ * **这是全仓库唯一一份**。历史上同一个问题有两个答案（这就是"降级乱降"的根）：
  *   · `wsGeo.detectLowPerf()`（2026-09-14）：**≤4 核 或 ≤3GB** ⇒ 弱；
  *   · `wsPerf.detectTier()`（2026-09-19）：**≤4 核 或 ≤4GB** ⇒ 弱。
  *   ⇒ **一台 4GB 内存的手机（很常见的那一档）会同时得到"弱"和"不弱"两个答案。**
@@ -157,7 +157,7 @@ export function readDeviceEnv(): DeviceEnv {
  *     `wsPerf` 算出的档位 ⇒ 生效的是 **≤4GB** 那份；
  *   · `wsGeo.detectLowPerf()` 在收敛前就已经**只剩 1 个调用点**（`useWorldSimGeo` 的兜底），
  *     而那个兜底在 `WorldSim` 里被 `perf.low` 覆盖掉了 ⇒ 它那份 ≤3GB 基本没生效过。
- * ⇒ 取 ≤4GB 才能**不改变机主现在看到的行为**（去屎山的第一条纪律：不许顺手改行为）。
+ * ⇒ 取 ≤4GB 才能**不改变用户现在看到的行为**（去屎山的第一条纪律：不许顺手改行为）。
  *
  * ## 与 fps 那一半的分工（别混）
  * 本函数只看**设备静态信号**（核数/内存），**不看实测帧率** ——
@@ -177,7 +177,7 @@ export function detectDeviceLow(env: DeviceEnv = readDeviceEnv()): boolean {
 /**
  * 读设备静态信号，换成 `{ cores, memGB }` 这套命名（`wsPerf.PerfEnv` 用的就是它）。
  *
- * ⚠️ **这是全仓库唯一一处读 `navigator.hardwareConcurrency / deviceMemory`**。
+ * **这是全仓库唯一一处读 `navigator.hardwareConcurrency / deviceMemory`**。
  * 过去 `wsGeo` 与 `wsPerf.readPerfEnv()` 各写了一遍同样的
  * `navigator as Navigator & { deviceMemory?: number }` 强转 —— 抄两遍就会漂。
  */
@@ -197,7 +197,7 @@ export interface WebglProbe {
 /**
  * 有没有 WebGL。
  *
- * ⚠️ **这是全仓库唯一一份**：`WsDistrictMapLibre.vue` 里原本自己 new 一个 canvas 探一次
+ * **这是全仓库唯一一份**：`WsDistrictMapLibre.vue` 里原本自己 new 一个 canvas 探一次
  * （`t.getContext("webgl2") || t.getContext("webgl")`），别处再探一次就会两边不一致
  * ⇒ 出现"组件 A 以为有 WebGL、组件 B 以为没有"的鬼故事。
  *

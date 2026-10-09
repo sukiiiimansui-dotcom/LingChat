@@ -6,19 +6,19 @@
  *    「首帧后必丢」—— 六种图形栈（headless_shell / 完整 Chromium / in-process-gpu /
  *    关看门狗 / Xvfb+ANGLE-GL / Xvfb+EGL / Xvfb+ANGLE-Vulkan）实测全一样。
  *    所以"好不好看"这件事，**agent 自己截不出来**。
- * ② **真机截屏通道被机主关闭**：机主 2026-09-19 原话「**不准让代理用 ADB！**」——
+ * ② **真机截屏通道被用户关闭**：2026-09-19 原话「**不准让代理用 ADB！**」——
  *    因为 `adb screencap` 截的是**整屏**，会看到他屏幕上的一切（实测确实看到过他的
  *    未发送草稿，这就是那条红线的由来）。
  *
  * ⇒ 唯一同时满足"看得到真 GPU 画面"和"不侵犯隐私"的路：
- *    **页面自己 `canvas.toDataURL()`，POST 给本机收图服务**（`~/chk/shotd.py`，127.0.0.1:8789）。
+ *    **页面自己 `canvas.toDataURL`，POST 给本地收图服务**（本地收图服务，127.0.0.1:8789）。
  *
  * ## 两个前置条件（少一个就静默失败，都踩过）
  * · 地图必须 `preserveDrawingBuffer: true`（否则 toDataURL 拿到**空白**）；
  * · 跨域瓦片必须声明 `crossOrigin: "anonymous"`（否则画布被**污染**、toDataURL 抛 SecurityError）。
  */
 
-/** 本机收图服务（`~/chk/shotd.py`） */
+/** 本地收图服务（本地收图服务） */
 export const SHOTD = "http://127.0.0.1:8789/shot";
 
 /**
@@ -26,7 +26,7 @@ export const SHOTD = "http://127.0.0.1:8789/shot";
  *
  * 为什么：小区级藏在 App 里（进入世界 → 选到小区级要点好几下），
  * URL 上带参数意味着"每一次跳转都要把参数传下去"；而 localStorage 是**跨页面、跨跳转**的
- * —— 机主只要事先打开一次带 `?autoshot=1` 的地址，之后**走到小区级就会自动拍**，
+ * —— 只要事先打开一次带 `?autoshot=1` 的地址，之后**走到小区级就会自动拍**，
  * 不用为截图多做一个动作（他只要走到那儿就行）。
  */
 export const AUTOSHOT_KEY = "wsm:v1:autoshot";
@@ -34,12 +34,12 @@ export const AUTOSHOT_KEY = "wsm:v1:autoshot";
 /**
  * 「**App 自拍**」的开关（`?selfshot=1`）—— 2026-09-21 加的**主 App 页**自拍通道。
  *
- * 和代拍页的区别（一句话）：代拍页是"**agent 给一个 URL，机主点开、拍完关掉**"；
- * App 自拍是"**机主在自己本来就在看的那个页面（`webdev.html` 那条路由）上刷新一次**"，
+ * 和代拍页的区别（一句话）：代拍页是"**agent 给一个 URL，用户点开、拍完关掉**"；
+ * App 自拍是"**用户在自己本来就在看的那个页面（`webdev.html` 那条路由）上刷新一次**"，
  * 走到小区级就自动拍 —— 把"点代拍页"这一步降成"刷新"。
  *
  * 为什么单独一个 key（不复用 `AUTOSHOT_KEY`）：两条通道要能**分别**开关，
- * 否则机主开着代拍页的开关时，App 页也会莫名其妙往服务器灌图。
+ * 否则用户开着代拍页的开关时，App 页也会莫名其妙往服务器灌图。
  */
 export const APPSHOT_KEY = "wsm:v1:selfshot";
 
@@ -61,7 +61,7 @@ export function selfShotDisarm(): void {
   }
 }
 
-/** URL 里带了 `?autoshot=1` 就**顺手开启**代拍（机主只需要打开这一个网址） */
+/** URL 里带了 `?autoshot=1` 就**顺手开启**代拍（只需要打开这一个网址） */
 export function selfShotMaybeArmFromUrl(search?: string): boolean {
   try {
     const s = search ?? (typeof location !== "undefined" ? location.search : "");
@@ -93,7 +93,7 @@ export async function postShot(dataUrl: string, name: string): Promise<boolean> 
 }
 
 /**
- * 把一份 JSON **也**发到同一个收图服务（`~/chk/shotd.py`，落盘 `~/chk/live/*.json`）。
+ * 把一份 JSON **也**发到同一个收图服务（本地收图服务，落盘 记录文件）。
  *
  * 用途：光有图**说不清"样式到底加载成了什么样"**（图层有没有、paint 是什么值、
  * 地图库报没报错）—— 那些只有页面自己知道。图 + JSON 一起回来，agent 才不用猜。
@@ -157,7 +157,7 @@ export function appSelfShotDisarm(): void {
  *
  * 为什么和代拍一样把开关落进 localStorage：小区级藏在 App 里（进世界 → 走到小区要点好几下），
  * URL 参数在一次路由跳转后就没了；而 localStorage 是**跨页面、跨跳转**的
- * ⇒ 机主只要在**任意一页**带着 `?selfshot=1` 刷新一次，之后走到小区级就会自动拍。
+ * ⇒ 只要在**任意一页**带着 `?selfshot=1` 刷新一次，之后走到小区级就会自动拍。
  */
 export function appSelfShotMaybeArmFromUrl(search?: string): boolean {
   try {
@@ -178,7 +178,7 @@ export function sleep(ms: number): Promise<void> {
 /**
  * 等"真的画完了"再按快门。
  *
- * 🔴 两条都是真踩过的：
+ * 两条都是真踩过的：
  * ① `map.on("idle")` 只代表**瓦片/样式就绪**，WebGL 是双缓冲 —— 立刻 `toDataURL`
  *    可能拿到**还没提交的那一帧**（读出来是上一帧甚至空白）；
  * ② 所以 idle 之后**再等两帧 rAF**，让浏览器真的把这一帧合成出去。
@@ -211,7 +211,7 @@ export async function settleForShot(
  *
  * 为什么要自己判：`toDataURL` **不会**因为画面是空的而失败 —— 它老老实实给你一张
  * 全透明的 PNG，POST 也成功。于是"代拍成功"看起来一切正常，
- * 而 agent 收到的是三张纯白图（**2026-09-19 真的发生过，机主白点了一次**）。
+ * 而 agent 收到的是三张纯白图（**2026-09-19 真的发生过，用户白点了一次**）。
  * ⇒ 空白**必须自己判出来**，并且**不许**把空白图当成功。
  */
 export function canvasIsBlank(cv: HTMLCanvasElement): { blank: boolean; note: string } {
@@ -286,8 +286,8 @@ export function blankFromSamples(d: ArrayLike<number>): { blank: boolean; note: 
 /**
  * 对**要发出去的那串字节**（`data:image/png;base64,...`）判空白 —— 解码回来再缩到 8×8 采样。
  *
- * 🔴 为什么不能只采样"活的画布"（`canvasIsBlank`）：**"画布上有内容"和"`toDataURL` 导出的是什么"
- * 可能不是同一帧** —— 2026-09-20 机主那次就是活的画布看着正常、导出的 PNG 全透明，
+ * 为什么不能只采样"活的画布"（`canvasIsBlank`）：**"画布上有内容"和"`toDataURL` 导出的是什么"
+ * 可能不是同一帧** —— 2026-09-20 用户那次就是活的画布看着正常、导出的 PNG 全透明，
  * 自检漏判、三张白图照发（白点一次）。判据必须落在**真正要发出去的字节**上。
  */
 export async function blankOfDataUrl(dataUrl: string): Promise<{ blank: boolean; note: string }> {
@@ -319,7 +319,7 @@ export async function blankOfDataUrl(dataUrl: string): Promise<{ blank: boolean;
  * 空白时回传一张**诊断图**（把状态写成字画在 2D canvas 上）。
  *
  * 为什么值得：白图什么都说明不了，而"诊断图"能让 agent 一眼看出卡在哪一步
- * （样式没加载？瓦片没到？取楼失败？）。机主只要点一次页面，信息量就够定位了。
+ * （样式没加载？瓦片没到？取楼失败？）。只要点一次页面，信息量就够定位了。
  */
 export function diagnosticPng(lines: readonly string[], title = "代拍空白 · 诊断"): string {
   const w = 900;

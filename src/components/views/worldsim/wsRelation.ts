@@ -1,8 +1,8 @@
 /**
  * wsRelation.ts —— 「关系/好感」的**数值层**（可玩性切片 A 的第一步）
  *
- * ## 为什么需要它（机主 2026-09-18：「这个 map 一点可玩性没有」）
- * 参考清单 `BORROW-LIST.md` 的结论是：**我们缺的不是"再写一个系统"，而是"把已有的零件接起来"**。
+ * ## 为什么需要它（2026-09-18 这个 map 一点可玩性没有）
+ * 参考清单 内部设计文档 的结论是：**缺的不是"再写一个系统"，而是"把已有的零件接起来"**。
  * 现在送礼物**只写了一句 setTimeout 式的 toast 和一条 localStorage 记账**（`wsGift.ts`），
  * 世界不会因为"你送过它东西"而改变 —— 所以玩家做什么都没有后果，自然不好玩。
  *
@@ -30,7 +30,7 @@
  * 那不是"关系变好"，那是玩家在按开关。
  * ⇒ 规则收成一张表 `ONCE_PER_DAY`：同一个本地日期里**第一条**话 +2，之后同一天再发多少条都 **+0**
  *    （`times` 照常 +1 —— 它记的是"互动了几次"，不是好感来源）。
- * ⚠️ 日期键**复用** `wsDaily.dayKeyOf()`（本地时区，**不用** UTC）——全仓"今天是哪天"只有那一份实现
+ * 日期键**复用** `wsDaily.dayKeyOf`（本地时区，**不用** UTC）——全仓"今天是哪天"只有那一份实现
  *    （PR 门禁 C1）；在这里再写一个 `toISOString().slice(0,10)` 会让东八区半夜换错天。
  */
 
@@ -200,7 +200,7 @@ export function applyGift(store: WsRelationStore, role: string, nowMs: number, d
 
 /**
  * 距上次互动 `nowMs` 后**建议**扣掉多少（纯函数）。
- * ⚠️ **调用方决定要不要用**：我们不自动跑定时器（那会变成"又一个后台系统"）。
+ * **调用方决定要不要用**：不自动跑定时器（那会变成"又一个后台系统"）。
  */
 export function decayOf(row: WsRelationRow, nowMs: number, perDay = DECAY_PER_DAY): number {
   if (!row.lastAt) return 0;
@@ -269,7 +269,7 @@ export function useWsRelation() {
     gift: (role: string, delta?: number) => record(role, "gift", delta).row,
     /**
      * 聊天：**当天只计一次**（`ONCE_PER_DAY.chat`）。
-     * 🔴 返回值是 `{ row, counted }` 而不是单独一行 —— 期 3 的调用方必须知道这次**加没加上**，
+     * 返回值是 `{ row, counted }` 而不是单独一行 ——  的调用方必须知道这次**加没加上**，
      *    否则第二条起还会弹一句"+2"（那是谎报）。`chat()` 此前**没有任何调用点**（期 3 才接上），
      *    所以这里的形状变化不影响别处。
      */

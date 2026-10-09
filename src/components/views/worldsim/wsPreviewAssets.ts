@@ -1,14 +1,14 @@
 /**
  * wsPreviewAssets.ts —— **浏览器预览**里的角色素材回退（只服务预览，真机不走这条路）。
  *
- * ## 为什么需要它（2026-10-03 机主真机验收后）
+ * ## 为什么需要它（2026-10-03 真机验收后）
  * 地图上的角色钉子与面板立绘，真机走的是 Tauri 命令 `get_avatar_file` + `convertFileSrc`
  * （`useWsActors.ts` / `useWsPortrait.ts`）——那条路在浏览器里**恒为空**（`isTauriRuntime()` 为假），
- * 于是预览里只能画"名字首字色块"、面板没有立绘。机主的验收环境**只有 5212 浏览器预览**
- * （手机上装的是官方原版 APK，看不到我们的改动）⇒ 他要求「把地图中的角色头像立绘全部换上」。
+ * 于是预览里只能画"名字首字色块"、面板没有立绘。验收环境**只有 5212 浏览器预览**
+ * （手机上装的是官方原版 APK，看不到改动）⇒ 他要求「把地图中的角色头像立绘全部换上」。
  *
  * ## 这条路是怎么通的（**零字节搬运**）
- * 预览服务 `~/chk/webdev-preview-server.py` 已经有一条**只读直通**：
+ * 预览服务 预览服务 已经有一条**只读直通**：
  *   `GET /char/<角色目录>/avatar/[<服装>/]<情绪>.webp`  → 直接读官方素材目录
  *   （根目录硬编码 `~/companion_new/lingchat-data/game_data/characters`，与 fork 的 `data/game_data/characters` 同内容）
  * 原型页 `public/ws3dshow.html` 一直用的就是它。所以**不用把 36MB 素材拷进 `public/`**

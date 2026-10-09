@@ -1,7 +1,7 @@
 <!--
   「世界模拟」T4-1：窗户光 —— 夜里把小区图上的建筑窗户点亮
 
-  ⚠️ 老线**没有**这个能力（`public/world_map/world_time.js` 里只有 timeTint /
+  老线**没有**这个能力（`public/world_map/world_time.js` 里只有 timeTint /
      applyTimeTint / sunTimes / FACILITIES，grep「窗」零命中）。这是 T4-1 的原始要求，
      属于**新写**，不是移植。
 
@@ -34,7 +34,7 @@
     data-ws-winlight
   >
     <!-- `<g>` 承担信箱折算 + 格子单位 → 单位空间。
-         ⚠️ x/y **必须分开缩放**：本层是 `viewBox="0 0 1 1"` + `preserveAspectRatio="none"`
+         x/y **必须分开缩放**：本层是 `viewBox="0 0 1 1"` + `preserveAspectRatio="none"`
             （1 个单位 = 容器宽/高的 100%），而地图占的那块通常只在**一个方向**上小于容器
             （另一个方向撑满）。统一除 size 会让窗户在地图方向被拉长 —— 这条是推导出来的，
             不是试出来的：单位空间里一格 = box.w/size（横向）与 box.h/size（纵向）。 -->
@@ -145,19 +145,19 @@
   /**
    * 信箱（letterbox）折算：算出「小区图实际占的那块」，用容器的比例表示。
    *
-   * ⚠️ 为什么必须折算：AI 精绘画布的 viewBox 是**正方形**（`0 0 size size`），
+   * 为什么必须折算：AI 精绘画布的 viewBox 是**正方形**（`0 0 size size`），
    *    而盒子常常是长方形 —— 地图靠 `preserveAspectRatio`（默认 `xMidYMid meet`）
    *    居中留白（`WsAvatarLayer.vue` 的文件头把同一件事写得很清楚：头像也必须复刻
    *    同一套折算，否则会"落在盒子上而不是图上"）。窗户光同理：不折算就与楼错位。
    *
-   * ⚠️⚠️ **不能去量 `.ws-paint` 的 `getBoundingClientRect()`** —— 这是踩过的坑：
+   * **不能去量 `.ws-paint` 的 `getBoundingClientRect`** —— 这是踩过的坑：
    *    `worldsim.css` 的 `.ws-neigh__layer svg { width:100%; height:100%; object-fit: contain }`
    *    让画布**元素盒**撑满容器（顺带说：`object-fit` 对内联 SVG **不生效**，
    *    那一条 CSS 其实只起了误导作用，真正留白的是 `preserveAspectRatio`）。
    *    量元素盒永远得到「撑满」，于是折算退化成恒等变换 —— **实测横向偏 219px**
-   *    （舞台 905×394、网格 28，见 `~/chk/check-letterbox.mjs` 的前后对照表）。
+   *    （舞台 905×394、网格 28，见 版式检查脚本 的前后对照表）。
    *
-   * ✅ 正确做法：量**容器盒**（本层自己的 `inset:0` 根 svg），然后按
+   * 正确做法：量**容器盒**（本层自己的 `inset:0` 根 svg），然后按
    *    `wsActors.ts::letterboxOf()` 的**同一个式子**算留白 —— 两边必须逐字一致，
    *    否则同一张图上的人和窗会各按各的算。
    *
@@ -245,7 +245,7 @@
     }, 2500);
     if (typeof ResizeObserver !== "undefined") {
       // 盒子长宽比变了（旋屏、软键盘、横竖屏分档）→ 留白也变了，必须重量。
-      // 观察 `.ws-neigh__ai`（它随盒子伸缩），而不是这一层自己（它被我们的
+      // 观察 `.ws-neigh__ai`（它随盒子伸缩），而不是这一层自己（它被
       // transform 影响，用自身尺寸当输入会形成回环）。
       const boxHost = document.querySelector(".ws-neigh__ai");
       if (boxHost) {

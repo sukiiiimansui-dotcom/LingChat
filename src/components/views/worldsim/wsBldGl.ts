@@ -1,11 +1,11 @@
 /**
  * wsBldGl.ts —— **楼房直画 WebGL2**（MapLibre 自定义层，实例化方盒）
  *
- * ## 为什么有它（机主 2026-09-25「去全网搜一下有没有直接调用 webgl 的方法」→「做」）
+ * ## 为什么有它（2026-09-25 「去全网搜一下有没有直接调用 webgl 的方法」→「做」）
  * 今天一下午的坑几乎同形：**被 MapLibre 的样式层夹在中间** ——
  * `fill-extrusion-height:["get","h3d"]` 缺字段 → 高度 0 → 一地图**平躺的板**；深色描边在小比例下盖住填充；
  * 阈值两处各写一份；`fill-extrusion` 开销**随要素数线性增长**（官方性能要点也这么说）⇒ 只能"只画 100 栋"兜。
- * 直接写 GL 就把这些决定权拿回来：高度我们自己算（缺就自己兜底）、颜色我们自己定、
+ * 直接写 GL 就把这些决定权拿回来：高度自己算（缺就自己兜底）、颜色自己定、
  * **实例化**画上万栋也只是几次 draw call、不写样式表达式 ⇒ 不会再撞"样式校验失败 ⇒ load 永不触发"。
  *
  * ## 结构（**纯逻辑与 GL 分离**，前者能在 Node 里自检）
@@ -192,7 +192,7 @@ export function createBldGlLayer(opts: BldGlLayerOpts) {
   let uni: WebGLUniformLocation | null = null;
   let cur = opts.boxes;
   const stats = { draws: 0, lastInstances: 0, errors: 0, lastError: "" as string,
-    /* 🔍 诊断（2026-09-25 首跑 draw=0 / 错误 3 时加的）：把 GL 版本与**每个 shader 的编译日志**都留下来，
+    /* 诊断（2026-09-25 首跑 draw=0 / 错误 3 时加的）：把 GL 版本与**每个 shader 的编译日志**都留下来，
        否则只知道"失败了"、不知道为什么 —— 今天已经因为"没有回执"栽过好几次。 */
     glVersion: "" as string, isWebGL2: null as boolean | null, logs: [] as string[] };
 
@@ -208,7 +208,7 @@ export function createBldGlLayer(opts: BldGlLayerOpts) {
     id: opts.id || "bld-gl",
     type: "custom" as const,
     renderingMode: "3d" as const,
-    /** 自检/HUD 用：层自己报的可数口径（不是我们从外面猜的） */
+    /** 自检/HUD 用：层自己报的可数口径（不是从外面猜的） */
     glStats: () => ({ ...stats, instances: cur.count }),
     update(boxes: ReturnType<typeof buildBldBoxes>) { cur = boxes; upload(); },
     onAdd(_map: unknown, g: WebGL2RenderingContext) {

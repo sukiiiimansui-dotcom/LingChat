@@ -1,16 +1,16 @@
 /**
  * wsBuildingSources.ts —— **楼房第二数据源的合并规则**（纯函数，可单测）。
  *
- * ## 为什么需要它（机主 2026-09-20：「换源我看看效果喵」）
+ * ## 为什么需要它（2026-09-20 换源看效果）
  * 楼房一直只有 OSM 一个源，而 OSM 在中国的覆盖**极不均**（同一个后端实测）：
  *   渝中区驻地 400m → **152 栋**（成片）；涪陵区驻地 400m → **0 栋**、1400m → 29。
- * 机主人在涪陵 ⇒ 他看到的就是"零星几栋"。**这是数据问题，不是渲染问题。**
+ * 实地点在涪陵 ⇒ 他看到的就是"零星几栋"。**这是数据问题，不是渲染问题。**
  *
  * 第二源 = **Overture Maps Buildings（ODbL）**。同一个涪陵城区 bbox 实测：
  *   OSM 0~29 栋 **vs** Overture **13,811 栋**。
  *
- * ## 合并规则（机主定的口径：「有真数据用真的」「OSM 有高度时用 OSM」）
- * ① **OSM 一律保留**，一条都不丢 —— 它是我们唯一有 `height`/`levels` 的源，
+ * ## 合并规则（有真数据用真的「OSM 有高度时用 OSM」）
+ * ① **OSM 一律保留**，一条都不丢 —— 它是唯一有 `height`/`levels` 的源，
  *    也是既有的出处与署名；第二源的角色是**补缺**，不是替换。
  * ② Overture 只补 OSM **没有**的地方 ⇒ 判定"重复"的办法：两个脚印的**中心点**
  *    距离小于 `dedupeM`（默认 18m）就算同一栋，丢掉 Overture 那条。
@@ -20,7 +20,7 @@
  * ③ 结果里**分开计数**（`osm` / `overture` / `dropped`）—— HUD 要如实写出两个来源各多少，
  *    不许混成一个数报出去（`DESIGN-3D-MODES.md` §八 的红线：不许把不同出处的东西说成一个）。
  *
- * ## ⚠️ 高度：Overture 这批**没有高度**
+ * ## 高度：Overture 这批**没有高度**
  * 涪陵实测 13,811 栋里 `height` / `num_floors` **全是 null**（纯脚印）。
  * 所以补进来的楼**必须**落在 `height_src=default`（按类型估）那一档，
  * **绝不许**进 HUD 的"真高"计数。本模块给它们打 `src="overture"` + `height_src="default"`，
@@ -30,7 +30,7 @@
 /** 楼房要素的最小形状（OSM 与 Overture 都满足） */
 export interface BldFeature {
   type?: string;
-  /* ⚠️ 别给它加 `| null`：项目里 `decorateBuildings()`（wsBuildingLook）吃的是
+  /* 别给它加 `| null`：项目里 `decorateBuildings`（wsBuildingLook）吃的是
      `properties?: Record<string, unknown>`，多一个 null 就整条链路对不上类型。
      后端确实可能给 null，所以**取值处一律写 `f.properties || {}`**（本文件里都是这么写的）。 */
   properties?: Record<string, unknown>;
@@ -79,9 +79,9 @@ export function geomCenter(geom: BldFeature["geometry"]): [number, number] | nul
 /**
  * 两个经纬度点之间的**近似**距离（米）。
  *
- * 为什么可以用近似：我们只拿它跟一个十几米的阈值比，而且比的是**同一个城市里**的两栋楼
+ * 为什么可以用近似：只拿它跟一个十几米的阈值比，而且比的是**同一个城市里**的两栋楼
  * （纬度差极小）⇒ 用等距圆柱投影就够，不必上 Haversine。
- * ⚠️ 但**经度必须乘 cos(纬度)**：漏了它，涪陵（29.7°N）会横向差 13%，
+ * 但**经度必须乘 cos(纬度)**：漏了它，涪陵（29.7°N）会横向差 13%，
  * 在阈值边界上的判定就会飘。
  */
 export function metersBetween(a: [number, number], b: [number, number]): number {

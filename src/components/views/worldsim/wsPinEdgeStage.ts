@@ -3,7 +3,7 @@
  * **整块搬出来**，宿主同名解构回去 ⇒ 下游调用点一个字都不改。
  *
  * ## 这个文件是什么
- * 📍 角色「屏外方向指示」的**宿主那一半**：量容器几何（含 `env(safe-area-inset-*)` 探针）、
+ * 角色「屏外方向指示」的**宿主那一半**：量容器几何（含 `env(safe-area-inset-*)` 探针）、
  * 把屏外的钉子夹进安全矩形并躲开三块禁区、每颗钉子算一次屏幕点、**只在变了才写 DOM**。
  * 纯算术那一半（夹取 / 角度 / 距离文案）**不在这里**，在共享真源 `wsPinEdge.ts`（本模块只 import）。
  *
@@ -21,12 +21,12 @@
  *    ⇒ 连同声明一起搬进来，宿主那边一个读者都没有（模块自持，**不是**第二份真源）。
  * ③ 除下面那两处别名，本片**没有**别的正文改动：分支 / 阈值 / 顺序 / DOM 契约逐字不变。
  *
- * ## 🔴 唯一的两处别名（逐类可数；对拍闸归一化后逐行比 ⇒ diff = 0）
+ * ## 唯一的两处别名（逐类可数；对拍闸归一化后逐行比 ⇒ diff = 0）
  * 只有 `pinEdgeSync` 改了：**函数体首行**各现读一次 —— `const pins = pinsNow();` /
  * `const map = mapNow();`（宿主那面两个都是 `let`：新增/移除钉子、建图/销毁都会重写它们，
  * 数组/对象没法按引用共享 ⇒ 与 S4 的 `alive`、S5 的 `map` 同一条落法）。
  * `pinEdgeSync` 全程同步、两处读之间没有任何东西会重写它们 ⇒ 体首一次与逐处现读**逐条等价**。
- * ⚠️ 另外五个函数（`pinEdgeInsetsOf` / `pinEdgeMeasure` / `pinEdgeAvoid` / `pinEdgeMetersOf`
+ * 另外五个函数（`pinEdgeInsetsOf` / `pinEdgeMeasure` / `pinEdgeAvoid` / `pinEdgeMetersOf`
  * 与两个声明）**一个字节都没动**；`pinEdgeMetersOf` 只吃四个入参、一个宿主状态都不读。
  *
  * ## 装配点与依赖方向
@@ -47,8 +47,8 @@ import type { PinEdgeStageCtx } from "./wsStageTypes";
 export function createPinEdgeStage(ctx: PinEdgeStageCtx) {
   const { host, pinsNow, mapNow } = ctx;
 
-  /* ══════════ 📍 **屏外方向指示**（2026-10-04 第七条）══════════════════════════════════
-     机主原话：「**为什么其他角色不见了喵**，放大到最大后楼就没了喵」（前半句归本段）；他自己点的方案：
+  /* ══════════ **屏外方向指示**（2026-10-04 第七条）══════════════════════════════════
+     **其他角色消失**，放大到最大后楼也消失（前半句归本段）；他自己点的方案：
      「**屏外加方向指示（小箭头 + 距离）**」。病根：角色钉子走地图库 `Marker` ⇒ **出了视口就是真的没有**。
 
      ## 三个"只在变了才写"（与 `joyAimWrite` 同款；写点数**可数**，写在这里备查）
@@ -63,9 +63,9 @@ export function createPinEdgeStage(ctx: PinEdgeStageCtx) {
      ## 几何：**只在挂载 / resize 量一次**（读 `clientWidth` 是强制布局，红线）
        · 安全区（刘海/手势条）用 `env(safe-area-inset-*)` 探针量一次 ⇒ 折成一个**内缩后的子矩形**，
          再把结果平移回去（纯函数只认一个标量 margin ⇒ 这里做的是仿射平移，**不是第二份几何**）；
-       · 三块禁区（HUD 让位带 / 📱 / 🔬）用摇杆那一份 `joyHomeBoxesOf()`（**同一份矩形、同一个间距**
+       · 三块禁区（HUD 让位带 / /）用摇杆那一份 `joyHomeBoxesOf`（**同一份矩形、同一个间距**
          `PIN_EDGE_MIN_GAP_PX = JOY_GAP_PX`）⇒ 箭头绝不会压在 HUD 上。 */
-  /** 📍 开关（**默认开**）：唯一的关法是 `?edge=0`（与 `?names=0`/`?joy=0` 同一族写法） */
+  /** 开关（**默认开**）：唯一的关法是 `?edge=0`（与 `?names=0`/`?joy=0` 同一族写法） */
   const pinEdgeOn = ref(!/[?&]edge=0\b/.test(String(typeof location !== "undefined" ? location.search : "")));
   /** 量一次就缓存：容器 CSS 尺寸 + 四边安全区（`measured=false` ⇒ 数不出来，一颗箭头都不写） */
   const pinEdgeGeom = { w: 0, h: 0, l: 0, t: 0, r: 0, b: 0, measured: false };
@@ -107,7 +107,7 @@ export function createPinEdgeStage(ctx: PinEdgeStageCtx) {
   }
   /**
    * 把一个点从三块禁区里**往上推**出去（与摇杆的"家"同一套矩形、同一个间距 ⇒ 不会打架）。
-   * 为什么是"往上推"：三块禁区全部贴在**下缘**（HUD / 📱 / 🔬），推一次就走开。
+   * 为什么是"往上推"：三块禁区全部贴在**下缘**（HUD / /），推一次就走开。
    * 推完仍夹回安全矩形 —— 返回的点一定在屏内（含边）。
    */
   function pinEdgeAvoid(x: number, y: number): { x: number; y: number } {
@@ -132,7 +132,7 @@ export function createPinEdgeStage(ctx: PinEdgeStageCtx) {
     return { x: px, y: py };
   }
   /**
-   * 📍 **一轮**：每颗"别人"的钉子算一次屏幕点 ⇒ 屏外画边缘箭头 + 距离，回到屏内就藏起来。
+   * **一轮**：每颗"别人"的钉子算一次屏幕点 ⇒ 屏外画边缘箭头 + 距离，回到屏内就藏起来。
    * 规则（夹取/角度/文案）全在纯函数 `wsPinEdge.ts`；这里只做三件事：投影、写 DOM、**只在变了才写**。
    */
   function pinEdgeSync(): void {
@@ -156,7 +156,7 @@ export function createPinEdgeStage(ctx: PinEdgeStageCtx) {
     }
     for (const p of pins) {
       const edge = p.edge;
-      /* 「我」那颗钉子**没有这三个节点**（相机跟着他，"屏外"对他没意义 —— 机主点的是"其他角色"） */
+      /* 「我」那颗钉子**没有这三个节点**（相机跟着他，"屏外"对他没意义 —— 要的是"其他角色"） */
       if (!edge || !p.edgeArrow || !p.edgeDist) continue;
       let px = NaN, py = NaN, lng = NaN, lat = NaN;
       try {
@@ -195,7 +195,7 @@ export function createPinEdgeStage(ctx: PinEdgeStageCtx) {
     }
   }
   /**
-   * 📏 **"离我多远"**：相机中心 → 这一颗钉子的**地面米数**（纯算术，与挑楼那把尺子同一对常数
+   * **"离我多远"**：相机中心 → 这一颗钉子的**地面米数**（纯算术，与挑楼那把尺子同一对常数
    * `111320·cos(lat)` / `110540`；**一次投影都不做** —— 两个点本来就是经纬度）。
    *
    * 口径：相机锁着「我」（近景那条口径）⇒ 中心就是「我」；两者不重合时以**相机中心**为准

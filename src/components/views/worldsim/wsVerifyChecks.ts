@@ -9,7 +9,7 @@
  *
  * ## 和样式自检 JSON 的关系
  * 两者吃**同一份快照**（`wsStyleReport.buildStyleReport` + 面板补的几个字段）：
- * JSON 是给 agent 的，这里是给**机主**看的 —— 同一件事，两种读者，不许各算一套。
+ * JSON 是给 agent 的，这里是给**用户**看的 —— 同一件事，两种读者，不许各算一套。
  * 所以本文件是**纯函数**（没有 import 任何渲染代码），Node 自检也能直接跑。
  */
 import type { StyleLayerLite, WsRenderPath } from "./wsStyleReport";
@@ -28,14 +28,14 @@ export interface VerifyCtx {
    *   · `temp` = **临时类**（没报错，只是慢；地图实例还在后台跑，出帧就自动切回 WebGL）；
    *   · `perm` = **永久类**（地图库报了 style/addLayer 类错误，或压根拿不到 WebGL/实例）；
    *   · `none` = 没降级。
-   * 为什么要分：机主的三个症状都源于"**慢**被当成了**坏**"（机器有 WebGL，却永久走 2D）。
+   * 为什么要分：三个症状都源于"**慢**被当成了**坏**"（机器有 WebGL，却永久走 2D）。
    */
   fallbackKind: "none" | "temp" | "perm";
   /** 曾经降级、后来**恢复回 WebGL** 了吗（恢复过就要写出来，否则人以为一直在 2D） */
   recovered: boolean;
   /**
    * 现在处在**哪一级**（`全国 / 省 / 市 / 区县 / 小区级`）。
-   * 机主的要求是"**每个级别**都要能开面板"⇒ 面板必须说清"你看的是哪一级的那条路"。
+   * 要求是"**每个级别**都要能开面板"⇒ 面板必须说清"你看的是哪一级的那条路"。
    */
   level?: string;
   /** `sawRender` 的**口径说明**（阶段舞台没有 render 事件监听 ⇒ 只能用"要素已画"当代理，要说明白） */
@@ -46,7 +46,7 @@ export interface VerifyCtx {
    */
   resizeLog?: string[];
   /**
-   * 页面上**所有** canvas 的事实（2026-09-21 机主实测抓到的关键线索：
+   * 页面上**所有** canvas 的事实（2026-09-21 实测抓到的关键线索：
    * `轮询兜底` 量到 300×150、而 `窗口/转屏` 那次量到 **3759×1287** ⇒ **很可能不止一块画布**，
    * 而"画布"那一行量错了对象）。⇒ 面板必须给出"**几块、哪块是谁**"的确定答案。
    */
@@ -93,11 +93,11 @@ export interface VerifyCtx {
   /** 主题给的路网图层规格条数（小区级才用得到）⇒ 没有就 `undefined` */
   roadSpecs?: number;
   /**
-   * 🧱 **离线包 offline-first 的可数回证**（切片 A，2026-09-25）。
-   * 机主在 App 上的三条反馈（「楼只有一块 / 慢 / 路时有时无」）都源自"现场取数 + 整份替换"，
+   * **离线包 offline-first 的可数回证**（切片 A，2026-09-25）。
+   * 用户在 App 上的三条反馈（「楼只有一块 / 慢 / 路时有时无」）都源自"现场取数 + 整份替换"，
    * 所以面板必须能回答：**默认到底发了几条 `/api/*`**、离线格取到几格、包外几格、失败几格、
    * 仓库里有多少要素（**数不出来写 null，不写 0**），以及数据许可的**署名原句**。
-   * ⚠️ 本机无头无 WebGL ⇒ 这里只证"取数与落图通路接对了"，**真机观感/帧率只有机主能判**。
+   * 无头环境没有 WebGL ⇒ 这里只证"取数与落图通路接对了"，**真机观感/帧率只能在真机上判**。
    */
   bundle?: {
     bld: { have: number; missing: number; failed: number; pending: number; n: number | null; cap: number | null; verdict: string };
@@ -111,7 +111,7 @@ export interface VerifyCtx {
   };
   /** 性能低档 */
   capsLow: boolean;
-  /** 主题 id（`anime` / `night`）—— 面板要显示"我看到的是哪一版配色" */
+  /** 主题 id（`anime` / `night`）—— 面板要显示"到的是哪一版配色" */
   wstheme: string;
   /** 夜色档：开关 + **实际生效的天黑程度**（0 = 白天逐字不变） */
   wsnight: { on: boolean; level: number };
@@ -119,13 +119,13 @@ export interface VerifyCtx {
   locSource: string;
   /** 「App ↔ 代拍页」对账结果（拿不到 JSON 就 `ok:false`，如实说"没对成"） */
   parity?: ThemeParity;
-  /** 🔎 这张图的 style **由哪一份实现产出**（对齐清单 B 的自证：`wsMapStyle.ts`） */
+  /** 这张图的 style **由哪一份实现产出**（对齐清单 B 的自证：`wsMapStyle.ts`） */
   styleSource?: string;
-  /** 🎬 相机与层序**由哪一份实现产出**（`wsScene.ts`；主会话要求：装配也只有一份）+ 实际层序违规 */
+  /** 相机与层序**由哪一份实现产出**（`wsScene.ts`；要求：装配也只有一份）+ 实际层序违规 */
   sceneSource?: string;
   sceneViolations?: string[];
   /**
-   * 「**动效状态**」（机主 2026-09-21：看不到 MG 动画时，要能分清"**没触发**"还是"**坏了**"）。
+   * 「**动效状态**」（2026-09-21 看不到 MG 动画时，要能分清"**没触发**"还是"**坏了**"）。
    * 全部来自**当场 DOM 观察**（有就有、没有就没有），不猜。
    */
   motion?: {
@@ -161,7 +161,7 @@ export interface VerifySnapshot extends VerifyCtx {
   keyPaints: Record<string, Record<string, unknown>>;
   /** 世界时间（如 `23:41 · 天黑 0.42`）；拿不到就是空串 */
   worldTime: string;
-  /** HUD 原话（机主看到的那一行） */
+  /** HUD 原话（屏幕上的那一行） */
   hud: string;
 }
 
@@ -198,7 +198,7 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
         (c.recovered ? "；**曾降级到 2D，地表出帧后已自动切回 WebGL**（档位也还回去了）" : "")
     );
   } else {
-    /* 三段必须写全（机主就是被"没说清"误导的）：①为什么降级 ②临时还是永久 ③手势不可用 */
+    /* 三段必须写全（用户就是被"没说清"误导的）：①为什么降级 ②临时还是永久 ③手势不可用 */
     const cat =
       c.fallbackKind === "temp"
         ? "**临时类**（地图库没报错，只是慢；实例还在后台跑着，**一出帧就自动切回 WebGL**）"
@@ -257,9 +257,9 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
   );
 
   /* ⑦ 画布非空白（用的是与自拍**同一个**判空实现）。
-     🔴 2026-09-21 纠正：**WebGL 路下"读不到像素"不等于"没渲染"** ——
+     2026-09-21 纠正：**WebGL 路下"读不到像素"不等于"没渲染"** ——
      `toDataURL`/`drawImage` 在渲染帧之外读 WebGL 画布，拿到全透明是**经典行为**
-     （`preserveDrawingBuffer` 与读的时机都会影响它）。机主那台机器当时的证据是
+     （`preserveDrawingBuffer` 与读的时机都会影响它）。用户那台机器当时的证据是
      `sawRender=出过` + `isStyleLoaded=已加载` + `resize ok` + 屏幕上**已经能看到地图**
      ⇒ 这条判词原来写"一帧都没渲染过"是**过度断言**，会把人带偏。现在改成：
      WebGL 路且读过帧 ⇒ 判"**判不了**"并把两种可能都写出来。 */
@@ -289,7 +289,7 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
         `${v.sample ? ` ${v.sample}` : ""}${v.covers ? " ⚠️ **它盖住了地图**" : ""}`
     );
     const mapOnes = c.canvases.filter((v) => v.isMapCanvas).length;
-    /* ⚠️ "遮挡"要**排除设计上的覆盖层**（天气/鼠标拖尾…），否则面板天天假报警；
+    /* "遮挡"要**排除设计上的覆盖层**（天气/鼠标拖尾…），否则面板天天假报警；
        但**非覆盖层**的那种必须继续报 —— 这次抓到真凶（`ws-dml__cv` 空壳）就是靠它。 */
     const stray = c.canvases.filter((v) => v.covers && !v.overlay);
     push(
@@ -309,9 +309,9 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     push("resize 尝试记录（最近 5 次）", null, c.resizeLog.join(" ｜ "));
   }
 
-  /* ⑧ 尺寸 / dpr —— 🔴 **这条是 2026-09-21 抓到真根因的那一条**：
+  /* ⑧ 尺寸 / dpr —— **这条是 2026-09-21 抓到真根因的那一条**：
      画布 300×150（MapLibre 的**默认值**）而布局是 1253×429 ⇒ 建图时容器没有布局尺寸，
-     canvas buffer 从没被 `resize()` 过 ⇒ CSS 拉满整屏 = **一块纯色**（机主说的"像图片/落后"）。
+     canvas buffer 从没被 `resize` 过 ⇒ CSS 拉满整屏 = **一块纯色**（用户说的"像图片/落后"）。
      所以判词要**直接点名"没 resize"**，不能只说"尺寸不符"。 */
   if (c.canvas) {
     const want = Math.round(c.canvas.cw * c.canvas.dpr);
@@ -355,7 +355,7 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     );
   }
 
-  /* ⑩.5 🧱🏢🛣 **离线包 offline-first**（切片 A）：默认**不发** `/api/buildings`·`/api/roads`，
+  /* ⑩.5 **离线包 offline-first**（切片 A）：默认**不发** `/api/buildings`·`/api/roads`，
      楼/路从静态包来并进累积仓库。三态照实：包外 / 取数失败 / 正常；**数不出来不写 0**。 */
   if (c.bundle) {
     const b = c.bundle;
@@ -432,7 +432,7 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
     );
   }
 
-  /* ⑪.8 App ↔ 代拍页一致性（机主追问「还是不是代拍里的那个啊」⇒ 面板要能**直接回答**） */
+  /* ⑪.8 App ↔ 代拍页一致性（用户追问「还是不是代拍里的那个啊」⇒ 面板要能**直接回答**） */
   if (c.parity) {
     const p = c.parity;
     if (!p.ok) {
@@ -466,11 +466,11 @@ export function runVerifyChecks(c: VerifyCtx): VerifyResult[] {
 }
 
 /**
- * 「**App ↔ 代拍页一致性**」的对账结果（2026-09-21 机主追问：「**还是不是代拍里的那个啊**」）。
+ * 「**App ↔ 代拍页一致性**」的对账结果（2026-09-21 **还是不是代拍里的那个啊**）。
  *
  * 代拍页 `public/ws3dshow.html` 消费的是 **`public/wstheme.json`**（由主题自检从 `wsMapTheme.ts` 生成）；
  * App 小区级是**运行时**调 `themeStyleParts()`。两者**理论上同源**，但只要有一边漂了
- * （JSON 没重新生成 / 图层被别处改过），观感就不一样 —— 机主肉眼已经感觉到了。
+ * （JSON 没重新生成 / 图层被别处改过），观感就不一样 —— 用户肉眼已经感觉到了。
  * ⇒ 面板**当场对账**：缺哪些图层、paint 差在哪、主题与夜色档位是什么，让面板**直接回答**。
  */
 export interface ThemeParity {
@@ -491,7 +491,7 @@ export interface ThemeParity {
   note: string;
 }
 
-/** JSON 形状（只读我们用到的那几个字段） */
+/** JSON 形状（只读用到的那几个字段） */
 interface ThemeJson {
   themes?: Record<string, { layers?: Array<{ id?: string; type?: string; paint?: Record<string, unknown> }> }>;
 }

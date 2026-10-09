@@ -1,5 +1,5 @@
 <!--
-  WsChatDrawer.vue —— 「走近说话」的**对话抽屉**（`PLAN-GAMEPLAY.md:69-76` · 期 3 第二节）。
+  WsChatDrawer.vue —— 「走近说话」的**对话抽屉**（· 第二节）。
 
   ## 它是什么，不是什么
   它是**地图这一屏里**的说话入口（阶段② 的边界：只长在地图屏内，`GAMEPLAY-AC-LIKE-V2.md:70` C-5）：
@@ -51,7 +51,7 @@
         <span class="wscd__av" aria-hidden="true">{{ initial }}</span>
         <div class="wscd__who">
           <div class="wscd__name">{{ role?.name || t('worldsim.chatDrawer.noWho') }}</div>
-          <!-- 🔴 判词原样上屏（三态：正数 / 0（已量） / 数不出来 + 原因）。空串 = 还没判过，
+          <!-- 判词原样上屏（三态：正数 / 0（已量） / 数不出来 + 原因）。空串 = 还没判过，
                不硬凑一句话（宁可不写，也不写一句像模像样的假话）。 -->
           <div v-if="nearText" class="wscd__near">{{ nearText }}</div>
         </div>

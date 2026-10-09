@@ -5,7 +5,7 @@
  * 生成逻辑（`wsTransport.buildTransport`）与规则/样式（`wsTransportRules`）本来就只有一份，
  * 但"**把结果变成 source + 图层**"这件事原来是**代拍页 `ws3dshow.html` 里手写的**
  * （约 30 行：按 kind 分组 → 拼 GeoJSON → addSource/addLayer）。
- * 本轮 App 也要这一屏（机主：「App 的世界模拟 = 代拍页那一屏」）——
+ * 本轮 App 也要这一屏（App 的世界模拟 = 代拍页那一屏）——
  * 如果 App 再抄一遍，就正好落进本项目反复栽的坑：**同一件事两份实现，慢慢漂**。
  *
  * ⇒ 这里只做"**纯的函数**"：
@@ -103,7 +103,7 @@ export function buildTransportFor(
   center: [number, number],
   low = false
 ): TfResult {
-  /* 🔴 入参必须是 **GeoJSON FeatureCollection**（`{features:[{geometry:{coordinates}, properties}]}`）。
+  /* 入参必须是 **GeoJSON FeatureCollection**（`{features:[{geometry:{coordinates}, properties}]}`）。
      为什么值得一道护栏：**形状不对时它会静默产出 0 个点位**（页面上就是"交通设施一个都没有"
      且零报错）。本会话自检里就踩到过：把已经摊平的**数组** `[{pts, cls}]` 直接喂进来 ⇒
      `roads?.features` 是 `undefined` ⇒ `made:0 / kept:0`，看起来像"这一带没有设施"。
@@ -123,7 +123,7 @@ export function buildTransportFor(
   }
   const toRoad = (f: NonNullable<TfRoadsFc["features"]>[number]): TfRoad => ({
     pts: (f?.geometry?.coordinates as Array<[number, number]>) || [],
-    /* 🔴 走 `roadClassOf`（`class` → `rank` 兜底）：后端给的是 `rank`，只读 `class` 会让
+    /* 走 `roadClassOf`（`class` → `rank` 兜底）：后端给的是 `rank`，只读 `class` 会让
        **公交站恒为 0**（详见 `roadClassOf` 的注释与实测数字）。 */
     cls: roadClassOf(f?.properties) as TfRoad["cls"],
     name: typeof f?.properties?.name === "string" ? f.properties.name : undefined,
@@ -146,7 +146,7 @@ function isGeoFeature(f: unknown): boolean {
 }
 
 /**
- * 🔴 从**真实 `/api/roads` 的 properties** 里取"道路等级"（0 快速路 … 5 步道）。
+ * 从**真实 `/api/roads` 的 properties** 里取"道路等级"（0 快速路 … 5 步道）。
  *
  * ## 为什么专门写一个函数（2026-09-24 真机截图抓到的 bug，**已用真数据复现**）
  * 后端 (`world_map_rs` 的 osm 解析) 给的字段是 **`rank`**（0~5，见 `wsRoads.RoadRankStyle`
@@ -159,7 +159,7 @@ function isGeoFeature(f: unknown): boolean {
  * 读 class（旧）  → 交通设施 90 · 公交/斑马线/红绿灯/停车/出入口 =  0/60/30/0/0 · 上限裁掉 489
  * 读 rank（新）   → 交通设施 110 · 公交/斑马线/红绿灯/停车/出入口 = 20/60/30/0/0 · 上限裁掉 454
  * ```
- * ⚠️ **停车/出入口是 0 是另一回事**：它们要**楼栋脚印**（`parking` 要 ≥800m² 或商业/办公楼、
+ * **停车/出入口是 0 是另一回事**：它们要**楼栋脚印**（`parking` 要 ≥800m² 或商业/办公楼、
  * `driveway` 要 ≥1500m²）—— 真机那张截图是在"楼房没取到"的时刻拍的，楼栋为空 ⇒ 这两类必为 0。
  * 属**已量=0**（有输入、规则明确判否），不是"数不出来"。
  *
@@ -220,7 +220,7 @@ export function tfKindAllowed(kind: TfKind, low: boolean): boolean {
  * 交通设施插进来之后，光靠"先插的那一次"不能保证顺序。App 现在走同一条装配路，
  * ⇒ 同一条保险也要有，并且**如实报自愈次数**（不报就等于没做）。
  *
- * ⚠️ `add-roads` 这一步这里**只计数、不重取路网** —— 取数是 `WsDistrictMapLibre` 的职责，
+ * `add-roads` 这一步这里**只计数、不重取路网** —— 取数是 `WsDistrictMapLibre` 的职责，
  * 越权重取会把 Overpass 打第二遍（它下一次 `moveend` 会自己补回来）。
  */
 export function executeLayerOps(

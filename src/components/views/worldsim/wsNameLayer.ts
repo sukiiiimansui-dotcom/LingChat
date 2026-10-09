@@ -1,16 +1,16 @@
 /**
- * wsNameLayer.ts —— 🏷🗺 **名字层**的唯一真源（真名标签 / 区名标签 / 点选喂卡片）。
+ * wsNameLayer.ts —— **名字层**的唯一真源（真名标签 / 区名标签 / 点选喂卡片）。
  *
- * ## 机主原话（2026-09-26，验收标准）
- * 「**我要求每个显示的楼房都要有名字喵**，**如果太密集了就根据类型划定区域（如经济区，美食区）**，
- *  **每个名字和楼房都能点击查看信息**（要求有**精美的 mg 动画**）」
+ * ## 需求（2026-09-26，验收标准）
+ * **每个显示的楼房都要有名字**，**如果太密集了就根据类型划定区域（如经济区，美食区）**，
+ *  **每个名字和楼房都能点击查看信息**（要求有**精美的 mg 动画**）
  *
  * ## 三条实测事实决定了这一层的样子（都不是推测）
  * ① **真楼名只覆盖 2.0%**（渝中区 400m：101 栋里 2 栋有名）⇒「每栋都有真名」做不到；
  * ② **48px 网格在 904×341 舞台上只放得下 29 个四字楼名**（cap 26→200 仍是 29）⇒ 每栋挂可见标签放不下；
  * ③ **按类型划区只在 ~1km 粒度成立**（0.05° 上 `food` 过半 0 格、0.01° 上 11 格）
  *    ⇒ 区名聚合粒度 = **0.01° 子格**，取数粒度 = **0.05°**（两者本来就不同，不是"口径不符"）。
- * 机主拍板的口径：**屏上标签只给「真名 + 区名」；生成名只进信息卡**（＊标记 / 单独计数 / 绝不进数据与对话）。
+ * 已定的口径：**屏上标签只给「真名 + 区名」；生成名只进信息卡**（＊标记 / 单独计数 / 绝不进数据与对话）。
  *
  * ## 这一份管什么（全部规则，一处定义；App 与代拍页都只接线 —— PR 门禁 C1）
  * · **取数**：按视野算 `namesbundle`（真名点）与 `placesbundle`（片区真名）的 **0.05° 格**，
@@ -19,20 +19,20 @@
  * · **区名标签**：`wsZoneNames.planZoneNames`（真名优先 / 过半才算数据驱动 / 示意另算）+
  *   `createZoneModeGate`（迟滞：0.45 进 / 0.20 退 / 连续 2 次 / 400ms 防抖）。
  * · **密集 ⇒ 切区名**：密集时**小名字（POI）退场**、**大名字（行政区名 / 区片名）留在屏上**、
- *   区名进场 —— 机主要的是「真名 + 区名」，所以真名不会因为密集就全没了。
+ *   区名进场 —— 要求是「真名 + 区名」，所以真名不会因为密集就全没了。
  * · **点选**：每个节点带 `pick`（原样转交 `wsBuildingCard.buildingCardData`）⇒
  *   点标签与点楼体**是同一张卡**（`DESIGN-MG-MOTION.md` §4.4）。
  * · **动效参数**（`LABEL_MOTION`）：三幕 120/40/200ms + 错峰 25ms、hover 90 / 退让 120 / 复现 160、
  *   相机运动整层 0.25（80ms）→ moveend 复现 160ms、节点阶梯阈值 —— **数字只有这一处**。
  *
- * ## 🔴 红线（写在代码里，谁都别绕）
+ * ## 红线（写在代码里，谁都别绕）
  * 1. **生成名绝不进数据层、绝不进对话上下文**，本模块**核**了这条：`NameFacts.generatedOnScreen`
  *    是字面量类型 `0` —— 屏上出现的生成名**恒为 0 个**（生成名只出现在点击后的信息卡里）。
  * 2. **真名 / 数据驱动 / 示意**三档**样式必须不同**（`NameRenderNode.style`，宿主按它给 class）。
  * 3. 署名（ODbL）**只念包索引里的原话**（`index.attribution`），取不到写"署名取不到"，不编。
  * 4. 判词三态：**正数 / 0（已量）/ 数不出来（写原因）** —— 0 与"没测出来"永远分得开。
  *
- * ## ⚠️ 两处**必须如实记下来**的现状（不是设计选择，是约束）
+ * ## 两处**必须如实记下来**的现状（不是设计选择，是约束）
  * · `namesbundle` **没有**进 `wsOfflineFeed.SPECS`（那份表归性能线），所以这里的格 URL
  *   用本模块的常量 `NAMES_BUNDLE_DIR` 拼 —— **唯一**一处自己拼包路径的地方，已用自检钉住；
  *   正确收口方式是给 `SPECS` 加一个 `names` 项（`BundleKind` 加一个字面量），那是别人的文件，**已上报**。
@@ -75,7 +75,7 @@ import {
 
 /* ══ ① 常量（**只有这一处**；宿主与自检都不许再写一份） ═════════════════════════════════ */
 
-/** 真名包目录名（见文件头 ⚠️：`SPECS` 里还没有 `names`，这里是唯一自己拼包路径的地方） */
+/** 真名包目录名（见文件头 ：`SPECS` 里还没有 `names`，这里是唯一自己拼包路径的地方） */
 export const NAMES_BUNDLE_DIR = "namesbundle";
 /** 真名包自己的格边长（度）—— **取数**单位，与划区的 0.01° 不是一回事 */
 export const NAMES_BUNDLE_CELL_DEG = 0.05;
@@ -214,13 +214,13 @@ export interface NameRenderPlan {
   lite: boolean;
   /** 相机运动期间容器目标 opacity（§4.2：整层 1 → 0.25，只写 1 个节点） */
   cameraOpacity: number;
-  /* ── 🆕 2026-10-01（机主：「换字动画我想要的是**像高德地图那样可以不用重算**的」）──────────
+  /* ── 2026-10-01（换字动画应当**像高德地图那样不重算**）──────────
      增删只该发生在**真的需要**时，而且要**个别标签各自淡入淡出**，不是整层一起换。
      这三个字段就是"该谁动"的唯一真源（宿主照着做，自己不许再算一份 diff）：
        · `changed` = **集合变了没**（= `batch` 变没变）——**false ⇒ 禁止整层换字**（只更新坐标）；
        · `entered` = 这一批**新进来**的节点 id（宿主只给这几张播淡入）；
        · `exited`  = 这一批**退场**的节点（宿主让它们各自淡出后移除；位置已按**当前**相机投好）。
-     ⚠️ 代拍页不读这三个字段（它按 `batch` 走原来的整层换字）⇒ 旧调用点行为不变（可选字段）。 */
+     代拍页不读这三个字段（它按 `batch` 走原来的整层换字）⇒ 旧调用点行为不变（可选字段）。 */
   changed?: boolean;
   entered?: string[];
   exited?: NameRenderNode[];
@@ -246,7 +246,7 @@ export interface NameFacts {
   zoneDerived: number;
   /** 区名里**示意**的个数（屏上样式必须与真名不同） */
   zoneSketch: number;
-  /** 🔴 **屏上的生成名个数** —— 字面量 `0`：机主拍板"生成名只进信息卡"，这一条是机器可查的红线 */
+  /** **屏上的生成名个数** —— 字面量 `0`：已定"生成名只进信息卡"，这一条是机器可查的红线 */
   generatedOnScreen: 0;
   /** 避让统计（`pickLabels` 的现成字段；密度信号 = dropped/candidates） */
   candidates: number;
@@ -278,7 +278,7 @@ export interface NameFacts {
   attribution: string | null;
   /** 包自报的格边长（度） */
   cellSize: number | null;
-  /* ── 🆕 🧠 计划缓存读数（2026-10-01：机主要的"像高德那样不用重算"必须**可数**）───────────
+  /* ── 计划缓存读数（2026-10-01："像高德那样不用重算"必须**可数**）───────────
      判词三态在缓存上同样成立：`planComputes` = **真算过几次**（正数），`planReuses` = 命中几次。
      `planReason` = 这一轮为什么算/为什么复用（cold/tier/drift/data/viewport/reuse）。 */
   planComputes: number;
@@ -292,9 +292,9 @@ export interface NameLayer {
   /** 按视野补格 → 算标签/区名 → 出渲染计划（**永不抛**） */
   refresh(why?: string): Promise<NameFacts>;
   /**
-   * 🆕 **只重投影、不重排**（相机停下来的那一帧调；治"松手弹回"）。
+   * **只重投影、不重排**（相机停下来的那一帧调；治"松手弹回"）。
    *
-   * 机主 2026-10-01 的口径：拖动中/松手后标签要**贴在地图要素上**，但**重投影不该顺带重排**
+   * 2026-10-01 的口径：拖动中/松手后标签要**贴在地图要素上**，但**重投影不该顺带重排**
    * ⇒ 这里只把现有节点的经纬度锚点按**当前**相机重新投一次（O(N)，N = 屏上标签数 ≤ 26），
    *   **集合、`batch`、避让、上限、区名聚合一律不动** ⇒ 宿主 `changed=false` ⇒ 不会整层换字。
    * 返回新计划（同时已通过 `onPlan` 交给宿主渲染）；**还没算过任何一批** ⇒ 返回 null（什么都不做）。
@@ -315,8 +315,8 @@ export function nameVerdictLine(f: NameFacts): string {
   if (f.state === "uncounted") {
     return `🏷🗺 名字 数不出来：这一轮 0 格取到（格 ${f.hit}/${f.cells}${f.failed ? " · 失败 " + f.failed : ""}）`;
   }
-  /* counted：**真名 / 数据驱动 / 示意 三档分开写**，生成名单独写一个 0（机主拍板那条红线） */
-  /* 🔴 看板卡点名的三个可数指标：**显示 / 丢弃(避让) / 超上限** —— 分开写，不许合成一个数。
+  /* counted：**真名 / 数据驱动 / 示意 三档分开写**，生成名单独写一个 0（已定那条红线） */
+  /* 看板卡点名的三个可数指标：**显示 / 丢弃(避让) / 超上限** —— 分开写，不许合成一个数。
      候选数也带上（"显示 26 / 候选 67"才说明得清"为什么只有 26 个"）。 */
   return (
     `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}` +
@@ -327,7 +327,7 @@ export function nameVerdictLine(f: NameFacts): string {
        （0.05° 上 food 过半就是 0 格 —— 这条实测事实必须能从 HUD 上读出来）。 */
     ` · 子格 够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf}` +
     ` · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"}` +
-    /* 🆕 缓存读数：**复用几次 / 真算几次**（机主要的"不用重算"要能在屏上数出来，不靠调试出口）。
+    /* 缓存读数：**复用几次 / 真算几次**（"不用重算"要能在屏上数出来，不靠调试出口）。
        右侧那个词是**这一轮为什么**算/复用（reuse = 命中缓存 ⇒ 没重排、没换字）。 */
     ` · ♻ 复用 ${f.planReuses} / 算 ${f.planComputes}（${f.planReason}）`
   );
@@ -363,7 +363,7 @@ function emptyFacts(on: boolean): NameFacts {
   };
 }
 
-/** 真名包一格的 URL（见文件头 ⚠️：`SPECS` 里还没有 `names`） */
+/** 真名包一格的 URL（见文件头 ：`SPECS` 里还没有 `names`） */
 export function namesCellUrl(cellKey: string, dir = NAMES_BUNDLE_DIR): string {
   return `/${dir}/${cellKey}.json`;
 }
@@ -403,10 +403,10 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   let indexCells: Set<string> | null = null;
   let indexFact: { attribution: string | null; cellSize: number | null; minConf: number | null; cells: number | null } | null = null;
 
-  /* ── 🧠 计划缓存（机主 2026-10-01：「换字动画我想要的是**像高德地图那样可以不用重算**的」）──────
+  /* ── 计划缓存（2026-10-01 换字动画应当**像高德地图那样不重算**）──────
      判据**只有一份**（在 `wsLabels.createLabelPlanCache`）：缩放跨档 / 中心漂移超视野短边的 25% /
      候选数据变了 / 视口尺寸变了 —— 其余情况**复用上一次的规划结果**（不重排、不换字、只重投影）。
-     ⚠️ 这里只存"上一次真算过"的那一份**模板**（节点带经纬度锚点）；复用时要按**当前**相机重新投影，
+     这里只存"上一次真算过"的那一份**模板**（节点带经纬度锚点）；复用时要按**当前**相机重新投影，
         并且**必须是新对象/新数组**（Vue 的 ref 同引用不触发渲染 ⇒ 位置就不会更新）。 */
   const planCache: LabelPlanCache<PickResult> = createLabelPlanCache<PickResult>();
   interface PlannedPayload {
@@ -463,14 +463,14 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   /**
    * 视口尺寸（CSS px）。
    *
-   * 🔴 2026-09-28 性能账单实测：**这个函数在拖动手势期花了 1.1~1.2 秒**
+   * 2026-09-28 性能账单实测：**这个函数在拖动手势期花了 1.1~1.2 秒**
    *    （`viewportOf` → `getCanvas()` → `clientWidth` 会**强制同步布局**，每调一次算一次）。
    * 现在：
    *   · **优先读绘制缓冲尺寸**（`canvas.width/height`）—— 纯属性读，**不触发布局**；
    *     maplibre 的 `canvas.width` 本来就是 `CSS 尺寸 × dpr`，除掉 dpr 就是 CSS px；
    *   · 结果按 `缓冲尺寸@dpr` **缓存**（同尺寸直接命中，不再读任何东西）；
    *   · 缓冲拿不到（0）时才退回 `clientWidth/clientHeight`（会强制布局，但这是罕见分支）。
-   * ⚠️ 语义不变：拿不到合法尺寸仍返回 null（调用方按"数不出来"处理）。
+   * 语义不变：拿不到合法尺寸仍返回 null（调用方按"数不出来"处理）。
    */
   let vpKey = "";
   let vpVal: { width: number; height: number } | null = null;
@@ -519,7 +519,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   }
 
   /**
-   * 🔴 2026-09-28 **同一格同时只许有一个在飞的请求**（性能账单实测的浪费）。
+   * 2026-09-28 **同一格同时只许有一个在飞的请求**（性能账单实测的浪费）。
    *
    * 实测读数（代拍页，一次加载）：`/namesbundle/106.55000_29.55000_0.05.json`（47,973 B）
    * 被取 **3~5 次**、`/placesbundle/` 同一个格 **4~6 次** ⇒ 页面 fetch 总量 373~376 KB 里
@@ -594,7 +594,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     try {
       await loadIndex();
       const cellSize = indexFact?.cellSize ?? null;
-      /* 🔴 包自报的格边长优先（0.05 与 0.02 那两次事故的硬化）：拿不到索引 ⇒ 数不出来 */
+      /* 包自报的格边长优先（0.05 与 0.02 那两次事故的硬化）：拿不到索引 ⇒ 数不出来 */
       if (indexFact === null) {
         last = { ...emptyFacts(true), state: "no-index", why: "真名包索引没读到" };
         return emit();
@@ -639,7 +639,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       /* ── 真名标签（POI + 片区 + 行政区 + 有名字的楼）──
          `pickLabels` 的产出只有屏幕坐标（`PlacedLabel` 不带经纬度），而**跟手**需要经纬度锚点、
          **点选**需要原始记录 ⇒ 这里同时建两张按 id 索引的表，节点生成时取。
-         ⚠️ 这一段**每轮都跑**：它就是"候选集"本身，缓存判据 `dataSig` 要用它。
+         这一段**每轮都跑**：它就是"候选集"本身，缓存判据 `dataSig` 要用它。
             被省掉的是它**下游**那一大块（投影 + 避让 + 上限 + 区名聚合 + 节点计划，见下面的 reuse 分支）。 */
       const items: LabelItem[] = [];
       const anchorOf = new Map<string, [number, number]>();
@@ -650,7 +650,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         const lng = Array.isArray(pp) ? Number(pp[0]) : Number(p.lng);
         const lat = Array.isArray(pp) ? Number(pp[1]) : Number(p.lat);
         if (!n || !Number.isFinite(lng) || !Number.isFinite(lat)) continue;
-        /* POI 真名借"小名字"那一档（见文件头 ⚠️：不改 `wsLabels` 的种类表） */
+        /* POI 真名借"小名字"那一档（见文件头 ：不改 `wsLabels` 的种类表） */
         const id = "poi:" + String(p.i ?? n);
         items.push({ id, kind: "building", name: n, lng, lat, source: "real" });
         anchorOf.set(id, [lng, lat]);
@@ -686,12 +686,12 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       const m = host.map();
       const vp = viewportOf();
       const z = m ? m.getZoom() : NaN;
-      /* 🔴 **取到的格也算候选数据**：新格/新名字进来 = 数据变了 ⇒ 必须重算（机主点名的第 ③ 条）。
+      /* **取到的格也算候选数据**：新格/新名字进来 = 数据变了 ⇒ 必须重算（指定的第 ③ 条）。
          格键**排序后**再进指纹：`bundleCellsForView` 按"离中心远近"排序，中心一动同一批格就换序。 */
       const okCellKeys = wanted.filter((c) => cells.get(c.key)?.ok).map((c) => c.key).sort();
       const dataSig = `${labelItemsSig(items)}|w=${wanted.length}|c=${hitCells}|ok=${okCellKeys.join(",")}`;
 
-      /* ── 🧠 缓存判据（**只有这一处**）：该复用还是该重算 ──────────────────────────────
+      /* ── 缓存判据（**只有这一处**）：该复用还是该重算 ──────────────────────────────
          命中 ⇒ **不跑**投影/避让/上限/区名聚合/节点计划，只按当前相机重投影（见 `planFromPayload`）。 */
       let key: LabelPlanKey | null = null;
       const vb = view.bounds;                      // 类型上可能是 null（`viewOf` 里已校过有限性）
@@ -737,14 +737,14 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           : pickLabels(items, (lng, lat) => m.project([lng, lat]), vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
       }
       const density = picked ? (picked.candidates > 0 ? picked.droppedByCollision / picked.candidates : null) : null;
-      /* ⚠️ 采样**一轮只做一次**：上面复用分支里若闸门已经采样过（并真的切了档），这里就不再采一次
+      /* 采样**一轮只做一次**：上面复用分支里若闸门已经采样过（并真的切了档），这里就不再采一次
          （重复采样会把"连续 N 次"的连击数喂大一倍 = 闸门行为被悄悄改掉）。 */
       const g = gateForced === null ? gate.sample(density, now()) : { zoneMode: gateForced, changed: true, reason: "复用分支里闸门已切档" };
       const mode: NameMode = g.zoneMode ? "zones" : "names";
-      /* 🔴 **名额必须分两半**（2026-09-26 真浏览器实测抓到的产品缺陷）：
+      /* **名额必须分两半**（2026-09-26 真浏览器实测抓到的产品缺陷）：
          实测那一屏有 8 个**真名区**（placesbundle 的社区/街道名，排序里 real 永远在前），
          8 个名额被它们占满 ⇒ **数据驱动区（「零售区」）一个都上不了屏** ——
-         而机主要的正是"按类型划出来的区"（经济区/美食区那种）。
+         而正是"按类型划出来的区"（经济区/美食区那种）。
          ⇒ 真名区最多 `NAMES_ZONE_REAL_MAX` 个，剩下的名额留给**算出来的**区；
            两边各自按 `planZoneNames` 的确定性顺序取，合起来 ≤ `NAMES_ZONE_CAP`。 */
       const zoneReal = zonesPlan.zones.filter((z) => z.source === "real");
@@ -779,7 +779,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           /* 密集：**小名字退场**（POI），**大名字留在屏上**（行政区名 / 区片名），区名进场 */
           const big = picked.shown.filter((s) => s.kind === "admin" || s.kind === "place").slice(0, NAMES_BIG_KEEP);
           for (const s of big) nodes.push(nodeOfLabel(s));
-          /* 🔴🔴 2026-09-26 机主真机：「**楼名与楼对不上位置**」——区名原来**不按视野过滤**：
+          /* 2026-09-26 **楼名与楼对不上位置**——区名原来**不按视野过滤**：
              候选来自"取过的格"（含挪走之前留下的旧格）⇒ 真浏览器实测 **7/8 个区名的锚点在画布外**
              （`@(1892,2074)`、`@(8554,3166)`…），屏上那几个正好是"看着像乱放"的。
              真名那条路早就有视野过滤（`pickLabels(..., vp, ...)`），区名必须同口径：
@@ -798,12 +798,12 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       nodes.forEach((n, i) => { n.slot = i; });
       const lite = nodes.length > LABEL_MOTION.liteAbove;
       const sig = mode + "|" + nodes.map((n) => n.id + ":" + n.text).join(",");
-      /* 🔴 `changed` 就是"集合变没变"（= `batch` 变没变）——**宿主只在它为 true 时才允许整层换字** */
+      /* `changed` 就是"集合变没变"（= `batch` 变没变）——**宿主只在它为 true 时才允许整层换字** */
       const sigChanged = sig !== lastBatchSig;
       if (sigChanged) { batch++; lastBatchSig = sig; }
-      /* 🆕 该谁动：**新来的 / 要走的**那几张（其余的一张都不许动）——
+      /* 该谁动：**新来的 / 要走的**那几张（其余的一张都不许动）——
          退场节点的位置按**当前**相机投好（它们上一次的坐标是上一台相机的，直接用就是错位）。
-         🔴 判据用 `id + 文案`（与 `sig` 同一口径），**不是只用 id**：万一同一个 id 的文案变了
+         判据用 `id + 文案`（与 `sig` 同一口径），**不是只用 id**：万一同一个 id 的文案变了
             （例：同一个区的名字被改、POI 改名），只用 id 判就会**原地改字** —— 那正是项目红线
             「绝不允许看着旧名字变成新名字」。用 id+文案 ⇒ 旧的那张进 `exited`（淡出）、
             新的那张进 `entered`（淡入），原地做一次交叉淡化，一个字都不会"变"。 */
@@ -819,7 +819,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       };
 
       const realLabels = nodes.filter((n) => n.style === "real").length;
-      /* 🔴 「区名」的计数口径：**带 pick.kind==="zone" 的节点**（而不是"样式不是 real"）——
+      /* 「区名」的计数口径：**带 pick.kind==="zone" 的节点**（而不是"样式不是 real"）——
          因为真名区（`source:"real"` 的区名）样式就是 real，按样式数会把它算成真名标签，
          于是"区名 0 个"与实际不符（2026-09-26 真浏览器实测抓到的读数矛盾，就是这一条）。 */
       const zoneLabels = nodes.filter((n) => n.pick.kind === "zone").length;
@@ -875,7 +875,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   }
 
   function nodeOfZone(z: ZoneName): NameRenderNode {
-    /* 🔴🔴 2026-09-26 机主真机：「**楼名与楼对不上位置 / 点开后完全不一致**」——
+    /* 2026-09-26 **楼名与楼对不上位置 / 点开后完全不一致**——
        原来这里把 `x/y` 硬写成 0（以为宿主会自己重投影），可宿主只拿 `n.x/n.y` 写 `translate3d`
        ⇒ **所有区名标签全堆在画布左上角**（实测 8 个区名 @(28,5)(17,5)(11,5)(23,5)…），
        点哪个都点到压在它上面的另一个 ⇒ 既"对不上位置"又"点开不一致"。
@@ -909,9 +909,9 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   }
 
   /**
-   * 🆕 **只重投影、不重排**（相机停下来的那一帧调；治"松手弹回 ~600ms"）。
+   * **只重投影、不重排**（相机停下来的那一帧调；治"松手弹回 ~600ms"）。
    *
-   * 机主 2026-10-01：「拖动地图时，名字标签应该**只是跟着地图滑**」——
+   * 2026-10-01 拖动地图时，名字标签应该**只是跟着地图滑**——
    * 拖动期间宿主用**容器一次 `translate3d`** 跟手（O(1)），可容器在 `moveend` 归零之后、
    * 重排（600ms 去抖 + 取包）完成之前，节点还钉在**上一台相机**的坐标上 ⇒ 那 600ms 里整层是错位的。
    * 这里把这段补上：按**当前**相机把每个保留节点重投一次（O(N)，N ≤ 26），

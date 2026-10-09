@@ -1,9 +1,9 @@
 /**
- * wsGwLayer.ts —— 🌊🌳 **真水系 / 绿地**的**唯一真源**（代拍页与 App 宿主共用同一份）。
+ * wsGwLayer.ts —— **真水系 / 绿地**的**唯一真源**（代拍页与 App 宿主共用同一份）。
  *
  * ## 为什么有这一份
- * 机主选了「**自己画**」：Esri 底图在 z17 这一带两个服务都只给占位图（实测同一张 2521B），
- * 屏幕上是**一片没有水、没有绿植**的楼群。于是我们用 `/gwbundle/<格>.json`（`world_map/gw_bundle.py`
+ * 用户选了「**自己画**」：Esri 底图在 z17 这一带两个服务都只给占位图（实测同一张 2521B），
+ * 屏幕上是**一片没有水、没有绿植**的楼群。于是用 `/gwbundle/<格>.json`（离线数据生成脚本
  * 从 OSM/Overpass 取的真多边形，**ODbL**）自己画两层 `fill`。
  *
  * 这份文件把页面里那段原型（`public/ws3dshow.html` 的 `refreshGw()`）**整段抽出来**，
@@ -12,7 +12,7 @@
  *
  * ## 这一份管什么（全部规则，一处定义）
  * · **视野 → 格键**：走 `wsFeatureStore.bundleCellsForView()`（`floor(x/deg)*deg`，0.05°）
- *   —— 与离线包**同口径**。🔴 这里的格边长只取常量 `GW_BUNDLE_CELL_DEG`，
+ *   —— 与离线包**同口径**。这里的格边长只取常量 `GW_BUNDLE_CELL_DEG`，
  *   **绝不** "包里写多少就按多少算"：0.02/0.05 两套口径那次事故，后果是**把有数据说成没数据**。
  * · **取数**：走共享管道 `wsOfflineFeed.createBundleFeed({kind:"gw"})`（索引优先 / 串行 /
  *   每格独立超时 / 包外与失败分开计 / 并进仓库去重），这里**一行取数循环都不写**。
@@ -23,7 +23,7 @@
  * · **署名**：只念 `index.json` 里那句**原话**（ODbL 要求署名随数据走），不在 TS 里重写一句。
  * · **一行判词**：`gwVerdictLine()` —— **三态**：正数 / 0（已量）/ 数不出来（写清原因）。
  *
- * ## 三态纪律（机主定的红线）
+ * ## 三态纪律（既定的红线）
  * `facts()` 里的 `water`/`green` **数得出来才是数字**：索引没读到、主题没色、口径不符、
  * 一格都没取到 ⇒ `water/green` 保持 `null`，判词写「数不出来：<原因>」，
  * **绝不写 0 冒充"这里没有水"**。
@@ -48,7 +48,7 @@ import { type FeatureStore, bundleCellsForView, createFeatureStore, metersBetwee
    实现**只有一份**，住在 `wsOfflineFeed` 里（与楼 / 路 / 片区名的解析器同族，也正因为在那儿，
    离线管道 `SPECS.gw.parse` 才能直接用它）。这里**再导出一次**：好让"水/绿地的全部规则"从
    **一个入口**就取得全 —— 页面、App 宿主、自检、以后别的宿主都只 import 这一个模块。
-   ⚠️ 是 re-export，**不是**第二份实现：改归一化只改 `wsOfflineFeed.bundleGwOf()` 一处。 */
+   是 re-export，**不是**第二份实现：改归一化只改 `wsOfflineFeed.bundleGwOf` 一处。 */
 export { bundleGwOf, gwIdOf, gwPointOf } from "./wsOfflineFeed";
 
 /* ══ ① 术语与常量（图层 id / 格尺寸只有一个来源：这里与 `wsOfflineFeed` 的 SPECS.gw） ═══════ */
@@ -68,7 +68,7 @@ export function gwSourceKeyOf(cellKey: string): string {
   return GW_SOURCE_KEY_PREFIX + cellKey;
 }
 
-/** 保留半径的下限（米）。🔴 **不能给小**：一格 0.05° 在纬度上就有 **~5.6 km**（经度 ~4.8 km，对角线 ~7.4 km），
+/** 保留半径的下限（米）。**不能给小**：一格 0.05° 在纬度上就有 **~5.6 km**（经度 ~4.8 km，对角线 ~7.4 km），
  *  给 3 km 时仓库会把**刚取回来那一格自己的要素**当成"太远"当场淘汰 ⇒ 判词少报。
  *  这不是推测：2026-09-26 真浏览器 A/B 实测（同 URL、同机位）抽前 `水 6 面 · 绿 132 面`、
  *  抽后 `水 4 面 · 绿 84 面` —— 差的那批正是被淘汰的（见 `gwRetainRadiusM()`）。 */
@@ -144,7 +144,7 @@ export interface GwMapLike {
   getSource(id: string): { setData(d: unknown): void } | undefined;
   addSource(id: string, spec: Record<string, unknown>): void;
   addLayer(spec: Record<string, unknown>, beforeId?: string): void;
-  /** 🆕 2026-09-30：把已有图层挪位置（治"被底图栅格压住"）。宿主没暴露 ⇒ 跳过，不抛。 */
+  /** 2026-09-30：把已有图层挪位置（治"被底图栅格压住"）。宿主没暴露 ⇒ 跳过，不抛。 */
   moveLayer?(id: string, beforeId?: string): void;
   /** 现有图层的读取口（MapLibre 的 `getStyle()`）；取不到 ⇒ 追加在最上层，不抛 */
   getStyle?(): { layers?: Array<{ id?: unknown; type?: unknown }> } | undefined;
@@ -156,12 +156,12 @@ export interface GwMapLike {
  * 取不到（这一带没有楼体层 / 拿不到样式）⇒ `undefined` = 追加到最上层（与页面原来的兜底一致，不抛错）。
  */
 /**
- * 🌊🌳 **水/绿该插到谁之前**（层序锚点）。
+ * **水/绿该插到谁之前**（层序锚点）。
  *
- * 🔴 2026-09-30 机主真机实测（「那个江还是显示不了」）后的重写：
+ * 2026-09-30 真机实测（「那个江还是显示不了」）后的重写：
  *   逐像素比对两张 2392×1080 截图 —— 画面里 **64.7% 的像素是底图瓦片的水色 `#C0D8E0`**，
- *   而我们水层的青调（`ai.water` 合成色）**只占 0.23%**；同时 HUD 明明写着
- *   `🌊🌳 水 30 面 · 绿 255 面（真数据 · 格 3/3）` ⇒ **数据在、层也建了，但被底图栅格盖住了**。
+ *   而水层的青调（`ai.water` 合成色）**只占 0.23%**；同时 HUD 明明写着
+ *   `水 30 面 · 绿 255 面（真数据 · 格 3/3）` ⇒ **数据在、层也建了，但被底图栅格盖住了**。
  *   （旧口径是"插到第一个 `bld*` 之前"，可底图那几层 `bg/base/tint` 是**后加的**：
  *    主题在图层建好之后才落地 ⇒ 栅格被追加到最上面，把水/绿整片压住。）
  *
@@ -170,7 +170,7 @@ export interface GwMapLike {
  *      （锚点不存在/它就是最后一层 ⇒ 返回 undefined = 追加到最上，也就是"在栅格之上"）；
  *   ② 没有底图栅格（样式还没落地等）⇒ 退回老口径"第一个 `bld*` 之前"；
  *   ③ 都没有 ⇒ undefined（追加到最上）。
- * ⚠️ 刻意**不**拿 `ref`（注记栅格）与 `prerender*` 当参照：LOD 的设计就是"远景让预渲染瓦片盖住矢量层"，
+ * 刻意**不**拿 `ref`（注记栅格）与 `prerender*` 当参照：LOD 的设计就是"远景让预渲染瓦片盖住矢量层"，
  *    水/绿跟着它们跑到最上面会把那套设计弄反。
  */
 export function gwBeforeIdOf(m: GwMapLike): string | undefined {
@@ -213,7 +213,7 @@ export interface GwApplyResult {
 
 /**
  * 把两种要素落成两层 `fill`。
- * ⚠️ `beforeId` **每次只算一次**（两层用同一个锚点）—— 与页面原实现一致；
+ * `beforeId` **每次只算一次**（两层用同一个锚点）—— 与页面原实现一致；
  * 颜色**必须由调用方从主题取好**（这里没有兜底色，取不到就别调它）。
  */
 export function applyGwLayers(opts: {
@@ -225,7 +225,7 @@ export function applyGwLayers(opts: {
   const out: GwApplyResult = { added: [], updated: [], layers: [], sources: [], errs: [] };
   const m = opts.m;
   if (!m) return out;
-  /* 🔴 2026-09-29：**锚点不存在时不许让整层消失**。
+  /* 2026-09-29：**锚点不存在时不许让整层消失**。
      实测（App 页无头，面板原文）：地图库报了 12 条
      `Cannot add layer "road-casing-N" before non-existing layer "ref"` —— 说明"算 beforeId 那一刻还在、
      真正 addLayer 时已经被换掉"（迟到 setStyle / 主题重挂，本仓栽过多次的那一类）**是常态风险**。
@@ -275,12 +275,12 @@ export function applyGwLayers(opts: {
       out.errs.push(`${id} ${String((e as Error)?.message || e).slice(0, 60)}`);
     }
   }
-  /* 🔴 2026-09-30：**只在"确实被底图栅格压住"时**才把水/绿挪一次（幂等、便宜、无噪音）。
+  /* 2026-09-30：**只在"确实被底图栅格压住"时**才把水/绿挪一次（幂等、便宜、无噪音）。
      为什么不能每轮无条件 `moveLayer`：第一次上线的版本就是这么写的，结果 HUD 里冒出
      `gw-water moveLayer 失败（Cannot read properties of null …）`——样式在"算锚点"与"挪层"
      之间被换掉时，MapLibre 内部会读到已失效的层对象。既然目的是"别被压住"，
      那就**先看层序、被压住才动手**，并且**best-effort 不报错**（真正要暴露的是"有没有画出来"，
-     那件事由 HUD 的 `🌊🌳 …` 判词负责）。 */
+     那件事由 HUD 的 `…` 判词负责）。 */
   try {
     const ls = (m as { getStyle?: () => { layers?: Array<{ id?: unknown }> } | undefined }).getStyle?.()?.layers || [];
     let lastBase = -1;
@@ -431,7 +431,7 @@ export function gwVerdictLine(f: GwFacts): string {
 
 /**
  * 页面那个 `window.__GW__` 的**形状**（自证字段；探针读它）。
- * ⚠️ 字段名与页面历史版本**逐字相同**（`on/index/attribution/cells/hit/err/water/green`）——
+ * 字段名与页面历史版本**逐字相同**（`on/index/attribution/cells/hit/err/water/green`）——
  * 换名字等于让探针读一个不存在的字段（本项目反复踩过"自证字段撒谎"）。
  */
 export interface GwSnapshot {
@@ -523,7 +523,7 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
   let last: GwFacts = emptyFacts(host.enabled ? host.enabled() : true);
   let indexFact: BundleIndexFact | null = null;
   /**
-   * 🔴 **在飞的索引加载**（2026-09-29 加的，治并发）：
+   * **在飞的索引加载**（2026-09-29 加的，治并发）：
    * 只有这一个 promise 会真的发请求，谁后到就 await 同一份 ⇒ 既不会重复取，也不会
    * 出现"进度标志已置真、数据还没写"的窗口（那个窗口会让 `idx.cellSize` 撞 null）。
    * 旧的 `indexDone` 布尔已被它取代（"读过没有"现在等价于 `indexFact !== null`）。
@@ -600,26 +600,26 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
     }
     try {
       /* ① 索引（一次；失败也要记住，别每帧重试）—— 署名与"哪些格存在"都从这里来 */
-      /* 🔴🔴 **2026-09-29 修的真 bug：并发 refresh 撞 `null.cellSize`** ——
+      /* **2026-09-29 修的真 bug：并发 refresh 撞 `null.cellSize`** ——
          原写法是 `if (!indexDone) { indexDone = true; const f = await loadBundleIndex(...); indexFact = f; ... }`
          ⇒ `indexDone` **在 await 之前**就置了 true：并发的第二次 refresh（开页时 `init` 与 `moveend`
          各 kick 一次，几乎必中）会跳过加载，直接走到下面 `const idx = indexFact` ——
          而那次赋值**还没发生**（`indexFact` 仍是初始的 null）⇒ `idx.cellSize` 抛
          `Cannot read properties of null (reading 'cellSize')` ⇒ **整轮水/绿层不画**，
          HUD 上只留一行红字（真机表现：**数据都对、画面上就是没有江**）。
-         ⚠️ 这个坑在本文件的历史注释里出现过一次（`wsOfflineFeed.ts:1148-1153` 的"indexFact 仍是 null"
+         这个坑在本文件的历史注释里出现过一次（`wsOfflineFeed.ts:1148-1153` 的"indexFact 仍是 null"
          那段），当时只修了"加载函数永不抛"，**没修调用方的并发**。
          ⇒ 现在改成**共享同一个在飞 promise**：谁先到谁发起，后来的 await 同一份；
          并且**兜一道 null 检查**（拿不到就如实写"数不出来"，绝不 deref）。 */
       if (!indexFact) {
         if (!indexInflight) {
-          /* 🔴 **F6（2026-10-01 性能审计 §5.5）：索引只取一次。**
+          /* **F6（2026-10-01 性能审计 §5.5）：索引只取一次。**
              原来这里直连 `loadBundleIndex(host.fetchCell, "gw")`，而下面 `feed.refresh()` 内部
              还会自己读一条（`ensureIndex`）⇒ 实测 `gwbundle/index.json` **被取了两遍**
              （@7028.1 与 @7130.1，同一份文件、同一个 URL）。
              现在改成走 **feed 自己那条在飞 promise**（`feed.ensureIndex()`）：谁先到谁发起，
              后面的（含 `feed.refresh()`）await 同一份 ⇒ 一个 URL 一次。
-             ⚠️ 语义没动：目录候选顺序、`cellSize` 对拍、三态判词都还是 feed 里那一份；
+             语义没动：目录候选顺序、`cellSize` 对拍、三态判词都还是 feed 里那一份；
              这里只是**不再另起一条读取路径**。 */
           indexInflight = feed.ensureIndex().then((f) => {
             indexFact = f;
@@ -639,7 +639,7 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
         last = nextFacts(last, true, { state: "uncounted", why: "索引还没读回来（并发 refresh）" });
         return emit();
       }
-      /* ② 口径对拍（🔴 0.02/0.05 那次事故的硬化）：不符就**一个格都不取** —— 说"包外"是最坏的那种谎 */
+      /* ② 口径对拍（0.02/0.05 那次事故的硬化）：不符就**一个格都不取** —— 说"包外"是最坏的那种谎 */
       if (idx.cellSize !== null && Math.abs(idx.cellSize - GW_BUNDLE_CELL_DEG) > 1e-9) {
         last = nextFacts(last, true, {
           state: "size-mismatch",
@@ -670,7 +670,7 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
       const view = host.view();
       const plan = gwPlanForView(idx.cells, view.bounds, view.center);
       const facts = feed.facts();
-      /* 🔴 **视野拿不到**（地图还没就绪 / 降级路）⇒ 也是「数不出来」，**不许**报成"格 0/0 的已量 0"：
+      /* **视野拿不到**（地图还没就绪 / 降级路）⇒ 也是「数不出来」，**不许**报成"格 0/0 的已量 0"：
          那是把"没法量"说成"量过了，是 0"。 */
       if (!plan) {
         last = nextFacts(last, true, {
@@ -688,7 +688,7 @@ export function createGwLayer(host: GwLayerHost): GwLayer {
       const keys = plan.keys;
       const hit = keys.reduce((n, k) => n + (store.has(gwSourceKeyOf(k)) ? 1 : 0), 0);
       const uncounted = keys.length > 0 && hit === 0;
-      /* 🔴 **三态**：一格都没取到 ⇒ `water/green` 保持 `null`（判词写"数不出来"，原因写明），
+      /* **三态**：一格都没取到 ⇒ `water/green` 保持 `null`（判词写"数不出来"，原因写明），
          `recount()` **绝不能**在这一态跑 —— 它会把"数不出来"改写成 0 面，那就是**把没测出来说成没有**。 */
       if (uncounted) {
         last = nextFacts(last, true, {

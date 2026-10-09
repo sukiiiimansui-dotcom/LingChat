@@ -1,7 +1,7 @@
 /**
  * wsArtParams.ts —— **楼体美术「取参」的共享真源**（2026-09-26 抽出）。
  *
- * ## 为什么要有它（机主真机原话）
+ * ## 为什么要有它（真机原话）
  * 「App 页用的建筑模型**不是 art1**，每次滑动建筑都变了，名字也没有」。
  *
  * 实测（不是猜）：
@@ -14,11 +14,11 @@
  *
  * 「观感参数只长在页面里」= 第二份真相（PR 门禁 C1 要防的形状）⇒ 抽到这里，页面/宿主都只调这一份。
  *
- * ## 硬约束（`ws_art_params_selftest.mjs` 钉着）
- * 🔴 **`art=1` 必须恒等返回**：`artRamp(ramp, 1) === ramp`（**同一个引用**，不是"等值"）——
+ * ## 硬约束（回归测试 钉着）
+ * **`art=1` 必须恒等返回**：`artRamp(ramp, 1) === ramp`（**同一个引用**，不是"等值"）——
  *    这是"不给参数 = 旧版一个字节都不变"的机器可断言形式。同理 `bldArtParamsOf(theme, {art:1, look:1})`
  *    出来的 `outline/vgrad/opacity/stops/lineWidth/rampColor` 必须与页面旧实现逐字段相同。
- * 🔴 **纯函数**：不读 `location`（`?art=` 的解析单独一个 `parseArtParam(search)`），
+ * **纯函数**：不读 `location`（`?art=` 的解析单独一个 `parseArtParam(search)`），
  *    不读全局主题，无随机、无时间 —— 同输入同输出。
  *
  * ## 与 `wsDistrictScene.bldLayerSpecsFor` 的分工
@@ -40,7 +40,7 @@ export const WS_ART_RAMP_HI: readonly string[] = ["#CFEDFF", "#E2F6FF", "#F2FCFF
 
 /**
  * 取不到主题时的色阶兜底（页面原来那份 `FALLBACK_RAMP`，**逐字搬过来**）。
- * ⚠️ 这是"主题没到位"时的兜底配方，**不是** `wsMapTheme.ANIME`（两者值不同，别混）。
+ * 这是"主题没到位"时的兜底配方，**不是** `wsMapTheme.ANIME`（两者值不同，别混）。
  */
 export const WS_BLD_FALLBACK_RAMP: ArtRampPoint[] = [
   [3, "#23323e"], [8, "#2d4356"], [16, "#3a586f"], [30, "#4a7290"],
@@ -54,16 +54,16 @@ export const WS_BLD_FALLBACK_OPACITY = 0.97;
 
 /**
  * 描边的 zoom→宽度 **停靠点**（单一真源：样式表达式与 HUD 显示都从这一份来，别写两遍）。
- * 机主反馈"看不出变化" ⇒ 近景放大一档（远景仍保持细）。
+ * 用户反馈"看不出变化" ⇒ 近景放大一档（远景仍保持细）。
  */
 export const WS_BLD_OUTLINE_STOPS: ReadonlyArray<readonly [number, number]> = [
   [13, 0.5], [15, 1.6], [16.5, 3.4], [18, 4.2],
 ];
 
 /**
- * 🎨 **补丁表（单一真源）**：`art≥2` 要改的"图层 → 键 → 值"。
+ * **补丁表（单一真源）**：`art≥2` 要改的"图层 → 键 → 值"。
  * `applyArt()` 按它改样式；`artReadback()` 按它读回**实时值**做回证 —— **同一份表**，
- * 所以"改了但没生效"一定会在回证表里露出来（机主第一反馈："这变了个啥"）。
+ * 所以"改了但没生效"一定会在回证表里露出来（用户第一反馈："这变了个啥"）。
  */
 export interface WsArtPatchRow {
   id: string;
@@ -74,7 +74,7 @@ export interface WsArtPatchRow {
   why: string;
 }
 export const WS_ART_PATCHES: readonly WsArtPatchRow[] = [
-  /* 🆕 art=3：底图整体往"水青"推（**我们没有水系矢量数据** —— 河/湖是栅格底图里的像素，
+  /* art=3：底图整体往"水青"推（**没有水系矢量数据** —— 河/湖是栅格底图里的像素，
      所以只能调 raster 的整体饱和度/亮度，**不能假装给水体单独上色**） */
   { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.6, why: "底图更青（**保守**：0.72 洗掉了路与注记）" },
   { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 0.94, why: "底图更亮但**不顶到 1**（顶到 1 吃掉层次）" },
@@ -106,8 +106,8 @@ export function lookIdOf(look: number): "game" | null {
 /**
  * 楼体色阶：`art=2` 把**高段**推到近白（**不动主题基准值**，只换这一页/这一屏用的那一份拷贝）。
  *
- * 🔴 **`art !== 2` ⇒ 原样返回入参（同一个引用）** —— "不给参数 = 一个字节都不变"。
- * ⚠️ 改写循环里的下标是 `hi[hi.length - 1 - i]`（不是 `hi[i]`）：色阶长度不足 4 档时，
+ * **`art !== 2` ⇒ 原样返回入参（同一个引用）** —— "不给参数 = 一个字节都不变"。
+ * 改写循环里的下标是 `hi[hi.length - 1 - i]`（不是 `hi[i]`）：色阶长度不足 4 档时，
  *    最后几档取的是 `hi` 的**尾部**色。照搬页面旧实现，别"顺手改成看着更对的写法"。
  */
 export function artRamp(ramp: ArtRampPoint[], art: number): ArtRampPoint[];
@@ -141,11 +141,11 @@ export function outlineWidthExpr(): unknown[] {
 }
 
 /**
- * 🎮 楼体色阶**表达式**。
+ * 楼体色阶**表达式**。
  * · 基准版 = 平滑插值（`interpolate`，8 档）；
  * · `look=2` = **硬边 `step`（cel 分档）** —— 抄 cel shading 的"三档之间是硬边"。
  *
- * ⚠️ **停靠点与颜色都来自主题**（`ramp`），这里只决定"**插值形式**" ⇒ 换观感换的是关系，
+ * **停靠点与颜色都来自主题**（`ramp`），这里只决定"**插值形式**" ⇒ 换观感换的是关系，
  *    不是又一份配色（调用方里没有一个楼体色号）。
  *
  * @param stops 已铺平的 `[h, c, h, c, …]`（= `bldArtParamsOf` 产出的 `stops`）
@@ -201,7 +201,7 @@ export interface BldArtParams {
 /**
  * **取参**：主题 + art/look 档 → 造楼房图层要用的那一整套观感参数。
  *
- * 🔴 `art=1` 且 `look=1` 时，这里产出的每一项都必须与页面旧实现（`bldLayerSpecs()` 头部那 5 行）
+ * `art=1` 且 `look=1` 时，这里产出的每一项都必须与页面旧实现（`bldLayerSpecs` 头部那 5 行）
  *    **逐字段相同** —— 自检第②组拿从 git 锚点取出的旧代码原文对拍。
  */
 export function bldArtParamsOf(
@@ -215,7 +215,7 @@ export function bldArtParamsOf(
   const ramp = artRamp((theme && theme.ramp) || fallbackRamp, art);
   const outline = (theme && theme.outline) || WS_BLD_FALLBACK_OUTLINE;
   const vgrad = theme ? theme.verticalGradient : true;
-  /* ⚠️ `||`（不是 `??`）：页面旧实现就是 `THEME?.extrudOpacity || 0.97` —— 照搬，别换判据 */
+  /* `||`（不是 `??`）：页面旧实现就是 `THEME?.extrudOpacity || 0.97` —— 照搬，别换判据 */
   const opacity = (theme && theme.extrudOpacity) || WS_BLD_FALLBACK_OPACITY;
   const stops: unknown[] = [];
   for (const [h, c] of ramp) stops.push(h, c);
@@ -224,7 +224,7 @@ export function bldArtParamsOf(
     art,
     look,
     ramp,
-    /* ⚠️ **原样透传**（不补默认值）：页面旧实现就是 `THEME?.outline || 兜底` 两步，
+    /* **原样透传**（不补默认值）：页面旧实现就是 `THEME?.outline || 兜底` 两步，
        这里多补一次 `??` 就会让"主题缺 width"时与旧实现不同 ⇒ 逐字段对拍会红。 */
     outline,
     vgrad,

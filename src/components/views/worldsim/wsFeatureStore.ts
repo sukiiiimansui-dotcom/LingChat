@@ -1,13 +1,13 @@
-// 🧱 **累积式要素仓库**（机主 2026-09-25 原话：「过一会加载的楼房虽然加载，但是之前的没了，
+// **累积式要素仓库**（2026-09-25 原话：「过一会加载的楼房虽然加载，但是之前的没了，
 //    必须保证视野内的楼房完整，道路完整」）。
 //
 // 问题形态：页面以前是"取一批 ⇒ `setData(这一批)`" ⇒ **整份替换**，
 // 于是新数据一来旧的就没了（楼房）／视野一大就只有中心一小块（道路，因为源上限 600m）。
 //
-// ✅ 做法：把要素**累积**在一个仓库里，按**稳定 id 去重**，只在"超出保留半径"或"超过上限"时淘汰，
+// 做法：把要素**累积**在一个仓库里，按**稳定 id 去重**，只在"超出保留半径"或"超过上限"时淘汰，
 //    每次合并**批量**吐一份 FeatureCollection（调用方一次 setData）。
 //
-// 🔴 这一份是**纯逻辑**（不碰 DOM / 不碰 map）—— 页面与（将来的）App 共用同一份，
+// 这一份是**纯逻辑**（不碰 DOM / 不碰 map）—— 页面与（将来的）App 共用同一份，
 //    谁都不许再写第二套"合并/淘汰"（这个项目对"两份实现"付过很多次代价）。
 //
 // 三态判词（HUD 要读）：`stats()` 里的 `n`（要素数）永远是**数得出来的数**；
@@ -39,7 +39,7 @@ export interface StoreStats {
   lastMergeMs: number | null;
   /** 硬上限 */
   cap: number;
-  /** 🔴 **被淘汰连累而作废的"来源键"个数**（历史累计）—— 见 `retainNear` 的 `dirtySources` 说明。
+  /** **被淘汰连累而作废的"来源键"个数**（历史累计）—— 见 `retainNear` 的 `dirtySources` 说明。
    *  为什么必须可数：作废一个来源键 = 那一格**下次还会被取一遍**（这是"楼没了"的修复代价），
    *  代价多大要能看见，不能悄悄发生。 */
   sourcesDropped: number;
@@ -65,7 +65,7 @@ export interface FeatureStore<T> {
   /** 合并一批要素（按 id 去重；同名 id 以**新的**为准） */
   merge(features: readonly T[], sourceKey?: string): MergeResult;
   /** 淘汰：先丢"离 center 超过 keepRadiusM"的，再（若仍超 cap）丢最远的，直到 ≤ cap。
-   *  🔴 同时把"被淘汰波及的来源键"作废（`has()` 变 false）—— 见实现里的 `dirtySources`。 */
+   *  同时把"被淘汰波及的来源键"作废（`has` 变 false）—— 见实现里的 `dirtySources`。 */
   retainNear(center: LngLat, keepRadiusM: number): { droppedFar: number; droppedOverCap: number; n: number; droppedSources: number };
   /** 当前并集（调用方拿它一次性 setData） */
   features(): T[];
@@ -94,19 +94,19 @@ export function createFeatureStore<T>(opts: {
   const sources = new Set<string>();
   let sourcesDropped = 0;
   /**
-   * 🔴🔴 **要素 → 它的来源键**（2026-09-26 性能/完整性子代理实测出来的真 bug 的修法）。
+   * **要素 → 它的来源键**（2026-09-26 性能/完整性实测出来的真 bug 的修法）。
    *
-   * 病根（真浏览器实测，`~/chk/_perf_base2.json` 的 ⑤）：`retainNear` 只丢**要素**、**不动作 `sources`**
+   * 病根（真浏览器实测，性能基线记录 的 ⑤）：`retainNear` 只丢**要素**、**不动作 `sources`**
    * ⇒ 一格被淘汰后 `has(格键)` 仍为 true ⇒ 离线管道 `todo` 里那一格**永远跳过**
    * ⇒ **挪走再挪回来，那一片就再也没有数据**（实测：挪回原机位后 `considered 177`（还是远处那一格）、
    * `inView 0`、`floorShort 10`，且 bldbundle 请求数**一条都没增加**）。
-   * 这就是机主说的「渲染不全」的一个**硬真因**（不是观感）。
+   * 这就是用户说的「渲染不全」的一个**硬真因**（不是观感）。
    *
    * 修法：用 **WeakMap** 记住每个"进来过"的要素属于哪个来源键（不污染要素本身 ⇒ 不会被
    * `setData`/`JSON.stringify`/structuredClone 带出去，也不会阻止 GC）；淘汰时把**被丢掉的要素**
    * 对应的来源键作废 ⇒ 管道下一轮就会**重新取那一格**（`merge` 按 id 去重 ⇒ 重取安全，
    * 缺的那部分正好补回来）。
-   * ⚠️ 只作废"有要素被丢"的来源键：没被波及的格子照旧不重取（那才是"来回挪不该反复取"的设计）。
+   * 只作废"有要素被丢"的来源键：没被波及的格子照旧不重取（那才是"来回挪不该反复取"的设计）。
    */
   const srcOf = new WeakMap<object, string>();
 
@@ -139,8 +139,8 @@ export function createFeatureStore<T>(opts: {
     },
 
     retainNear(center, keepRadiusM) {
-      /* ⚠️ 顺序要紧：**先**按"太远"淘汰（视野外一圈之外），**再**看是否还超上限。
-         为什么保留"视野外一圈"：来回挪地图时不该反复重取（机主抱怨的正是"来回一趟就没了"）。 */
+      /* 顺序要紧：**先**按"太远"淘汰（视野外一圈之外），**再**看是否还超上限。
+         为什么保留"视野外一圈"：来回挪地图时不该反复重取（用户抱怨的正是"来回一趟就没了"）。 */
       const droppedSourcesBefore = sourcesDropped;
       let droppedFar = 0, droppedOverCap = 0;
       const keep: [number, T][] = [];
@@ -161,8 +161,8 @@ export function createFeatureStore<T>(opts: {
         keep.push(...sorted.slice(0, cap));
         droppedOverCap = over.length;
       }
-      /* 🔴 **淘汰之后，来源键只保留"确实还有要素活着"的那些**（没活着的作废）。
-         ⚠️ 判据是"**这一格一个要素都不剩了**"，不是"丢了几个" —— 这条是踩过才改的：
+      /* **淘汰之后，来源键只保留"确实还有要素活着"的那些**（没活着的作废）。
+         判据是"**这一格一个要素都不剩了**"，不是"丢了几个" —— 这条是踩过才改的：
          第一版写成"只要有要素被丢就作废"，结果**跨保留半径的格子每一轮都被作废**
          （真浏览器实测：同一格在 3.5s 内被取了 3 次、`feed.net:bldbundle` 1→3 次；因为
          半径外的部分本来就会被反复丢掉 ⇒ 作废 ⇒ 重取 ⇒ 再丢，绕圈）。
@@ -210,13 +210,13 @@ export function createFeatureStore<T>(opts: {
       };
     },
 
-    /* ⚠️ `clear()` 必须**连来源键一起清**：`has()` 的语义现在是"仓库里确实还有这一格的要素"
+    /* `clear` 必须**连来源键一起清**：`has` 的语义现在是"仓库里确实还有这一格的要素"
        （见 `retainNear` 的 `dirtySources`）—— 只清要素不清来源键，就会又变回"说已经取过、其实没有"。 */
     clear() { byId.clear(); noIdList = []; sources.clear(); },
   };
 }
 
-/* ── 🛣🏢 离线包：格子与"视野需要哪些格"（纯函数，页面/App 共用） ───────────────────── */
+/* ── 离线包：格子与"视野需要哪些格"（纯函数，页面/App 共用） ───────────────────── */
 
 /** 离线**路**包的格边长（度）。0.05° ≈ 5.5km —— 手机上一次取几格也不至于太大。 */
 export const ROADS_BUNDLE_CELL_DEG = 0.05;
@@ -252,7 +252,7 @@ export function bldBundleCellOf(lng: number, lat: number, size = BLD_BUNDLE_CELL
   return bundleCellOf(lng, lat, size);
 }
 
-/** 🏢 离线楼房包的格键（与 `world_map/export_bld_bundle.py` 同式） */
+/** 离线楼房包的格键（与 离线数据生成脚本 同式） */
 export function bldBundleCellKey(w: number, s: number, size = BLD_BUNDLE_CELL_DEG): string {
   return bundleCellKey(w, s, size);
 }
@@ -272,7 +272,7 @@ export function bundleCellsForView(
   if (![w0, e0, s0, n0, center.lng, center.lat].every((v) => Number.isFinite(v))) return null;
   const seen = new Set<string>();
   const out: Array<{ key: string; w: number; s: number; d: number }> = [];
-  /* ⚠️ 用**整数格号**算行列数，不要用 `(ce-cw)/size` —— 浮点会给出 1.9999999/2.0000000002
+  /* 用**整数格号**算行列数，不要用 `(ce-cw)/size` —— 浮点会给出 1.9999999/2.0000000002
      之类的值，`ceil` 一抖就多算一整行/一整列（自检里 9 格被算成 16 格就是这么来的）。 */
   const i0 = Math.floor(w0 / size), i1 = Math.floor(e0 / size);
   const j0 = Math.floor(s0 / size), j1 = Math.floor(n0 / size);
@@ -292,7 +292,7 @@ export function bundleCellsForView(
   return { cells: out.slice(0, maxCells).map(({ key, w, s }) => ({ key, w, s })), wanted: out.length, capped };
 }
 
-/** 🛣 视野需要哪些**路**离线格（按离视野中心距离，近的先取） */
+/** 视野需要哪些**路**离线格（按离视野中心距离，近的先取） */
 export function roadsBundleCellsForView(
   bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
   center: { lng: number; lat: number } | null,
@@ -302,7 +302,7 @@ export function roadsBundleCellsForView(
   return bundleCellsForView(bounds, center, maxCells, size);
 }
 
-/** 🏘 视野需要哪些**片区名**离线格（同式；点很稀 ⇒ 一般一次 1~4 格就够） */
+/** 视野需要哪些**片区名**离线格（同式；点很稀 ⇒ 一般一次 1~4 格就够） */
 export function placesBundleCellsForView(
   bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
   center: { lng: number; lat: number } | null,
@@ -312,7 +312,7 @@ export function placesBundleCellsForView(
   return bundleCellsForView(bounds, center, maxCells, size);
 }
 
-/** 🏢 视野需要哪些**楼房**离线格（同式；楼房密 ⇒ 默认上限给大一点，仍是"近的先取"） */
+/** 视野需要哪些**楼房**离线格（同式；楼房密 ⇒ 默认上限给大一点，仍是"近的先取"） */
 export function bldBundleCellsForView(
   bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null,
   center: { lng: number; lat: number } | null,

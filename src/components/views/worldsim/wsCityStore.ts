@@ -11,7 +11,7 @@
  *   · `install(id, onProgress)` —— 下载 → 校 sha256 → 解包 → 存；每一步都有真进度与真失败原因
  *   · `remove(id)`              —— 卸载（元数据 + 内容一起清）
  *
- * ## 🔴 下载源：一处可替换 + 三条覆盖途径（本文件是唯一入口）
+ * ## 下载源：一处可替换 + 三条覆盖途径（本文件是唯一入口）
  * `WS_CITY_PACK_BASE_DEFAULT` 是**唯一的常量行**，默认值 = **示例占位**
  * （RFC 2606 保留域名 `.invalid`，永远不会解析成真服务器）：
  * **真源由维护者或用户自建**（GitHub Release / 自己的静态服务器都行），
@@ -29,7 +29,7 @@
  * 保存/清除走 `setCityPackBase()`：**它会即时重算**（`WS_CITY_PACK_BASE_INFO` / `WS_CITY_PACK_BASE`
  * 是 `let` 导出 ⇒ ESM 里是活绑定），store 侧 `setBase()` 还会顺手作废清单缓存，保存后 `reload()` 立刻生效。
  *
- * ## 🔴 下一片（真机落盘）要接的接口点
+ * ## 下一片（真机落盘）要接的接口点
  * 真机是 Tauri 壳，**没有 HTTP 服务**（`/bldbundle/<格>.json` 这类相对路径在真机上取不到，
  * 这是今天已知的缺口，正是"选城市 + 下载"要补的洞）。下一片要做的是：
  *   ① 后端加两条命令：`ws_city_download(id, url, sha256)`（边下边写文件 + 报进度）
@@ -38,7 +38,7 @@
  *      （`CityPackBackend` 就是为这个留的缝，**引导 UI 一行都不用改**）；
  *   ③ 让取数管道从"已装城市"读格：`wsOfflineFeed.bundleCellUrl()` 是唯一的口径点，
  *      换 URL 前缀 / 换成文件读取都从那里进（本文件暴露 `readCell()` 给那一步用）。
- * 本片**不做**上面三件（机主明确："真机的下载落盘/断点续传留到下一片"）。
+ * 本片**不做**上面三件（用户明确："真机的下载落盘/断点续传留到下一片"）。
  *
  * ## 浏览器实现（本片）
  * · 下载：真 `fetch` + `ReadableStream` 逐块读 ⇒ **真进度**（有 `content-length` 就有分母，
@@ -46,7 +46,7 @@
  * · 校验：`crypto.subtle` 算整包 sha256，与清单里的 `sha256` 对账（清单没给就如实写"未校验"）；
  * · 解包：`wsCityPack.readPackContents()`（`DecompressionStream`，零新依赖）；
  * · 落盘：元数据进 `localStorage`（这样**装过就直接进地图，不再问**），格内容进内存 Map。
- *   ⚠️ 如实说明：浏览器预览里"格内容"只在本次会话的内存里（刷新即空）——
+ *   如实说明：浏览器预览里"格内容"只在本次会话的内存里（刷新即空）——
  *   真机落盘是下一片的事；所以这里把"内存驻留上限"写死并**把超限情形报到界面上**，不假装全都装下了。
  */
 
@@ -68,7 +68,7 @@ import {
 import { shallowRef } from "vue";
 
 /**
- * 🔴 下载源默认值 = **示例占位**（RFC 2606 保留域名 `.invalid`：永远不会解析成真服务器，
+ * 下载源默认值 = **示例占位**（RFC 2606 保留域名 `.invalid`：永远不会解析成真服务器，
  * 所以"忘了配"会**响亮地**失败成"数不出来"，而不是静默打到某台真服务器上）。
  * ⇒ 真源不随代码走：维护者用 GitHub Release / 用户自建静态服务器，见 `CITY-PACK-FORMAT.md`「托管与自建」。
  */
@@ -169,15 +169,15 @@ export function resolveCityPackBase(
 }
 
 /** 当前生效的下载源**与它的来路**（坏值回落时这里带着 `why`/`requested`，界面/自检据此如实说明）。
- *  ⚠️ 是 `let` 导出（ESM 活绑定）：`setCityPackBase()` 之后**这个绑定会跟着变**。
- *  ⚠️ 但它**不是响应式**的 —— 组件里要用响应式的 `baseState`（`setCityPackBase()` 会更新它）。 */
+ *  是 `let` 导出（ESM 活绑定）：`setCityPackBase` 之后**这个绑定会跟着变**。
+ *  但它**不是响应式**的 —— 组件里要用响应式的 `baseState`（`setCityPackBase` 会更新它）。 */
 export let WS_CITY_PACK_BASE_INFO: CityPackBaseInfo = resolveCityPackBase();
 
-/** 🔴 **响应式**的那一半：`setCityPackBase()` 会更新它 ⇒ 读它的 `computed` 立刻失效重算。
+/** **响应式**的那一半：`setCityPackBase` 会更新它 ⇒ 读它的 `computed` 立刻失效重算。
  *  为什么要它：保存后如果界面读的还是缓存住的旧值，就会"填了不生效"（自检/文本检查抓到过）。 */
 export const wsCityPackBaseState = shallowRef<CityPackBaseInfo>(WS_CITY_PACK_BASE_INFO);
 
-/** 🔴 下载源（解析结果，非响应式）。换默认值改 `WS_CITY_PACK_BASE_DEFAULT`；换源走 `setCityPackBase()` /
+/** 下载源（解析结果，非响应式）。换默认值改 `WS_CITY_PACK_BASE_DEFAULT`；换源走 `setCityPackBase` /
  *  `?citybase=` / 构建期常量。**同样是活绑定**（`setCityPackBase()` 后跟着变）。 */
 export let WS_CITY_PACK_BASE = WS_CITY_PACK_BASE_INFO.base;
 
@@ -200,7 +200,7 @@ export function setCityPackBase(raw: string): CityPackBaseInfo {
   const info = resolveCityPackBase({ stored: v.trim() ? v : null });
   WS_CITY_PACK_BASE_INFO = info;
   WS_CITY_PACK_BASE = info.base;
-  wsCityPackBaseState.value = info; // 🔴 响应式那一路（界面靠它立刻变）
+  wsCityPackBaseState.value = info; // 响应式那一路（界面靠它立刻变）
   return info;
 }
 
@@ -367,7 +367,7 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
   let current: CityPackBaseInfo = opts.base
     ? { base: opts.base.replace(/\/+$/, ""), from: "option" }
     : WS_CITY_PACK_BASE_INFO;
-  /* 🔴 `base` / `baseInfo` 必须是**响应式**的（组件里的 computed 读它们）——
+  /* `base` / `baseInfo` 必须是**响应式**的（组件里的 computed 读它们）——
      否则 computed 会把保存前的旧值缓存住，界面就成了"填了不生效"（自检/文本检查抓到过这一条）。 */
   const currentRef = shallowRef<CityPackBaseInfo>(current);
   void current; // 只用于初始化那一行；之后一律走 currentRef
@@ -502,7 +502,7 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
     if (!contents.cells.length && !contents.declared) {
       return { ok: false, stage: "unpack", why: "包内容不认识：" + (contents.cellsWhy || "原因不明") };
     }
-    /* 🔴 压缩方式要先在这里拦住：`readPackContents()` 只读 index.json，
+    /* 压缩方式要先在这里拦住：`readPackContents` 只读 index.json，
        坏格子要等到"写入"那一步才会炸 —— 那样报出来的阶段是 `store`，
        读的人会跑去查存储，实际坏的是包。所以这一步就把清单摊开来看。 */
     if (contents.unsupported.length) {
@@ -512,7 +512,7 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
     }
 
     /* ⑤ 存 —— 存**整包条目**（按 zip 顺序），不只是格文件。
-       🔴 为什么不只存格文件：feed 的**第一跳**就是 `/<层目录>/index.json`（先读格白名单再取格），
+       为什么不只存格文件：feed 的**第一跳**就是 `/<层目录>/index.json`（先读格白名单再取格），
        层索引不是"格"、但**必须能读出来**，否则"从已装城市包读数据"第一步就失败
        （城市包那条线实测报回来的缺口）。
        顺序沿用 zip 顺序：导出器把「根 index + NOTICE + 四张层索引 + gw + places + roads + bld」

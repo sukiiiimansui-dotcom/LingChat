@@ -1,11 +1,11 @@
-// 🏷 **地名 / 楼名标签层（单一真源，纯逻辑）** —— 机主 2026-09-25：「**如何实现楼房及区域名字喵**」。
+// **地名 / 楼名标签层（单一真源，纯逻辑）** —— 2026-09-25 **如何实现楼房及区域名字**。
 //
-// 🔴 为什么是 DOM 标签而不是 MapLibre 的文字层：
-//   我们的样式里 `glyphs` 是**明令禁止**的（`glyphs: undefined` ⇒ 样式校验失败 ⇒ `load` 永不触发、
+// 为什么是 DOM 标签而不是 MapLibre 的文字层：
+//   样式里 `glyphs` 是**明令禁止**的（`glyphs: undefined` ⇒ 样式校验失败 ⇒ `load` 永不触发、
 //   整张地图全白且零报错——项目里栽过）。要中文就得自托管 glyphs PBF 字体 + 生成工具链，
 //   体积/依赖都不划算 ⇒ **用 DOM 标签**（先例：`WsAvatarMark.vue` 的名字标签、`WsDistrictMapLibre.vue` 的 domPins）。
 //
-// 🔴 **铁律（ROUTE.md：画面可以编，事实不许编）**：
+// **铁律（ROUTE.md：画面可以编，事实不许编）**：
 //   · 标签只显示**真名字**；没有 `name` 的对象**就不显示**（**不许编**"某某大厦"——编名字 = 给 AI 制造幻觉源）；
 //   · 每个标签带 `source: real | sketch`；**喂给判断的只有 real**（`pickLabels` 默认丢掉 sketch）。
 //
@@ -58,7 +58,7 @@ export interface LabelPlan {
 }
 
 /**
- * 分层规则（机主/父代理 2026-09-25 定的口径）：
+ * 分层规则（用户/ 2026-09-25 定的口径）：
  *   · z≤10：只 区县名（admin）+ **区片名**（suburb/quarter/borough）；
  *   · z11~12：+ 主干路名 + **小区/街区名**（neighbourhood）；
  *   · z13+：+ 次干路名 + 楼名（此时片区名和它们**同层竞争**，优先级 行政>主干>次干>**片区**>楼名）。
@@ -83,8 +83,8 @@ export function labelPlanFor(zoom: number): LabelPlan {
 /**
  * 缩放**档位**（重算判据之一）—— 阈值与 `labelPlanFor` **同一份**（11/13/16 就是它的三道坎）：
  *   0 = z<11（行政名 + 区片名）· 1 = 11~12（+主干路 + 小区名）· 2 = 13~15（+次干路 + 楼名）· 3 = z≥16（上限 26）。
- * ⚠️ **档内**缩放（如 13.0→15.9）不算跨档：`cap` 与各档闸门都没变，位置由调用方重投影负责
- *   ⇒ 这正是机主要的「像高德地图那样可以不用重算」：连续缩放不掉进整层重排。
+ * **档内**缩放（如 13.0→15.9）不算跨档：`cap` 与各档闸门都没变，位置由调用方重投影负责
+ *   ⇒ 这正是「像高德地图那样可以不用重算」：连续缩放不掉进整层重排。
  */
 export function labelTierOf(zoom: number): number {
   const z = Number.isFinite(zoom) ? Number(zoom) : 14;   // NaN/undefined 与 `labelPlanFor` 同口径（按近景处理）
@@ -96,7 +96,7 @@ export function labelTierOf(zoom: number): number {
  *
  * 为什么是 0.25：避让网格 `gridPx = 48`。0.25×短边在 App 舞台（904×341）≈ 85px ≈ **1.8 个格**、
  * 在自检视口（800×600）= 150px ≈ 3 格 —— 也就是"标签最多偏离它本该在的位置约两格"时就该重排；
- * 再放宽下去就会出现机主看得见的两种退化：**该进来的名字一直不进来**、**两个标签压在一起也没人管**。
+ * 再放宽下去就会出现用户看得见的两种退化：**该进来的名字一直不进来**、**两个标签压在一起也没人管**。
  * 取**短边**（不是宽）：两个方向共用一份判据，长边方向更保守（宁可早重算，不许错位）。
  */
 export const LABEL_PLAN_DRIFT_RATIO = 0.25;
@@ -241,7 +241,7 @@ export function pickLabels(
   return out;
 }
 
-/* ══ 🧠 计划缓存（机主 2026-10-01：「换字动画我想要的是**像高德地图那样可以不用重算**的」）═══════════
+/* ══ 计划缓存（2026-10-01 换字动画应当**像高德地图那样不重算**）═══════════
    口径（他的原话拆开）：
      · **拖动时名字标签只是跟着地图滑** —— 位置由调用方重投影负责（本模块不参与）；
      · **不要每次松手都整层重算 / 重新规划 / 整层换字** —— 规划结果在这里被缓存；
@@ -271,7 +271,7 @@ export interface LabelPlanKey {
 /**
  * 中心漂移（**像素**）：把经纬度位移按"占**当前**视野跨度的比例 × 视口尺寸"折算，取两轴里大的那个。
  * 用**当前**（`next`）的跨度换算：判据问的是"标签此刻相对它该在的位置偏了多少屏幕像素"。
- * 🔴 数不出来（跨度/视口缺失、非有限）时返回 `Infinity` = **宁可重算**：
+ * 数不出来（跨度/视口缺失、非有限）时返回 `Infinity` = **宁可重算**：
  *    「量不出来」绝不能变成「永远复用」（那会让标签选择停在很久以前的一屏上）。
  */
 export function planDriftPx(base: LabelPlanKey, next: LabelPlanKey): number {
@@ -330,7 +330,7 @@ export interface LabelPlanCache<T> {
   reasonFor(key: LabelPlanKey): LabelPlanReason;
   /** 命中 ⇒ **不调用 `work`**（`work` 里的投影/避让/上限一次都不跑）；未命中 ⇒ 跑并把结果记下来 */
   run(key: LabelPlanKey, work: () => T): T;
-  /** 上一次规划的结果（未跑过 = null）。⚠️ **只读**：复用方要改就得自己拷贝，不许改这份 */
+  /** 上一次规划的结果（未跑过 = null）。**只读**：复用方要改就得自己拷贝，不许改这份 */
   last(): T | null;
   stats(): LabelPlanCacheStats;
   reset(): void;
@@ -339,7 +339,7 @@ export interface LabelPlanCache<T> {
 /**
  * 造一个规划缓存。判据**只有这一处**（宿主不许再写一份）：
  *   `cold`（第一次）· `tier`（跨档）· `viewport`（视口尺寸变了）· `data`（候选指纹变了）· `drift`（漂移超阈值）
- * 🔴 命中时**不刷新基准 key**：把基准换成"当前视野"就等于每步都从零开始量漂移 ⇒ 连续小步平移永远不重算
+ * 命中时**不刷新基准 key**：把基准换成"当前视野"就等于每步都从零开始量漂移 ⇒ 连续小步平移永远不重算
  *    （自检里那条"连续 10 次各漂 0.1 屏 ⇒ 必须重算 1 次"就是钉这一条的）。
  */
 export function createLabelPlanCache<T>(opts: { driftRatio?: number } = {}): LabelPlanCache<T> {
@@ -371,7 +371,7 @@ export function createLabelPlanCache<T>(opts: { driftRatio?: number } = {}): Lab
       if (r === "reuse") { reuses++; return result as T; }
       const out = work();
       computes++;
-      base = { ...key };                                       // ← 只有**真算过**才刷新基准（见上面的 🔴）
+      base = { ...key };                                       // ← 只有**真算过**才刷新基准（见上面的）
       result = out;
       return out;
     },
@@ -384,7 +384,7 @@ export function createLabelPlanCache<T>(opts: { driftRatio?: number } = {}): Lab
   };
 }
 
-/** 🏷 从路网要素里取**有名字**的路（离线包 / live 同款形状）—— 同类只留一条（同类名去重） */
+/** 从路网要素里取**有名字**的路（离线包 / live 同款形状）—— 同类只留一条（同类名去重） */
 export function roadLabelsFrom(features: readonly any[], kindOfRank: (rank: number) => LabelKind): LabelItem[] {
   const seen = new Map<string, LabelItem>();
   for (const f of features || []) {
@@ -405,7 +405,7 @@ export function roadLabelsFrom(features: readonly any[], kindOfRank: (rank: numb
   return [...seen.values()];
 }
 
-/** 🏷 从楼房要素里取**有名字**的楼（`/api/buildings` 的 `properties.name`；实测只有 ~5% 有） */
+/** 从楼房要素里取**有名字**的楼（`/api/buildings` 的 `properties.name`；实测只有 ~5% 有） */
 export function buildingLabelsFrom(features: readonly any[]): LabelItem[] {
   const out: LabelItem[] = [];
   for (const f of features || []) {
@@ -426,8 +426,8 @@ export function buildingLabelsFrom(features: readonly any[]): LabelItem[] {
 }
 
 /**
- * 🏷 **片区/小区名**（来自离线包 `/placesbundle/<格>.json` 的 `{n,k,p,i}`）。
- * 🔴 **没有名字的不进**（`skippedNoName` 由 `pickLabels` 统一计数；这里直接丢掉，双保险）；
+ * **片区/小区名**（来自离线包 `/placesbundle/<格>.json` 的 `{n,k,p,i}`）。
+ * **没有名字的不进**（`skippedNoName` 由 `pickLabels` 统一计数；这里直接丢掉，双保险）；
  *    **不认得的 place 类型也不进**（宁可少显示，不许显示错的东西）。
  */
 export function placeLabelsFrom(
@@ -450,7 +450,7 @@ export function placeLabelsFrom(
   return out;
 }
 
-/** 🏷 行政名（区县/市/省）—— 数据来自 DataV 边界接口（8790），页面把名字与驻地坐标喂进来 */
+/** 行政名（区县/市/省）—— 数据来自 DataV 边界接口（8790），页面把名字与驻地坐标喂进来 */
 export function adminLabelsFrom(list: readonly { id: string; name: string; lng: number; lat: number; level?: number }[]): LabelItem[] {
   const out: LabelItem[] = [];
   for (const it of list || []) {

@@ -1,4 +1,4 @@
-/* wsEngineGuard.ts —— S7（M9）：**引擎自愈 / 验证 / 自拍**（看门狗 / 画布事实 / resize 自证 /
+/* wsEngineGuard.ts —— S7（：**引擎自愈 / 验证 / 自拍**（看门狗 / 画布事实 / resize 自证 /
  * WebGL 回切 / 代拍 · App 自拍 / 验证快照与面板）。
  *
  * ## 这个文件是什么
@@ -27,9 +27,9 @@
  * ## ctx 的落法（与 S2~S7 同一套）
  * 宿主构造一份只读 ctx，本工厂在开头**解构一次**，解构出来的名字与搬走前宿主里的闭包变量**同名**
  * ⇒ 下面这些函数的函数体除了别名之外几乎一个字节都不用改
- * （对拍闸 `ws_engineguard_move_selftest.mjs` 断言 diff = 0）。
+ * （对拍闸 回归测试 断言 diff = 0）。
  *
- * ## 🔴 别名逐类可数（对拍闸把每一类都机器化，多一处少一处都红）
+ * ## 别名逐类可数（对拍闸把每一类都机器化，多一处少一处都红）
  * ① `alive` → `aliveNow()`（**10 处**，逐处现读：watchdog / 延迟 resize / 轮询 / 屏幕转屏 /
  *    recover 轮询 / 代拍三处 `if (!alive) return` / 自拍的 `aborted`）；
  * ② `map` → `mapNow()`（**12 处读点**）· `map = null` → `setMap(null)`（**1 处写**，watchdogFire 的永久类）；
@@ -37,9 +37,9 @@
  * ④ `recoverTimer` → `recoverTimerNow()`（1 读）+ `setRecoverTimer(...)`（3 写）；
  * ⑤ `sawRender` → `sawRenderNow()`（**5 处**，`verifySnapshot` / `panelSnapshot` 里那两个
  *    `sawRender:` **对象键**不算 —— 别名只换取值，不换键名）。
- * ⚠️ `resizeTimers`（宿主 `const` 数组）**按引用**递进来：模块只 `.push`，宿主那边遍历照旧看得见
+ * `resizeTimers`（宿主 `const` 数组）**按引用**递进来：模块只 `.push`，宿主那边遍历照旧看得见
  *    ⇒ 它不是别名、也不算"第二份"。其余分支 / 阈值 / 调用顺序 / DOM 契约逐字不变。
- * ⚠️ `kickResize` 里那一处 `resizeRo = new ResizeObserver(…);` 换成
+ * `kickResize` 里那一处 `resizeRo = new ResizeObserver(…);` 换成
  *    `const resizeRo = setResizeRo(new ResizeObserver(…));` —— 宿主那面是 `let`，只给取值器的话
  *    下面两行 `resizeRo.observe(...)` 会被 TS 判"可能为 null"（原来靠"刚赋值"的窄化）。
  *    写入器把引用原样返回，绑成**块内 `const`** 之后那两行**一个字都不用动**、窄化也还在
@@ -57,7 +57,7 @@ import { computed, ref } from "vue";
 import type { BldFeature } from "./wsBuildingSources";
 import { themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { prerenderSourceOf, sceneOrderViolations, sceneSelfReport } from "./wsScene";
-/* ⚠️ `scenePlanConsumed` 的**真源在 `wsDistrictScene`**（宿主就是从那 import 的）—— 别写成 `wsScene`。 */
+/* `scenePlanConsumed` 的**真源在 `wsDistrictScene`**（宿主就是从那 import 的）—— 别写成 `wsScene`。 */
 import { scenePlanConsumed } from "./wsDistrictScene";
 import type { BundleFeedFacts } from "./wsOfflineFeed";
 import { roadLayerSpecs } from "./wsRoads";
@@ -79,7 +79,7 @@ import type { EngineGuardCtx } from "./wsStageTypes";
 
 /**
  * 装配 M9（引擎自愈 / 验证 / 自拍）。
- * ⚠️ 位置与理由见文件头「装配位置（TDZ）与 M6 ⇄ M9 那个环」那一段。
+ * 位置与理由见文件头「装配位置（TDZ）与 M6 ⇄ M9 那个环」那一段。
  */
 export function createEngineGuard(ctx: EngineGuardCtx) {
   /* 解构出来的名字**与搬走前宿主里的闭包变量同名** ⇒ 下面函数体一个字都不用动（见文件头）。 */
@@ -99,18 +99,18 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
    */
   const WATCHDOG_MS = computed(() => {
     if (isAutomation()) return 8000; // 闸门靠这条：到点如实降级，别把闸门拖成假失败
-    /* 🔴 2026-09-21（P0）：真机期限**大幅放宽**（低端 30s / 其余 60s）。
-       原来 12s/24s 的代价机主已经付过了：冷启动 + 首批瓦片本来就要十几秒到几十秒，
+    /* 2026-09-21（：真机期限**大幅放宽**（低端 30s / 其余 60s）。
+       原来 12s/24s 的代价用户已经付过了：冷启动 + 首批瓦片本来就要十几秒到几十秒，
        到点被砍进 2D 路 ⇒ 又卡又没手势。而"等久了"在真机上只有好处（多等 = 少误判）；
        自动化保持 **8s 不变**（闸门靠这条：它要的是"到点如实降级"，等久了会把闸门拖成假失败）。
-       ⚠️ 而且现在**判错也不致命**了：临时类降级是可恢复的（见 `watchdogFire` / `promoteToWebgl`）。 */
+       而且现在**判错也不致命**了：临时类降级是可恢复的（见 `watchdogFire` / `promoteToWebgl`）。 */
     return perf.low.value ? 30000 : 60000; // 真机：低端短一档，其余给足冷启动时间
   });
 
   /**
    * 看门狗到点：**如实降级**到 2D 自绘路，并把**实际期限**写进 HUD。
    *
-   * ⚠️ 这里**没有**做"降级后再自动切回 WebGL"：`fallback2d()` 会换掉画布元素
+   * 这里**没有**做"降级后再自动切回 WebGL"：`fallback2d` 会换掉画布元素
    * （同一个 canvas 不能同时有 webgl 和 2d 上下文，见那里的注释），
    * 要切回来得**重建整张地图 + 换回那块画布**，代价与风险都不小。
    * ⇒ 本轮只做到"别误判 + 如实降级 + 降级路不再是一片纯色"，
@@ -119,9 +119,9 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   function watchdogFire(m: { remove(): void } | null, fc: { features?: BldFeature[] } | null, limitMs: number): void {
     if (!aliveNow() || phase.value === "done") return;
     const secs = Math.round(limitMs / 1000);
-    /* 🔴 2026-09-21（P0 核心）：**"慢"不等于"坏"**。
+    /* 2026-09-21（P0 核心）：**"慢"不等于"坏"**。
        这里以前是**无条件** `m.remove()` + `map = null` —— 等于把"冷启动慢"判成**永久**降级：
-       机器明明有 WebGL（代拍页 `ws3dshow.html` 实测顺滑，机主证过），却再也回不去那条路，
+       机器明明有 WebGL（代拍页 `ws3dshow.html` 实测顺滑，用户证过），却再也回不去那条路，
        于是又卡（2D 自绘填充率）、又像静态图、又没手势。**三个症状同一个根**。
        ⇒ 现在分两类：
          · **永久类**（`perm`）：地图库**报了错**（style/addLayer 那类，只能靠 `error` 事件捞），
@@ -132,7 +132,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
     const hasErr = mapErrs.length > 0;
     const kind: "temp" | "perm" = !m || hasErr ? "perm" : "temp";
     const whyBase = `地图库 ${secs} 秒内没画出第一帧（load 未触发）`;
-    /* 🆕 机主 2026-09-21：「**要求别降级了**」。没显式开逃生阀时**不画 2D**：
+    /* 2026-09-21 **要求别降级了**。没显式开逃生阀时**不画 2D**：
        留在页面上如实说明"还在等"，后台每 5 秒复查，出的帧一到、`load` 一来就照常往下走。
        真等不到了（见 `startRecoverPoll` 的期限）就切 `failed` —— **如实报错，不画假的 2D 图**。 */
     if (!ALLOW_2D) {
@@ -191,7 +191,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   /** 这一次建图的实例序号（面板里对得上"resize 打在哪个实例上"） */
   let mapSeq = 0;
   /**
-   * 🔴 **resize 自证日志**（2026-09-21，机主实测"画布仍是 300×150"之后加的）。
+   * **resize 自证日志**（2026-09-21，实测"画布仍是 300×150"之后加的）。
    *
    * 为什么非要它：上一版我只是"该调的时机都调一遍"，结果真机上**画布还是 300×150**，
    * 而**没有任何证据能说明是哪一步没生效**（时机？对象？实例？）—— 只能靠猜。
@@ -204,11 +204,11 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   }
 
   /**
-   * 🔴 **真地图那块画布**（`map.getCanvas()`）—— 2026-09-21 起，**所有**画布读数都用它。
+   * **真地图那块画布**（`map.getCanvas`）—— 2026-09-21 起，**所有**画布读数都用它。
    *
-   * 为什么：机主的"resize 尝试记录"里同一次 `map.resize()` 一会儿量到 300×150、
+   * 为什么："resize 尝试记录"里同一次 `map.resize` 一会儿量到 300×150、
    * 一会儿量到 **3759×1287** ⇒ 强烈指向**页面上不止一块 canvas**，而原来我一直量 `cv.value`
-   * （模板那块 ref）—— 若 MapLibre 实际用的是它自己建的那块，那我量的就是**另一块**（默认 300×150），
+   * （模板那块 ref）—— 若 MapLibre 实际用的是它自己建的那块，那的就是**另一块**（默认 300×150），
    * 屏幕上那块"浅色矩形"也就有了着落。⇒ 先量对对象，再谈修。
    */
   function realMapCanvas(): HTMLCanvasElement | null {
@@ -244,7 +244,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
           visibility: String(st.visibility),
           isMapCanvas: !!mc && c2 === mc,
           isRef: c2 === cv.value,
-          /* ⚠️ 判"遮挡"必须用**渲染尺寸**（clientWidth/Height），不能用 buffer（width/height）：
+          /* 判"遮挡"必须用**渲染尺寸**（clientWidth/Height），不能用 buffer（width/height）：
              罪魁那块 `ws-dml__cv` 的 buffer 只有 300×150，但 CSS 被拉满整屏 ⇒ 它照样盖住地图。 */
           cw: c2.clientWidth,
           ch: c2.clientHeight,
@@ -258,7 +258,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   /**
    * **设计上的覆盖层白名单**（判据：**它们本来就该铺在地图上面，且都应该是透明的**）。
    * 命中判据（任一）：class 含这些片段，或父元素 class 含这些片段。
-   * ⚠️ 只用来**免掉"遮挡"误报**，绝不隐藏它们；**非白名单**的可见画布照旧要报（真凶就是这么抓到的）。
+   * 只用来**免掉"遮挡"误报**，绝不隐藏它们；**非白名单**的可见画布照旧要报（真凶就是这么抓到的）。
    */
   const OVERLAY_CANVAS_HINTS = ["cursor-trail", "cursor-effects", "ws-wx", "ws-weather", "ws-particle"];
   function isOverlayCanvas(el: HTMLCanvasElement): boolean {
@@ -318,9 +318,9 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
     if (!mc || !box) return;
     try {
       /* 规则（2026-09-21 定案后修正）：**只看"地图容器内部"**、可见、且不是 `map.getCanvas()` 的画布。
-         ⚠️ 原来那条"必须与真画布同一父级"是**漏网的原因**：罪魁 `.ws-dml__cv` 的父级是 `div.ws-dml`
-         （= 我们的 host），而真画布在 `div.maplibregl-canvas-container` 里 ⇒ 父级不同，规则放过了它。
-         ⚠️ 也**不能**无差别删掉页面上所有非地图画布：天气粒子那块（`div.ws-wx` 里）是**该在**的，
+         原来那条"必须与真画布同一父级"是**漏网的原因**：罪魁 `.ws-dml__cv` 的父级是 `div.ws-dml`
+         （=  host），而真画布在 `div.maplibregl-canvas-container` 里 ⇒ 父级不同，规则放过了它。
+         也**不能**无差别删掉页面上所有非地图画布：天气粒子那块（`div.ws-wx` 里）是**该在**的，
          所以作用域限定在 host 内部。 */
       const all = Array.from(box.querySelectorAll("canvas")) as HTMLCanvasElement[];
       for (const el of all) {
@@ -397,13 +397,13 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
       if (Date.now() < pollEnd) resizeTimers.push(window.setTimeout(poll, 500));
     };
     resizeTimers.push(window.setTimeout(poll, 500));
-    /* 顺手清掉"盖在真地图上的遗留画布"（机主那块浅色矩形最可能的来源） */
+    /* 顺手清掉"盖在真地图上的遗留画布"（用户那块浅色矩形最可能的来源） */
     resizeTimers.push(window.setTimeout(() => aliveNow() && hideStrayCanvases(), 800));
     try {
       if (typeof ResizeObserver !== "undefined" && host.value) {
         const resizeRo = setResizeRo(new ResizeObserver(() => doResize(m, "ResizeObserver(容器)")));
         resizeRo.observe(host.value);
-        /* ⚠️ 也观察**画布自己**：容器没变而画布 CSS 尺寸变了的情况（父级用别的方式撑开）也收得住 */
+        /* 也观察**画布自己**：容器没变而画布 CSS 尺寸变了的情况（父级用别的方式撑开）也收得住 */
         if (cv.value) resizeRo.observe(cv.value);
       }
     } catch {
@@ -419,8 +419,8 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   }
   /** 视口/方向变化 → 延迟一点再量（浏览器改布局是异步的） */
   function onWinResize(): void {
-    joyMeasureVh();      // 🕹 §15：转屏/改窗口 ⇒ 底盘尺寸跟着变（同一个 resize 里量，不新开监听）
-    /* 📍 屏外指示的几何也在这里重量（容器尺寸 + 安全区）——**同一个 resize 里**，不新开监听；
+    joyMeasureVh();      // §15：转屏/改窗口 ⇒ 底盘尺寸跟着变（同一个 resize 里量，不新开监听）
+    /* 屏外指示的几何也在这里重量（容器尺寸 + 安全区）——**同一个 resize 里**，不新开监听；
        量完立刻同步一次：转屏后箭头的落点是按新矩形算的，不补这一下会停在旧位置上。 */
     pinEdgeMeasure();
     pinEdgeSync();
@@ -428,8 +428,8 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
     window.setTimeout(() => doResize(mapNow() as { resize?: () => void }, "窗口/转屏"), 300);
   }
   /**
-   * 面板上的「🔄 强制重算画布」：**手动**调一次并回报前后尺寸。
-   * 这是最快的判定手段 —— 机主点一下就知道"resize 能不能治好"，也能区分
+   * 面板上的「强制重算画布」：**手动**调一次并回报前后尺寸。
+   * 这是最快的判定手段 —— 用户点一下就知道"resize 能不能治好"，也能区分
    * "逻辑没跑到"（日志里没有记录）和"resize 本身无效"（记录了但尺寸不变）。
    */
   function forceResizeCanvas(): string {
@@ -461,7 +461,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   /**
    * 临时类降级后：**每 4 秒问一次"地图库出帧了吗"**，出来就切回 WebGL。
    *
-   * 为什么值得（P0）：机主的机器**有** WebGL（代拍页顺滑），App 之所以掉进 2D 只是**慢**。
+   * 为什么值得（：机器**有** WebGL（代拍页顺滑），App 之所以掉进 2D 只是**慢**。
    * 以前"慢"被当成"坏"——永久判决、而且地图实例当场被销毁 ⇒ 再也回不去。
    * 现在实例留着跑（藏在 2D 画布下面），这里只负责"等它好了把它请回前台"。
    */
@@ -537,7 +537,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
       : "✅ 地图库出帧了 ⇒ 已自动切回 WebGL（手势可用）";
     try {
       syncPins();
-      /* 🗄 2026-09-24：AI 示意层不再挂（机主：App 页是最终结构，但**去掉多余叠加**）
+      /* 2026-09-24：AI 示意层不再挂（App 页是最终结构，但**去掉多余叠加**）
          —— `syncAiLayers()` 留在文件里，两个调用点与两个 watcher 都关掉。 */
     } catch {
       /* 同步失败不影响"画面已经切回 WebGL"这件事 */
@@ -546,7 +546,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   }
 
   /**
-   * 面板上的「**重试地图**」：机主手动按一下，做两件事 ——
+   * 面板上的「**重试地图**」：手动按一下，做两件事 ——
    *   ① 实例还在 ⇒ **立刻**按恢复判据试一次（很多时候它其实已经好了，只是没人去看）；
    *   ② 实例已经没了（永久类）⇒ 只能重载这一页再试（**会回到主菜单**，如实说出来）。
    */
@@ -571,7 +571,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   /**
    * 「代拍」：页面上有 `?autoshot=1` 时，走到小区级就**自动拍三张**（近/远/侧）回传。
    *
-   * 为什么由页面自己拍：agent 侧看不到 WebGL，机主又禁了 ADB 截屏（会看到整屏隐私）。
+   * 为什么由页面自己拍：agent 侧看不到 WebGL，用户又禁了 ADB 截屏（会看到整屏隐私）。
    * 详见 `wsSelfShot.ts` 的文件头。这里只负责"什么时候按快门"。
    *
    * 三张的机位是**商量好的**：一近（看楼体）、一远（看整片）、一侧（看高低起伏）。
@@ -612,8 +612,8 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
     await settleForShot(m, 800);
     if (!aliveNow()) return;
     let ok = await snap("app-dist-near");
-    /* 🎨 「远」这张现在专门用来看**地平线与天空**（pitch 26° ≈ 接近平视）。
-       机主要"看得见天空（基沃托斯的天空）"⇒ 三张证据图里必须有一张是抬着头的。 */
+    /* 「远」这张现在专门用来看**地平线与天空**（pitch 26° ≈ 接近平视）。
+       需要"看得见天空（基沃托斯的天空）"⇒ 三张证据图里必须有一张是抬着头的。 */
     m.easeTo({ zoom: 14.6, pitch: 26, duration: 900 });
     await settleForShot(m, 1200);
     if (!aliveNow()) return;
@@ -627,9 +627,9 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   }
 
   /**
-   * 🧪 **App 自拍**（`?selfshot=1`）：主 App 页走完"进小区级 → 等稳 → 抓帧回传"。
+   * **App 自拍**（`?selfshot=1`）：主 App 页走完"进小区级 → 等稳 → 抓帧回传"。
    *
-   * 与上面 `runSelfShot`（代拍页那条通道）**不共用机位**：这一条拍的就是**机主正在看的这一屏**
+   * 与上面 `runSelfShot`（代拍页那条通道）**不共用机位**：这一条拍的就是**用户正在看的这一屏**
    * ——真主题、真图层、真降级逻辑，一个字都不改，所以它同时是"验收证据"和"故障现场"。
    *
    * 触发点两处（都只加一次调用，**不改任何既有语义**）：
@@ -640,7 +640,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
    * （超时也要给证据，只是会在诊断图/HUD 里如实写 `数据到齐=false`）。
    */
   function maybeAppSelfShot(kind: "webgl" | "fallback2d", why = ""): void {
-    /* 🔬 面板要的就是这两个事实（**先记下来再说要不要自拍** —— 没开自拍时面板照样要显示） */
+    /* 面板要的就是这两个事实（**先记下来再说要不要自拍** —— 没开自拍时面板照样要显示） */
     renderKind.value = kind;
     fallbackWhy.value = why;
     /* 没开就是一次 boolean 判断（零开销）—— 与代拍同一个纪律 */
@@ -655,7 +655,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
       kind,
       fallbackWhy: why,
       /* 画布**现取**：降级路会换掉画布元素（见 `fallback2d` 那段），存下来的引用会拍到旧画布 */
-      /* 📸 拍到**真地图那块**（WebGL 路 = `map.getCanvas()`；降级路 = 2D 覆盖层） */
+      /* 拍到**真地图那块**（WebGL 路 = `map.getCanvas`；降级路 = 2D 覆盖层） */
       getCanvas: () => activeCanvas(),
       getMap: () => (kind === "webgl" ? (mapNow() as unknown as ShotMapLike | null) : null),
       sawFirstFrame: () => (kind === "webgl" ? sawRenderNow() : true),
@@ -664,11 +664,11 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
       dataNote: () =>
         `🏢${stats.count} 🛣${stats.roads} 🏪${stats.facilities} 👤${stats.pins} · ${stats.note || "无提示"}`,
       /* 真机 Overpass 冷查询实测 20~100s；无头/自动化给短一点（免得把闸门拖成假失败）。
-         面板按钮走的是"**机主已经站在这一屏前**"的场景 ⇒ 给 6 秒就够（数据早就在了） */
+         面板按钮走的是"**用户已经站在这一屏前**"的场景 ⇒ 给 6 秒就够（数据早就在了） */
       waitMs: isAutomation() ? 15000 : 45000,
-      /* 等数据的这几十秒里机主可能切走 ⇒ 组件卸载就**什么都不发**（发了就是假证据） */
+      /* 等数据的这几十秒里用户可能切走 ⇒ 组件卸载就**什么都不发**（发了就是假证据） */
       aborted: () => !aliveNow(),
-      /* 📊 样式自检 JSON：**有多少给多少，不知道写 null**（详见 `wsStyleReport.ts` 的文件头）。
+      /* 样式自检 JSON：**有多少给多少，不知道写 null**（详见 `wsStyleReport.ts` 的文件头）。
          取值全走"现读"：`map` 可能是 null（降级路）、画布可能被换过 —— 提前存下来的都会失真。 */
       styleReport: (shot) => verifySnapshot(true, shot),
       note: (s) => {
@@ -679,7 +679,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   }
 
   /**
-   * 🔬 面板与样式 JSON **共用的那一份快照**（同一件事，两种读者：人看面板、agent 读 JSON）。
+   * 面板与样式 JSON **共用的那一份快照**（同一件事，两种读者：人看面板、agent 读 JSON）。
    *
    * `full = true` 时给样式 JSON（带 shot 那一轮的细节）；面板走 `full = false`（没有 shot 段）。
    * 一律**现读**：`map` 可能是 null、画布可能被换过、`theme` 可能正在切 —— 提前存下来的都会失真。
@@ -734,7 +734,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
   /**
    * 「**动效状态**」：**当场 DOM 观察**（不猜、不写死）。
    *
-   * 机主 2026-09-21 的疑问是"看不到 MG 动画" —— 而"没触发"和"坏了"是两件事：
+   * 2026-09-21 的疑问是"看不到 MG 动画" —— 而"没触发"和"坏了"是两件事：
    * 加载动画播完就收、事件条只在**新事件**来时入场、设施淡入只在小区级且只播一次。
    * ⇒ 把这些事实摆出来，人自己就能分清。
    */
@@ -781,7 +781,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
     /* "主题期望的图层" —— 与当前档位**同一份来源、同一档位**（`themeStyleParts`），
        少一条就能当场看出来。
 
-       🔴 2026-09-24 修掉一次**假报**（机主真机截图："主题图层齐：实际 8 条 / 期望 4 条 · 缺 tint"）：
+       2026-09-24 修掉一次**假报**（真机截图："主题图层齐：实际 8 条 / 期望 4 条 · 缺 tint"）：
        这里原来写死 `low = false`（高档）去算期望，而**实际渲染按当前档位**——
        低档下 `themeForTier()` 会把 `tint` 甚至 `sky` 摘掉（`dropTint`）⇒ 期望里带着 `tint`、
        实际没有 ⇒ 面板年年报"缺 tint"，**而装配其实是正确的**。
@@ -814,7 +814,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
       fallbackWhy: fallbackWhy.value,
       fallbackKind: renderKind.value === "fallback2d" ? fallbackKind.value : "none",
       recovered: recovered.value,
-      /* ⚠️ 这一条是**读的那一刻**的原始值（`map.isStyleLoaded()`）：
+      /* 这一条是**读的那一刻**的原始值（`map.isStyleLoaded`）：
          它在"瓦片还在下"时会**长时间为 false**，而地图**可能早就画出内容了**
          （本会话真机截图就出现过 `样式已加载=false` 与 `出过首帧=true` **同屏**）。
          ⇒ 不粉饰原值，但在后面把 `sawRender` 一起写出来：**出过帧 = 这份 style 校验通过、
@@ -833,7 +833,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
             dpr: rep.canvas.dpr,
           }
         : null,
-      /* 🎬 场景装配自证（主会话要求：App 里也要能看到"相机/层序取自 wsScene"） */
+      /* 场景装配自证（要求：App 里也要能看到"相机/层序取自 wsScene"） */
       sceneSource: (() => {
         try {
           const camOk = true; // 相机默认值在 setup 期就取自 `cameraDefaults()`
@@ -850,16 +850,16 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
           return [];
         }
       })(),
-      /* 2D 路的 DPR 封顶（机主要的"降级路便宜了多少"的数字；WebGL 路不适用 ⇒ null） */
+      /* 2D 路的 DPR 封顶（"降级路便宜了多少"的数字；WebGL 路不适用 ⇒ null） */
       dprCap2d: renderKind.value === "fallback2d" ? dprCap2d() : null,
       canvasBlank: (() => {
         const c2 = activeCanvas();
         return c2 ? canvasIsBlank(c2) : null;
       })(),
       counts: { buildings: stats.count, roads: stats.roads, facilities: stats.facilities, pins: stats.pins },
-      /* 🧱 **离线包 offline-first 的可数回证**（切片 A）：默认发了几条 `/api/*`、取了哪些格、
+      /* **离线包 offline-first 的可数回证**（切片 A）：默认发了几条 `/api/*`、取了哪些格、
          包外/失败各几格、仓库里多少要素（**数不出来写 null，不写 0**）、以及署名原句。
-         ⚠️ 判词/计数口径**只有一份**（`wsScene.*VerdictText` / `wsOfflineFeed.bundleCountsLine`），
+         判词/计数口径**只有一份**（`wsScene.*VerdictText` / `wsOfflineFeed.bundleCountsLine`），
          面板只是把它念出来 —— 不在这里另算一套。 */
       bundle: (() => {
         const bf: BundleFeedFacts = bldFeed.facts();
@@ -876,7 +876,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
         return {
           bld: { have: bf.have, missing: bf.missing, failed: bf.failed, pending: bf.pending, n: bf.n, cap: bf.cap, verdict: stats.bldVerdict },
           roads: { have: rf.have, missing: rf.missing, failed: rf.failed, pending: rf.pending, n: rf.n, verdict: stats.roadsVerdict },
-          /* 🧱 重构切片 S4（M2）：`bldHits` / `roadHits` / `bldInfo` / `roadInfo` 四个读数的所有者
+          /* 重构：`bldHits` / `roadHits` / `bldInfo` / `roadInfo` 四个读数的所有者
              现在是 `wsViewFetch`（宿主里那四个 `let` 跟着函数一起搬走了）⇒ 这里换成它的出口。
              `on` 仍由宿主拼（`LIVE_ON` 是宿主自己的开关，不归 M2）。判据一字未改：还是"念出来"。 */
           live: { on: LIVE_ON, ...viewFetch.liveFacts() },
@@ -904,7 +904,7 @@ export function createEngineGuard(ctx: EngineGuardCtx) {
     };
   }
 
-  /** 面板的「现在拍一张」：**不看开关**（这是机主显式点的），拍完回一句人话 */
+  /** 面板的「现在拍一张」：**不看开关**（这是用户显式点的），拍完回一句人话 */
   async function shootNow(): Promise<string> {
     /* 还没分路（`init`）时按 WebGL 试：面板按钮多出现在地图已经起来之后，真降级了上面那条早就写了 */
     const kind = renderKind.value === "fallback2d" ? "fallback2d" : "webgl";

@@ -13,7 +13,7 @@
   - **获取 / 送出**：纯函数 `addItem` / `sendGift` 真扣真加，送出后「最近送出」立刻可见。
 
   ## 哪些**明确写着未接入**（绝不假装成功）
-  - 货币系统（机主还没定 ⇒ 这一版是"商店里直接获得"）
+  - 货币系统（用户还没定 ⇒ 这一版是"商店里直接获得"）
   - 后端物品表 / 背包接口
   - 写进角色记忆 / 触发现实事件（前端没有这条通路，见 `wsGift.ts` 顶部说明）
 -->
@@ -127,7 +127,7 @@
       /** 面板对着的是玩家自己（= 不能送） */
       isMe?: boolean;
       /** runtime 的设施表（`runtime.facilities`，原样传进来；解析在 wsGift 里）
-       *  ⚠️ 故意**不给默认值**：`unknown` 类型 + `withDefaults` 的默认值会让 vue-tsc 报
+       *  故意**不给默认值**：`unknown` 类型 + `withDefaults` 的默认值会让 vue-tsc 报
        *  「null 不能赋给函数类型」（unknown 含函数签名）。缺省时它就是 undefined，
        *  而 `shopList(undefined)` 本来就会退化成空清单 —— 行为一样，类型干净。 */
       facilities?: unknown;

@@ -4,17 +4,17 @@
  *
  * ## 它补的是哪个盲区（2026-09-21）
  * 「能玩」闸门跑的是**无头浏览器** ⇒ 本机无头**没有 WebGL** ⇒ 闸门全程走的是 **2D 降级路**。
- * ⇒ **闸门全绿也看不到 WebGL 那条路的故障**（"整屏纯色"那次事故就是这么放到机主眼前的）。
+ * ⇒ **闸门全绿也看不到 WebGL 那条路的故障**（"整屏纯色"那次事故就是这么放到用户眼前的）。
  * 真机 WebGL 的画面**只有真机浏览器拍得出来**，而页面自己 `toDataURL` 是唯一
- * 既能看到真 GPU 画面、又不碰 `adb screencap`（会拍到机主整屏隐私）的通道 ——
+ * 既能看到真 GPU 画面、又不碰 `adb screencap`（会拍到用户整屏隐私）的通道 ——
  * 详见 `wsSelfShot.ts` 的文件头。
  *
  * ## 与"代拍页"（`public/ws3dshow.html` + `?autoshot=1`）的分工
  * | | 代拍页 | **App 自拍（本文件）** |
  * |---|---|---|
- * | 机主要做什么 | 打开 `/ws3dshow.html?autoshot=1&v=9` | 在**本来就在看的页面**上刷新一次 |
+ * | 需要做什么 | 打开 `/ws3dshow.html?autoshot=1&v=9` | 在**本来就在看的页面**上刷新一次 |
  * | 拍的是什么 | 调参台（自建 style、自定机位） | **真实产品页**（真主题、真图层、真降级逻辑） |
- * | 覆盖降级路 | ❌ 它自己就是那一页 | ✅ 降级了也拍（并如实标注"这是降级路"） |
+ * | 覆盖降级路 | 它自己就是那一页 | 降级了也拍（并如实标注"这是降级路"） |
  * ⇒ 修观感用代拍页，**验收"真 App 到底画出了什么"用 App 自拍**。
  *
  * ## 三条硬纪律（都在代码里守着）
@@ -61,7 +61,7 @@ export interface AppShotResult {
   ready: boolean;
   /** 图发出去了吗 */
   posted: boolean;
-  /** 📊 样式自检 JSON 发出去了吗（没传 `styleReport` 就是 null） */
+  /** 样式自检 JSON 发出去了吗（没传 `styleReport` 就是 null） */
   reportPosted: boolean | null;
 }
 
@@ -89,20 +89,20 @@ export interface AppShotCtx {
   /**
    * 页面/组件还在吗？（`() => !alive`）
    *
-   * 🔴 为什么必须有：等数据最长 45 秒，这段时间里机主可能**切走这一页**。
+   * 为什么必须有：等数据最长 45 秒，这段时间里用户可能**切走这一页**。
    * 不判它的话，`getCanvas()` 会返回 null ⇒ 走"没有画布"分支 ⇒
    * 回传一张写着"WebGL 读回失败"的诊断图 —— **那是假话**（真相是"这轮不拍了"）。
    * 如实优先：切走了就**什么都不发**，只在 HUD 留一句。
    */
   aborted?: () => boolean;
-  /** 📊 样式自检包的输入（返回 null = 这一轮不发 JSON） */
+  /** 样式自检包的输入（返回 null = 这一轮不发 JSON） */
   styleReport?: (shot: AppShotResult) => Record<string, unknown> | null;
 }
 
 /**
  * 在**渲染完成的那一刻**抓帧（不是"睡够了再抓"）。
  *
- * 🔴 为什么必须这样（Android 实测）：WebGL 是**双缓冲**，`idle` + 两帧 rAF + 700ms 之后
+ * 为什么必须这样（Android 实测）：WebGL 是**双缓冲**，`idle` + 两帧 rAF + 700ms 之后
  * 缓冲区往往已经被清空/未提交 ⇒ `toDataURL` 拿到**全透明**（尺寸完全正常，极难发现）。
  * 做法：`triggerRepaint()` 之后在 `render` 回调里**立刻**抓。
  * 拿不到（没有 render / 超时）⇒ 退回直接 `toDataURL`（两条都失败就当空白，交给上层）。
@@ -190,7 +190,7 @@ function diagLines(ctx: AppShotCtx, why: string, attempts: number, r: { waitedMs
  *
  * 顺序：等稳（首帧 + 数据，或超时）→ 抓帧 → **判空（解码后的字节）** →
  * 空白则**同一轮再试一次** → 两次都空白 ⇒ 回传**诊断图**（写明"WebGL 读回失败（第 N 次）"）。
- * 结束后**关掉开关**（不然每次进出小区级都往服务器灌图 —— 机主下次刷新会重新开）。
+ * 结束后**关掉开关**（不然每次进出小区级都往服务器灌图 —— 用户下次刷新会重新开）。
  */
 export async function runAppSelfShot(ctx: AppShotCtx): Promise<AppShotResult> {
   const name = appShotName();
@@ -208,7 +208,7 @@ export async function runAppSelfShot(ctx: AppShotCtx): Promise<AppShotResult> {
     const stable = await waitStable(ctx);
     out.waitedMs = stable.waitedMs;
     out.ready = stable.ready;
-    /* 等数据最长 45 秒 —— 机主可能已经切走了。切走了就**不发任何东西**（发了就是假证据） */
+    /* 等数据最长 45 秒 —— 用户可能已经切走了。切走了就**不发任何东西**（发了就是假证据） */
     if (ctx.aborted?.()) {
       out.why = "页面已切走/卸载，本轮不拍";
       ctx.note("自拍：页面已切走，本轮没拍（没发图）");
@@ -255,7 +255,7 @@ export async function runAppSelfShot(ctx: AppShotCtx): Promise<AppShotResult> {
     let payload = dataUrl;
     let payloadName = name;
     if (out.blank || !dataUrl) {
-      /* 🔴 绝不把空白当成功：回传**诊断图**（纯色图/白图什么都说明不了，等于让机主白刷新一次） */
+      /* 绝不把空白当成功：回传**诊断图**（纯色图/白图什么都说明不了，等于让用户白刷新一次） */
       const diag = diagnosticPng(
         diagLines(ctx, why || "没拿到 PNG", out.attempts, stable),
         ctx.kind === "webgl" ? "App 自拍 · 诊断（WebGL 读回失败）" : "App 自拍 · 诊断（2D 降级路）"
@@ -273,7 +273,7 @@ export async function runAppSelfShot(ctx: AppShotCtx): Promise<AppShotResult> {
     out.why = `自拍自身出错：${String((e as Error)?.message || e)}`;
     ctx.note(`自拍失败：${out.why}`);
   }
-  /* 📊 样式自检 JSON（与图同一轮、同一个时间戳；图挂了也照发 —— 它正是"图为什么是空的"的答案） */
+  /* 样式自检 JSON（与图同一轮、同一个时间戳；图挂了也照发 —— 它正是"图为什么是空的"的答案） */
   if (ctx.styleReport) {
     try {
       const rep = ctx.styleReport(out);

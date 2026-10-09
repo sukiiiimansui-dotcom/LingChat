@@ -2,7 +2,7 @@
  * wsDistrictScene.ts —— **小区级 3D 街景（districts）装配的唯一真源**。
  *
  * ## 为什么有这一份（不是"再抄一份"，是**搬家**）
- * `ROUTE.md §五.1`（机主 2026-09-25 原话「**App 页才是最终结构（PR）**」）要求：
+ * `ROUTE.md §五.1`（2026-09-25 原话「**App 页才是最终结构（PR）**」）要求：
  * **运行期逻辑必须落在共享单一真源，页面只做"接线 + 回证"**；判据是"换宿主、调同样的函数"。
  * 而 PR 标准门禁（`world_map/pr_standard_check.py` C1）实测：下面这五个函数在
  * `WsDistrictMapLibre.vue`（App 宿主）与 `public/ws3dshow.html`（原型页）里**各有一份**，
@@ -17,7 +17,7 @@
  * | `flushRoads(why)` | `flushRoadsStore(opts, why)` |
  * | （宿主私有）`planBeforeOf(m, group)` | `planBeforeOf(m, group)` + `scenePlanConsumed()` |
  *
- * 🔴 **本文件的纪律**：
+ * **本文件的纪律**：
  *   1. **逐字搬**：行为、默认值、边界条件一字不改（搬家 commit 的 diff 应当一眼看出是搬运）；
  *      观感数值（颜色/色阶/层序/不透明度）**一个都不在这里写死** —— 全部来自 `wsMapTheme` 与 `wsScene`。
  *   2. **只被"接线"调用**：页面/宿主负责"什么时候刷、数据从哪来、HUD 怎么念"；
@@ -25,34 +25,34 @@
  *   3. 累积仓库的**合并/淘汰**规则不在这里（在 `wsFeatureStore` + `wsOfflineFeed`）；
  *      取数决策/半径/判词也不在这里（在 `wsScene`）。
  *
- * ⚠️ 原型页 `public/ws3dshow.html` 里那份仍由它自己持有（门禁按 `C1b` ⚠️ 提醒，收口归片区名那条线）；
+ * 原型页 `public/ws3dshow.html` 里那份仍由它自己持有（门禁按 `C1b` 提醒，收口归片区名那条线）；
  *    本模块的导出名就是留给页面侧复用的（普通 `export function`，不藏）。
  */
 
-/* ⚠️ `rampExpression` 已不再用：色阶表达式统一走 `wsArtParams.bldRampColorExpr`（取参只有一份） */
+/* `rampExpression` 已不再用：色阶表达式统一走 `wsArtParams.bldRampColorExpr`（取参只有一份） */
 import { themeForTier, themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { sceneLayerPlan } from "./wsScene";
-/* 🎨 **取参只有一份**（`bldArtParamsOf`）—— 本文件只决定"参数怎么变成图层"，不决定参数从哪来 */
+/* **取参只有一份**（`bldArtParamsOf`）—— 本文件只决定"参数怎么变成图层"，不决定参数从哪来 */
 import { bldArtParamsOf } from "./wsArtParams";
-/* 🎨 基准上妆要 `buildingPartSet`（拆件：主体 + 屋顶系，纯函数）。
-   ⚠️ 本文件**只**用它的纯函数，不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。
+/* 基准上妆要 `buildingPartSet`（拆件：主体 + 屋顶系，纯函数）。
+   本文件**只**用它的纯函数，不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。
    `renderHeight` 已不再直接调（它现在在 `buildingPartSet` 里算，两边各算一次迟早漂移）。 */
 import { buildingPartSet, HEIGHT_COLOR_RAMP, type ShapeMode } from "./wsBuildingLook";
-/* 🏢 **拆件的 zoom 分档真源**（2026-10-02 B1）：两个固定阈值 + `part→档位` 查表 + 离线可见性判定。
-   ⚠️ 它是**单向**依赖（本文件 → 它），它不 import 任何东西 ⇒ 不成环。 */
+/* **拆件的 zoom 分档真源**（2026-10-02 B1）：两个固定阈值 + `part→档位` 查表 + 离线可见性判定。
+   它是**单向**依赖（本文件 → 它），它不 import 任何东西 ⇒ 不成环。 */
 import {
   WS_BLD_DETAIL_ROOF_ZOOM,
   WS_BLD_DETAIL_EQUIP_ZOOM,
   bldTierOfPart,
   bldLayerVisibilityAt,
 } from "./wsBldDetailTiers";
-/* 🏙 挑选的**统计类型**来自编排真源（`wsBldPickStore`）；规则类型（`wsBuildingPick`）本文件已不再直接用 ——
-   `pickBuildingsForView` 那条"按视野挑、无冻结"的旧路**已从这里移除**（App 会"挪一下就变"，机主否过）。 */
+/* 挑选的**统计类型**来自编排真源（`wsBldPickStore`）；规则类型（`wsBuildingPick`）本文件已不再直接用 ——
+   `pickBuildingsForView` 那条"按视野挑、无冻结"的旧路**已从这里移除**（App 会"挪一下就变"，已排除）。 */
 import type { BldPickStats } from "./wsBldPickStore"
-/* 🏙 双预算挑楼的**统计类型**（真源在 `wsBldBudget`）—— 落图通路对两种口径一视同仁：
+/* 双预算挑楼的**统计类型**（真源在 `wsBldBudget`）—— 落图通路对两种口径一视同仁：
    它只把挑出来的那批交给 `dress()`、把 `stats` 转给 `onPicked()`，**不解读**统计里的字段。 */
 import type { BldBudgetStats } from "./wsBldBudget"
-/* 🌆 **足迹档的分界线**（2026-10-03「按 zoom 分层」）：`z < WS_BLD_FOOTPRINT_MAXZOOM` 画足迹
+/* **足迹档的分界线**（2026-10-03「按 zoom 分层」）：`z < WS_BLD_FOOTPRINT_MAXZOOM` 画足迹
    （`bld-foot`，平面）、`z ≥ 14` 画立体（`bld-ext`，挤出）—— 与上面的屋顶系阈值**同一条分界线**
    （那个 14 全项目只有一份，在 `wsBldBudget` 里引用 `wsBldDetailTiers`）。 */
 import { WS_BLD_FOOTPRINT_MAXZOOM } from "./wsBldBudget";
@@ -81,25 +81,25 @@ export interface FeatureCollectionLike {
 /**
  * 小区级地图的**整份 style**（原宿主 `makeStyle()`，逐字搬）。
  *
- * ⚠️ 2026-09-19 更正：原来写「**不依赖瓦片服务器**」——那是当时的取舍，但结果是这块地方
- * 一直是一整片纯深色（机主："只有白底/不像地图"）。现在接 **Esri 暗色灰底**（免 key、实测 0.48s）。
- * 🔴 Esri 路径是 `{z}/{y}/{x}`（y 在前），写成 `{z}/{x}/{y}` 不报错但地图会跑到错位置。
+ * 2026-09-19 更正：原来写「**不依赖瓦片服务器**」——那是当时的取舍，但结果是这块地方
+ * 一直是一整片纯深色（"只有白底/不像地图"）。现在接 **Esri 暗色灰底**（免 key、实测 0.48s）。
+ * Esri 路径是 `{z}/{y}/{x}`（y 在前），写成 `{z}/{x}/{y}` 不报错但地图会跑到错位置。
  *
  * @param theme   主题对象（含 `id`；`wsMapTheme()` / `nightVariant()` 派生而来）
  * @param low     低端档（关 sky/降档，见 `themeForTier`）
  * @param fadeMs  颜色过渡时长（**低端档必须传 0**：软渲染下过渡就是每帧重算）
  */
 export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number): Record<string, unknown> {
-  /* 🎨 整份 style 的"底半部分"（`sky` + `sources` + 背景/底图/色罩/注记）由
+  /* 整份 style 的"底半部分"（`sky` + `sources` + 背景/底图/色罩/注记）由
      `wsMapTheme.themeStyleParts()` 生成 —— 它是**纯函数**，所以
-     `ws_map_theme_selftest.mjs` 能在 Node 里把生成出来的 style 按
+     回归测试 能在 Node 里把生成出来的 style 按
      **从 vendored maplibre 包里现抠出来的 spec** 逐条校验
      （根级属性白名单 / 图层类型枚举 / sky 的 7 个合法字段 / 各 paint 字段表）。
 
-     🔴 为什么值得这么做：2026-09-20 往 `layers[0]` 塞过一个坏对象 ⇒
+     为什么值得这么做：2026-09-20 往 `layers[0]` 塞过一个坏对象 ⇒
      **整份 style 校验失败 ⇒ `load` 永不触发 ⇒ 全站退回 2D 降级**。
      那种错只在**运行时**炸一次，而它本来是可以被断言掉的。
-     ⚠️ `sky` **不是图层类型**（图层类型只有 fill/line/symbol/circle/heatmap/
+     `sky` **不是图层类型**（图层类型只有 fill/line/symbol/circle/heatmap/
      fill-extrusion/raster/hillshade/color-relief/background），只能走**根级** `sky`。 */
   const parts = themeStyleParts(theme, low, fadeMs);
   return {
@@ -109,7 +109,7 @@ export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number)
        免得给 style 里塞一个值为 undefined 的键（校验器会当它存在）。 */
     ...(parts.sky ? { sky: parts.sky } : {}),
     sources: parts.sources,
-    /* ⚠️ 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
+    /* 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
        楼房的图层由 `addLayer(l, "ref")` 插到 **ref 之前** ⇒ 自动落在线罩**之上**。
        `ref` 必须留在最后一条：它是楼房层的插入锚点。 */
     layers: parts.layers,
@@ -124,24 +124,24 @@ export function districtStyleOf(theme: WsMapTheme, low: boolean, fadeMs: number)
  * 颜色/描边/色阶**全从主题取**（`theme` / `themeTier`），这里不写死任何色号。
  */
 /**
- * 🏢 **楼房矢量层从哪一档开始画**（= `bld-foot` / `bld-line` 的 minzoom）。
- * 🔴 抽成共享常量的原因（2026-09-25 真机事故）：这个数以前在 specs 里写 12.8、而页面"挑楼"的门槛
- * 另写了 14 ⇒ 机主停在 **13.5 级**时**两不靠**：矢量楼在画（≥12.8）、封顶却没生效（<14）
+ * **楼房矢量层从哪一档开始画**（= `bld-foot` / `bld-line` 的 minzoom）。
+ * 抽成共享常量的原因（2026-09-25 真机事故）：这个数以前在 specs 里写 12.8、而页面"挑楼"的门槛
+ * 另写了 14 ⇒ 用户停在 **13.5 级**时**两不靠**：矢量楼在画（≥12.8）、封顶却没生效（<14）
  * ⇒ 12,000 栋全画出来 = 他截图里那片"黑点/还这么多"。**阈值只许有一份。**
- * 2026-09-25 二次更正（机主「**小范围一个区块最高 100 栋**」）后**统一到 14**：
+ * 2026-09-25 二次更正（用户「**小范围一个区块最高 100 栋**」）后**统一到 14**：
  * `z < 14` 由**预渲染瓦片**负责（瓦片不透明度也延到 14 才归零），`z ≥ 14` 才画矢量楼并按区块封顶。
  * 2026-10-03 **按 zoom 分层**后它的语义变成"**楼房矢量**（先足迹、后立体）从这一档开始"：
  *   · `11 ≤ z < 14` ⇒ **足迹层** `bld-foot`（平面 `fill`，看得见城市肌理）；
  *   · `z ≥ 14` ⇒ **立体层** `bld-ext`（挤出）。
- * ⇒ **"瓦片归零点 = 矢量楼起点"那条三向不变量仍然成立**（`ws_lod_selftest.mjs` 盯着 11/11/11），
+ * ⇒ **"瓦片归零点 = 矢量楼起点"那条三向不变量仍然成立**（回归测试 盯着 11/11/11），
  *   变的只是"11~14 这一段画的是什么形状"。
  */
-export const WS_BLD_VECTOR_MINZOOM = 11;   /* ← 2026-09-26 与 `LOD_NEAR_ZOOM` 对齐（机主：楼要一直显示） */
+export const WS_BLD_VECTOR_MINZOOM = 11;   /* ← 2026-09-26 与 `LOD_NEAR_ZOOM` 对齐（楼要一直显示） */
 
 /**
- * 🌆 **足迹层的不透明度**（`bld-foot` 的 `fill-opacity`；2026-10-03「按 zoom 分层」那一笔）。
+ * **足迹层的不透明度**（`bld-foot` 的 `fill-opacity`；2026-10-03「按 zoom 分层」那一笔）。
  *
- * 取值理由（不是拍脑袋 —— 机主的原话是"平面，**看得见城市肌理**"）：
+ * 取值理由（不是拍脑袋 —— 原话是"平面，**看得见城市肌理**"）：
  *  ① **看得见**：z12 时一栋 30m 楼在屏上只有 0.9px、z13 只有 1.8px（1280px 视口实测表，见
  *     `wsBldBudget` 文件头）⇒ 足迹是"这一片有没有城市、肌理是方格还是自由生长"的**唯一线索**，
  *     低于 0.3 在一张亮底图上就快读不出来了；
@@ -150,27 +150,27 @@ export const WS_BLD_VECTOR_MINZOOM = 11;   /* ← 2026-09-26 与 `LOD_NEAR_ZOOM`
  *     0.35 的覆盖不会把它们压成一片死色（同一量级的先例：代拍页 `bld-contact` 接触阴影 = 0.35）；
  *  ③ **它是一个常量、不是表达式**：足迹档**只在 z<14 出现**（`maxzoom` 那一刀），
  *     zoom 插值在这里没有意义，还会多一个"低 zoom 越画越淡"的不确定观感；
- *  ④ **只跟图层走**：不掺帧率/设备/候选数（机主红线：不许自动降级）。
+ *  ④ **只跟图层走**：不掺帧率/设备/候选数（用户红线：不许自动降级）。
  */
 export const WS_BLD_FOOTPRINT_OPACITY = 0.35;
 
-/** 🖊 描边从哪一档才开始**可见**：小比例下每栋只有 1~3px，深色描边会把填充整个盖住（"灯芯绒"）。
+/** 描边从哪一档才开始**可见**：小比例下每栋只有 1~3px，深色描边会把填充整个盖住（"灯芯绒"）。
  *  与 AI 绘制管线里那条经验同源（z12 小楼不许描边）；这里用 zoom 插值让线从 12.8 的 0 平滑长到 15 的正常宽。 */
 export const WS_BLD_OUTLINE_FULL_ZOOM = 15;
 
-/* ══ 🎨 **基准上妆**（`dressBase`，2026-09-26 从代拍页 `dressBldBase` 搬过来）════════════════
- * 机主拍板 **(a′)：App 向代拍页看齐**（「**我的要求是代拍页和App页完全一样喵**」）——
+/* ══ **基准上妆**（`dressBase`，2026-09-26 从代拍页 `dressBldBase` 搬过来）════════════════
+ * 已定 **(a′)：App 向代拍页看齐**（「**我的要求是代拍页和App页完全一样**」）——
  * 两页默认档都必须走**同一条**"只补渲染字段、**不拆件**"的上妆，所以它不能再只长在页面里
  * （App 抄一份就是 PR 门禁 C1 要防的"第二份实现"）。
  *
  * ## 为什么必须有这一步（页面注释里的真机事故，原话搬来）
  * 图层写的是 `"fill-extrusion-height": ["get","h3d"]`（**没有兜底**），而离线通路以前直接把仓库要素
  * 塞进 `setData`、**从没上妆** ⇒ `h3d` 缺失 = MapLibre 当 0 ⇒ 一地图**平躺的板**
- * （机主 2026-09-25「**这是近处，连3d都没有**」的真因）。
+ * （2026-09-25 「**这是近处，连3d都没有**」的真因）。
  */
 
 /** 小楼阈值（m²）：脚印面积小于它就 `small = 1`（代拍页 `?bst=2` 用它"小楼不描边"）。
- *  ⚠️ 页面里那份字面量（`BST_SMALL_M2 = 220`）**等它可以动时改成读这里**（v75）——数值以这一份为准。 */
+ *  页面里那份字面量（`BST_SMALL_M2 = 220`）**等它可以动时改成读这里**（v75）——数值以这一份为准。 */
 export const WS_BLD_SMALL_M2 = 220;
 
 /** `dressBase()` 的计数（**楼栋数**，不是要素数 —— 不拆件时两者相等，但口径要写死） */
@@ -187,7 +187,7 @@ export interface DressBaseCounts {
 /**
  * 脚印面积（m²，鞋带公式，经纬度按本地米制换算）——**逐字等于页面那份** `fpAreaM2Of`。
  *
- * 🔴 为什么不去调 `wsBuildingLook.footprintMetrics()`：两者**数值上会有极小差异**
+ * 为什么不去调 `wsBuildingLook.footprintMetrics`：两者**数值上会有极小差异**
  *   （那份用**首点**纬度做 `kx`、并在质心系里做鞋带；这份用**环上纬度均值**、在绝对坐标里做）。
  *   而 `small = fp < 220` 是**阈值判定** ⇒ 极小的差会让临界楼在两页之间翻面。
  *   "两页完全一样"优先 ⇒ 这里与页面**同式**；等页面也改调共享（v75）之后，这份就是唯一一份。
@@ -210,9 +210,9 @@ export function bldFootprintAreaM2(f: { geometry?: { coordinates?: unknown } | n
 }
 
 /**
- * 🎨 **基准上妆（默认档 = 主体 + 屋顶系）**：给每栋楼补 `h3d`/`h_from`/`color3d`/`h_base`/`part`/`zt`/`fp`/`small`。
+ * **基准上妆（默认档 = 主体 + 屋顶系）**：给每栋楼补 `h3d`/`h_from`/`color3d`/`h_base`/`part`/`zt`/`fp`/`small`。
  *
- * ## 🏢 2026-10-02 改口径（机主拍板的 B1：「拆件进默认档 + 按 zoom 分层」）
+ * ## 2026-10-02 改口径（拆件进默认档 + 按 zoom 分层）
  * 以前这里是"**只补渲染字段、不拆件**"（一栋楼一个要素，屏上全是平顶柱体）。
  * 现在默认档走 `buildingPartSet(mode:"roof")` ⇒ 一栋楼变成 **1~5 个要素**：
  *   · `body`（第 0 档，**一直画**）；
@@ -250,7 +250,7 @@ export function dressBase<T extends { properties?: Record<string, unknown> | nul
       ramp,
       { mode }
     );
-    /* 🔴 计数口径 = **楼栋数**（拆件后要素变多，HUD 的「🏢 N」必须还是"这里有几栋楼"） */
+    /* 计数口径 = **楼栋数**（拆件后要素变多，HUD 的「N」必须还是"这里有几栋楼"） */
     counts.n += 1;
     if (set.parts[0]) {
       const from = (set.parts[0].properties as Record<string, unknown> | undefined)?.h_from;
@@ -280,34 +280,34 @@ export interface BldLayerOpts {
   art?: number;
   /** `?look=` 档位（默认 1） */
   look?: number;
-  /** 形体档（默认 `base` —— 机主 (a′) 之后**两页默认档都是这一档**） */
+  /** 形体档（默认 `base` —— 用户 (a′) 之后**两页默认档都是这一档**） */
   mode?: BldLayerMode;
 }
 
 export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLayerOpts = {}): Array<Record<string, unknown>> {
-  /* 🎨 取参**只有一份**（`wsArtParams.bldArtParamsOf`）：色阶 / 描边 / 渐变 / 不透明度 / 停靠点全从它来，
+  /* 取参**只有一份**（`wsArtParams.bldArtParamsOf`）：色阶 / 描边 / 渐变 / 不透明度 / 停靠点全从它来，
      本文件不写死任何颜色。`art=1` 时 `ramp` 就是主题那个**引用** ⇒ 默认逐字节不变。 */
   const th = theme;
   const P = bldArtParamsOf(th, { art: opts.art ?? 1, look: opts.look ?? 1 });
 
-  /* ── 🏢🌆 **按 zoom 分档的楼房层**（2026-10-02 B1 三条挤出层 + 2026-10-03 足迹层）──────
+  /* ── **按 zoom 分档的楼房层**（2026-10-02 B1 三条挤出层 + 2026-10-03 足迹层）──────
      档位来自 `wsBldDetailTiers`（唯一真源）：0 = 主体/裙楼/塔楼/退台 · 1 = 女儿墙
      （`z ≥ WS_BLD_DETAIL_ROOF_ZOOM` = 14）· 2 = 设备箱 + 天线（`z ≥ WS_BLD_DETAIL_EQUIP_ZOOM` = 16）。
      2026-10-03 **再按同一条分界线分"画法"**：`z < WS_BLD_FOOTPRINT_MAXZOOM`(14) ⇒ 足迹（`fill`）·
-     `z ≥ 14` ⇒ 立体（`fill-extrusion`）—— 机主原话：「z<14 画"足迹"（平面，看得见城市肌理）；
+     `z ≥ 14` ⇒ 立体（`fill-extrusion`）—— 需求：「z<14 画"足迹"（平面，看得见城市肌理）；
      z≥14 画立体（严格档 100 栋）」。
 
-     🔴 **闸是 `minzoom` / `maxzoom`**：MapLibre 的 `layout.visibility` 在 v6.10.0 **不接受 zoom 表达式**
+     **闸是 `minzoom` / `maxzoom`**：MapLibre 的 `layout.visibility` 在 v6.10.0 **不接受 zoom 表达式**
      （vendor 里那份 style-spec 的 `parameters` 只有 `global-state`；写了 zoom 表达式 ⇒ **整份 style
      校验失败 ⇒ 地图永不 load**，这个坑项目踩过）。`minzoom`/`maxzoom` 是官方"按 zoom 开关整层"的那一档，
      语义上就是"z 落在区间外 ⇒ 该层不可见 ⇒ **0 顶点 / 0 draw call**"（离线判定 `bldLayerVisibilityAt`）。
-     ⚠️ **固定阈值**：这几个数只跟 zoom 走，**不看帧率、不看设备**（机主红线：不许性能档位自动降级）。
+     **固定阈值**：这几个数只跟 zoom 走，**不看帧率、不看设备**（用户红线：不许性能档位自动降级）。
 
      分层筛选靠要素上算好的 `zt`（0/1/2），**不在 filter 里拼表达式** —— 表达式报错是静默的
      （本项目为此付过代价）。`zt` 缺席（没上妆的要素）**按第 0 档算** ⇒ 照旧画，绝不"少画楼"。 */
   const tierFilter = (t: 0 | 1 | 2): unknown[] =>
     t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
-  /** 🎨 **楼体取色（全项目唯一一份表达式）**：要素自带的 `color3d` 优先，缺了才走主题色阶。
+  /** **楼体取色（全项目唯一一份表达式）**：要素自带的 `color3d` 优先，缺了才走主题色阶。
    *  足迹层（`fill-color`）与三条挤出层（`fill-extrusion-color`）**共用同一个数组对象** ⇒
    *  "远了是足迹、近了是立体"的**颜色口径同一个字节都不会漂**（各写一份迟早变成一片楼两种色）。 */
   const bldColorExpr: unknown[] = ["coalesce", ["get", "color3d"], P.rampColor];
@@ -320,7 +320,7 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
     "fill-extrusion-vertical-gradient": P.vgrad,
     "fill-extrusion-color": bldColorExpr,
   };
-  /* ── 🌆 **足迹层**（`bld-foot`，2026-10-03 机主拍板：「z<14 画"足迹"（平面，看得见城市肌理）」）──
+  /* ── **足迹层**（`bld-foot`，2026-10-03 z<14 画"足迹"（平面，看得见城市肌理））──
      与立体层**同一个 source、同一批要素**，差别只在画法与 zoom 区间：
        · `fill`（贴地平面）而不是 `fill-extrusion`；
        · `maxzoom = WS_BLD_FOOTPRINT_MAXZOOM`(14) ⇒ **z ≥ 14 整层不可见**（MapLibre 语义：
@@ -328,7 +328,7 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
          理由与屋顶系那两条层完全相同（`layout.visibility` 不接受 zoom 表达式）；
        · `minzoom = WS_BLD_VECTOR_MINZOOM`(11)：与"楼房矢量从 11 起"那条三向不变量同一个起点；
        · `filter = tierFilter(0)`：只画主体（z<14 时屋顶系那两档连要素都不生成，见 `dressBase`）。
-     🔴 **层序**：它是 specs 数组的**第一条** ⇒ `applyBuildingsTo()` 里那句 `addLayer(l, before)`
+     **层序**：它是 specs 数组的**第一条** ⇒ `applyBuildingsTo` 里那句 `addLayer(l, before)`
      先加它（`before` 取法与同文件其它层**逐字相同**：场景计划 → `ref` 注记层兜底，没有第二套）
      ⇒ 它落在 `bld-ext` 以及**后插进来的路网**之下 —— 足迹是地面上的东西，压住路网/注记就成了
      "一层半透明脏膜"。 */
@@ -357,18 +357,18 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
   const outlineLayers = tier.outlineWidth !== null
     ? [{
         id: "bld-line", type: "line", source: "bld",
-        /* 🌆 2026-10-03（PLAN-BLD-LOWZOOM §4 表那一笔）：**低缩放不再给同一批要素画第二遍**。
+        /* 2026-10-03（§4 表那一笔）：**低缩放不再给同一批要素画第二遍**。
            足迹档（z<14）已经有一层 `fill`（`bld-foot`）在画同一批要素，再叠一层描边就是方案 §1②
            里那片"深色小面/灯芯绒"（每栋 1~2px，描边把填充整个盖掉）。
-           🔴 **闸开在 `minzoom` 这一侧**（= 描边只在立体档 `z ≥ WS_BLD_FOOTPRINT_MAXZOOM` 画）。
+           **闸开在 `minzoom` 这一侧**（= 描边只在立体档 `z ≥ WS_BLD_FOOTPRINT_MAXZOOM` 画）。
               方案 §4 表把这一步写成"加 `maxzoom`"，但按 MapLibre 语义（`minzoom ≤ z < maxzoom`，
               见上面 `bld-foot` 那段注释）`maxzoom: 14` 是**把 z≥14 的描边整层关掉** —— 那既治不了
               低缩放（z<14 照样两层），又违反同一个方案 §验收 6「**`bld-line` 行为与 v95 同
-              （近景是机主认过的，不许动）**」。⇒ 取**能满足两边意图**的那一侧：低缩放不画、
+              （近景是已确认的，不许动）**」。⇒ 取**能满足两边意图**的那一侧：低缩放不画、
               z≥14 与 v95 逐字节同（`?bldn=`/`?bld=2`/低端档那几条路都不受影响）。
-           ⚠️ 代拍页 `bldLineLayer()` 必须同一份规格（`ws_pages_consistency.mjs` ④b 盯着 minzoom）。 */
+           代拍页 `bldLineLayer` 必须同一份规格（`ws_pages_consistency.mjs` ④b 盯着 minzoom）。 */
         minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-        /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
+        /* **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
            `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。 */
         paint: {
           "line-color": P.outline.color,
@@ -377,12 +377,12 @@ export function bldLayerSpecsFor(theme: WsMapTheme, tier: ThemeTier, opts: BldLa
       }]
     : [];
 
-  /* ── ① `base` 档（**默认**，机主 (a′) 后两页共用）：原始脚印 + 屋顶系两条 ──
+  /* ── ① `base` 档（**默认**，用户 (a′) 后两页共用）：原始脚印 + 屋顶系两条 ──
      规格**逐字段等于代拍页默认档**（`bldLayerSpecs()` 的 else 分支）—— 这是"两页完全一样"的判据，
      由 `ws_pages_consistency.mjs` 的 ④a/④b 盯着。
-     ⚠️ `bld-ext` 从 2026-10-02 起也读 `color3d`/`h_base`：默认档的数据**现在也拆件**
+     `bld-ext` 从 2026-10-02 起也读 `color3d`/`h_base`：默认档的数据**现在也拆件**
      （`dressBase` 走 `mode:"roof"`），主体与屋顶件必须是**同一条取色**（各读各的会一片楼两种色）。
-     ⚠️ 2026-10-03 **按 zoom 分层**：`bld-foot`（足迹，z<14）打头、`bld-ext` 的 `minzoom` 抬到
+     2026-10-03 **按 zoom 分层**：`bld-foot`（足迹，z<14）打头、`bld-ext` 的 `minzoom` 抬到
      `WS_BLD_FOOTPRINT_MAXZOOM`(14)（立体只在 z≥14 出现）；屋顶系两条不动。 */
   if ((opts.mode ?? "base") === "base") {
     return [
@@ -441,13 +441,13 @@ export function planBeforeOf(m: DistrictMapLike, group: "roads" | "buildings"): 
 }
 
 /**
- * 🌆 **上一次真正写进 `bld` 源的要素 id 签名**（按**地图实例**分表，`WeakMap` ⇒ 换图/换主题重载不留残渣）。
+ * **上一次真正写进 `bld` 源的要素 id 签名**（按**地图实例**分表，`WeakMap` ⇒ 换图/换主题重载不留残渣）。
  *
- * 为什么要它（PLAN-BLD-LOWZOOM §4 表 / §验收 4）：同一机位连续落图时，低缩放挑出来的往往
+ * 为什么要它（§4 表 / §验收 4）：同一机位连续落图时，低缩放挑出来的往往
  * **就是同一批**（静态分排序 + 集合不变）—— 那时再 `setData` 一次是纯白工：MapLibre 要重解析
- * GeoJSON、重建索引、重上传，这一帧就是机主看到的"整层换一批/闪"。
+ * GeoJSON、重建索引、重上传，这一帧就是屏幕上的"整层换一批/闪"。
  * 判据只有一条：**id 序列（含条数）逐字节相同 ⇒ 不重传**。
- * ⚠️ id 序列取自**上妆后的数据**（`dress()` 的产物）⇒ 挑楼集合与拆件结果**任一**变了都会重传
+ * id 序列取自**上妆后的数据**（`dress` 的产物）⇒ 挑楼集合与拆件结果**任一**变了都会重传
  * （不是"只看挑楼"，也不看别的 —— 上妆是纯函数，同输入必同产物）。
  */
 const bldDataSig = new WeakMap<object, string>();
@@ -466,7 +466,7 @@ function bldDataSigOf(data: FeatureCollectionLike): string | null {
  * （落图通路**只有这一条**：离线包与 `?live=1` 两条来源都先把要素并进仓库，再由 `flushBldStore` 调它
  *   —— 写两遍迟早漂移，而"两条来源各画一套"正是"新的一来旧的没了"的成因。）
  *
- * 🌆 2026-10-03（PLAN-BLD-LOWZOOM）：源已存在且**这一批的 id 序列与上次逐字节相同** ⇒
+ * 2026-10-03：源已存在且**这一批的 id 序列与上次逐字节相同** ⇒
  *    **直接返回，不 `setData`**（方案 §验收 4：同相机 3 次 flush ⇒ `setData` ≤ 1 次）。
  */
 export function applyBuildingsTo(
@@ -483,7 +483,7 @@ export function applyBuildingsTo(
   }
   m.addSource("bld", { type: "geojson", data });
   if (sig !== null) bldDataSig.set(m, sig);
-  /* 🎬 层序：`before=` 取自**计划**（`wsScene.sceneLayerPlan()`）—— 计划里 buildings 的
+  /* 层序：`before=` 取自**计划**（`wsScene.sceneLayerPlan`）—— 计划里 buildings 的
      `beforeId` 就是这里的取值，**逐字相同**；取不到才退回本地判断（`ref` 注记层 ⇒ 街名压在楼上面）。 */
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);
   for (const l of specs) m.addLayer(l, before);
@@ -505,23 +505,23 @@ export interface BldFlushOpts<T> {
   /** 落图**之后**（宿主的标签/HUD；画不成时不会调用） */
   afterDraw?: (why: string, data: FeatureCollectionLike) => void;
   /**
-   * 🏙 **近景挑选**（机主 2026-09-25「楼房过于密集…**上限 100 栋根据视野来显示**」，
+   * **近景挑选**（2026-09-25 「楼房过于密集…**上限 100 栋根据视野来显示**」，
    * 2026-09-26 更正为「**小范围一个区块最高 100 栋**」+「视野内最少十栋房」）。
    *
    * 传了就把挑出来的那批交给 `dress()`（**其余仍在仓库里，只是不画** —— 事实不编，只编"画多少"）。
    * `null`/不传 = 全画（远景/预览）。
    *
-   * 🔴 **编排不在这个模块里**（2026-09-26）：按格挑 + 按格冻结 + 视野补齐的规则与状态都在
+   * **编排不在这个模块里**（2026-09-26）：按格挑 + 按格冻结 + 视野补齐的规则与状态都在
    * `wsBldPickStore.createBldPickStore()`（页面与 App **各自一份实例**，调的是**同一个**函数）。
    * 这里只负责"挑出来的那批去 `dress()`、其余不画"这一步。
    *
-   * ⚠️ 上一版这里叫 `pickNearView`，内部调 `pickBuildingsForView`（**按视野**挑、**没有冻结**）——
-   * App 因此"挪走再挪回，那批楼就变了"（机主真机原话：「**每次滑动建筑都变了**」），
+   * 上一版这里叫 `pickNearView`，内部调 `pickBuildingsForView`（**按视野**挑、**没有冻结**）——
+   * App 因此"挪走再挪回，那批楼就变了"（**每次滑动建筑都变了**），
    * 而代拍页早已是按格那套 ⇒ 两页不是一个东西。**别把按视野那套加回来。**
    *
-   * 🏙 **2026-10-02（B2）**：默认口径换成 `store.pickBudget()`。**2026-10-03（第五条）**它的规则是
+   * **2026-10-02（B2）**：默认口径换成 `store.pickBudget`。**2026-10-03（第五条）**它的规则是
    * 「**按离线包格取静态重要度前 K 栋**；两个代价预算（Σ投影 px² + Σ顶点）当**安全闸**」——
-   * **与相机、与缩放无关**（机主：「能不能将楼房具体显示哪些**直接定下来**」）。
+   * **与相机、与缩放无关**（能不能将楼房具体显示哪些**直接定下来**）。
    * `store.pick()`（按格 + 冻结）留给 `?bldn=` 的 A/B 逃生口与两页一致闸第③组。
    * 本参数的类型因此放宽成"两种统计都收"（`BldPickAnyStats`）—— 通路只转交，不解读。
    */
@@ -532,11 +532,11 @@ export interface BldFlushOpts<T> {
 
 /**
  * 把**累积仓库的并集一次性**写进地图（楼）。
- * 语义（机主 2026-09-25：「之前的没了…必须保证视野内完整」）：**一次 `setData`**，
+ * 语义（2026-09-25 之前的没了…必须保证视野内完整）：**一次 `setData`**，
  * 数据来自仓库并集而不是"这一批" ⇒ 换视野/换来源都不会把已画上的楼抹掉。
  */
 export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
-  /* 🏙 近景挑选：**只影响"画哪些"**，仓库不动（HUD 的"仓库 N 栋"仍是全量）。
+  /* 近景挑选：**只影响"画哪些"**，仓库不动（HUD 的"仓库 N 栋"仍是全量）。
      编排（按格挑 + 按格冻结 + 视野补齐）在 `wsBldPickStore` 里 —— 这里只转交。 */
   let drawn = opts.features();
   if (opts.pick) {

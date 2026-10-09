@@ -5,7 +5,7 @@
 //     加权）是**业务规则**，写在组件里就只能靠肉眼验；
 //   · 粒子位置全部由 `t` 与索引哈希即时算出（帧间不存粒子数组 → 零 GC 压力），
 //     这是纯函数里最容易写错、也最值得单测的一块；
-//   · 于是 `node weather_selftest.mjs` 用 esbuild 打包后能秒级跑断言，不用开浏览器。
+//   · 于是 `node 回归测试 用 esbuild 打包后能秒级跑断言，不用开浏览器。
 //
 // ── 与老线的关系（`public/world_map/world_weather.js`，625 行裸 JS）────────────
 //   判定优先级、强度公式、色调表、四套粒子的画法**逐值照搬**老线
@@ -215,7 +215,7 @@ function pickRoot(raw: unknown): Record<string, unknown> {
 /**
  * 原始 payload → 统一天气状态。
  *
- * ⚠️ 与老线的一处**有意差异**：老线 `normalize` 只吃 `current` 那一层，
+ * 与老线的一处**有意差异**：老线 `normalize` 只吃 `current` 那一层，
  *    而真机回来的形状有三种（`{current:{...}}` / `{weather:{...}}` / 顶层就是），
  *    `useWsActors.ts::describeWeather` 已经在处理这件事了 —— 这里收口成一处，
  *    免得角标显示「未知」而角色面板显示「小雨」（同一份数据两个口径）。
@@ -227,7 +227,7 @@ export function normalize(raw: unknown): WsWeatherState {
   const clouds = clamp(num(cur.cloudcover) ?? 0, 0, 100);
   /* 描述：**原始 payload 里到底有没有给**要留痕。
    * 为什么：`desc` 兜底成中文类型名（照搬老线）之后，角标就没法区分
-   * 「接口说今天晴」和「接口没给描述，我们按云量推的晴」—— 于是角标会显示
+   * 「接口说今天晴」和「接口没给描述，按云量推的晴」—— 于是角标会显示
    * 「晴 5°C」这种把推断当数据的文案。`descFromData` 就是那一条留痕，
    * 供电台/角标决定"要不要把那句话说出来"（自检里踩到过，见 weather_selftest_t2 ⑧）。 */
   const rawDesc = pick(cur, "desc", "weather_desc", "text");
@@ -238,7 +238,7 @@ export function normalize(raw: unknown): WsWeatherState {
     kindLabel: KIND_LABEL[kind],
     label: KIND_LABEL[kind],
     icon: KIND_ICON[kind],
-    // ⚠️ `temp_C`（大写 C）是 Rust 侧 `world_map_weather` 的字段名，别漏
+    // `temp_C`（大写 C）是 Rust 侧 `world_map_weather` 的字段名，别漏
     desc,
     descFromData,
     descEn: String(pick(cur, "desc_en") ?? ""),
@@ -268,7 +268,7 @@ export function normalize(raw: unknown): WsWeatherState {
  * 降级态：**拿不到天气**时用它。
  *
  * 为什么不直接返回 `normalize(null)`：那会得到一个 `kind = "clear"`（云量 0 → 晴）的
- * 状态 —— 也就是**把「拿不到」显示成「晴天」**。机主明确讨厌假数据，所以降级态是
+ * 状态 —— 也就是**把「拿不到」显示成「晴天」**。不接受假数据，所以降级态是
  * 独立的：`degraded = true` + `kind = "unknown"`，角标据此显示「天气不可用」。
  *
  * @param reason 人工可读的原因（角标 hover/title 会显示它，便于真机排障）

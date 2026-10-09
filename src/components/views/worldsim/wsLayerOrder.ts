@@ -1,9 +1,9 @@
 /**
  * wsLayerOrder.ts —— 「**地面设施的层序**」的**纯逻辑**（可在 Node 里用假 map 断言）。
  *
- * ## 为什么有这个文件（2026-09-22 机主的真机回归）
- * 机主两张图对比：`?v=9` 路网很好，`?tf=1`（加了交通设施）**路网不见了**。
- * 我读接线觉得"结构上不该互相挤掉"（路先插在 `bld-ext` 之前、设施后插也在它之前 ⇒ 路在下），
+ * ## 为什么有这个文件（2026-09-22 真机回归）
+ * 用户两张图对比：`?v=9` 路网很好，`?tf=1`（加了交通设施）**路网不见了**。
+ * 接线觉得"结构上不该互相挤掉"（路先插在 `bld-ext` 之前、设施后插也在它之前 ⇒ 路在下），
  * 但**真机证据说没了** ⇒ 结论：**不能靠"先插的那一次"保证顺序**，要**事后断言**：
  *   ① 缺 source / 缺图层 ⇒ 补；
  *   ② 都在 ⇒ 用 `moveLayer()` 把路网**显式**移到交通设施之下、楼体之下；
@@ -36,9 +36,9 @@ export const TF_LAYER_ID_LIST = ["tf-cross", "tf-drive", "tf-park", "tf-bus", "t
 /** 楼体图层 id（路网必须在其下） */
 export const BUILDING_LAYER_ID = "bld-ext";
 /**
- * 🌆 **足迹层 id**（2026-10-03「按 zoom 分层」：`z < 14` 时屏上的"楼"就是这一层，`fill` 贴地平面）。
+ * **足迹层 id**（2026-10-03「按 zoom 分层」：`z < 14` 时屏上的"楼"就是这一层，`fill` 贴地平面）。
  *
- * 为什么路网的自愈要知道它：足迹是**地面上的肌理**，被它盖住 = 一层半透明脏膜（机主原话：
+ * 为什么路网的自愈要知道它：足迹是**地面上的肌理**，被它盖住 = 一层半透明脏膜（需求：
  * 足迹不许压住路网）。而"路网先插、楼体后插"的顺序下（页面实测到过），`bld-foot` 会落在路网
  * **之上**，此时老判据（只看 `bld-ext` / tf）认为"已经是对的"⇒ **不会自愈** ⇒ 真机上是脏的。
  * ⇒ 它和 `BUILDING_LAYER_ID` 一起构成路网的层序约束：**足迹 < 路网 < 设施 < 楼体**。
@@ -76,7 +76,7 @@ export function planEnsureRoadOrder(m: LayerOrderMapLike): LayerOp[] {
   const lowestTf = tfIdx.length ? Math.min(...tfIdx) : -1;
   if (lowestTf >= 0 && firstRoad > lowestTf) blockers.push("交通设施");
   if (bldIdx >= 0 && firstRoad > bldIdx) blockers.push("楼体");
-  /* 🌆 2026-10-03：路网还必须**压在足迹层之上**（`bld-foot` 是贴地平面 ⇒ 盖住路网就是脏膜）。
+  /* 2026-10-03：路网还必须**压在足迹层之上**（`bld-foot` 是贴地平面 ⇒ 盖住路网就是脏膜）。
      判据与上面两条同式（索引更小 = 更靠下）；只有足迹层在挡时也走下面同一套 `before` 计算。 */
   if (footIdx >= 0 && firstRoad < footIdx) blockers.push("足迹层");
   if (!blockers.length) return ops; // 已经是对的 ⇒ **不动**（避免无谓的 moveLayer 抖动）
@@ -86,7 +86,7 @@ export function planEnsureRoadOrder(m: LayerOrderMapLike): LayerOp[] {
   else if (lowestTf >= 0) before = ids[lowestTf]!;
   else if (bldIdx >= 0) before = ids[bldIdx]!;
   /* 只有足迹层在挡（没有楼体层、也没有设施）⇒ 锚点取**足迹层之上最近的那一条**。
-     🔴 取不到就**不动**：老代码那一支会算出 `undefined`，而 `before: undefined` 的语义是
+     取不到就**不动**：老代码那一支会算出 `undefined`，而 `before: undefined` 的语义是
      "移到最上"—— 那比"留在原地"更糟（路网跑到所有东西上面）。 */
   else if (footIdx >= 0) before = ids[footIdx + 1] || "";
   if (!before) return ops;
@@ -100,8 +100,8 @@ export function layerOrderHud(heals: number, roads: number): string {
 }
 
 /**
- * 🛣 **路网计数的三态判据**（纯函数）—— 2026-09-22 机主抓到我们**误报**：
- * HUD 写着 `🛣 0 条 · 图层 12 个 · "路网没画上"`，而画面上**路明明看得见**
+ * **路网计数的三态判据**（纯函数）—— 2026-09-22 已发现**误报**：
+ * HUD 写着 `0 条 · 图层 12 个 · "路网没画上"`，而画面上**路明明看得见**
  * （12 = 6 个等级 × casing+line ⇒ 图层确实都插上了）⇒ 是 `visibleRoadCount()` **数不出来**，
  * 不是"没画上"。**误报比不报更糟**（会把人带偏）。
  *

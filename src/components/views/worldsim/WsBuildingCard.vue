@@ -1,22 +1,22 @@
 <!--
-  WsBuildingCard.vue —— 🪪 「世界模拟」的**信息卡**（楼体 / 真名点 / 区名 **三种入口共用同一张卡**）。
+  WsBuildingCard.vue —— 「世界模拟」的**信息卡**（楼体 / 真名点 / 区名 **三种入口共用同一张卡**）。
 
-  ## 机主原话（2026-09-26）
+  ## 需求（2026-09-26）
   「**每个名字和楼房都能点击查看信息**（要求有**精美的 mg 动画**）」
   ⇒ 两个入口是**同一"物种"**（`DESIGN-MG-MOTION.md` §4.4）：同一个组件、同一条时序常量、同一组 `data-*`，
   唯一的差别是**生长原点**（点楼体 = 以点击点为中心；点区名 = 底部升起 24px）。
 
   ## 三条设计约束（都是硬约束，不是风格偏好）
-  ① 🔴 **禁 `backdrop-filter`**（RED LINE R1）：实测 `blur(0px) ≠ 没有模糊` —— 只要值不是 `none`
+  ① **禁 `backdrop-filter`**（RED LINE R1）：实测 `blur(0px) ≠ 没有模糊` —— 只要值不是 `none`
      就会建 backdrop 层、**每帧把底下的像素读回来**，而卡片正浮在地图画布上（fps 19→27 的代价）。
-     ⚠️ 所以这里**绝不能**套用全局的 `.ws-card` 类：那个类里写着
+     所以这里**绝不能**套用全局的 `.ws-card` 类：那个类里写着
      `backdrop-filter: blur(var(--ws-blur))`，玻璃主题下 `--ws-blur` 是 `10px` ⇒ 一用就退回掉帧。
      本组件用**自己的** `ws-bcard` 类：半透明**纯色** + 1px 描边 + 一层阴影。
   ② **只动 `transform` / `opacity`**（R2）：位置/生长用 `translate3d` + `scale`，不许动
      `width/height/top/left/margin/padding/font-size`；动画属性白名单在 `wsBuildingCard.CARD_ANIM_PROPS`。
   ③ **两个降级面**（R8）：`.ws-perf-low`（低档：去位移、内容不分层、140ms）与
      `prefers-reduced-motion: reduce`（纯淡入 120ms，**保留终态**，去掉位移与缩放）。
-     ⚠️ 全站 CSS 已把 `.ws-root *` 的 `transition-duration` 压到 `0.12s !important`，
+     全站 CSS 已把 `.ws-root *` 的 `transition-duration` 压到 `0.12s !important`，
      但 **`transition-delay` 不在覆盖范围**内 ⇒ reduced-motion 时由本组件**自己**把错峰清零，
      否则会"卡片已经到了、内容还在排队"。
 
@@ -187,7 +187,7 @@ const cardStyle = computed<Record<string, string>>(() => {
   if (!d) return base;
   if (phase.value === "enter") {
     /* 起点 = 以点击点为 origin 生长（`cardEnterStyle` 会夹紧 ±40px；区名入口改底部升起 24px）。
-       🔴 transform 必须**拼在基准居中之后**（`cardComposeTransform`）—— 直接覆盖会把居中一起干掉。 */
+       transform 必须**拼在基准居中之后**（`cardComposeTransform`）—— 直接覆盖会把居中一起干掉。 */
     const st = cardEnterStyle(d.origin);
     return { ...base, transform: cardComposeTransform(st.transform), opacity: st.opacity ?? "0" };
   }
@@ -238,7 +238,7 @@ const tailFields = computed<CardField[]>(() => rows.value.slice(2));
 </script>
 
 <style scoped>
-/* ⚠️ 这里**不写** `backdrop-filter`（红线 R1）。要"浮起来"的感觉只靠三层：
+/* 这里**不写** `backdrop-filter`（红线 R1）。要"浮起来"的感觉只靠三层：
    半透明纯色 + 1px 描边 + 一层阴影。低档下阴影也被 --ws-shadow-lg 换掉（全局已有规则）。 */
 .ws-bcard__scrim {
   position: absolute;
@@ -268,7 +268,7 @@ const tailFields = computed<CardField[]>(() => rows.value.slice(2));
   will-change: transform, opacity;
   pointer-events: auto;
 }
-/* 🎯 只有被点中的那一张卡带 will-change（[MDN] 明确要求"用完就撤"；这里随节点卸载自动撤） */
+/* 只有被点中的那一张卡带 will-change（[MDN] 明确要求"用完就撤"；这里随节点卸载自动撤） */
 .ws-bcard.is-lite { will-change: auto; }
 
 .ws-bcard__head { display: flex; align-items: baseline; gap: 8px; }
@@ -277,7 +277,7 @@ const tailFields = computed<CardField[]>(() => rows.value.slice(2));
   flex: none; font-size: 11px; padding: 1px 6px; border-radius: 999px;
   border: 1px solid var(--ws-border, rgba(143, 214, 192, 0.38));
 }
-/* 🔴 生成/示意件**样式必须与真名不同**（机主拍板 + 项目红线）：虚线边 + 斜体 + 低饱和底 */
+/* 生成/示意件**样式必须与真名不同**（已定 + 项目红线）：虚线边 + 斜体 + 低饱和底 */
 .ws-bcard__tag.is-sketch {
   font-style: italic; border-style: dashed;
   background: var(--ws-primary-soft, rgba(143, 214, 192, 0.18));

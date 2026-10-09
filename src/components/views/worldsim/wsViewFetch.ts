@@ -1,4 +1,4 @@
-/* wsViewFetch.ts —— M2：**取数 / 落地**（`PLAN-REFACTOR.md` §2.1 / §2.2 / §3 的 S4 行）。
+/* wsViewFetch.ts —— **取数 / 落地**（§2.1 / §2.2 / §3 的 S4 行）。
  *
  * ## 这个文件是什么
  * 从 `WsDistrictMapLibre.vue` **整块搬出来**的那一段：现问 Overpass 的取楼/取路（含超时与重试）、
@@ -22,11 +22,11 @@
  *
  * ## ctx 的落法（与 S2/S3 同一套）
  * 宿主构造一份只读 ctx，本工厂在开头**解构一次**，解构出来的名字与搬走前宿主里的闭包变量**同名**
- * ⇒ 下面这些函数的**函数体一个字节都不用改**（对拍闸 `ws_viewfetch_move_selftest.mjs` 断言 diff = 0）。
- * ⚠️ 取值器而不是快照：`aliveNow()` 每次调用现读宿主那面 `alive` 旗（它是 `let`，卸载时置 false）
+ * ⇒ 下面这些函数的**函数体一个字节都不用改**（对拍闸 回归测试 断言 diff = 0）。
+ * 取值器而不是快照：`aliveNow` 每次调用现读宿主那面 `alive` 旗（它是 `let`，卸载时置 false）
  *    —— 解构布尔会拿到**构造那一刻**的快照，之后永远为真（本文件对 TDZ/快照有过前科）。
  *
- * ## 🔴 唯一一处例外：`alive` → `aliveNow()`（10 处，逐处可数）
+ * ## 唯一一处例外：`alive` → `aliveNow`（10 处，逐处可数）
  * 搬走的函数体里原来直接写 `if (!alive) return;`。**JS 里布尔无法按引用共享**：传给模块的只能是
  * 取值器，而 `!取值器` 恒为 false（对象永真），所以要么改正文、要么在模块里再养一面旗（那是第二份
  * 真源，漂移了没人看得出来）。这里选**改正文**，并且只改这一种：
@@ -54,7 +54,7 @@ import type { BldMapLike, ViewFetchCtx } from "./wsStageTypes";
 
 /**
  * 装配 M2（取数/落地）。
- * ⚠️ 位置见文件头「装配位置（TDZ）」那一段。
+ * 位置见文件头「装配位置（TDZ）」那一段。
  */
 export function createViewFetch(ctx: ViewFetchCtx) {
   /* 解构出来的名字**与搬走前宿主里的闭包变量同名** ⇒ 下面函数体一个字都不用动（见文件头）。 */
@@ -84,16 +84,16 @@ export function createViewFetch(ctx: ViewFetchCtx) {
     ]);
   }
 
-  /* ── 🔴 取数超时与重试（2026-09-24，父会话定的下一刀）──────────────────────────
+  /* ── 取数超时与重试（2026-09-24，父会话定的下一刀）──────────────────────────
      为什么必须动：同一台后端实测**冷查 27~33s**（渝中 600m：buildings 27.3s / roads 32.5s），
      而原来 App 侧一刀切 **20s / 25s 且不重试** ⇒ **冷启动那次几乎必然整批丢**，
      屏幕上就是"一栋楼都没有 / 一条路都没有"，人只会以为"这一带没数据"。
      口径：**等够 + 重试 + 失败必须可见**（三态：失败 / 空数据 / 成功，不许混）。
-     ⚠️ 这里只放宽"等多久"，**不改任何观感数值**；代价是冷启动那一次要等更久
+     这里只放宽"等多久"，**不改任何观感数值**；代价是冷启动那一次要等更久
         （loading 动画一直在转，且 HUD 会写等了多久）。 */
   const BLD_FETCH_MS = 55_000; // 单次上限（冷查实测最长 33s，留一倍余量）
   const BLD_RETRIES = 2; // 最多再试 2 次（第 2 次起后端多半已在写缓存 ⇒ 命中是毫秒级）
-  /** 楼房取数试了几次（HUD/面板如实报 —— 只报"失败"看不出我们为此做了什么） */
+  /** 楼房取数试了几次（HUD/面板如实报 —— 只报"失败"看不出为它做了什么） */
   let bldTries = 0;
   /** 楼房取数失败的原因原文（超时/HTTP 码/后端 error） */
   let bldFailedWhy = "";
@@ -151,7 +151,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
    *
    * ## 为什么只在稀疏时才问
    * 渝中区 400m 就有 152 栋**带高度**的真楼；涪陵 400m 有 **0 栋**。
-   * 第二源的角色是**补缺**而不是替换（机主原话：「有真数据用真的」）⇒
+   * 第二源的角色是**补缺**而不是替换（有真数据用真的）⇒
    * 够看的地方（≥ `BLD_SPARSE`）根本不发这个请求：既省一次 12MB/17s 的取数，
    * 也不会拿一层**没有高度**的脚印把本来有高度的真楼淹掉。
    *
@@ -196,18 +196,18 @@ export function createViewFetch(ctx: ViewFetchCtx) {
     }
   }
 
-  /* ── 🛣 路网：与楼房**同一套节奏**（视野算半径 / 去抖键 / 超时 / 如实上报）────
+  /* ── 路网：与楼房**同一套节奏**（视野算半径 / 去抖键 / 超时 / 如实上报）────
      为什么单独一个函数而不是塞进 loadBuildingsForView：
        · 两者的**触发条件不同** —— 楼在 z≥13.5 才取（亚像素没意义），
          而路在**更远**就该画出来（z12 起，路网是"地图的骨架"）；
        · 失败要能分别报（"楼取不到"和"路取不到"是两条不同的坏消息）。
-     ⚠️ 后端是**现问 Overpass**（涪陵 800m 冷查询实测 14.7s，缓存命中 95ms）⇒
+     后端是**现问 Overpass**（涪陵 800m 冷查询实测 14.7s，缓存命中 95ms）⇒
        必须有超时 + 按"中心+半径"去抖，别在拖动时反复打。 */
   let lastRoadKey = "";
 
   async function loadRoadsForView(m: BldMapLike): Promise<void> {
     if (!aliveNow()) return;
-    /* 🔴 **默认根本不打 live**（offline-first）：决策在真源 `wsScene.roadsLiveDecision()`
+    /* **默认根本不打 live**（offline-first）：决策在真源 `wsScene.roadsLiveDecision`
        —— 冷查分钟级、600m 只有缓存命中才 0.1~1s，所以默认 0 条，路从**离线路网包**来；
        `?live=1` 才走这条（补新区域/调试），失败照旧**可见**。 */
     if (!roadsLive.live) return;
@@ -225,21 +225,21 @@ export function createViewFetch(ctx: ViewFetchCtx) {
     lastRoadKey = key;
     liveRoadHits += 1; // 可数口径：这一轮真的发了一条 `/api/roads`
     try {
-      /* 🔴 2026-09-24：与取楼同一口径 —— **放宽上限（25s → 55s）+ 重试 2 次 + 失败可见**。
+      /* 2026-09-24：与取楼同一口径 —— **放宽上限（25s → 55s）+ 重试 2 次 + 失败可见**。
          实测 `/api/roads` 渝中 600m **冷查 32.5s**（缓存命中 0.03s）⇒ 25s 那一刀必然砍掉冷查。
-         路网是"地图的骨架"，它丢了比楼丢了更明显（父会话的诊断里 App 面板曾有 🛣118，那是缓存命中时）。 */
+         路网是"地图的骨架"，它丢了比楼丢了更明显（父会话的诊断里 App 面板曾有 118，那是缓存命中时）。 */
       const geo = (await fetchRoadsWithRetry(c.lat, c.lng, r)) as { type?: string; features?: unknown[] } | null;
       if (!aliveNow()) return;
       const fc = geo as { type?: string; features?: unknown[] } | null;
       const feats = (fc?.features || []) as BldFeature[];
       if (!feats.length) {
         /* 空结果**必须说出来**（同楼房的纪律：静默 = 让人以为"这里没路"）。
-           ⚠️ 仓库里已有的**不清空**（累积语义：live 说的是"这一问回了 0 条"，不是"全都没有"）。 */
+           仓库里已有的**不清空**（累积语义：live 说的是"这一问回了 0 条"，不是"全都没有"）。 */
         stats.note = stats.note ? `${stats.note} · live 取路回来 0 条（r=${r}m）` : `live 取路回来 0 条（r=${r}m）`;
         liveRoadInfo = `r=${r}m（${rp.decidedBy}）· 0 条（已量）`;
         return;
       }
-      /* 🧱 **并进同一个累积仓库**（不是整份替换）：换视野/换来源都不会"新的一来旧的没了" */
+      /* **并进同一个累积仓库**（不是整份替换）：换视野/换来源都不会"新的一来旧的没了" */
       roadsStore.merge(feats as unknown as BundleRoadFeature[], `live:${key}`);
       roadsFlush("live");
       /* `worldMapApi.roads()` 只解包 `geojson`（与 buildings 同一个壳），
@@ -256,22 +256,22 @@ export function createViewFetch(ctx: ViewFetchCtx) {
   /** 最近一次 live 取路的实况（面板回证；离线路走 `stats.roadStore` 那一行） */
   let liveRoadInfo = "";
 
-  /* ── 🏪 设施（`/api/facilities`）→ MapLibre 圆点 ────────────────────────────
-     机主 2026-09-20：「在地图上把**道路和设施**全部勾出来（方便将行人啥的挪出来）」。
+  /* ── 设施（`/api/facilities`）→ MapLibre 圆点 ────────────────────────────
+     2026-09-20 在地图上把**道路和设施**全部勾出来（方便将行人啥的挪出来）。
      以前设施由旧的 DOM 层画（`WsFacilityLayer`），而那层在
      `districtUnderlayVisible=false` 的 `v-if` 里 ⇒ **小区级根本看不到**。
      这里把它迁到地图上（同一条渲染通路，缩放/倾斜/遮挡全都自洽）。
 
-     🔴 坐标口径（这是最容易搞错的一步）：`/api/facilities` 给的是
+     坐标口径（这是最容易搞错的一步）：`/api/facilities` 给的是
      `gx/gy`（28×28 网格）+ **`cell_meters`（实测 30m）** ⇒ 它描述的是
      **28×30 = 840m 的一块街区**，不是整个区县。
      所以映射是「**以地图中心为原点的 840m 方格**」——
      要是像 AI 示意层那样铺到**区县 bbox**（几十公里）上，一格就是好几公里，
      又变成"一栋楼几百米宽"那类**尺度错**（那个坑已经踩过一次）。
-     ⚠️ 由此**设施点是"示意布局"不是实测位置**，HUD 必须这么写（见 `facNote`）。
+     由此**设施点是"示意布局"不是实测位置**，HUD 必须这么写（见 `facNote`）。
 
-     ⚠️ 名称标注做不了：`symbol` 图层的 `text-field` **必须有 `glyphs`（字体服务）**，
-     而我们的样式是**故意不带 glyphs** 的（引字体＝多一个外部依赖 + 多一次跨域）。
+     名称标注做不了：`symbol` 图层的 `text-field` **必须有 `glyphs`（字体服务）**，
+     而样式是**故意不带 glyphs** 的（引字体＝多一个外部依赖 + 多一次跨域）。
      所以名字走 HUD 的 `title`（悬停可看），地图上只画**分类配色**的圆点。 */
   const FAC_COLOR_FALLBACK = "#9fb4c8";
 
@@ -363,7 +363,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
       }
       stats.facilities = feats.length;
       const top = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 6);
-      /* ⚠️ 必须写"示意布局"：这些点的经纬度是**按 840m 方格摊出来的**，不是实测位置 */
+      /* 必须写"示意布局"：这些点的经纬度是**按 840m 方格摊出来的**，不是实测位置 */
       stats.facNote = `${feats.length} 个（示意布局 ${grid}×${cellM}m 方格）：${top.map(([k, v]) => `${k}${v}`).join(" ")}`;
     } catch {
       stats.facNote = "设施取不到（后端没响应或超时）";
@@ -377,9 +377,9 @@ export function createViewFetch(ctx: ViewFetchCtx) {
    *   ① 半径从**当前视野**算（见 `radiusForView`）；
    *   ② 楼太少（< `BLD_ENOUGH`）就翻倍再试一次，最多爬到 `BLD_R_MAX`，**命中即停**；
    *   ③ 全都试完还是空 ⇒ **如实写进 HUD**（试过哪些半径），绝不静默 ——
-   *      静默正是"HUD 常显示 🏢 0 却没人知道为什么"的成因。
+   *      静默正是"HUD 常显示 0 却没人知道为什么"的成因。
    *
-   * ⚠️ 为什么要封顶（现在是 2000m）：**实测**（同一后端）
+   * 为什么要封顶（现在是 2000m）：**实测**（同一后端）
    *   · 涪陵驻地 400m→0 栋、600m→3、900m→18、1000m→21、1400m→29、**2500m→取不到**；
    *   · 渝中区驻地 400m→56、800m→232、**1200m→查询直接失败（Overpass 拖挂）**。
    *   ⇒ 半径越大越容易整条查询失败，而失败一次要等二十几秒。宁可"多爬两级"，
@@ -390,7 +390,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
    */
   async function loadBuildingsForView(m: BldMapLike): Promise<void> {
     if (!aliveNow()) return;
-    /* 🔴 **默认根本不打 live**（offline-first）：决策在真源 `wsScene.bldLiveDecision()`
+    /* **默认根本不打 live**（offline-first）：决策在真源 `wsScene.bldLiveDecision`
        —— 现场一次只覆盖 R≤2000m 且冷查 27~33s（最慢 91.7s），所以默认 0 条，楼从**离线楼房包**来；
        `?live=1` 才走这条（补新区域/调试），失败照旧**可见**。 */
     if (!bldLive.live) return;
@@ -437,7 +437,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
     let features: BldFeature[] = best?.feats ?? [];
     if (!aliveNow()) return;
     if (!features.length) {
-      /* 🔴 空结果**必须说出来**：不然就是"看起来卡住了/什么都没有" */
+      /* 空结果**必须说出来**：不然就是"看起来卡住了/什么都没有" */
       stats.view = "街区视野";
       stats.note = failed
         ? `楼房数据取不到（已试 ${tried.join("/")}m）`
@@ -454,7 +454,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
       stats.note = `${stats.note} · ${fill0.note}`;
       return;
     }
-    /* 🆕 第二源补缺：OSM 不够看时才问（够看的地方一次网络都不发） */
+    /* 第二源补缺：OSM 不够看时才问（够看的地方一次网络都不发） */
     let fillNote = "";
     if (shouldAskSecondSource(features.length, BLD_SPARSE)) {
       /* 先如实说"正在补"，别让人对着不动的画面猜（这一问冷启动要十几秒） */
@@ -469,7 +469,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
         fillNote = "Overture 补缺不可用（只用 OSM）";
       }
     }
-    /* 🧱 **并进同一个累积仓库**（不是整份替换）：live 与离线包走同一条落图通路（一次 `setData`） */
+    /* **并进同一个累积仓库**（不是整份替换）：live 与离线包走同一条落图通路（一次 `setData`） */
     bldStore.merge(features as unknown as BundleBuildingFeature[], `live:${key}`);
     bldFlush("live");
     liveBldInfo = `r=${r0}m（${rp.decidedBy}${rp.limitWhy ? `，策略本想要 ${rp.want}m` : ""}）· ${features.length} 栋 · live 第 ${liveBldHits} 条`;
@@ -482,7 +482,7 @@ export function createViewFetch(ctx: ViewFetchCtx) {
   /**
    * "够看"的楼栋数（**只在 `?live=1` 这条兜底路里用**）：一屏想看到"成片"至少得有这么几栋，
    * 不到就沿阶梯放大再试一级。25 与代拍页 `loadForView` 里那个 `>= 25` **同值**（自检对拍）。
-   * ⚠️ 默认路径（离线包）**不看这个数**：包里有多少画多少，格子按视野取。
+   * 默认路径（离线包）**不看这个数**：包里有多少画多少，格子按视野取。
    */
   const BLD_ENOUGH = 25;
 

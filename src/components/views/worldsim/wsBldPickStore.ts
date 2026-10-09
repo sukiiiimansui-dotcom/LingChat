@@ -7,7 +7,7 @@
  * 一直**只长在 `public/ws3dshow.html` 里**（那段 `const ckey = …` 到 `window.__BLD_PICK__ = r.stats;`）。
  * 于是 App 宿主 `WsDistrictMapLibre.vue` 拿不到它 ⇒ 实测它那四个符号
  * （`capBuildingsPerCell` / `__BLD_FROZEN__` / `minInView` / `pickBuildingsForView`）命中**全是 0**
- * ⇒ App 侧没有"按格挑选 + 按格冻结 + 视野补齐"，**视野一变喂给地图的楼就变**（机主原话：
+ * ⇒ App 侧没有"按格挑选 + 按格冻结 + 视野补齐"，**视野一变喂给地图的楼就变**（需求：
  * 「App 页用的建筑模型不是 art1，**每次滑动建筑都变了**，名字也没有」）。
  * 「编排长在页面里」正是 PR 门禁 **C1（不许第二份实现）** 要防的形状 ⇒ 先抽真源，页面/宿主只接线。
  *
@@ -16,10 +16,10 @@
  *    与视野/中心**无关**；同一格算出来的那批（= `base`）一旦进冻结集，**后续只读冻结集**。
  * ② **视野内至少 `minInView` 栋** —— base 算完后数"base 里落在视野内的"，不够就从
  *    「视野内、未入选」那批按**同一套排序规则**补（`stats.floorAdded`）。
- * ③ 🔴 **补的那批绝不进冻结集** —— 否则挪一下地图，那 100 栋就换了一批 = 又回到机主否掉的"乱变"。
+ * ③ **补的那批绝不进冻结集** —— 否则挪一下地图，那 100 栋就换了一批 = 又回到已排除的"乱变"。
  *    因此：**冻结只冻结 `base`**（`stats.baseChosen` 之前那一段），补齐件**每帧重算**。
  *
- * ## 逐字节等价（`ws_bld_pick_store_selftest.mjs` 第④组钉着）
+ * ## 逐字节等价（回归测试 第④组钉着）
  * 本模块与**页面里那段旧实现**（从固定 git 锚点取出的原文，`new Function` 跑起来）
  * 在同输入下 `features` 的 id 序列与整个 `stats` **逐字节相同**。
  * 冻结键的格式、`toFixed(5)`、`Map` 的插入序（→ 输出顺序）全部照搬页面，**改这里的人别"顺手整理"**。
@@ -36,7 +36,7 @@ import {
   type PickBounds,
   type PickFeature,
 } from "./wsBuildingPick";
-/* 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2）：规则/成本模型/固定常量都在那一份里，
+/* **双预算挑楼**（2026-10-02 已定的 B2）：规则/成本模型/固定常量都在那一份里，
    本模块只做"宿主调哪一个口"的接线（页面与 App 都只认 `createBldPickStore()`）。 */
 import {
   bldNearKOf,
@@ -46,7 +46,7 @@ import {
   type BldBudgetBounds,
   type BldScreenCtx,
 } from "./wsBldBudget";
-/* 🧮 **格数学只有那一份**（`bundleCellOf` / `bundleCellKey`）：2026-10-04 第七条起
+/* **格数学只有那一份**（`bundleCellOf` / `bundleCellKey`）：2026-10-04 第七条起
    **锚点也要落格**（"相机进过的离线包格"），必须与 base 的"按格取前 K"**同一张网**——
    两份 `floor(x/deg)*deg` 就是本项目栽过的那类"两套口径"。`wsFeatureStore` 不 import 任何东西 ⇒ 不成环。 */
 import { bundleCellKey, bundleCellOf } from "./wsFeatureStore";
@@ -95,39 +95,39 @@ export interface BldBudgetInputLite<T> {
   budgetPx2?: number;
   budgetVerts?: number;
   /**
-   * 🔴 **每格取前几栋（K）**（机主 2026-10-03："一开始直接固定可显示的楼房数据，严格限制"；
+   * **每格取前几栋（K）**（2026-10-03 "一开始直接固定可显示的楼房数据，严格限制"；
    * 同日第五条：候选池改成"按离线包格已加载的楼" ⇒ 这个数变成**每格**上限，不再是整屏上限）。
    * 与 `budgetPx2`/`budgetVerts` 同一路透传：**算 K 不在这里**（`bldMaxDrawnOf(档位)` 在
    * `wsBldBudget`、档位存储在 `wsBldMode`），本模块只把宿主算好的数原样交给规则模块。
    *
-   * ⚠️ **K 与 zoom 无关**（第五条）：宿主只用**用户选的档位**算它；本模块**不碰地图对象**
+   * **K 与 zoom 无关**（第五条）：宿主只用**用户选的档位**算它；本模块**不碰地图对象**
    * （见文件头"本模块不读 `window`/`location`/全局主题"）⇒ 也没法在别处偷偷乘一个 zoom 因子。
    */
   maxDrawn?: number;
   /**
-   * 🧮 **离线包格边长（度）** —— "按格取前 K"的那张网格（2026-10-03 第五条）。
+   * **离线包格边长（度）** —— "按格取前 K"的那张网格（2026-10-03 第五条）。
    * 宿主给**包自报**的 `feed.facts().cellDeg`（页面/App 同一份）；不给 ⇒ 规则模块退回
    * `BLD_BUNDLE_CELL_DEG`（0.05）。**取格/算格键/分格三处必须是同一份格数学**，本模块只透传。
    */
   cellDeg?: number;
   minInView?: number;
   /**
-   * 🆕 📍 **相机中心 —— 这是"锚点的种子"**（2026-10-04 第六条引入；**第七条改成锚点冻结**）。
+   * **相机中心 —— 这是"锚点的种子"**（2026-10-04 第六条引入；**第七条改成锚点冻结**）。
    *
-   * 🔴 语义变了（宿主接线不用改，但**理解必须换**）：它**不再**原样透传给规则模块当参照点，
+   * 语义变了（宿主接线不用改，但**理解必须换**）：它**不再**原样透传给规则模块当参照点，
    * 而是被本模块**落成锚点格**（与 base 同一个 `cellDeg`）后播进锚点表：
    *   · **同一个格只认第一次**那个点（"首次进入该格时的相机中心"）⇒ 宿主每轮照传实时中心，
-   *     同格内怎么动都**不会**新增锚点 ⇒ 输出逐字节不变（机主要的就是这个：角色一动楼不该冒出来）；
+   *     同格内怎么动都**不会**新增锚点 ⇒ 输出逐字节不变（就是这个：角色一动楼不该冒出来）；
    *   · 跨格才新增锚点（**只增不删**）⇒ 跨格可能多补几栋，且**已画出去的绝不消失**；
    *   · **坏值 / `null` / 没给** ⇒ 这一轮**不新增锚点**（已有锚点的补齐与"冻结还原"照常）——
    *     不吞、不猜，也不拿它当"锚点表清空"（清空会让已画的楼消失，正是第七条要治的病）。
    *
-   * ⚠️ **字段名没改**（仍叫 `nearCenter`）是有意的：页面那条路的 store 来自 `public/vendor/wsScene.mjs`，
+   * **字段名没改**（仍叫 `nearCenter`）是有意的：页面那条路的 store 来自 `public/vendor/wsScene.mjs`，
    * 旧产物只认这个名字 —— 改名会让页面在 vendor 重出之前**静默丢掉**就近补齐（"绝对有楼"当场退化）。
    * 新名字（锚点表）只出现在本模块与规则模块之间。
    */
   nearCenter?: { lng: number; lat: number } | null;
-  /** 🆕 就近补齐的栋数（默认在规则模块里 = 10；`0` = 关闭）；**原样透传** */
+  /** 就近补齐的栋数（默认在规则模块里 = 10；`0` = 关闭）；**原样透传** */
   nearK?: number;
 }
 
@@ -139,13 +139,13 @@ export interface BldBudgetInputLite<T> {
  * HUD 与自检要能读到它（"锚点只增不删"这条得可数，不然就是一句空话）。
  */
 export interface BldPickBudgetStats extends BldBudgetStats {
-  /** 📍 本实例**手里一共记着几个锚点**（只增不删；≥ `nearAnchors`，坏种子那一轮会 > ） */
+  /** 本实例**手里一共记着几个锚点**（只增不删；≥ `nearAnchors`，坏种子那一轮会 >） */
   nearAnchorTotal: number;
-  /** 🔒 其中**已经冻结成批**的锚点数（那批要素的**引用**被本实例持有 ⇒ 离线包淘汰也不消失） */
+  /** 其中**已经冻结成批**的锚点数（那批要素的**引用**被本实例持有 ⇒ 离线包淘汰也不消失） */
   nearFrozenBatches: number;
 }
 
-/* ══ 🏙 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
+/* ══ 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
  * 为什么放在这里（2026-09-26，两页一致性）：这两个数原来**只长在代拍页里**（页面自己的
  * `bldnEff()` / `INVIEW_N`）。App 宿主用的是另一套（`WS_BLD_VIEW_CAP` = 100，**按视野**挑的旧方案）
  * ⇒ 同一个机位、同一份包，两页画出来的楼不是一个集合。
@@ -154,7 +154,7 @@ export interface BldPickBudgetStats extends BldBudgetStats {
 
 /** 「每块 ≤100 栋」是按哪个格尺寸定的基准（页面历史口径：0.05° ≈ 5.5km） */
 export const WS_BLD_CELL_CAP_REF_DEG = 0.05;
-/** 视野内至少几栋（机主 2026-09-26：「还要保证视野内最少有十栋房」） */
+/** 视野内至少几栋（2026-09-26 还要保证视野内最少有十栋房） */
 export const WS_BLD_INVIEW_DEFAULT = 10;
 
 /** `?bldn=` 显式钉住的每块上限（没给 ⇒ null）；`0` = 近景一栋不画（保留语义） */
@@ -168,7 +168,7 @@ export function parseBldnParam(search: string | null | undefined): number | null
 }
 
 /**
- * 每块最多几栋 —— **跟着"块"的面积等比缩**（机主批的"等密度"算法）。
+ * 每块最多几栋 —— **跟着"块"的面积等比缩**（用户批的"等密度"算法）。
  * 依据：区块边长默认 0.05°≈5.5km；分片后数据格变成 0.01°（面积 1/25），若上限照旧 100
  * ⇒ 屏上密度**暴涨 25 倍**（那是改观感）⇒ 上限按面积缩：`100 × (deg/0.05)²`。
  * **老包（0.05°）⇒ 仍是 100，逐字节与旧版相同**；0.01° 包 ⇒ 自动变 4。
@@ -178,7 +178,7 @@ export function parseBldnParam(search: string | null | undefined): number | null
  */
 export function bldCapForCellDeg(cellDeg: number, pin?: number | null): number {
   if (pin !== null && pin !== undefined && Number.isFinite(pin)) return Math.max(0, Math.floor(pin));
-  /* 🔴 **逐字等于页面 `bldnEff()` 的那一行**（不含"校验 deg"的小动作）：
+  /* **逐字等于页面 `bldnEff` 的那一行**（不含"校验 deg"的小动作）：
      页面那边 `deg` 已经过 `bldCellDeg()` 的校验（正数，否则退 0.05）⇒ 这里再加一层
      `deg > 0 ? deg : 0.05` 反而会让 `deg=0` 时两页不同（页面 `Math.round(100*0)=0 → max(1,0)=1`，
      加固版会退回 0.05 ⇒ 100）。**判据是"同输入同输出"，不是"更稳"** ——
@@ -189,7 +189,7 @@ export function bldCapForCellDeg(cellDeg: number, pin?: number | null): number {
 
 /**
  * `?inview=` 视野内下限（没给 / 非法 / 负数 ⇒ `def`，默认 `WS_BLD_INVIEW_DEFAULT` = 10）。
- * ⚠️ 正则与"非负才认"与页面那个通用 `qnum("inview", 10)` **逐条相同**（含小数）——
+ * 正则与"非负才认"与页面那个通用 `qnum("inview", 10)` **逐条相同**（含小数）——
  *    自检第⑧组拿页面锚点原文里的 `qnum` 对拍，别"顺手改成 `\d+`"（那会让 `?inview=10.5` 两页不同）。
  */
 export function parseInViewParam(search: string | null | undefined, def: number = WS_BLD_INVIEW_DEFAULT): number {
@@ -217,13 +217,13 @@ export interface BldPickStore {
   /** 挑一次。**纯编排**：不改入参要素，只更新内部的冻结集 */
   pick<T extends PickFeature>(input: BldPickInput<T>): BldPickOutcome<T>;
   /**
-   * 🏙 **双预算挑楼**（机主 2026-10-02 拍板的 B2，**现在的默认口径**）。
+   * **双预算挑楼**（2026-10-02 已定的 B2，**现在的默认口径**）。
    *
    * 与 `pick()` 的区别（一句话）：`pick()` 按**固定经纬格**挑（"同一格永远同一批"，有冻结集）；
    * 本方法按**代价**挑（候选 = 视野内全部楼，预算 = Σ投影 px² + Σ顶点，两个**固定常量**）。
    * ⇒ 本方法**没有冻结集**（它的确定性来自"同视野 + 同数据 ⇒ 逐字节同一批"，见 `wsBldBudget`）。
    *
-   * ⚠️ `pick()` **仍然保留**：① 它是两页一致闸 `ws_pages_consistency.mjs` 第③组的判据对象
+   * `pick` **仍然保留**：① 它是两页一致闸 `ws_pages_consistency.mjs` 第③组的判据对象
    *    （那一组拿它逐字节比两页口径）；② `?bldn=` 那条 A/B 老路还在。**两条路都只有一份实现。**
    */
   pickBudget<T extends { id?: unknown }>(input: BldBudgetInputLite<T>): {
@@ -233,7 +233,7 @@ export interface BldPickStore {
   /** 冻结集里多少格（等价页面旧实现的 `window.__BLD_FROZEN_N__`） */
   frozenTotal(): number;
   /**
-   * 🔴 **冻结缓存本身**（`{格键: 要素数组}`）——就是这份实例真正在用的那个对象，**不是拷贝**。
+   * **冻结缓存本身**（`{格键: 要素数组}`）——就是这份实例真正在用的那个对象，**不是拷贝**。
    * 为什么给这个口子：页面以前把这个对象挂在 `window.__BLD_FROZEN__` 上做回证（"同一格永远同一批"可核），
    * 接线后它应当**仍然是同一个对象**（拿它当 outlet ⇒ 零拷贝、也**不可能**出现第二份冻结点）。
    */
@@ -246,7 +246,7 @@ export interface BldPickStore {
 
 /**
  * 冻结缓存：`{格键: 要素数组}` 的**普通对象**（页面旧实现就是它，所以拿它当 outlet 时形状逐字节相同）。
- * ⚠️ 用普通对象而不是 `Map` 是有意的：键里含 `@` `|` `_` 与数字，**永远不是整数索引**
+ * 用普通对象而不是 `Map` 是有意的：键里含 `@` `|` `_` 与数字，**永远不是整数索引**
  * ⇒ `Object.keys()` 的插入序是规范的，与页面旧实现完全一致。
  */
 export type BldFrozenCellsObj<T extends PickFeature = PickFeature> = Record<string, readonly T[]>;
@@ -268,8 +268,8 @@ function pointOfFeature(f: PickFeature): [number, number] | null {
 export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPickStore {
   const frozen: BldFrozenCellsObj = opts?.frozen ?? {};
 
-  /* ══ 📍 **锚点表 + 各锚点的补齐件冻结集**（2026-10-04 第七条；机主「在我移动了角色后，
-   *    角色周围就出现了楼，很诡异喵」+ 老口径「将楼的位置固定啊喵（包括名字）」）══════════════
+  /* ══ **锚点表 + 各锚点的补齐件冻结集**（2026-10-04 第七条；用户在我移动了角色后，
+   *    角色周围就出现了楼，很诡异+ 老口径「将楼的位置固定啊（包括名字）」）══════════════
    * 这一层**只存状态**：规则（取哪个锚点最近的那几栋、怎么排序）**一行都不在这里**，
    * 全在 `pickBuildingsByBudget`。本层做三件事：
    *   ① 把宿主给的**相机中心**落成锚点格（与 base 同一份 `cellDeg`、同一份格数学）；
@@ -279,7 +279,7 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
    *   ④ 标出**哪一个锚点是"当前锚点"**（相机所在那一格的那一个）：只有它还要**全量重算**，
    *      其余（老锚点）**只并冻结集**（`frozenOnly`）⇒ 每轮代价 = 1 次全池扫描 + 并集，
    *      **与锚点数无关**。这不是新口径，是"冻结"二字的直译：老锚点那批本来就"不许再变"。
-   * 🔴 锚点表**只增不删**（口径如此：删一个锚点就会让它那批楼消失）。
+   * 锚点表**只增不删**（口径如此：删一个锚点就会让它那批楼消失）。
    *    换包/换城市要换一份**新实例**（`clear()` 只清"按格挑选"那条路的冻结集，不动这里）。 */
   const nearAnchors: Array<{ lng: number; lat: number; key: string }> = [];
   const nearFeat = new Map<string, unknown[]>();
@@ -295,7 +295,7 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         bounds: input.bounds ?? null,
         minInView: input.minInView,
       });
-      /* 🔴 用**模块解析后的**格尺寸/上限（不是入参的原始值）当冻结键的一截：
+      /* 用**模块解析后的**格尺寸/上限（不是入参的原始值）当冻结键的一截：
          入参非法时（NaN / 0 / 缺）规则模块会退回默认值，键必须跟着它走，否则会出现
          "同一份数据两套键"（页面旧实现直接用入参值，前提是那儿传进来的一定合法）。 */
       const size = r.stats.cellDeg;
@@ -347,7 +347,7 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
       return Object.keys(frozen).length;
     },
 
-    /* 🏙 **双预算挑楼** —— 规则一行都不在这里（在 `wsBldBudget.pickBuildingsByBudget`）。
+    /* **双预算挑楼** —— 规则一行都不在这里（在 `wsBldBudget.pickBuildingsByBudget`）。
        本方法之所以存在：页面与 App **都只认 `createBldPickStore()` 这一个口**
        （2026-09-26 抽真源的初衷），新口径不该让宿主去 import 第二个模块。 */
     pickBudget<T extends { id?: unknown }>(input: BldBudgetInputLite<T>): {
@@ -356,14 +356,14 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
     } {
       /* ① **播种锚点**：相机中心 ⇒ 锚点格（格边长 = **与 base 同一份解析** `bldResolvedCellDeg`，
              格数学 = **与 base 同一个** `bundleCellOf`/`bundleCellKey`）。
-             🔴 `if (!nearFeat.has(key))` 这一行**就是本轮的修复本体**：同一个格**只认第一次**那个点
+             `if (!nearFeat.has(key))` 这一行**就是本轮的修复本体**：同一个格**只认第一次**那个点
              （旧口径是"每轮现读相机中心"，于是一走动就换一批楼、在他脚边凭空冒出来）。 */
       const deg = bldResolvedCellDeg(input.cellDeg);
       const seed = input.nearCenter as { lng?: unknown; lat?: unknown } | null | undefined;
       const seedGiven = !!seed && typeof seed === "object";
       const seedLng = seedGiven ? Number(seed!.lng) : NaN;
       const seedLat = seedGiven ? Number(seed!.lat) : NaN;
-      /* 🔴 `nearK: 0`（用户**关掉**补齐）⇒ **连锚点都不播** —— "关掉"必须是"什么都不做"：
+      /* `nearK: 0`（用户**关掉**补齐）⇒ **连锚点都不播** —— "关掉"必须是"什么都不做"：
          否则锚点表会悄悄长起来，下次打开时参照点已经不是"你进这一格时的位置"了。
          "什么叫关着"的口径只有一处（`bldNearKOf`，与规则模块同一个函数、同一个默认数）。 */
       if (bldNearKOf(input.nearK) > 0 && seedGiven && isFinite(seedLng) && isFinite(seedLat)) {
@@ -373,14 +373,14 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
           nearAnchors.push({ lng: seedLng, lat: seedLat, key });
           nearFeat.set(key, []);
         }
-        /* 🔴 **每轮都写**（不是只在新建时写）：相机**走回老格**时，那一个锚点就重新成为"当前锚点"
+        /* **每轮都写**（不是只在新建时写）：相机**走回老格**时，那一个锚点就重新成为"当前锚点"
            —— 只有当前锚点还要全量重算（冷加载时那一格的数据可能还在陆续到位）。 */
         nearCurrentKey = key;
       }
       /* ② **所有锚点**交给规则模块（只增不删；顺序 = 首次出现序 ⇒ "按锚点顺序追加"这条可复现）。
             坏种子**不参与**（这一轮不新增锚点）—— 规则模块那边的"数不出来"只留给**直接调它**的人
             （旧 vendor/页面），本模块不替它编一个坏锚点出来（那会把已有锚点整条打成"数不出来"）。
-            🔒 **老锚点标 `frozenOnly`**：相机已经不在它那一格里 ⇒ 它的贡献早就定稿，
+            **老锚点标 `frozenOnly`**：相机已经不在它那一格里 ⇒ 它的贡献早就定稿，
                只并冻结集、不再花一次全池扫描重算它（**代价回到"与锚点数无关"**）。 */
       const anchorsOut = nearAnchors.map((a) => ({
         lng: a.lng,
@@ -394,15 +394,15 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         screen: input.screen,
         budgetPx2: input.budgetPx2,
         budgetVerts: input.budgetVerts,
-        /* 🔴 每格上限 K **原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
+        /* 每格上限 K **原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
-        /* 🧮 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
-           ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）；
+        /* 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
+           本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）；
              上面播种用的是 `bldResolvedCellDeg`（**同一个解析口**，不是第二份默认值）。 */
         cellDeg: input.cellDeg,
         minInView: input.minInView,
-        /* 📍 2026-10-04 第七条：传的是**锚点表 + 各锚点的冻结集**（不再是每轮现读的相机中心）；
+        /* 2026-10-04 第七条：传的是**锚点表 + 各锚点的冻结集**（不再是每轮现读的相机中心）；
            `nearK`（栋数）与"关掉"的语义仍归规则模块那一处说了算。 */
         nearAnchors: anchorsOut,
         nearFrozen: frozenOut,

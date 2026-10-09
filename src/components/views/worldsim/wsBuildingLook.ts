@@ -2,21 +2,21 @@
  * wsBuildingLook.ts —— 「楼怎么长、怎么上色」的**纯逻辑**（不碰 DOM、不碰地图库，可单测）。
  *
  * ## 为什么单独拎出来（2026-09-19）
- * 机主原话：「这个 ai 2d 小区好丑，直接试一下 3d 路线我看看效果」。
+ * 2D 小区观感差，改试 3D 路线。
  * 要把"好看"这件事做出来，绕不开两个决定：**每栋楼多高、什么颜色**。
  * 这两件事以前散在 `WsDistrictMapLibre.vue` 的 paint 表达式里，改一次要重编一次页面、
  * 而且没法单独验。现在把它们变成纯函数：输入是后端给的属性，输出是"渲染用的高度 + 来源标签"。
  *
- * ## 🔴 诚实红线（来自 `DESIGN-3D-MODES.md` §八）
+ * ## 诚实红线（来自 内部设计文档 §八）
  * OSM 在中国的楼高覆盖率很低（渝中区实测：800m 内 232 栋里 **166 栋没有高度**）。
- * 我们不假装那是真数据：
+ * 不假装那是真数据：
  *   · 真高 → `src: "real"`（原样用）
  *   · 层数×3 → `src: "levels"`（后端已折算好，仍是 OSM 写了的）
- *   · **按 OSM 建筑类型估** → `src: "kind"`（**我们猜的**，HUD 单独计数、单独配色说明）
+ *   · **按 OSM 建筑类型估** → `src: "kind"`（**猜的**，HUD 单独计数、单独配色说明）
  * 三档必须分得开。混在一起报一个数，就是"把估计值当真数据"。
  */
 
-/* 🏢 **拆件的 zoom 分档真源**（2026-10-02 B1）：`part` → 档位 0/1/2，只此一份。
+/* **拆件的 zoom 分档真源**（2026-10-02 B1）：`part` → 档位 0/1/2，只此一份。
    本文件不 import 别的实现模块（纯逻辑、可单测），而 `wsBldDetailTiers` **什么都不 import**
    ⇒ 不会成环，也不会把地图/DOM 拖进来。 */
 import { bldTierOfPart } from "./wsBldDetailTiers";
@@ -43,7 +43,7 @@ export interface RenderHeight {
  *   · 6~7 层住宅（最常见的"老小区"）：≈ 18m
  *   · 临街商业 4~5 层：≈ 15m
  *   · 写字楼/酒店：40m 起；`tower` 是 OSM 里明确标的高塔，给 90m
- * ⚠️ **说不清是什么楼的**（裸 `building=yes` / 未登记类型）走 `UNKNOWN_KIND_BAND_M` 那一档（**15~18m**）；
+ * **说不清是什么楼的**（裸 `building=yes` / 未登记类型）走 `UNKNOWN_KIND_BAND_M` 那一档（**15~18m**）；
  *    这张表里的 `yes` 只写该档的中点，作用有二：① 让读表的人一眼看到量级；
  *    ② 模块还没加载时（代拍页 inline 兜底）用它。**真正的取值为区间 + 确定性哈希**，见 `renderHeight()`。
  */
@@ -83,13 +83,13 @@ export const KIND_HEIGHT_M: Record<string, number> = {
 };
 
 /**
- * 🔧 **估算档位**（`building=yes` / 未登记类型 ⇒ 没有任何高度数据时的兜底区间，米）。
+ * **估算档位**（`building=yes` / 未登记类型 ⇒ 没有任何高度数据时的兜底区间，米）。
  *
  * **这是估算值，不是事实** —— 只在后端 `height_src` 既不是 `height` 也不是 `levels` 时生效；
  * HUD 上永远单列成「按类型估 N」，绝不混进「真高 N」。
  *
- * ## 为什么从 12m 提到 15~18m（机主 2026-09-24 拍板）
- * 机主真机反馈「**大量楼像薄板/纸片平躺**」。用他那一屏的真数据量了一下
+ * ## 为什么从 12m 提到 15~18m（2026-09-24 已定）
+ * **大量楼像薄板/纸片平躺**。用他那一屏的真数据量了一下
  * （渝中区 `29.5567/106.5629`、r=800m、**378 栋**）：
  *   · 高度中位数 **11.8m**、≥24m 只有 **25 栋**、≥60m **16 栋**；
  *   · 平均脚印 **653m²**；**179 栋（47%）** 落在「h<15m 且脚印≥300m²」= 视觉上的薄板；
@@ -98,7 +98,7 @@ export const KIND_HEIGHT_M: Record<string, number> = {
  * 中国城区的裸 `building=yes` 实测多为 4~6 层（≈15~18m），12m（≈4 层）偏矮；
  * 取 15~18 还能让这批楼**跨过屋顶细节的 15m 门槛**（女儿墙/设备箱跟着出现，屋顶不再是一块平板）。
  *
- * ⚠️ 改这个区间就会改变**全站**（App 与代拍页共用本函数）的估算楼高 —— 改之前先看 HUD 的「按类型估 N」。
+ * 改这个区间就会改变**全站**（App 与代拍页共用本函数）的估算楼高 —— 改之前先看 HUD 的「按类型估 N」。
  */
 export const UNKNOWN_KIND_BAND_M: [number, number] = [15, 18];
 
@@ -143,9 +143,9 @@ export function renderHeight(props: Record<string, unknown> | undefined | null):
   }
   const seed = String(p.osm_id || p.name || "x");
   const kind = String(p.kind || "yes").toLowerCase();
-  /* 🔧 「说不清是什么楼」那一档（裸 `building=yes` / 未登记类型）：**15~18m 区间**，
+  /* 「说不清是什么楼」那一档（裸 `building=yes` / 未登记类型）：**15~18m 区间**，
      区间内位置由 `hash32(seed + "#unk")` 决定 ⇒ 同一栋楼每次一样、整片看又有参差（**不是随机数**）。
-     见 `UNKNOWN_KIND_BAND_M` 上方的依据（机主 2026-09-24：12m 太低 ⇒ 大脚印的楼像薄板）。 */
+     见 `UNKNOWN_KIND_BAND_M` 上方的依据（2026-09-24 12m 太低 ⇒ 大脚印的楼像薄板）。 */
   if (kind === "yes" || !Object.prototype.hasOwnProperty.call(KIND_HEIGHT_M, kind)) {
     const k = hash32(seed + "#unk") % 101; // 0..100
     const h = UNKNOWN_KIND_BAND_M[0] + ((UNKNOWN_KIND_BAND_M[1] - UNKNOWN_KIND_BAND_M[0]) * k) / 100;
@@ -163,8 +163,8 @@ export function renderHeight(props: Record<string, unknown> | undefined | null):
  * 给整份 FeatureCollection 里每栋楼**补上渲染字段**（`h3d` / `h_from` / `color3d` / `part`），
  * 并把够高的楼**拆出屋顶压顶与天线**。
  *
- * ⚠️ `count` 数的是**楼栋数**（不是要素数）：拆件之后要素会变多，
- * 但 HUD 上的 `🏢 N` 必须还是"这里有 N 栋楼"，不然读数就没意义了。
+ * `count` 数的是**楼栋数**（不是要素数）：拆件之后要素会变多，
+ * 但 HUD 上的 `N` 必须还是"这里有 N 栋楼"，不然读数就没意义了。
  *
  * 为什么在 JS 里算好、而不是写在地图库的表达式里：
  * MapLibre 的 paint 表达式**报错是静默的**（写错一个字段名 ⇒ 图层直接不画，控制台偶尔才吭一声）。
@@ -184,7 +184,7 @@ export function decorateBuildings(fc: {
   }>;
   const count: ShapeCounts = {
     n: feats.length, real: 0, levels: 0, kind: 0,
-    /* ⚠️ 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
+    /* 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
        `roof` = 默认档的屋顶系（2026-10-02 B1）；`detail` 只在代拍页 `?bld=2` 打开。 */
     mode: opts.mode === "detail" ? "detail" : opts.mode === "roof" ? "roof" : "base", low: !!opts.low,
     body: 0, podium: 0, tower: 0, setback: 0, roof: 0, parapet: 0, equip: 0, antenna: 0,
@@ -193,7 +193,7 @@ export function decorateBuildings(fc: {
   const out: Array<Record<string, unknown>> = [];
   for (const f of feats) {
     count[renderHeight(f.properties).from]++;
-    /* 🔴 计数与**真正画出去的那批要素**同源（同一个 `buildingPartSet` 的返回值）——
+    /* 计数与**真正画出去的那批要素**同源（同一个 `buildingPartSet` 的返回值）——
        两边各算一次迟早漂移，而漂移了 HUD 上没人看得出来。 */
     const set = buildingPartSet(f, ramp, opts);
     for (const part of set.parts) {
@@ -226,7 +226,7 @@ export function decorateBuildings(fc: {
  * 矮的沉进暗部、高的亮起来，一眼看出"哪片是高楼"。
  * （"哪些是估的"仍然可读：见 `HEIGHT_FROM_ALPHA`，用的是透明度那一档，不抢色彩。）
  *
- * ⚠️ 低端必须**明显亮于** Esri 暗底图（约 #1e1e1e~#2d2d2d）：不然楼和地面一个亮度，
+ * 低端必须**明显亮于** Esri 暗底图（约 #1e1e1e~#2d2d2d）：不然楼和地面一个亮度，
  *    整屏糊成一块 —— 这正是"看着很丑"的成因之一。
  */
 export const HEIGHT_COLOR_RAMP: Array<[number, string]> = [
@@ -248,7 +248,7 @@ export function heightColorExpression(ramp: Array<[number, string]> = HEIGHT_COL
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * 第二步：**"改造渲染"**（`world_map/DESIGN-BUILDING-REALISM.md` §三 的 #2/#4/#6/#8）
+ * 第二步：**"改造渲染"**（内部设计文档 §三 的 #2/#4/#6/#8）
  *
  * 一句话：**不换数据**，用同一批 OSM 轮廓"画得更像一座真城市"。
  * 思路是把"一栋楼"在**渲染前**拆成几个体块（body / roof / antenna）——
@@ -264,7 +264,7 @@ export function heightColorExpression(ramp: Array<[number, string]> = HEIGHT_COL
  *
  * `base` 档只用 body/roof/antenna（App 侧现在就是这三种）；
  * `detail` 档（代拍页 `?bld=2`）多了 podium（裙楼）/tower（塔楼）/setback（退台段）/parapet（女儿墙）/equip（设备箱）。
- * ⚠️ 新体块只在 `detail` 档出现 ⇒ App 侧那三层（按 part 过滤的）不受影响；
+ * 新体块只在 `detail` 档出现 ⇒ App 侧那三层（按 part 过滤的）不受影响；
  *    将来接进 App 时，`WsDistrictMapLibre.vue` 的三层 filter 要一起加上新 part（**本次范围外**）。
  */
 export type BldPart = "body" | "roof" | "antenna" | "podium" | "tower" | "setback" | "parapet" | "equip";
@@ -303,7 +303,7 @@ export function rampColorOf(h: number, ramp: Array<[number, string]> = HEIGHT_CO
  * 为什么要微扰：一整片楼如果都取色阶上同一档，颜色会"齐刷刷一样"，
  * 一眼就看得出是程序刷的。±10% 的明度差异足够让眼睛读出"一栋一栋"，又不会花。
  *
- * 🔴 种子必须来自 `osm_id`（**不是 `Math.random()`**）：同一栋楼每次渲染颜色必须一致，
+ * 种子必须来自 `osm_id`（**不是 `Math.random`**）：同一栋楼每次渲染颜色必须一致，
  *    用随机数会让整片楼**每帧闪**（而且刷新一次变一个样，没法比对截图）。
  */
 export function buildingColor(h: number, seed: string, ramp: Array<[number, string]> = HEIGHT_COLOR_RAMP): string {
@@ -391,7 +391,7 @@ function partFeature(
   return {
     type: "Feature",
     id: `${String(src.id || "")}#${part}${extra.tier ? "-t" + String(extra.tier) : ""}${extra.idx !== undefined ? "-" + String(extra.idx) : ""}`,
-    /* 🏢 `zt` = 这个体块属于哪一档（0 一直画 / 1 z≥14 女儿墙 / 2 z≥16 设备箱+天线）。
+    /* `zt` = 这个体块属于哪一档（0 一直画 / 1 z≥14 女儿墙 / 2 z≥16 设备箱+天线）。
        写进属性而不是在图层的 filter 里拼表达式 —— 表达式报错是静默的（见文件头）。 */
     properties: { ...(src.properties || {}), part, zt: bldTierOfPart(part), h3d: top, h_base: base, color3d: color, ...extra },
     geometry: { type: "Polygon", coordinates: [ring] },
@@ -449,14 +449,14 @@ export function buildingPartSet(
   const ring = outerRing(f.geometry);
   if (!ring) return { parts: [body], info };
   /* ⑤ 低档（`perfLow` / `?low=1`）：**只画主体**。退台/屋顶细节/窗格全部不生成。
-     ⚠️ 这一条必须在 `base` 分支**之前**判 —— 低档要的正是"连压顶/天线都不要"，
+     这一条必须在 `base` 分支**之前**判 —— 低档要的正是"连压顶/天线都不要"，
      落到 base 分支就会把压顶和天线又画回来（自检里踩过：低档出来 3 个要素）。 */
   if (opts.low) return { parts: [body], info };
-  /* ── `roof` 档（🆕 **默认档**，机主 2026-10-02 拍板的 B1「拆件进默认档 + 按 zoom 分层」）───────
+  /* ── `roof` 档（**默认档**，2026-10-02 已定的 B1「拆件进默认档 + 按 zoom 分层」）───────
      **只加屋顶系**：女儿墙（一圈 0.6m 薄墙）+ 设备箱 + 天线。
      与 `detail` 档的**唯一**区别 = 不切裙楼/塔楼/退台 ⇒ 楼的轮廓仍是**原始脚印**
      ⇒ `z < WS_BLD_DETAIL_ROOF_ZOOM(14)` 时这一档生成的所有体块都不画（图层 minzoom 闸），
-        画出来的东西与改造前**逐字节相同**（= 机主要的"`<14` 平顶"）。
+        画出来的东西与改造前**逐字节相同**（= "`<14` 平顶"）。
      配色仍从**同一张高度色阶**派生（`shade()` 调明暗），不引入第二套配色。 */
   if ((opts.mode ?? "base") === "roof") {
     const parts: Array<Record<string, unknown>> = [body];
@@ -533,7 +533,7 @@ export function buildingPartSet(
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * 第四步：**形体细化**（机主 2026-09-24：「能优化一下楼房模吗啊喵」）
+ * 第四步：**形体细化**（2026-09-24 需要优化楼房模型）
  *
  * 六条，逐条可单独验收（全部**纯函数**、全部**确定性**、**一次 `Math.random` 都没有**）：
  *   ① **裙楼 + 塔楼**：脚印够大 + 够高 ⇒ 底部裙楼（保持原脚印、较矮）+ 上部塔楼（内缩 20%）；
@@ -545,7 +545,7 @@ export function buildingPartSet(
  *   ⑤ **低档**（`opts.low`）：只画主体，退台/屋顶细节/窗格**全部关掉**（保帧率）；
  *   ⑥ **形体干净**：脚印 <20m² 或长宽比 >6 的"纸片楼"**跳过全部细节**（只留主体），并计入 `skipped`。
  *
- * 🔴 两条红线：
+ * 两条红线：
  *   · 新体块**只在 `detail` 档**出现；`base` 档（App 侧的默认）逐字节不变 —— 自检里有回归项；
  *   · 配色仍从**同一张高度色阶**派生（`shade()` 调明暗），不引入第二套配色。
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -553,7 +553,7 @@ export function buildingPartSet(
 /**
  * 形体档位（2026-10-02 起三档）：
  *   · `base` = 2026-09-19 那一版（主体 + 屋顶压顶 + 天线）；
- *   · `roof` = 🆕 **默认档**（B1）：主体 + **女儿墙 + 设备箱 + 天线**，轮廓就是原始脚印
+ *   · `roof` = **默认档**（B1）：主体 + **女儿墙 + 设备箱 + 天线**，轮廓就是原始脚印
  *     （不切裙楼/塔楼/退台 —— 那些仍归 `?bld=2`）；三档各自按 zoom 分档闸门（`zt`）。
  *   · `detail` = `?bld=2` 那一版（裙楼/塔楼 + 退台 + 女儿墙 + 设备箱 + 天线）。
  */
@@ -736,7 +736,7 @@ export function pointInRing(x: number, y: number, ring: number[][]): boolean {
  * 向质心缩进**指定米数**（`insetRing` 是按比例的版本，这个是按绝对厚度的版本）。
  *
  * 用途：女儿墙要的是"一圈 ~0.7m 的薄墙"，按比例缩的话大脚印会缩出 3 米厚的"墙"。
- * ⚠️ 仍然是**径向缩进**（不是真多边形偏移）——真偏移要处理凹角自交，本项目一直没做（见 `insetRing`）。
+ * 仍然是**径向缩进**（不是真多边形偏移）——真偏移要处理凹角自交，本项目一直没做（见 `insetRing`）。
  */
 export function insetRingMeters(ring: number[][], meters: number): number[][] {
   const n = ring.length - 1;
@@ -762,7 +762,7 @@ export function insetRingMeters(ring: number[][], meters: number): number[][] {
  *
  * 这就是女儿墙：把"一圈薄墙"做成**一个**多边形（而不是给每条边生一个四边形）——
  * 要素数从 O(顶点数) 降到 O(1)，而且挤出后外侧面/内侧面/顶面都天然正确。
- * ⚠️ 两条环必须是同点数、且内环完全在外环里（`insetRingMeters` 的产物满足）。
+ * 两条环必须是同点数、且内环完全在外环里（`insetRingMeters` 的产物满足）。
  */
 export function ringBand(outer: number[][], inner: number[][]): number[][] {
   const o = outer.slice(0, Math.max(0, outer.length - 1));

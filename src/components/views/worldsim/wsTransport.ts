@@ -5,7 +5,7 @@
  * 几何全用**等距平面近似**（米）：小范围（一个小区 1~3km）误差可忽略，
  * 而这样所有距离/面积都能用**米**说话，规则里的 350m/1500m² 才是可读的。
  *
- * ## 🔴 产物性质：**全部是示意位置，不是实测坐标**
+ * ## 产物性质：**全部是示意位置，不是实测坐标**
  * 生成的每一个点都必须经 `labelFacilities()` 打上「示意，非事实」的标记（HUD 要显示）。
  * 只有 OSM 真站点才算事实 —— 而 v0 **不编任何真站点**。
  */
@@ -232,7 +232,7 @@ export function buildTransport(roads: TfRoad[], buildings: TfBuilding[], center:
     }
     counts.bus.made = features.filter((f) => f.kind === "bus").length;
     /* 去重：**同一条路**上 350m 内的站合并（吸附到路口后很容易挤在一起）。
-       ⚠️ 必须**按路**去重：全局去重会让两条相距几十米的平行街道**互相吃掉站点**
+       必须**按路**去重：全局去重会让两条相距几十米的平行街道**互相吃掉站点**
        （自检里 40 条平行路只剩几个站、上限永远裁不到 —— 就是这条写错时的症状）。 */
     const keptBus: TfFeature[] = [];
     const busByRoad = new Map<string, TfFeature[]>();
@@ -413,7 +413,7 @@ export function transportHudLine(r: TfResult): string {
     (s, k) => s + r.counts[k].droppedByCap,
     0
   );
-  /* ⚠️ **0 也要显示**（机主要能一眼看出"哪一类是 0"），别省略空类别 */
+  /* **0 也要显示**（需能一眼看出"哪一类是 0"），别省略空类别 */
   const per = (["bus", "crosswalk", "signal", "parking", "driveway"] as TfKind[])
     .map((k) => r.counts[k].kept)
     .join("/");

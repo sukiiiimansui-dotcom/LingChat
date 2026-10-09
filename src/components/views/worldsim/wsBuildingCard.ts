@@ -1,13 +1,13 @@
 /**
- * wsBuildingCard.ts —— 🪪 **信息卡**的唯一真源（数据部分 + 动效令牌）。纯逻辑：不碰 DOM、不碰地图、不联网。
+ * wsBuildingCard.ts —— **信息卡**的唯一真源（数据部分 + 动效令牌）。纯逻辑：不碰 DOM、不碰地图、不联网。
  *
  * ## 为什么有这一份
- * 机主 2026-09-26 原话：「**每个名字和楼房都能点击查看信息**（要求有**精美的 mg 动画**）」。
+ * 2026-09-26 **每个名字和楼房都能点击查看信息**（要求有**精美的 mg 动画**）。
  * 三条入口 —— **点楼体 / 点楼名 / 点区名** —— 弹的必须是**同一张卡**（`DESIGN-MG-MOTION.md` §4.4：
  * 「两个入口是同一"物种"，只有锚点不同」）。所以"卡片上写什么、字段从哪来、三态怎么判"
  * 只能有一处定义，否则立刻就是两套语言（这正是 PR 门禁 C1 判红的那种"第二份实现"）。
  *
- * ## 三态（机主要求"每栋楼都有名字"，而真名只覆盖 2.0% ⇒ 必须如实分三态）
+ * ## 三态（要求"每栋楼都有名字"，而真名只覆盖 2.0% ⇒ 必须如实分三态）
  * | 态 | 什么时候 | 标题 | `sketch` |
  * |---|---|---|---|
  * | `real` | 有真名字（OSM `name` / Overture places 的 `n`） | **真名原样** | `false` |
@@ -16,18 +16,18 @@
  * ⇒ 第三态是**必须存在**的：生成名由 `id` 决定（同 id 永远同名），没有 id 就只能如实说"数不出来"，
  *    **不许**退化成"随便起一个"（那会让每次刷新都换一个名字，比没有更糟）。
  *
- * ## 🔴 红线（写在代码里，谁都别绕）
+ * ## 红线（写在代码里，谁都别绕）
  * 1. **生成名绝不进数据层、绝不进对话上下文** —— 本模块把它做成了**可执行的**：
  *    要喂给 LingChat / 日志 / 任何文本的地方**只准用 `cardChatText(d)`**，
  *    它会把生成名/示意名替换成「（生成·示意名，不入对话）」；`d.title` 只许上屏。
  * 2. 生成名与真名**样式不同 + 分开计数**（`sketch` / `titleTag` / `data-ws-card-source` 三个机器可判的标志位）。
- * 3. 高度三档如实标：`real`（OSM 真写了 height）/ `levels`（层数×3，也是 OSM 写的）/ `kind`（**我们按类型估的，不是真数据**）。
+ * 3. 高度三档如实标：`real`（OSM 真写了 height）/ `levels`（层数×3，也是 OSM 写的）/ `kind`（**按类型估的，不是真数据**）。
  * 4. 署名（ODbL）**只念包索引里的原话**（`cardAttributionOf`），取不到写"署名取不到"，**绝不编一句**。
  *
  * ## 动效令牌（`DESIGN-MG-MOTION.md` §4.3/§4.4，**只有这一处定义**）
  * 卡片 200ms / 内容 4 层每层 140ms、起于 60ms、错峰 30ms（总 290ms ≤ 450ms 预算）/ 退场 160ms /
  * 遮罩 160ms（退场晚 40ms）/ 生长位移夹紧 ±40px / 区名入口改"底部升起 24px"（时长曲线**同源**）。
- * 🔴 只动 `transform` / `opacity`（`CARD_ANIM_PROPS`）；**禁 `backdrop-filter`**（`worldsim.css` 低档显式 `none`）。
+ * 只动 `transform` / `opacity`（`CARD_ANIM_PROPS`）；**禁 `backdrop-filter`**（`worldsim.css` 低档显式 `none`）。
  */
 
 import { ringCenter, ringsOf } from "./wsBuildingHint";
@@ -144,7 +144,7 @@ export interface CardInput {
   index?: { attribution?: string | null; source?: string | null; real?: boolean | null } | null;
   /** 生成名用的档（`wsNameGen`）；不传 = `shop` */
   genKind?: GenKind;
-  /** 显式禁用生成名（调试/合规开关）；默认 `false` = 按机主要求"每栋都有名字" */
+  /** 显式禁用生成名（调试/合规开关）；默认 `false` = 按要求"每栋都有名字" */
   noSketch?: boolean;
 }
 
@@ -172,7 +172,7 @@ export interface CardData {
   title: string;
   /** 标题角标：「真名」/「生成·示意」/ null（第三态没有角标，因为它没有名字） */
   titleTag: string | null;
-  /** 🔴 机器可判的"这是示意件"标志位（屏上样式必须与真名不同） */
+  /** 机器可判的"这是示意件"标志位（屏上样式必须与真名不同） */
   sketch: boolean;
   /** 类型（有则显示，无则 `CARD_STRINGS.typeUnknown`） */
   type: string;
@@ -326,7 +326,7 @@ export function buildingCardData(input: CardInput): CardData {
       why = "真名来自 OSM `name`";
     }
   } else if (kind !== "place" && kind !== "zone" && id && !input?.noSketch) {
-    /* 没真名但有**稳定 id** ⇒ 生成名（机主要求"每栋楼都有名字"；生成名由 id 决定，永远同名） */
+    /* 没真名但有**稳定 id** ⇒ 生成名（要求"每栋楼都有名字"；生成名由 id 决定，永远同名） */
     state = "generated";
     title = genName(id, input?.genKind || "shop");
     titleTag = CARD_STRINGS.tagSketch;
@@ -393,7 +393,7 @@ export function buildingCardData(input: CardInput): CardData {
     const z = input.zone as ZoneName;
     const shareTxt = z.share === null ? "不适用（真名）" : `${z.count}/${z.total} = ${(z.share * 100).toFixed(1)}%`;
     fields.push({ key: "zoneDominant", label: "主导类占比", value: shareTxt, tone: z.source === "derived" ? "real" : z.source === "generated" ? "sketch" : "muted", hint: z.why });
-    /* ⚠️ 子格边长要**格式化**：`106.58 - 106.57 = 0.010000000000005116`（浮点），
+    /* 子格边长要**格式化**：`106.58 - 106.57 = 0.010000000000005116`（浮点），
        直接拼进卡片就是一行会被当成 bug 的噪声（真浏览器实测抓到）。 */
     const spanDeg = +(z.bbox[2] - z.bbox[0]).toFixed(4);
     fields.push({ key: "zoneBbox", label: "范围", value: `[${z.bbox.join(", ")}]（${spanDeg}° 子格）`, tone: "muted", hint: "区名的作用范围 = 一个 0.01° 子格（≈1.1km）" });
@@ -456,7 +456,7 @@ export function cardEnterStyle(o: CardOrigin | null): Record<string, string> {
 }
 
 /**
- * 卡片的**基准 transform**（居中）。🔴 生长位移是**相对**终态位置的增量，
+ * 卡片的**基准 transform**（居中）。生长位移是**相对**终态位置的增量，
  * 所以宿主写 inline `transform` 时必须把它拼在基准之后 —— 否则会把居中一起覆盖掉
  * （卡片会跳到屏幕左上角，看起来像"从角落飞出来"）。
  * 页面与 App **必须**都用 `cardComposeTransform()` 拼，别各写一遍字符串（那正是"两套语言"的开端）。
@@ -479,7 +479,7 @@ export function cardExitTransform(): string {
   return cardComposeTransform(`translate3d(0, ${CARD_MOTION.exitShiftPx}px, 0) scale(${CARD_MOTION.exitScaleTo})`);
 }
 
-/* ══ ⑦ 进对话的文本（🔴 红线的**可执行**版本：生成名在这里被替换掉） ═════════════════ */
+/* ══ ⑦ 进对话的文本（红线的**可执行**版本：生成名在这里被替换掉） ═════════════════ */
 
 /**
  * 供**进对话/日志/上报**的纯文本。与前缀无关，只保证一件事：

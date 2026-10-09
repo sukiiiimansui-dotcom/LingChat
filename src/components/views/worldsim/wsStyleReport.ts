@@ -1,24 +1,24 @@
 /**
  * wsStyleReport.ts —— 「**样式自检 JSON**」：页面把"我这儿的样式到底加载成了什么样"写成一份
- * JSON，和截图**同一轮**发回收图服务（`127.0.0.1:8789`，落 `~/chk/live/style-<时间戳>.json`）。
+ * JSON，和截图**同一轮**发回收图服务（`127.0.0.1:8789`，落 记录文件）。
  *
  * ## 为什么光有图不够（2026-09-21 定的）
  * 一张图能说明"好不好看"，说不清"**为什么**"：
  *   · 样式加载成功了吗？`load` 触发过吗？
  *   · 那条 `fill-extrusion` 图层的 `color` 到底是什么表达式？栅格底图的不透明度是不是被压到 0 了？
  *   · 地图库偷偷报了错没有？（MapLibre 的错误**不冒泡成 JS 异常** —— 样式校验失败时它只发一个
- *     `error` 事件，然后 `load` **永远不触发**，屏幕全透明而控制台干干净净，我们被骗过一次。）
+ *     `error` 事件，然后 `load` **永远不触发**，屏幕全透明而控制台干干净净，被骗过一次。）
  *   · 现在走的是 WebGL 路还是 2D 降级路？夜色是哪一档？HUD 上写着什么？
  * ⇒ 这些**只有页面自己知道**，所以让页面自己报。agent 拿到「图 + JSON」才不用猜。
  *
  * ## 边界（重要）
  * 这一份**只读**：只 `getStyle()` / `getPaintProperty()` / 读页面状态，**不写任何样式**
  * （诊断设施绝不能改变被诊断的东西）。取值的动作由调用方通过 `paintOf` 注入 —— 这样
- * 本文件是**纯函数**，能在 Node 里全量自检（见 `ws_selfshot_selftest.mjs`）。
+ * 本文件是**纯函数**，能在 Node 里全量自检（见 回归测试）。
  */
 
 /**
- * 「现在到底走的哪条渲染路」—— **五级共用同一个类型**（2026-09-21 机主：
+ * 「现在到底走的哪条渲染路」—— **五级共用同一个类型**（2026-09-21
  * 「要求别降级了，直接全面迭代（最新）」「整个世界模拟都必须最新」）。
  *   · `init`   还没分路（**不许猜**）
  *   · `webgl`  MapLibre 出帧了（正常路）
@@ -85,7 +85,7 @@ export interface StyleReportInput {
   recovered?: boolean;
   /** 地图库**真的出过一帧**没有（`m.on("render")`） */
   sawRender: boolean;
-  /** HUD 上现在写着什么（机主看到的那一行） */
+  /** HUD 上现在写着什么（屏幕上的那一行） */
   hud: string;
   /** 组件里的 stats（`mode/count/roads/facilities/pins/note/fps…`） */
   stats?: Record<string, unknown>;
@@ -148,7 +148,7 @@ export function buildStyleReport(i: StyleReportInput): Record<string, unknown> {
     /* ③ 地图库报错（不冒泡成异常的那一类，只能靠这个事件捞） */
     errors: (i.errors || []).slice(0, 20),
     errorCount: (i.errors || []).length,
-    /* ④ 主题 / 夜色档位（"我看到的是哪一版配色"） */
+    /* ④ 主题 / 夜色档位（"到的是哪一版配色"） */
     theme: {
       wstheme: i.wstheme,
       wsnight: i.wsnight?.on ? "on" : "off",
@@ -171,7 +171,7 @@ export function buildStyleReport(i: StyleReportInput): Record<string, unknown> {
     fallbackKind: j(i.fallbackKind ?? "none"),
     recovered: !!i.recovered,
     sawRender: !!i.sawRender,
-    /* ⑦ HUD 原话 + stats（机主看到的就是这一行，逐字带回来） */
+    /* ⑦ HUD 原话 + stats（屏幕上的就是这一行，逐字带回来） */
     hud: String(i.hud || ""),
     stats: j(i.stats ?? null),
     shot: i.shot ? { ...i.shot } : null,

@@ -1,16 +1,16 @@
 /**
- * wsZoneNames.ts —— 🗺 **区名**的唯一真源（真名 / 数据驱动 / 示意）。纯逻辑：不碰 DOM、不碰地图、不联网。
+ * wsZoneNames.ts —— **区名**的唯一真源（真名 / 数据驱动 / 示意）。纯逻辑：不碰 DOM、不碰地图、不联网。
  *
  * ## 为什么有这一份
- * 机主 2026-09-26 原话：「**我要求每个显示的楼房都要有名字喵**，**如果太密集了就根据类型划定区域
- * （如经济区，美食区）**」。三条**实测**事实决定了这份模块的形状（都不是推测）：
+ * 2026-09-26 原话：**每个显示的楼房都要有名字**，**如果太密集了就根据类型划定区域
+ * （如经济区，美食区）**。三条**实测**事实决定了这份模块的形状（都不是推测）：
  *   ① **真楼名只覆盖 2.0%**（渝中区 400m：101 栋里 2 栋有名）⇒「每栋都有真名」做不到；
  *   ② **48px 避让网格在 904×341 舞台上只放得下 29 个四字楼名**（cap 26→200 仍是 29）⇒ 每栋挂标签物理上放不下；
  *   ③ **按类型划区只在 ~1km 粒度成立**：名字包自己的 0.05° 格上 `food` 占比过半 = **0 格**；
  *      换到 **0.01°（≈1.1km）** 才 **11 格**（`NAMES-BUNDLE-REPORT.md` §3）。
  * ⇒ **划区粒度 = 0.01° 子格**（不是包自己的 0.05°），且**只在"主导类过半"时才算数据驱动**。
  *
- * ## 三种区名（**屏上样式必须互不相同**，机主/父代理 2026-09-26 拍板）
+ * ## 三种区名（**屏上样式必须互不相同**，用户/ 2026-09-26 拍板）
  * | `source` | 什么时候出 | 名字长什么样 | 依据 |
  * |---|---|---|---|
  * | `real` | 这个子格里**有真地名/行政区名**（`placesbundle` / `adminLabelsFrom`） | **原样**（如「解放碑」） | 真数据；**优先于**聚合名（聚合名绝不许盖真名） |
@@ -31,7 +31,7 @@
  *
  * ## 口径来源（改判据必须一起改的地方）
  * · 格键与楼/路/片区包**同一套数学**：直接复用 `wsFeatureStore.bundleCellOf / bundleCellKey`
- *   （🔴 不许在这里写第二份 `floor(x/deg)*deg` —— 0.02/0.05 那两次事故就是这么来的）；
+ *   （不许在这里写第二份 `floor(x/deg)*deg` —— 0.02/0.05 那两次事故就是这么来的）；
  * · 粗类 12 个 = `namesbundle/index.json.kinds`（导出器 `COARSE_KINDS`）；
  * · 判据数字（`minCount 5` / `占比 > 0.5`）= `NAMES-BUNDLE-REPORT.md` §3 写死的那条，
  *   自检拿**真包**复现「0.05° food 过半 **0 格** / 0.01° **11 格**」。
@@ -65,7 +65,7 @@ export const WS_ZONE_KIND_LABEL: Record<CoarseKind, string> = {
   food: "美食", retail: "零售", commercial: "商业", lodging: "住宿",
   education: "教育", medical: "医疗", transport: "交通", landmark: "地标",
   park: "公园", culture: "文化", industrial: "工业",
-  /* 🔴 「没类别」那一档（真包 24 条 = 1.3%）：**不进主导类统计**（它不构成"以什么为主"），
+  /* 「没类别」那一档（真包 24 条 = 1.3%）：**不进主导类统计**（它不构成"以什么为主"），
      但仍然计入 `total`（分母），并如实出现在 `unclassified` 里。 */
   other: "其他",
 };
@@ -161,7 +161,7 @@ export interface ZoneRealName {
 
 /**
  * 从 `placesbundle` 的 `places[]`（`{n,k,p,i}`）取真地名。
- * 🔴 **不认得的 place 类型不进**（`placeTierOf` 返回 null）—— 宁可少显示，不许显示错的东西
+ * **不认得的 place 类型不进**（`placeTierOf` 返回 null）—— 宁可少显示，不许显示错的东西
  *    （与 `wsLabels.placeLabelsFrom` 同一条纪律；这里只是把"档"记下来给区名排序用）。
  */
 export function zoneRealNamesFromPlaces(
@@ -237,7 +237,7 @@ export interface ZoneOpts {
   sketch?: boolean;
   /** 真名够不够格：真名所在格的点数 ≥ 它才出真名区（默认 0 = 真名不受"够格"限制） */
   minRealCount?: number;
-  /* ── 取数口径（🔴 **必读**：真名包的格与划区的格**不是同一个粒度**） ─────────────────
+  /* ── 取数口径（**必读**：真名包的格与划区的格**不是同一个粒度**） ─────────────────
      真名包（`namesbundle`）自己的格是 **0.05°**（它是**取数单位**：一次 fetch 一格）；
      而"按类型划区"的粒度**必须是 0.01°**（实测：0.05° 上 `food` 过半 = 0 格、0.01° 上 11 格）。
      ⇒ 这两者**本来就该不同**，不要对拍、更不要因此拒绝算区名。
@@ -279,7 +279,7 @@ export function zoneGridCompatible(subDeg: number, containerDeg: number): boolea
 
 /** 分桶：只由**输入点**决定（与视野无关）。返回按格键升序 —— 确定性的一半在这里。
  *
- * 🔴 重心**必须按规范序求和**：浮点加法不满足结合律，`a+b+c ≠ c+b+a`（末位差 1e-14）——
+ * 重心**必须按规范序求和**：浮点加法不满足结合律，`a+b+c ≠ c+b+a`（末位差 1e-14）——
  *    自检真抓到过：同一批点**逆序喂入**，重心从 `106.55499999999999` 变成 `106.55499999999998`，
  *    `JSON.stringify` 就不再逐字节相同。修法不是"四舍五入掩盖"，而是**先把坐标按字典序排好再求和**
  *    （与输入顺序完全无关，且不做任何精度损失）。 */
@@ -382,7 +382,7 @@ export interface ZoneName {
   bbox: [number, number, number, number];
   lng: number;
   lat: number;
-  /** 屏上样式分档：`real` / `derived` / `generated` —— **三者必须不同**（机主拍板） */
+  /** 屏上样式分档：`real` / `derived` / `generated` —— **三者必须不同**（已定） */
   style: ZoneSource;
   /** 是不是"示意"（机器可判的红线标志位；真名/数据驱动 = false） */
   sketch: boolean;
@@ -529,7 +529,7 @@ export interface ZonePlan {
   shareMedian: number | null;
   /** 因为不够格一个字都没出的格数 */
   skippedSparse: number;
-  /** 🔴 因为**容器格没取全**（视野边缘的半格）而**不出结论**的子格数 —— 如实计数，别当成"这里没数据" */
+  /** 因为**容器格没取全**（视野边缘的半格）而**不出结论**的子格数 —— 如实计数，别当成"这里没数据" */
   skippedPartial: number;
 }
 
@@ -542,7 +542,7 @@ function median(xs: readonly number[]): number | null {
 
 /**
  * **一批点 + 真名 → 一批区名**（确定性：同输入两次调用 `JSON.stringify` 逐字节相同）。
- * 🔴 **不接收任何视野/相机参数** —— 这就是"不随视野漂"的结构保证：
+ * **不接收任何视野/相机参数** —— 这就是"不随视野漂"的结构保证：
  *    结果只由"每个子格里的点"决定，跨格之间没有任何归一化。
  *
  * `opts.containers` 给了就只算"落在**取全了的容器格**里"的子格 —— 视野边缘的半格数据不出结论。
@@ -731,7 +731,7 @@ export function zoneAttributionOf(index: ZoneIndexLike | null | undefined): stri
 export type ZoneState =
   /** 索引没读到 ⇒ 连"这一带有几个名字点"都不知道 */
   | "no-index"
-  /** 🔴 容器格（取数粒度）与子格（划区粒度）**不相容**（容器边长不是子格整数倍 ⇒ 子格会跨容器）⇒ **本轮不算** */
+  /** 容器格（取数粒度）与子格（划区粒度）**不相容**（容器边长不是子格整数倍 ⇒ 子格会跨容器）⇒ **本轮不算** */
   | "size-mismatch"
   /** 名字点一条都没有（已量：这个视野里没有真名点） */
   | "no-points"
@@ -753,7 +753,7 @@ export interface ZoneFacts {
   cellSize: number | null;
   /** 容器格 ↔ 子格口径相容（0.05 / 0.01 = 5 ⇒ true） */
   gridOk: boolean;
-  /** 🔴 因为容器格没取全（视野边缘半格）而没出结论的子格数 */
+  /** 因为容器格没取全（视野边缘半格）而没出结论的子格数 */
   skippedPartial: number;
   attribution: string | null;
   /** 数不出来/异常的原因原文 */
@@ -810,7 +810,7 @@ export function zoneFactsOf(
 
 /* ══ ⑧ 结构断言用的分档（无头里能验的那部分） ═══════════════════════════════════════════ */
 
-/** 屏上样式类：真名 / 数据驱动 / 示意 —— **三档必须不同**（自检钉；机主拍板） */
+/** 屏上样式类：真名 / 数据驱动 / 示意 —— **三档必须不同**（自检钉；已定） */
 export function zoneStyleClassOf(z: Pick<ZoneName, "source"> | null | undefined): string {
   const s = z && z.source;
   if (s === "real") return "is-real";

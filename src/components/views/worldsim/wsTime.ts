@@ -203,7 +203,7 @@ export function nightLevel(hour: number): number {
 /* ══════════════════════════════════════════════════════════════════════════
  * 窗户光
  *
- * ⚠️ 老线**没有**这个能力（`public/world_map/world_time.js` 里只有
+ * 老线**没有**这个能力（`public/world_map/world_time.js` 里只有
  *    timeTint / applyTimeTint / sunTimes / FACILITIES，grep「窗」零命中）——
  *    这是 T4-1 的原始要求，属于**新写**，不是移植。
  *

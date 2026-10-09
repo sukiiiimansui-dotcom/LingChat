@@ -33,7 +33,7 @@
 //
 // ── 测试性 ────────────────────────────────────────────────────────────────
 // `buildPatch()` 是**纯函数**（不 import vue、不调 invoke），
-// 所以能在 node 里直接跑断言（见 `~/rikka/Dsh-SYuki/world_map/frontend_selftest_worldsim_p1.mjs`）。
+// 所以能在 node 里直接跑断言（见 前端回归测试）。
 
 import { invoke } from "@tauri-apps/api/core";
 import type { MapActor } from "./wsActors";
@@ -57,7 +57,7 @@ export interface RuntimeActorRecord {
   /** 什么时候到这儿的（`"19:20"` 这种展示用字符串） */
   since?: string;
   /**
-   * 心情 / 体力（**0–1，含端点**）—— 期 2「因果通电」。
+   * 心情 / 体力（**0–1，含端点**）—— 「因果通电」。
    *
    * 契约真源 = `src-tauri/src/world_map/event_cmd.rs` 头部的字段映射表：
    * `mood ← actors[role].mood`、`energy ← actors[role].energy`（别名 `stamina`），
@@ -89,9 +89,9 @@ export interface RuntimePatchInput {
   /** 一个格子等于多少米（Rust 侧兜底 30） */
   cellM?: number;
   /**
-   * 心情 / 体力：**角色名 → 两个 0–1 的数**（期 2）。
+   * 心情 / 体力：**角色名 → 两个 0–1 的数**（。
    *
-   * 只给**真有这两项的那个角色**（当前对话角色）—— 别人的数值我们没有任何真实输入，
+   * 只给**真有这两项的那个角色**（当前对话角色）—— 别人的数值没有任何真实输入，
    * 编一套出来等于"给所有人写同一个数"（本仓铁律：数不出来就写数不出来）。
    * 键名与 `actors` 同一套（= 角色的 `display_name`，见文件头契约 ①）。
    */
@@ -162,10 +162,10 @@ export function buildPatch(input: RuntimePatchInput): Record<string, unknown> {
     const rec = actorRecordOf(a);
     if (rec) actors[name] = rec;
   }
-  /* 期 2：心情/体力按**角色名**贴到已存在的那条记录上。
+/* 心情/体力按**角色名**贴到已存在的那条记录上。
      三条刻意的取舍（都是为了"别造数据"）：
        ① 只贴给**已经在 `actors` 里的人** —— 凭空插入一条只有 mood 的记录，
-          Rust 那边会当成"有这么个角色站在那儿"，而我们并不知道他在哪；
+          Rust 那边会当成"有这么个角色站在那儿"，而并不知道他在哪；
        ② 只认 **0–1 的有限数**（与 `event_cmd.rs::actor_unit` 的判据逐字对齐）——
           越界/NaN 一律**不写这个键**（写了也会被 Rust 当"不知道"，但让 JSON 说谎更糟）；
        ③ 一个键都不写就不塞 `needs` 对象（`buildPatch` 的"只放有值的键"口径）。 */
@@ -248,7 +248,7 @@ export async function pushRuntime(input: RuntimePatchInput): Promise<PushResult>
 /**
  * 退出世界模拟：**必须**调这个。
  *
- * ⚠️ 清空要用 **`null`**，不能用空对象 —— `state.rs::apply_patch` 的语义是：
+ * 清空要用 **`null`**，不能用空对象 —— `state.rs::apply_patch` 的语义是：
  *   · `scene: null` / `me: null` / `actors: null` / `facilities: null` / `current_role: null`
  *     → **清空**该字段
  *   · `actors: {}` → 字段级合并时空对象**什么都不做**（不是清空！）

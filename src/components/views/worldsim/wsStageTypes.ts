@@ -1,4 +1,4 @@
-/* wsStageTypes.ts —— L0.5：**舞台层共用的类型**（`PLAN-REFACTOR.md` §2.2）。
+/* wsStageTypes.ts —— L0.5：**舞台层共用的类型**（§2.2）。
  *
  * ## 这个文件是什么
  * 舞台拆分（§2.1 的 M1…M9）之后，各模块与宿主之间要靠类型对齐：模块**不许 import 宿主**
@@ -24,7 +24,7 @@
  */
 
 /** 取楼用的地图最小接口（只声明用到的，避免 any）。
- *  ⚠️ 2026-10-04（S1）从 `WsDistrictMapLibre.vue` 原样搬来，**一个字段都没改**；
+ *  2026-10-04（从 `WsDistrictMapLibre.vue` 原样搬来，**一个字段都没改**；
  *     搬家的理由：`wsViewFetch`（M2）等模块要按这个形状收地图，而模块不许 import 宿主。 */
 export interface BldMapLike {
   getZoom(): number;
@@ -42,12 +42,12 @@ export interface BldMapLike {
 export type { VerifySnapshot } from "./wsVerifyChecks";
 
 /* ══ S2（M6 `wsFallback2d`）的注入面 ══════════════════════════════════════════════════════
- * 下面两个 interface 是 `PLAN-REFACTOR.md` §2.2 那句「跨模块共享状态一律走宿主构造的只读 ctx，
+ * 下面两个 interface 是 §2.2 那句「跨模块共享状态一律走宿主构造的只读 ctx，
  * 由宿主注入」的落地：M6 那批函数**闭包着宿主一大把 setup 期局部量**，把它们改成"每次调用都传参"
  * 就得改函数体里每一处 `theme.value` ⇒ 那就不是"只搬不改"了。
  * ⇒ 宿主构造这份 ctx，`createFallback2d(ctx)` 在里面**解构一次**，函数体一个字都不用动（对拍闸守着）。
  *
- * ⚠️ 两条纪律：
+ * 两条纪律：
  * ① **这里是形状的说明书，不是第二份实现**：`Fallback2dStats` 只是宿主那个 `reactive` 的
  *    **结构化视图**（只列 M6 真正读写的字段），真源永远是宿主里那一份；
  * ② **字段只许按"真实调用点倒逼"增加** —— 没人用的字段不要先写上来（S1 里 `StageCtx` 就是这么被推迟的）。
@@ -61,12 +61,12 @@ import type { BundleBuildingFeature, BundleFeed, BundleFeedFacts, BundlePlaceFea
 import type { GwLayer } from "./wsGwLayer";
 import type { JoyCamSnapshot, JoyMotion, JoyPxScale, RoamStore, joyGateOf } from "./wsJoystick";
 import type { NameLayer, NameRenderNode } from "./wsNameLayer";
-/* S7（M7）的注入面要用到的形状 —— 同上（只 import type）：`WsDistrictPin` 是
+/* S7（的注入面要用到的形状 —— 同上（只 import type）：`WsDistrictPin` 是
    `pinEl` / `props.markers` 的元素形状（真源 `wsActors`）。 */
 import type { WsDistrictPin } from "./wsActors";
 /* S4（M2）的注入面要用到的形状 —— 同样是**只 import type**（编译后不留运行时痕迹） */
 import type { FeatureStore } from "./wsFeatureStore";
-/* S6（M3）的注入面要用到的形状 —— 同上（只 import type）：
+/* S6（的注入面要用到的形状 —— 同上（只 import type）：
    `ThemeTier`（形体档对应的样式档，真源 `wsDistrictScene.themeForTier` 的产物）、
    `RoadSeg`（路的吸附段）、`BldFeature`（上妆那两个函数的入参形状）。 */
 import type { ThemeTier } from "./wsDistrictScene";
@@ -143,9 +143,9 @@ export interface Fallback2dCtx {
  * 差别只有一处：**S3 有三个装配点**（依赖时点不同，见 `wsHudStats.ts` 文件头）——
  *   · `createHudStats`（早：stats/aiOn/长等待/fps）—— 必须早于 S2 的装配点（那边要 `stats`/`aiOn`）；
  *   · `createMapCamera`（晚：晚于 `labRootEl`）与 `createBundleHud`（晚：晚于离线包管道）。
- * ⚠️ 同样是"形状的说明书，不是第二份实现"：`StageStats` 只描述**搬到 M8 里的**那个 `reactive`，
+ * 同样是"形状的说明书，不是第二份实现"：`StageStats` 只描述**搬到 M8 里的**那个 `reactive`，
  *    真源永远只有一份（现在它就诞生在 `wsHudStats.ts` 的 `createHudStats` 里）。
- * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
+ * 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
  */
 
 /** 宿主那份 `stats`（`reactive({…})`）的**结构化视图** —— 全部字段（它现在在 M8 里诞生）。
@@ -186,7 +186,7 @@ export interface StageStats {
 /** M8 前半（`createHudStats`）要用的宿主状态 —— 全部**只读**。 */
 export interface HudStatsCtx {
   /** 只用到 `showAi` / `aiAuto`（`aiOn` 的两半判据）。
-   *  ⚠️ 两个都是**必填** `boolean`：宿主那份 `withDefaults` 给了默认值（false / true）
+   *  两个都是**必填** `boolean`：宿主那份 `withDefaults` 给了默认值（false / true）
    *     ⇒ Vue 解析后的 props 类型里它们不是 `boolean | undefined`（松写成可选会让
    *     `aiOn` 变成 `ComputedRef<boolean | undefined>`，与 S2/M6 那份 `ComputedRef<boolean>` 对不上）。 */
   props: { showAi: boolean; aiAuto: boolean };
@@ -205,7 +205,7 @@ export interface HudStatsCtx {
 /** M1（`createMapCamera`）要用的宿主状态 —— 全部**只读**。 */
 export interface MapCameraCtx {
   /** 只用到 `joy` / `pitch`（近景判据与两个俯角）。
-   *  ⚠️ 两个都是**必填**：宿主 `withDefaults` 给了默认值（`joy: false` / `pitch: 38`）
+   *  两个都是**必填**：宿主 `withDefaults` 给了默认值（`joy: false` / `pitch: 38`）
    *     ⇒ 解析后的 props 类型就是 `boolean` / `number`（松写会让 `setPitch?.(props.pitch)` 报 TS2345）。 */
   props: { joy: boolean; pitch: number };
   /** 组件根元素（`joyMeasureVh` 量它的高度） */
@@ -224,7 +224,7 @@ export interface MapCameraCtx {
   cameraMoving: Ref<boolean>;
   /** 标签层容器（位移只写它一个节点） */
   labRootEl: Ref<HTMLElement | null>;
-  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  /** 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
   mapNow(): unknown;
 }
 
@@ -238,7 +238,7 @@ export interface BundleHudCtx {
   bldFeed: BundleFeed<BundleBuildingFeature>;
   roadsFeed: BundleFeed<BundleRoadFeature>;
   placesFeed: BundleFeed<BundlePlaceFeature>;
-  /** 🌊🌳 水/绿地那一条（**不设 zoom 闸门**） */
+  /** 水/绿地那一条（**不设 zoom 闸门**） */
   gwLayer: GwLayer;
   /** 浏览器取数（每格独立超时；`fetchWithTimeout` 的装配在宿主） */
   fetchCell: BundleFetch;
@@ -247,7 +247,7 @@ export interface BundleHudCtx {
   ROAD_MIN_ZOOM: number;
   /** HUD 去重器（**留在宿主**：它闭包宿主的 `bundleHudQueued` 与 `alive`） */
   scheduleBundleHud(): void;
-  /** 🔴 宿主那个 `let map` 的取值器（同 `MapCameraCtx.mapNow`） */
+  /** 宿主那个 `let map` 的取值器（同 `MapCameraCtx.mapNow`） */
   mapNow(): unknown;
 }
 
@@ -255,9 +255,9 @@ export interface BundleHudCtx {
  * 与 S2/S3 同一套落法（宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体一个字都不用动），
  * 只有一处例外：**`alive` 是一个布尔**，JS 里没法按引用共享 ⇒ 它在 M2 里走 `aliveNow()` 现读
  * （逐处理由与"为什么不用形参默认值"写在 `wsViewFetch.ts` 的文件头）。
- * ⚠️ 同样是"形状的说明书，不是第二份实现"：`bldStore` / `roadsStore` / `bldFlush` / `roadsFlush`
+ * 同样是"形状的说明书，不是第二份实现"：`bldStore` / `roadsStore` / `bldFlush` / `roadsFlush`
  *    的真源都在宿主（M3 `wsBldLanding` 那一片，S6 才搬）⇒ 这里只声明 M2 真正用到的那几个成员。
- * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
+ * 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
  */
 
 /** M2（取数/落地）要用的宿主状态/函数 —— 全部**只读**（宿主仍是它们唯一的拥有者）。 */
@@ -288,7 +288,7 @@ export interface ViewFetchCtx {
   /** 落图通路（真源在 `wsDistrictScene`；M2 只管"什么时候喊一声"） */
   bldFlush(why: string): void;
   roadsFlush(why: string): void;
-  /** 🔴 宿主那面 `alive` 旗的**取值器**（`let`，卸载时置 false）——
+  /** 宿主那面 `alive` 旗的**取值器**（`let`，卸载时置 false）——
    *  解构会拿到快照；这里每次调用现读，与原实现在**同一时刻**读同一个值。 */
   aliveNow(): boolean;
 }
@@ -300,13 +300,13 @@ export interface ViewFetchCtx {
  *   · `map` 在 **M5** 里走"函数体第一行的 `const map = ctx.mapNow()`"而不是形参默认值 ——
  *     因为 `onJoyDrive` / `onJoyHalt` 的**签名行**被 `ws_joystick_selftest` 逐字钉着（判据 ⑦/⑫h），
  *     多一个形参就红了（理由逐条写在 `wsJoystickStage.ts` 的文件头）。
- * ⚠️ 同样是"形状的说明书，不是第二份实现"：真源永远只有一份
+ * 同样是"形状的说明书，不是第二份实现"：真源永远只有一份
  *    （`stats` / `perf` / `pins` / `cameraMoving` / ref 那几个都在宿主）。
- * ⚠️ 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
+ * 字段只许按"真实调用点倒逼"增加（S1 里 `StageCtx` 就是因为没人用而被推迟的）。
  */
 
 /** 宿主 `pins` 里**真正被读到**的那些字段（结构化视图）。
- *  ⚠️ S7（M7）把 `mk` 收窄成 `PickMarkerLike`，并补了 `edge*` 三件 + `edgeKey` ——
+ *  S7（把 `mk` 收窄成 `PickMarkerLike`，并补了 `edge*` 三件 + `edgeKey` ——
  *     这是**同一份**宿主对象的视图（真对象就是 `new mlMod.Marker(…)`，
  *     `remove()` / `getLngLat?()` 本来就在它身上）⇒ 只扩不复制，绝不为同一个形状再写第二份 interface。 */
 export interface StagePin {
@@ -318,11 +318,11 @@ export interface StagePin {
   aim: HTMLElement | null;
   dash: HTMLElement | null;
   tip: HTMLElement | null;
-  /** 📍 屏外方向指示三件（**只有"别人"的钉子上建**，「我」那三栏恒 null） */
+  /** 屏外方向指示三件（**只有"别人"的钉子上建**，「我」那三栏恒 null） */
   edge: HTMLElement | null;
   edgeArrow: HTMLElement | null;
   edgeDist: HTMLElement | null;
-  /** 📍 上一轮写进 DOM 的那份"边缘状态"（`"off"` 或 `"1|角|文案"`）—— 没变就一次都不写 */
+  /** 上一轮写进 DOM 的那份"边缘状态"（`"off"` 或 `"1|角|文案"`）—— 没变就一次都不写 */
   edgeKey: string;
 }
 
@@ -336,16 +336,16 @@ export interface NameHostCtx {
   perf: PerfApi;
   /** 分路状态（`fallback2d` 时名字层不许再要地图 —— 判据就在喂给 `createNameLayer` 的取值器里） */
   renderKind: Ref<"init" | "webgl" | "waiting" | "failed" | "fallback2d">;
-  /** 🔴 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`） */
+  /** 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`） */
   aliveNow(): boolean;
-  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  /** 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
   mapNow(): unknown;
-  /** 🔴 宿主那个 `let drawnBld` 的**取值器**（`afterDraw` 每轮重写 ⇒ 名字层要读当下那一份） */
+  /** 宿主那个 `let drawnBld` 的**取值器**（`afterDraw` 每轮重写 ⇒ 名字层要读当下那一份） */
   drawnBldNow(): readonly unknown[];
 }
 
 /** M5（`createJoystickStage`）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。
- *  ⚠️ 两个 `watch`（`props.joy` 开合 / `joyGate.show` 卸载兜底）**故意留在宿主** ⇒ 这里没有
+ *  两个 `watch`（`props.joy` 开合 / `joyGate.show` 卸载兜底）**故意留在宿主** ⇒ 这里没有
  *     `props` / `joyGate`（模块不需要它们；写上来就是没人用的字段，见文件头那条纪律）。 */
 export interface JoystickStageCtx {
   /** 相机运动中（摇杆判定"相机真的动了"那一刻置位；名字层跟手那一层淡化用它） */
@@ -378,17 +378,17 @@ export interface JoystickStageCtx {
   joyZoomLevels: Ref<number>;
   /** 名字层是否正在整层隐藏（拉近期间；`labRootClass` 的 `is-zoom-pull` 读它） */
   joyZoomPulling: Ref<boolean>;
-  /** ♿ 系统"减弱动效"（**只关踏步**；宿主那段 `matchMedia` 求值仍在宿主 —— 本模块只读） */
+  /** 系统"减弱动效"（**只关踏步**；宿主那段 `matchMedia` 求值仍在宿主 —— 本模块只读） */
   joyReducedMotion: boolean;
-  /** 🔴 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`） */
+  /** 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`） */
   aliveNow(): boolean;
-  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  /** 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
   mapNow(): unknown;
-  /** 🔴 宿主那面 `joyActive` 旗（**唯一一份仍在宿主**：五个 `m.on(...)` 早退与卸载都在读它）
+  /** 宿主那面 `joyActive` 旗（**唯一一份仍在宿主**：五个 `m.on(...)` 早退与卸载都在读它）
    *  —— 与 S4 的 `alive` 同一条处理：模块每帧现读，要改就喊一声。 */
   joyActiveNow(): boolean;
   setJoyActive(v: boolean): void;
-  /** 🔴 宿主那个 `let bldTimer`（`moveend` 那条 600ms 去抖也用它）—— 取值器 + 写入器 */
+  /** 宿主那个 `let bldTimer`（`moveend` 那条 600ms 去抖也用它）—— 取值器 + 写入器 */
   bldTimerNow(): number;
   setBldTimer(v: number): void;
 }
@@ -401,16 +401,16 @@ export interface JoystickStageCtx {
  *     那个**以后才会被调**的取值器，它走内联）；
  *   · `roadSegs` / `drawnBld`（宿主那两个 `let` 是**只写**的）⇒ 走**写入器**各 1 处
  *     （与 S5 的 `setJoyActive` / `setBldTimer` 同一条落法：宿主握真源，模块不养第二份）。
- * ⚠️ 同样是"形状的说明书，不是第二份实现"：真源永远只有一份
+ * 同样是"形状的说明书，不是第二份实现"：真源永远只有一份
  *    （`stats` / `renderKind` / `theme` / `themeTier` / `fetchCell` / `roadSegs` / `drawnBld` 都在宿主）。
- * ⚠️ 字段只许按"真实调用点倒逼"增加：本块里**零引用**的 `perf` / `props` 因此没写上来
+ * 字段只许按"真实调用点倒逼"增加：本块里**零引用**的 `perf` / `props` 因此没写上来
  *    （与 S1 里被推迟的 `StageCtx`、S5 的 `JoystickStageCtx` 同一条纪律）。
  */
 
 /** M3 读的那几个地图成员 —— `BldMapLike`（取楼那一套）**再补两个 M3 用到的**。
- *  ⚠️ 为什么是"补"而不是新写一份：`BldMapLike` 已经是宿主那个 `map` 的**同一份**结构化视图
+ *  为什么是"补"而不是新写一份：`BldMapLike` 已经是宿主那个 `map` 的**同一份**结构化视图
  *     （S1 搬来的，M2/M5/M6 都在用）⇒ 这里只 `extends` 它，绝不复制它的字段（C1 那条红线）。
- *  ⚠️ 这两个成员写**必填**：`project` 在挑楼那个闭包里是直接调的（`map ? … : null` 只是判空，
+ *  这两个成员写**必填**：`project` 在挑楼那个闭包里是直接调的（`map ? … : null` 只是判空，
  *     没有 `typeof` 守卫），写成可选反而要往正文里加一处守卫 —— 那就不是"只搬不改"了。 */
 export interface BldLandingMapLike extends BldMapLike {
   getPitch(): number;
@@ -418,7 +418,7 @@ export interface BldLandingMapLike extends BldMapLike {
 }
 
 /** M3（挑楼流水线 / 落地）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。
- *  ⚠️ 两个写入器是**唯一**允许 M3 改的宿主状态：那两个 `let` 的读者（吸附/寻路、名字层）
+ *  两个写入器是**唯一**允许 M3 改的宿主状态：那两个 `let` 的读者（吸附/寻路、名字层）
  *     都在宿主 ⇒ 模块自己养一份就是第二份真源。 */
 export interface BldLandingCtx {
   /** HUD 计数（`bldPick` / `roads` / `roadStore` / `gwVerdict` / `note` 几格是 M3 写的） */
@@ -447,13 +447,13 @@ export interface BldLandingCtx {
   WS_BLDN_PIN: number | null;
   /** 「视野内最少十栋房」阈值（挑楼时原样交给规则模块） */
   WS_BLD_INVIEW: number;
-  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  /** 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
   mapNow(): BldLandingMapLike | null;
-  /** 🔴 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`；`bldFlush` 每处现读） */
+  /** 宿主那面 `alive` 旗的**取值器**（同 `ViewFetchCtx.aliveNow`；`bldFlush` 每处现读） */
   aliveNow(): boolean;
-  /** 🔴 宿主那个 `let roadSegs` 的**写入器**（取值那半在宿主：吸附/寻路在读它） */
+  /** 宿主那个 `let roadSegs` 的**写入器**（取值那半在宿主：吸附/寻路在读它） */
   setRoadSegs(v: RoadSeg[]): void;
-  /** 🔴 宿主那个 `let drawnBld` 的**写入器**（取值那半在宿主：名字层经 `drawnBldNow()` 读它） */
+  /** 宿主那个 `let drawnBld` 的**写入器**（取值那半在宿主：名字层经 `drawnBldNow` 读它） */
   setDrawnBld(v: readonly unknown[]): void;
 }
 
@@ -465,9 +465,9 @@ export interface BldLandingCtx {
  *     `new mlMod.Marker(…)` 对箭头调用有优先级坑，`pins` 又既读又写；
  *   · `pins = …` → `setPins(…)`（1 处写入器，与 S6 的 `setRoadSegs` / `setDrawnBld` 同款）；
  *   · `roadSegs` → `roadSegsNow()`（2 处）· `drawnBld` → `drawnBldNow()`（1 处）。
- * ⚠️ 同样是"形状的说明书，不是第二份实现"：`stats` / `theme` / `bboxRef` / `pins` / `drawnBld` /
+ * 同样是"形状的说明书，不是第二份实现"：`stats` / `theme` / `bboxRef` / `pins` / `drawnBld` /
  *    `roadSegs` / `nameLayer` / `labRootEl` 的真源都只有一份（在宿主那一侧）。
- * ⚠️ 字段只许按"真实调用点倒逼"增加：`domPins`（任务书列进 M7 但**故意留在宿主**）、
+ * 字段只许按"真实调用点倒逼"增加：`domPins`（任务书列进 M7 但**故意留在宿主**）、
  *    `draw2dBbox` / `mapAvailable` / `aiFeatureCollection` 这些本块里零引用 ⇒ 没写上来。
  */
 
@@ -480,7 +480,7 @@ export interface PickMarkerModLike {
 }
 
 /** `new mlMod.Marker(…).setLngLat(pos).addTo(m)` 的产物 —— 宿主 `pins` 里存的就是它。
- *  ⚠️ `getLngLat` 是**可选**：`pinEdgeSync` 读它时带 `?.`（MapLibre 有，桩里可能没有）。 */
+ *  `getLngLat` 是**可选**：`pinEdgeSync` 读它时带 `?.`（MapLibre 有，桩里可能没有）。 */
 export interface PickMarkerLike {
   setLngLat(c: [number, number]): unknown;
   getLngLat?(): { lng: number; lat: number };
@@ -490,18 +490,18 @@ export interface PickMarkerLike {
 /** 宿主那个 `let pins` 的元素形状 —— **不在这里再写一份**：它就是上面（M5 那一段）那个
  *  `StagePin`，本片只**增量**加了 `mk.remove()` / `mk.getLngLat?()` 与 `edge*` / `edgeKey`
  *  （见那一段的说明；真对象本来就是 `new mlMod.Marker(…)`，对摇杆是纯增量）。
- *  🔴 **这是本片唯一的非机械改动**：它是**类型**（编译后不存在）⇒ 运行时零改动。 */
+ *  **这是本片唯一的非机械改动**：它是**类型**（编译后不存在）⇒ 运行时零改动。 */
 
 /** M7（交互命中：钉子 / 吸附 / 锚点 / AI 示意层 / 信息卡点选）要用的宿主状态 —— 全部**只读**。
- *  ⚠️ 三个"不按引用共享"的入口是**取值器/写入器**：`map` / `mlMod` / `pins` 都是宿主 `let`
+ *  三个"不按引用共享"的入口是**取值器/写入器**：`map` / `mlMod` / `pins` 都是宿主 `let`
  *     （建图、动态 import、新增与移除钉子都会重写它）⇒ 模块自己养一份就是第二份真源。
- *  ⚠️ `cardData` / `cardOpen` / `closeCard` / `panel` **不在这里**：它们在 M7 那一块**里面**
+ *  `cardData` / `cardOpen` / `closeCard` / `panel` **不在这里**：它们在 M7 那一块**里面**
  *     （连声明一起搬进模块，宿主同名解构回去给模板用）。
- *  ⚠️ `domPins` **故意不在**：它唯一的同步消费点 `createFallback2d` 在本装配点**之前**
+ *  `domPins` **故意不在**：它唯一的同步消费点 `createFallback2d` 在本装配点**之前**
  *     ⇒ 搬进 M7 就成环（理由写在 `wsPickInteract.ts` 文件头）。 */
 export interface PickInteractCtx {
   /** 只用到 `adcode` / `grid` / `markers` / `aiItems` / `snapPins` 五个。
-   *  ⚠️ 按**解析后的**类型写（宿主 `withDefaults` 给了默认值的那四个 ⇒ 不是 `| undefined`）；
+   *  按**解析后的**类型写（宿主 `withDefaults` 给了默认值的那四个 ⇒ 不是 `| undefined`）；
    *     `adcode` **不在** `withDefaults` 的默认值表里 ⇒ 如实写可选（写成 `string` 会 TS2322）。 */
   props: { adcode?: string; grid: number; markers: WsDistrictPin[]; aiItems: AiItem[]; snapPins: boolean };
   /** HUD 计数（M7 写 `pins` / `pinsNote` / `pinsAnchor` / `card` / `note` 那几格） */
@@ -522,21 +522,21 @@ export interface PickInteractCtx {
   labRootEl: Ref<HTMLElement | null>;
   /** 名字层实例（`indexFactOfNames` 只念它的 `facts()`；真源在 M4 `wsNameHost`） */
   nameLayer: NameLayer;
-  /** 📍 屏外指示的两个宿主函数（`syncPins` 末尾各补一次；**故意留在宿主**：
+  /** 屏外指示的两个宿主函数（`syncPins` 末尾各补一次；**故意留在宿主**：
    *  它们读宿主那一份几何缓存 `pinEdgeGeom`，搬进来就会把屏外指示整段拖进 M7） */
   pinEdgeMeasure(): void;
   pinEdgeSync(): void;
-  /** 🔴 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
+  /** 宿主那个 `let map` 的**取值器**（建图/销毁会重新赋值 ⇒ 不许解构快照） */
   mapNow(): unknown;
-  /** 🔴 宿主那个 `let mlMod` 的**取值器**（动态 import 完才赋值 ⇒ 不许解构快照） */
+  /** 宿主那个 `let mlMod` 的**取值器**（动态 import 完才赋值 ⇒ 不许解构快照） */
   mlModNow(): PickMarkerModLike | null;
-  /** 🔴 宿主那个 `let pins` 的**取值器**（新增/移除都会重写它；`pinEdgeSync` 与 M5 也在读） */
+  /** 宿主那个 `let pins` 的**取值器**（新增/移除都会重写它；`pinEdgeSync` 与 M5 也在读） */
   pinsNow(): StagePin[];
-  /** 🔴 宿主那个 `let pins` 的**写入器**（`syncPins` 末尾按存活名单过滤后写回） */
+  /** 宿主那个 `let pins` 的**写入器**（`syncPins` 末尾按存活名单过滤后写回） */
   setPins(v: StagePin[]): void;
-  /** 🔴 宿主那个 `let roadSegs`（M3 的 `setRoadSegs` 在写它）—— 吸附只读 */
+  /** 宿主那个 `let roadSegs`（M3 的 `setRoadSegs` 在写它）—— 吸附只读 */
   roadSegsNow(): RoadSeg[];
-  /** 🔴 宿主那个 `let drawnBld`（`afterDraw` 每轮重写）—— 屏幕距离兜底只读 */
+  /** 宿主那个 `let drawnBld`（`afterDraw` 每轮重写）—— 屏幕距离兜底只读 */
   drawnBldNow(): readonly unknown[];
 }
 
@@ -545,9 +545,9 @@ export interface PickInteractCtx {
  * 这一片的别名逐类可数（理由与处数写在 `wsEngineGuard.ts` 的文件头）：
  *   · `alive` → `aliveNow()`（10 处）；`map` → `mapNow()`（14 处）+ `setMap(null)`（1 处）；
  *   · `resizeRo` / `recoverTimer` → 取值器 + 写入器（2+1 / 1+3）；`sawRender` → `sawRenderNow()`（5 处）。
- * ⚠️ 同样是"形状的说明书，不是第二份实现"：`stats` / `renderKind` / `cv` / `host` / `map` / `sawRender` /
+ * 同样是"形状的说明书，不是第二份实现"：`stats` / `renderKind` / `cv` / `host` / `map` / `sawRender` /
  *    `resizeRo` / `recoverTimer` / `resizeTimers` / `isAutomation` 的真源都只有一份（在宿主那一侧）。
- * ⚠️ 字段只许按"真实调用点倒逼"增加。
+ * 字段只许按"真实调用点倒逼"增加。
  */
 
 /** M9（引擎自愈 / 验证 / 自拍）要用的宿主状态 —— 全部**只读**，除了三个写入器与一个共享数组。 */
@@ -588,7 +588,7 @@ export interface EngineGuardCtx {
   /** 2D 降级路的落地（真源在 M6；看门狗只在临时/永久两类各调一次） */
   fallback2d(mode: string, fc: { features?: BldFeature[] } | null, why?: string, kind?: "temp" | "perm", map?: BldMapLike | null): void;
   /** M2 的读数出口（面板的 `bundle.live` 那一行；`on` 由宿主拼）。
-   *  ⚠️ 形状按 `VerifySnapshot.bundle.live` 如实写：写成 `Record<string, unknown>` 的话，
+   *  形状按 `VerifySnapshot.bundle.live` 如实写：写成 `Record<string, unknown>` 的话，
    *     `...viewFetch.liveFacts()` 展开出来的东西对不上 `bundle.live` ⇒ TS2322。 */
   viewFetch: { liveFacts(): { bldHits: number; roadHits: number; bldInfo: string; roadInfo: string } };
   /** offline-first 开关（宿主自己那一份；面板如实写"默认不发 /api"） */
@@ -598,34 +598,34 @@ export interface EngineGuardCtx {
   roadsFeed: { facts(): BundleFeedFacts };
   /** M1 的出口：转屏/改窗口时重量底盘尺寸（`onWinResize` 里那一句） */
   joyMeasureVh(): void;
-  /** 📍 屏外指示的两个宿主函数（`onWinResize` 里各补一次；它们读宿主那份几何缓存） */
+  /** 屏外指示的两个宿主函数（`onWinResize` 里各补一次；它们读宿主那份几何缓存） */
   pinEdgeMeasure(): void;
   pinEdgeSync(): void;
   /** 钉子的总同步（`promoteToWebgl` 切回 WebGL 那一下补一次；真源在 M7 `wsPickInteract`） */
   syncPins(): void;
-  /** 🔴 宿主那个 `const` **数组**（`onBeforeUnmount` 要遍历清定时器）—— 模块只 `.push`，
+  /** 宿主那个 `const` **数组**（`onBeforeUnmount` 要遍历清定时器）—— 模块只 `.push`，
    *  宿主那边照旧看得见 ⇒ 它是**同一个引用**，不是别名、也不是第二份。 */
   resizeTimers: number[];
   /** 自动化/无头判定（**留在宿主**：M6 装配那一刻就同步调它 ⇒ 搬进 M9 会成环） */
   isAutomation(): boolean;
-  /** 🔴 宿主那面 `alive` 旗的取值器（卸载后所有异步路都要早退；每处现读） */
+  /** 宿主那面 `alive` 旗的取值器（卸载后所有异步路都要早退；每处现读） */
   aliveNow(): boolean;
-  /** 🔴 宿主那个 `let map` 的取值器。
-   *  ⚠️ 宿主那一份的类型**就是 `any`**（见它上面那行 eslint-disable 的注释）⇒ 这里如实写 `any`：
+  /** 宿主那个 `let map` 的取值器。
+   *  宿主那一份的类型**就是 `any`**（见它上面那行 eslint-disable 的注释）⇒ 这里如实写 `any`：
    *     写 `unknown` 会让快照里那几处 `map?.getStyle?.()` / `map?.isStyleLoaded?.()` 直接编不过
    *     （而"补一层 cast"就是改被搬走的正文了）。 */
   mapNow(): any;
-  /** 🔴 宿主那个 `let map` 的写入器（watchdogFire 的**永久类**那一路会置 null） */
+  /** 宿主那个 `let map` 的写入器（watchdogFire 的**永久类**那一路会置 null） */
   setMap(v: unknown): void;
-  /** 🔴 宿主那个 `let resizeRo` 的**写入器**（卸载要 `disconnect`；模块只写一次）。
-   *  ⚠️ 它**返回**写进去的那个引用：`kickResize` 里把它绑成块内 `const resizeRo` 之后，
+  /** 宿主那个 `let resizeRo` 的**写入器**（卸载要 `disconnect`；模块只写一次）。
+   *  它**返回**写进去的那个引用：`kickResize` 里把它绑成块内 `const resizeRo` 之后，
    *     下面两行 `resizeRo.observe(...)` **一个字都不用动**、TS 的「刚赋值」窄化也还在
    *     （只给取值器的话那两行会被判 possible null —— 那就得往被搬走的正文里加东西了）。 */
   setResizeRo(v: ResizeObserver): ResizeObserver;
-  /** 🔴 宿主那个 `let recoverTimer`（卸载要 `clearTimeout`）—— 取值器 + 写入器 */
+  /** 宿主那个 `let recoverTimer`（卸载要 `clearTimeout`）—— 取值器 + 写入器 */
   recoverTimerNow(): number;
   setRecoverTimer(v: number): void;
-  /** 🔴 宿主那面 `sawRender` 旗（`m.on("render")` 在写；看门狗"别只看时间"就靠它） */
+  /** 宿主那面 `sawRender` 旗（`m.on("render")` 在写；看门狗"别只看时间"就靠它） */
   sawRenderNow(): boolean;
 }
 
@@ -638,7 +638,7 @@ export interface EngineGuardCtx {
  * 就得往被搬走的正文里加一行 `const fc = fcNow();`。理由逐条写在 `wsStageEvents.ts` 文件头。
  * 别名逐类可数（处数也在那边）：`alive` / `joyActive` / `watchdog` → 取值器；
  * `sawRender` → 写入器；`bldTimer` / `zoomNameTimer` → 取值器 + 写入器。
- * ⚠️ 字段只许按"真实调用点倒逼"增加（与 S1~S7 同一条纪律）。
+ * 字段只许按"真实调用点倒逼"增加（与 S1~S7 同一条纪律）。
  */
 
 /** S11（地图事件接线）要用的宿主状态与函数。 */
@@ -686,7 +686,7 @@ export interface StageEventsCtx {
   stopTimer(): void;
   /** M7 的钉子总同步（`load` 收尾一次） */
   syncPins(): void;
-  /** 📍 屏外指示（`load` 里量一次几何；三个相机钩子各同步一次） */
+  /** 屏外指示（`load` 里量一次几何；三个相机钩子各同步一次） */
   pinEdgeMeasure(): void;
   pinEdgeSync(): void;
   /** M2 的按视野取数（`load` 与 `moveend`） */
@@ -703,7 +703,7 @@ export interface StageEventsCtx {
   /** offline-first 的结论（`moveend` 决定要不要现场取数） */
   bldLive: { live: boolean };
   roadsLive: { live: boolean };
-  /** 🏠「我的家」的取名点取值器（随 `scene-ready` 一起递出去） */
+  /** 「我的家」的取名点取值器（随 `scene-ready` 一起递出去） */
   placesGetter(): readonly PlacePoint[];
   /** 代拍 / App 自拍（`load` 里各一次） */
   selfShotArmed(): boolean;
@@ -722,28 +722,28 @@ export interface StageEventsCtx {
   roamStore: RoamStore;
   /** M1 的底盘尺寸（建图那一刻量一次） */
   joyMeasureVh(): void;
-  /** 🔴 宿主那面 `alive` 旗的取值器（卸载后异步路要早退；每处现读，不许冻在入口） */
+  /** 宿主那面 `alive` 旗的取值器（卸载后异步路要早退；每处现读，不许冻在入口） */
   aliveNow(): boolean;
-  /** 🔴 宿主那个 `let joyActive` 的取值器（摇杆自持标志；8 处早退每处现读） */
+  /** 宿主那个 `let joyActive` 的取值器（摇杆自持标志；8 处早退每处现读） */
   joyActiveNow(): boolean;
-  /** 🔴 宿主那面 `sawRender` 旗的**写入器**（`m.on("render")` 是它唯一的写者） */
+  /** 宿主那面 `sawRender` 旗的**写入器**（`m.on("render")` 是它唯一的写者） */
   setSawRender(v: boolean): void;
-  /** 🔴 宿主那个 `let watchdog` 的取值器（`load` 里 `clearTimeout` 要读**当时**那一份） */
+  /** 宿主那个 `let watchdog` 的取值器（`load` 里 `clearTimeout` 要读**当时**那一份） */
   watchdogNow(): number;
-  /** 🔴 宿主那个 `let bldTimer`（`onBeforeUnmount` 要 clearTimeout）—— 取值器 + 写入器 */
+  /** 宿主那个 `let bldTimer`（`onBeforeUnmount` 要 clearTimeout）—— 取值器 + 写入器 */
   bldTimerNow(): number;
   setBldTimer(v: number): void;
-  /** 🔴 宿主那个 `let zoomNameTimer`（同上）—— 取值器 + 写入器 */
+  /** 宿主那个 `let zoomNameTimer`（同上）—— 取值器 + 写入器 */
   zoomNameTimerNow(): number;
   setZoomNameTimer(v: number): void;
 }
 
 /* ══ S13（`wsPinEdgeStage`）的注入面 ═══════════════════════════════════════════════════
- * 📍 屏外角色箭头那一族（`pinEdgeOn` / `pinEdgeGeom` / `pinEdgeInsetsOf` / `pinEdgeMeasure` /
+ * 屏外角色箭头那一族（`pinEdgeOn` / `pinEdgeGeom` / `pinEdgeInsetsOf` / `pinEdgeMeasure` /
  * `pinEdgeAvoid` / `pinEdgeSync` / `pinEdgeMetersOf`）要用的宿主状态。与 S2~S11 同一套落法：
  * 宿主构造只读 ctx → 工厂里解构一次 ⇒ 函数体除两处别名外**一个字节都不动**（对拍闸守着）。
  *
- * ⚠️ 三条纪律（与上面几片同源）：
+ * 三条纪律（与上面几片同源）：
  * ① **形状的说明书，不是第二份实现**：`pins` 的真源永远是宿主那个 `let`（M7 会重新赋值）；
  * ② **字段只许按"真实调用点倒逼"增加**；
  * ③ `pinEdgeOn`（`?edge=0` 开关）与 `pinEdgeGeom`（量一次就缓存的几何）**不在这里** ——
@@ -753,9 +753,9 @@ export interface PinEdgeStageCtx {
   /** 底板元素（唯一的几何来源：`clientWidth/clientHeight` 与安全区探针的挂点；容器节点是同一个，
    *  `ref` 本身按值递进来，宿主不会换掉它） */
   host: Ref<HTMLElement | null>;
-  /** 🔴 宿主那个 `let pins` 的**取值器**（新增/移除钉子都会重写它 ⇒ 不许解构快照；
+  /** 宿主那个 `let pins` 的**取值器**（新增/移除钉子都会重写它 ⇒ 不许解构快照；
    *  `pinEdgeSync` 函数体首行现读一次，全程同步 ⇒ 与逐处现读逐条等价） */
   pinsNow(): StagePin[];
-  /** 🔴 宿主那个 `let map` 的**取值器**（同上；`pinEdgeSync` 体首现读一次） */
+  /** 宿主那个 `let map` 的**取值器**（同上；`pinEdgeSync` 体首现读一次） */
   mapNow(): unknown;
 }

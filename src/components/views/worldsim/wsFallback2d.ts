@@ -1,4 +1,4 @@
-/* wsFallback2d.ts —— M6：**2D 降级路整块**（`PLAN-REFACTOR.md` §2.1 的 M6 / §3 的 S2）。
+/* wsFallback2d.ts —— **2D 降级路整块**（§2.1 的 M6 / §3 的）。
  *
  * ## 这个文件收什么
  * 从宿主 `WsDistrictMapLibre.vue` **整块搬出来**的那条路（锚点 = 函数名，不按行号）：
@@ -10,7 +10,7 @@
  * ## 搬迁纪律（这一片**零行为变化**）
  * 搬迁 = **移动 + 加签名**：分支、阈值、调用顺序、写进画布的那几行字、DOM 契约
  * （`data-ws-*` / `ws-labs` / 各 `id`）**逐字不变**。所以本文件里每个函数体都是
- * 从宿主**逐字节复制**过来的（对拍闸 `ws_fallback2d_move_selftest.mjs` 断言 diff = 0）。
+ * 从宿主**逐字节复制**过来的（对拍闸 回归测试 断言 diff = 0）。
  *
  * ## 为什么要 `createFallback2d(ctx)` 这个工厂，而不是 `fn(ctx, …)`
  * 这些函数**闭包着宿主的一大堆 setup 期局部量**（`theme` / `stats` / `cv` / `host` /
@@ -19,7 +19,7 @@
  * —— 那就不再是"只搬不改"，而是顺手重构（本片禁止）。
  * ⇒ 依赖倒置的落法：**宿主构造一份只读 ctx 递进来，工厂在这里解构一次**，
  *    函数体于是**一个字都不用动**。ctx 的形状在 `wsStageTypes.ts`（L0.5，纯类型）。
- * ⚠️ 本模块**不许 import 宿主**（`PLAN-REFACTOR.md` §2.2 规则③）：只 import L0 叶子模块
+ * 本模块**不许 import 宿主**（§2.2 规则③）：只 import L0 叶子模块
  *    与 L0.5 类型，方向永远向下。
  *
  * ## 为什么 `map` 是形参，而不是 ctx 字段
@@ -46,7 +46,7 @@ import type { BldMapLike, Fallback2dCtx } from "./wsStageTypes";
 /**
  * 装配 2D 降级路：宿主把只读 ctx 递进来，拿回这条路的全部函数。
  *
- * ⚠️ 调用点必须在**所有被闭包捕获的 ref/computed 都声明之后**（宿主里放在 `domPins` 之后）：
+ * 调用点必须在**所有被闭包捕获的 ref/computed 都声明之后**（宿主里放在 `domPins` 之后）：
  * 这些量是 `const`，声明前引用会踩 TDZ（本仓有过前科）。
  */
 export function createFallback2d(ctx: Fallback2dCtx) {
@@ -57,12 +57,12 @@ export function createFallback2d(ctx: Fallback2dCtx) {
   const { isAutomation, artTheme } = ctx;
 
   /**
-   * 🔴 2026-09-21 机主硬要求：「**要求别降级了，直接全面迭代（最新）**」+「App 整个地图感觉像落后好多」。
+   * 2026-09-21 **要求别降级了，直接全面迭代（最新）**；App 整个地图感觉像落后好多。
    *
    * ⇒ **默认不再自动降到 2D 自绘路**（那条路又卡、又像静态图、又没有手势 ——
-   *   而机主的机器**有** WebGL，代拍页 `ws3dshow.html` 实测顺滑）。
+   *   而机器**有** WebGL，代拍页 `ws3dshow.html` 实测顺滑）。
    * 手动逃生阀 `?wsfallback=1`（真机确实没有 WebGL 时才用）保留，默认关。
-   * ⚠️ 例外：**自动化/无头**（`navigator.webdriver`）保留 2D 兜底 ——「能玩」闸门跑的就是那条路，
+   * 例外：**自动化/无头**（`navigator.webdriver`）保留 2D 兜底 ——「能玩」闸门跑的就是那条路，
    * 关掉它等于把闸门变成假失败（它量不到任何东西）。
    */
   const ALLOW_2D = (() => {
@@ -77,7 +77,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
   /**
    * 自建 style —— **装配在共享真源里**（`wsDistrictScene.districtStyleOf()`）。
    *
-   * 🔴 2026-09-25（PR 标准门禁 C1）：这里原来有一份本地 `makeStyle()`，与原型页那份并存 ⇒
+   * 2026-09-25（PR 标准门禁 C1）：这里原来有一份本地 `makeStyle`，与原型页那份并存 ⇒
    * "运行期逻辑必须在共享单一真源"（`ROUTE.md §五.1`）不达标。现在**搬家**到
    * `wsDistrictScene.ts`（行为逐字不变），宿主只把主题/档位/过渡时长递进去。
    * 回退：`git revert <本 commit>`。
@@ -112,9 +112,9 @@ export function createFallback2d(ctx: Fallback2dCtx) {
   /**
    * 楼高来源分类（与 Rust/前端别处的口径一致：height → levels×3 → **按 OSM 类型估**）。
    *
-   * ⚠️ 三档必须分得开（`DESIGN-3D-MODES.md` §八 的红线）：
+   * 三档必须分得开（内部设计文档 §八 的红线）：
    * OSM 在中国的楼高覆盖率很低（渝中区实测 800m 内 232 栋里 **166 栋没有高度**），
-   * 那 166 栋的高度是**我们按 `building=*` 类型猜的**，HUD 里单独一列，
+   * 那 166 栋的高度是**按 `building=*` 类型猜的**，HUD 里单独一列，
    * 绝不能混进"真高" —— 混在一起报一个数就是把估计值当真数据。
    */
   function classify(fc: { features?: BldFeature[] }) {
@@ -144,15 +144,15 @@ export function createFallback2d(ctx: Fallback2dCtx) {
     type: "FeatureCollection";
     features: unknown[];
   } {
-    /* 🏢 **默认档 = 主体 + 屋顶系（按 zoom 固定分档）** —— 机主拍板 **(a′)：App 向代拍页看齐**
+    /* **默认档 = 主体 + 屋顶系（按 zoom 固定分档）** —— 已定 **(a′)：App 向代拍页看齐**
        （原话「**我的要求是代拍页和App页完全一样喵**」）+ **2026-10-02 B1**（`<14` 平顶 /
        `14–16` 女儿墙 / `≥16` 设备箱+天线）。
        两页默认档走**同一个** `dressBase()`（共享真源 `wsDistrictScene`）：
        `h3d`/`h_from`/`color3d`/`h_base`/`part`/`zt`/`fp`/`small`，拆件口径 = `mode:"roof"`。
-       ⚠️ 这里要把**当前 zoom** 喂进去：生成侧与图层侧用**同一份固定阈值**（`wsBldDetailTiers`），
+       这里要把**当前 zoom** 喂进去：生成侧与图层侧用**同一份固定阈值**（`wsBldDetailTiers`），
        `z<14` 连女儿墙体块都不生成 ⇒ `setData` 的解析量与改造前**同样轻**。
-       🔴 **不许**把 zoom 换成"实测帧率/设备能力"（机主红线：那是他不批的性能档位降级）。
-       🏢 **`?bld=2` = 拆件档**（与代拍页同一个开关）：走 `decorateBuildings(..., {mode:"detail"})`，
+       **不许**把 zoom 换成"实测帧率/设备能力"（用户红线：那是他不批的性能档位降级）。
+       **`?bld=2` = 拆件档**（与代拍页同一个开关）：走 `decorateBuildings(..., {mode:"detail"})`，
        多出裙楼/塔楼/退台/窗格；颜色写进要素属性 `color3d` ⇒ 图层读它。 */
     if (WS_BLD_MODE === 2) {
       const { features, count } = decorateBuildings(fc, artTheme(theme.value).ramp, { mode: "detail" });
@@ -193,19 +193,19 @@ export function createFallback2d(ctx: Fallback2dCtx) {
   function draw2d(fc: { features?: BldFeature[] } | null) {
     const c = cv.value;
     if (!c) return;
-    /* 🎨 2D 降级路的调色板**从主题取**（2026-09-20 主会话截图发现：主题只写在 MapLibre 的
+    /* 2D 降级路的调色板**从主题取**（2026-09-20 截图发现：主题只写在 MapLibre 的
        style 上，而低端机走的是这条 Canvas2D 自绘路 ⇒ 底色是写死的深色，
        结果一台低端机上是"浅蓝界面 + 黑地图"的半截子观感）。
        这一刀把 `bg / empty / 描边 / 示意层投影` 全部改成读 `theme.canvas`。
-       ⚠️ 这块画布**没有自己的 CSS 底色**（`.ws-dml__cv` 只有 position/inset），
+       这块画布**没有自己的 CSS 底色**（`.ws-dml__cv` 只有 position/inset），
           所以下面那次 fillRect 就是"地面"本身，改它才有效。 */
     const pal = theme.value.canvas;
-    // ⚠️ 别把局部变量叫 `host`：会遮蔽外层的 ref，TS 直接报"自引用"（TS7022/TS2448）
+    // 别把局部变量叫 `host`：会遮蔽外层的 ref，TS 直接报"自引用"（TS7022/TS2448）
     const el = host.value;
     const w = Math.max(64, el?.clientWidth || 320);
     const h = Math.max(64, el?.clientHeight || 240);
-    /* 🔴 2026-09-21：降级路的画布**像素数封顶 1.5×**（原来是 `min(2, dpr)`）。
-       机主的证据把这条钉死了：「**在小区级很卡**（那可能降级后的是，在那个代拍里的用 webgl
+    /* 2026-09-21：降级路的画布**像素数封顶 1.5×**（原来是 `min(2, dpr)`）。
+       证据把这条钉死了：「**在小区级很卡**（那可能降级后的是，在那个代拍里的用 webgl
        却一点都不卡）」—— 同一台手机，WebGL 那条路不卡 ⇒ **贵的是这条路**。
        它贵在**填充率**：真机 1080×2400 @dpr2.4 的画布，按 dpr=2 建 = **1080×2400 像素**
        （原来 `min(2, 2.4)` 就是 2），每一次自绘（底色 + 网格 + 楼 + 等高线 + 示意层）
@@ -213,7 +213,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
        （这块画布画的是平面俯视图，不是要抠细节的写实图）。
        逃生阀：`?wsdpr=2`（低端机想对照/想更清楚时用，与 `?wsnight=off` 同一套口径）。 */
     let dpr = Math.min(dprCap2d(), window.devicePixelRatio || 1);
-    /* 再按**总像素**封一道（机主/主会话要的"降级路画布尺寸封顶"）：
+    /* 再按**总像素**封一道（用户/要的"降级路画布尺寸封顶"）：
        大屏（平板/横屏）上 `w×h` 本来就大，DPR 1.5 也能堆到几百万像素。
        1.4M 像素 ≈ 1440×960 的 2D 自绘量：够看清街区轮廓，又不会让每次自绘去写几百万像素。 */
     const MAX_PX_2D = 1_400_000;
@@ -227,11 +227,11 @@ export function createFallback2d(ctx: Fallback2dCtx) {
     ctx.fillStyle = pal.bg;
     ctx.fillRect(0, 0, w, h);
     const feats = fc?.features || [];
-    /* 🆕 2026-09-20：**降级路也要能"看到城市"**。
+    /* 2026-09-20：**降级路也要能"看到城市"**。
        以前这里只画真楼 ⇒ 涪陵（真楼 0~29 栋）在低端机上就是一片空 + 一行
-       「这一带没有楼房数据」，和机主要的"成片"完全相反。
+       「这一带没有楼房数据」，和"成片"完全相反。
        现在把同一份示意图元也画进来（同一条 `aiOn` 判据：真数据够就不画）。
-       ⚠️ 位置仍然是示意（线性映射），所以这一层用**暖色**画，和真楼的冰蓝分得开。 */
+       位置仍然是示意（线性映射），所以这一层用**暖色**画，和真楼的冰蓝分得开。 */
     const aiFc = aiOn.value && aiBboxRef.value ? aiFeatures(props.aiItems || [], aiBboxRef.value, props.grid || 28) : [];
     const aiPolys: Array<{ pts: number[][]; kind: string }> = [];
     for (const f of aiFc) {
@@ -240,10 +240,10 @@ export function createFallback2d(ctx: Fallback2dCtx) {
       if (ring?.length) aiPolys.push({ pts: ring as number[][], kind: String(f.properties.kind) });
     }
     if (!feats.length && !aiPolys.length) {
-      /* 🔴🔴 **这里曾经就是机主看到的「纯色屏」**（2026-09-21 定案）。
+      /* **这里曾经就是屏幕上的「纯色屏」**（2026-09-21 定案）。
          原来这个分支只做两件事：铺满 `pal.bg` + 在左上角写一行 12px 的
          「这一带没有楼房数据」⇒ 一屏**只有底色**（二次元主题下是 `#DCEFF7` 一片浅蓝），
-         远看/缩略图看**就是一张纯色图**；而机主 21:54 那两张"逐字节相同"的截图
+         远看/缩略图看**就是一张纯色图**；而用户 21:54 那两张"逐字节相同"的截图
          量出来正是 `std=0.00` 的单色。
 
          为什么会走到这儿：看门狗把"地图库 8 秒内没画出第一帧"判成降级 ⇒ 2D 路，
@@ -254,7 +254,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
            浅网格（看得出"这是一块地，不是坏了"）+ 两行字（在等什么、为什么）。
          代价是几十条线，**只画一次**（`draw2d` 不是逐帧调用）⇒ 低档帧率不受影响；
          真正的"呼吸"动效交给 DOM/CSS（见模板里那块 `.ws-dml__wait`），不开 canvas 逐帧。
-         ⚠️ 网格颜色从**主题**取（`pal.empty` + 低透明度）而不是写死灰色：
+         网格颜色从**主题**取（`pal.empty` + 低透明度）而不是写死灰色：
            夜色/暗色主题下写死的灰线会变成"亮底上的白线"（看不见），这条踩过。 */
       ctx.save();
       ctx.globalAlpha = 0.16;
@@ -277,11 +277,11 @@ export function createFallback2d(ctx: Fallback2dCtx) {
       ctx.fillText("降级预览 · 楼栋还没取到", 12, 24);
       ctx.globalAlpha = 0.75;
       ctx.font = "11px system-ui";
-      /* 🔴 这两行必须**逐字为真**（原来那行「这一带没有楼房数据」是在替后端下结论，
+      /* 这两行必须**逐字为真**（原来那行「这一带没有楼房数据」是在替后端下结论，
          而真相常常只是"这一档根本没去取"）。
          为什么不能写「放大到街区会自动加载」：**2D 降级路上缩放是死的** ——
          `zoomBy`/`fitDistrict` 都要 `map`（MapLibre 实例），而降级时 `map = null`
-         ⇒ 楼栋永远不会再取。写在画布上的承诺必须是我们真做得到的。 */
+         ⇒ 楼栋永远不会再取。写在画布上的承诺必须是真做得到的。 */
       ctx.fillText("地图库没起来，走的是自绘路；HUD 里有原因", 12, 42);
       ctx.globalAlpha = 1;
       /* 这一屏**什么都没画**（连楼都没有）⇒ 也就没有"范围内"可言：把范围清空，
@@ -317,7 +317,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
       }
     }
     if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return;
-    /* 🧭 把这份范围**留给降级路的人**（`domPins` 要用同一份，人才会站在画出来的楼上）。 */
+    /* 把这份范围**留给降级路的人**（`domPins` 要用同一份，人才会站在画出来的楼上）。 */
     draw2dBbox.value = [minX, minY, maxX, maxY];
     const pad = 10;
     const k = Math.min((w - 2 * pad) / (maxX - minX), (h - 2 * pad) / (maxY - minY));
@@ -338,7 +338,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
     }
     /* 示意层（暖色，和真楼的冰蓝分得开）。俯视图里没有"高度"，
        所以给每栋楼往右下**偏移一小块**当投影 —— 一眼能看出这是"有体量的楼"，
-       而不是一块平贴的色块（机主要的"成片楼房"在 2D 降级路上也要成立）。 */
+       而不是一块平贴的色块（"成片楼房"在 2D 降级路上也要成立）。 */
     for (const a of aiPolys) {
       const hex = a.kind === "park" ? theme.value.ai.park : a.kind === "water" ? theme.value.ai.water : "#d9a06b";
       ctx.beginPath();
@@ -383,8 +383,8 @@ export function createFallback2d(ctx: Fallback2dCtx) {
   ): void {
     stats.mode = mode;
     mapAvailable.value = false;
-    /* 🔴🔴 **这条是本次 fps 修复的核心一行**（2026-09-20）：
-       走到这里 = 我们已经确定在用 **Canvas2D 软渲染**（不管是因为探针说没 WebGL、
+    /* **这条是本次 fps 修复的核心一行**（2026-09-20）：
+       走到这里 = 已经确定在用 **Canvas2D 软渲染**（不管是因为探针说没 WebGL、
        地图库加载失败，还是地图库 `load` 一直不来被看门狗砍掉）。软渲染天生重 ——
        实测小区级只有 7fps。
        而**档位判定此前完全不知道这件事**：它只看核数/内存/WebGL 探针，于是
@@ -393,16 +393,16 @@ export function createFallback2d(ctx: Fallback2dCtx) {
        用 `perf.low` 的地方会自动跟着变：`ws-perf-low` 类、天气层、车辆/行程卡全部生效。 */
     perf.forceLow(mode);
     /* HUD 上如实写清两件事：**为什么被压到低档** + **2D 画布的 DPR 封顶**
-       （机主的三个症状里"很卡"就是这条路的填充率；写出来他才看得出我们为此做了什么） */
+       （三个症状里"很卡"就是这条路的填充率；写出来他才看得出为它做了什么） */
     stats.perf = `已因「${mode}」压到低档（2D 画布 DPR 封顶 ${dprCap2d()}，真机 dpr=${typeof devicePixelRatio === "number" ? devicePixelRatio : "?"}）`;
-    /* 🔴 **降级前必须换一块新画布**：`cv` 可能已经被 WebGL 占过（MapLibre 在它上面建了
+    /* **降级前必须换一块新画布**：`cv` 可能已经被 WebGL 占过（MapLibre 在它上面建了
        webgl 上下文），而按 HTML 规范，`canvas.getContext("2d")` 在**已经有 webgl 上下文**
        的画布上会返回 `null` ⇒ `draw2d()` 里 `if (!ctx) return;` 直接**静默不画**。
        症状："已经降级了，HUD 也说了原因，但画布是**空白**的"，而且**零报错**。
        （同一张画布不能有两种上下文，这是规范行为，不是 bug —— 但极容易踩。） */
     const oldCv = cv.value;
     const hostEl = host.value;
-    /* 🔴 P0：**临时类降级不换画布、也不销毁地图** —— 直接在原来那块上面**盖**一块新的 2D 画布。
+    /* **临时类降级不换画布、也不销毁地图** —— 直接在原来那块上面**盖**一块新的 2D 画布。
        为什么这样就绕开了"一个 canvas 不能同时有 webgl 和 2d 上下文"这条规范限制：
        **2D 画的是另一块 canvas**，WebGL 那块原封不动留在 DOM 里（只是藏起来），
        MapLibre 继续拿它渲染 ⇒ 它一出帧，把上面这块摘掉、把下面那块显示回来 = **切回 WebGL**
@@ -422,9 +422,9 @@ export function createFallback2d(ctx: Fallback2dCtx) {
        ② **旧画布压根不存在**（WebGL 路下模板那块被 `v-if` 关掉了）—— 这一条是这次加上的，
           少了它，降级路会"什么都不画"（`draw2d` 里 `if (!c) return`）且**零报错**。 */
     if (!oldCv || !oldCv.getContext("2d")) {
-      show2d.value = true; // 让 `v-if` 打开（下一帧生效；这一帧我们直接用新建的这块）
+      show2d.value = true; // 让 `v-if` 打开（下一帧生效；这一帧直接用新建的这块）
       const fresh = document.createElement("canvas");
-      /* ⚠️ 要连**所有属性**一起搬（`class` 之外还有 Vue 的 scoped 标记 `data-v-xxxx`）——
+      /* 要连**所有属性**一起搬（`class` 之外还有 Vue 的 scoped 标记 `data-v-xxxx`）——
          漏了它，新画布就丢掉了 `position:absolute; width:100%; height:100%`，
          会缩回浏览器默认的 300×150 跑到左上角：**又是一次"降级了但看着是坏的"**。 */
       /* 旧画布在不在都要能走通：不在就照**模板那块的类名**补上（`ws-dml__cv` 的定位/铺满规则靠它） */
@@ -437,7 +437,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
       } else if (oldCv?.parentElement) {
         oldCv.replaceWith(fresh);
       } else if (hostEl) {
-        /* `map.remove()` 会把画布**从 DOM 里摘掉**（我们把它交给了地图库管），
+        /* `map.remove` 会把画布**从 DOM 里摘掉**（把它交给了地图库管），
            这时 `replaceWith` 是空操作 ⇒ 必须自己插回去，否则又是"画在一块不在页面上的画布"。 */
         hostEl.insertBefore(fresh, hostEl.firstChild);
       }
@@ -450,7 +450,7 @@ export function createFallback2d(ctx: Fallback2dCtx) {
     stopTimer();
     /* 临时类：**后台继续等它出帧**，出来了就切回 WebGL（每 4 秒看一次，见 `startRecoverPoll`） */
     if (keepAlive) startRecoverPoll();
-    /* 🧪 App 自拍：**降级路更要拍** —— "整屏纯色"那类事故就发生在这条路上（闸门只跑这条路，
+    /* App 自拍：**降级路更要拍** —— "整屏纯色"那类事故就发生在这条路上（闸门只跑这条路，
        所以这条路正是"agent 以为验过了"的那条）。`why` 原样带进诊断图，别让图上写着"2D"却没有原因。 */
     maybeAppSelfShot("fallback2d", why || "未说明原因");
   }

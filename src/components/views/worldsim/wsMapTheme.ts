@@ -66,7 +66,7 @@ export interface WsMapRasterSource {
   tiles: [string];
   /**
    * 版权署名。**不是可选的美化项**：Esri 的服务条款要求署名，删掉就是拿别人的数据不说出处。
-   * 我 2026-09-20 把 sources 从组件搬进本文件时**漏掉了它**（`themeStyleParts` 只搬了
+   * 2026-09-20 把 sources 从组件搬进本文件时**漏掉了它**（`themeStyleParts` 只搬了
    * tiles/maxzoom）—— 这种"搬家丢字段"不会报错、也没人看得出来，是最容易悄悄发生的一类回归。
    * 现在它跟 tiles 一起放在主题里，并且自检会断言每条栅格源都有署名。
    */
@@ -631,7 +631,7 @@ export function baseMaxZoomFor(
  * ① 底图源与**亮度基准**是绑在一起的：`measuredLuma.base` 是 `rasterBrightness()/groundLuma()/
  *    groundHex()` 唯一的输入，它一错，"地面多亮"就全错，楼/地明度关系与描边对比度跟着错。
  * ② 2026-09-25 有人把底图换成 `World_Street_Map` 但**没动基准** ⇒ 屏幕上出现「地图直接变白/没了」，
- *    当天 revert。我 2026-09-26 逐档 curl 才量出**真因不是亮度基准**：
+ *    当天 revert。2026-09-26 逐档 curl 才量出**真因不是亮度基准**：
  *      · `World_Street_Map` / `World_Topo_Map` 在这一带 **z≥14 只返回 2521 字节的占位图**
  *        （ArcGIS 的 "Map data not yet available"，四个服务返回的是**同一张图**，sha256 相同）；
  *      · 页面默认机位是 **z16.4** ⇒ 整屏都是占位图 ⇒ 那才是"变白"。
@@ -718,7 +718,7 @@ export const WS_BASEMAP_CANDIDATES: Record<string, WsBasemapCandidate> = {
     hud: "底图对照 = 同一张灰底图，但**默认机位不淡出**（分离变量用）",
     why:
       "把「看不见瓦片」和「瓦片没颜色」两个原因**分开**：这一档只改淡出（源与主题同一张），" +
-      "用来证明机主在默认机位看到的是「纯色地面」而不是「灰瓦片」",
+      "用来证明默认机位看到的是「纯色地面」而不是「灰瓦片」",
     source: {
       tiles: [
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
@@ -737,7 +737,7 @@ export const WS_BASEMAP_CANDIDATES: Record<string, WsBasemapCandidate> = {
     id: "topo",
     label: "候选·地形图（有绿/水）",
     hud: "底图候选 = 地形图（**有植被绿 / 水体蓝**，但本区最高只到 z13）",
-    why: "机主要的「看得到水/绿植」：这张底图**真的有**植被色与水体色（实测彩色占比 6.7%~26%）",
+    why: "要求「看得到水/绿植」：这张底图**真的有**植被色与水体色（实测彩色占比 6.7%~26%）",
     source: {
       tiles: [
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
@@ -803,7 +803,7 @@ export const WS_BASEMAP_CANDIDATES: Record<string, WsBasemapCandidate> = {
     hud: "底图候选 = 卫星影像（**唯一撑到 z17 的**；写实，改美术方向）",
     why:
       "本机网络实测里**唯一**在 z17 仍有真图的栅格源（水体/植被都是真的），" +
-      "留作「要清晰又要真色」的兜底；但它是写实路线，与 BA 平涂冲突 ⇒ 要不要它属于**美术方向**，得机主定",
+      "留作「要清晰又要真色」的兜底；但它是写实路线，与 BA 平涂冲突 ⇒ 要不要它属于**美术方向**，需另行商定",
     source: {
       tiles: [
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -1030,9 +1030,9 @@ export function wsGameLook(base: WsMapTheme): WsMapTheme {
         {
           k: "压暗地面（第一版的「深底亮线」）",
           why:
-            "**机主 2026-09-24 裁定**：「代拍页的地图底都看不清了」⇒ 地面回到 BA 亮底" +
+            "**2026-09-24 已定**：「代拍页的地图底都看不清了」⇒ 地面回到 BA 亮底" +
             "（`bg`/`tint`/`raster` 逐字段等于基准）。而且我自己的调研就写着 MT3D 地面**也是近白** " +
-            "⇒「深底」不是 MT3D 的事实，是我选错了方向。**派生件不许改机主拍板的美术方向。**",
+            "⇒「深底」不是 MT3D 的事实，方向选错了。**派生件不许改既定的美术方向。**",
         },
         {
           k: "霓虹辉光（`road-glow-*`）",
@@ -1045,12 +1045,12 @@ export function wsGameLook(base: WsMapTheme): WsMapTheme {
           k: "远景淡出（大气透视）",
           why:
             "**撤回基准值**（`extrudOpacity` 逐字段等于基准）：亮底上把远景楼调透明 = 楼「化」进地面，" +
-            "与机主「底要看得清」的诉求相反；它也不在机主的保留清单里（清单 = 接触阴影 / cel 硬边 / 路 casing）。",
+            "与「底要看得清」的诉求相反；它也不在保留清单里（清单 = 接触阴影 / cel 硬边 / 路 casing）。",
         },
         {
           k: "楼体竖向渐变（受光面/背光面）",
           why:
-            "**撤回基准值**（`verticalGradient` 保持 false）：BA 的**平涂**是机主拍板的美术方向，" +
+            "**撤回基准值**（`verticalGradient` 保持 false）：BA 的**平涂**是既定的美术方向，" +
             "「受光/背光」改用 **cel 分档**表达（结构手段），不再动渐变。",
         },
       ],

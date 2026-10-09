@@ -18,7 +18,7 @@
  *
  * ## 为什么"visibility:none"是**离线判定**而不是写进图层属性
  * 需求原话是「z 低于某档阈值时，那一档的层 `visibility: "none"` ⇒ 0 顶点 / 0 draw call（离线可数）」。
- * MapLibre GL JS **v6.10.0 的 `layout.visibility` 不接受 zoom 表达式**——本机 vendor 里那份
+ * MapLibre GL JS **v6.10.0 的 `layout.visibility` 不接受 zoom 表达式**——vendor 里那份
  * style-spec 原文是：
  *   `visibility:{type:`enum`,values:{visible:{},none:{}},default:`visible`,expression:{interpolated:!1,parameters:[`global-state`]}}`
  * （`public/vendor/maplibre/maplibre-gl-shared.mjs`；`parameters` 只有 `global-state` ⇒ **写 `["step",["zoom"],…]`
@@ -44,7 +44,7 @@
  *  ① 2026-10-02 已报 `<14` 平顶 / `14–16` 女儿墙 ⇒ **这个数是他给的**；
  *  ② 与项目里已有的空间闸**同一档**：`?bst=2` 的 `bld-contact` 用的是 `minzoom: 15`、
  *     预渲染瓦片服务 `z<11`、`WS_BLD_VECTOR_MINZOOM = 11`（`wsDistrictScene.ts`）——
- *     本机默认机位是 **z16.4**（`wsScene.ts` 的默认相机）⇒ 女儿墙在**默认机位上是看得见的**，
+ *     默认机位是 **z16.4**（`wsScene.ts` 的默认相机）⇒ 女儿墙在**默认机位上是看得见的**，
  *     而 z14 以下（整片俯瞰）只画平顶主体，与改造前的画法**逐字节相同**；
  *  ③ 独立于**任何**运行时测量：这里只跟 zoom 走，**不读帧率、不读 deviceMemory、不看 fps**（用户红线）。
  */

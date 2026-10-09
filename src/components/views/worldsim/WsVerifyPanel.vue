@@ -41,7 +41,7 @@
         <p>② 现状：样式已加载={{ String(snap.isStyleLoaded) }} · 出过帧={{ String(snap.sawRender) }} · 地图库错误 {{ snap.errors.length }} 条</p>
       </div>
       <div v-else-if="snap.kind === 'failed'" class="wsv__warn">
-        <p>❌ <b>地图库始终没出帧</b>（<b>未降级、未画 2D</b> —— 机主要求"别降级了"）。</p>
+        <p>❌ <b>地图库始终没出帧</b>（<b>未降级、未画 2D</b> —— 已定口径：不许降级）。</p>
         <p>① 原因原文：<b>{{ snap.fallbackWhy || "未记录" }}</b></p>
         <p>② 地图库错误 {{ snap.errors.length }} 条（<b>原文见下</b>）；这也是唯一能修的东西。</p>
         <p>③ 两条路：按「🔄 重试地图」重建；或加 <code>?wsfallback=1</code> 显式用 2D 自绘兜底（默认关）。</p>

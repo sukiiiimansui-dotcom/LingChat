@@ -16,10 +16,10 @@
  *
  * | 输入 | 真源 | 缺了怎么办 |
  * |---|---|---|
- * | 本机时间（时） | `Date.now()` → 本地小时 | **缺了就整体判"数不出来"**（时间是最小充分输入） |
+ * | 本地时间（时） | `Date.now` → 本地小时 | **缺了就整体判"数不出来"**（时间是最小充分输入） |
  * | 天气 | `useWorldWeather`（真天气；降级态 = 没拿到） | 记进 `missing`，**那一项不参与**（不是按"0 分天气"算） |
  * | 刚发生的事件 | `useWorldEvents`（Rust 事件表带的 `effects`） | 没有事件 = 没有脉冲（列表不变） |
- * | 今日三件事 | `wsDailyStore`（本机玩法状态） | 记进 `missing`，那一项不参与 |
+ * | 今日三件事 | `wsDailyStore`（本地玩法状态） | 记进 `missing`，那一项不参与 |
  *
  * ⇒ 产物是**推导值**（`source: "derived"`），不是测量值。给用户看的时候必须连口径一起给
  * （`basis` / `missing` / `why` 三个字段就是干这个的），**不许**把它说成"角色的真实心情"。
@@ -288,7 +288,7 @@ export function dailyMoodDelta(done: unknown): { delta: number; used: boolean; n
 
 /** `computeNeeds` 的输入（全部可注入 ⇒ 纯函数） */
 export interface NeedInputs {
-  /** 本机时间（ms）—— **必须给**（拿不到就判"数不出来"） */
+  /** 本地时间（ms）—— **必须给**（拿不到就判"数不出来"） */
   nowMs?: unknown;
   /** 真实天气（`useWorldWeather().state`）；`null` = 没拿到 */
   weather?: NeedWeatherInput | null;
@@ -574,7 +574,7 @@ function browserIo(): NeedStoreIo {
 }
 
 export interface UseWsNeedsOptions {
-  /** 时间源（默认真本机时钟） */
+  /** 时间源（默认真实本地时钟） */
   now?: () => number;
   /** 存储（默认 localStorage） */
   io?: NeedStoreIo;

@@ -2,7 +2,7 @@
  * wsSelfShot.ts —— 「**代拍**」：让页面**自己**把 WebGL 画布导成 PNG 回传。
  *
  * ## 为什么非得这样（2026-09-19 定下来的两条硬约束）
- * ① **agent 侧看不到 WebGL**：本机（Termux/Android）自动化 Chromium 的 GPU 上下文
+ * ① **agent 侧看不到 WebGL**：Termux/Android 环境自动化 Chromium 的 GPU 上下文
  *    「首帧后必丢」—— 六种图形栈（headless_shell / 完整 Chromium / in-process-gpu /
  *    关看门狗 / Xvfb+ANGLE-GL / Xvfb+EGL / Xvfb+ANGLE-Vulkan）实测全一样。
  *    所以"好不好看"这件事，**agent 自己截不出来**。
@@ -115,7 +115,7 @@ export async function postJson(obj: unknown, name: string): Promise<boolean> {
 
 
 /**
- * 时间戳（`MMDD-HHMMSS`，本机时区）—— 自拍的名字里要带它。
+ * 时间戳（`MMDD-HHMMSS`，本地时区）—— 自拍的名字里要带它。
  * 为什么不用 `toISOString()`：文件名里出现 `:` 和 `T`/`Z` 又长又要转义，而 agent
  * 拿到文件第一眼想看的是"这是刚拍的还是十分钟前的"。
  */

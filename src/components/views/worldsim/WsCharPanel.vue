@@ -238,7 +238,7 @@
              三个都有落地：
                · 打招呼   → 页面 onQuick('hi') → 复用「去找他聊聊」（跳 /chat，零副作用）
                · 约他出门 → 页面 onQuick('outing') → `world_map_trip_start` 让他动身来找你
-               · 送礼物   → 就地打开 `WsGiftSheet`（方案 B：地图商店 → 本机背包 → 送出记账）
+               · 送礼物 → 就地打开 `WsGiftSheet`（方案 B：地图商店 → 本地背包 → 送出记账）
              说明文案不再用 `worldsim.action.hint` —— 那句还写着「送礼物还没定方案」，
                 已经不成立了（见 wsGift.ts 顶部的文案口径）。 -->
         <WsCollapse :title="t('worldsim.panel.actions')" icon="⚡" :default-open="true">
@@ -274,7 +274,7 @@
                三条口径（一字不改地照 `wsNeeds` 的判词）：
                 ① 显示的是 **0–1 的原始值**（不是百分比）—— 与 `event_cmd.rs::actor_unit` 的
                    量程逐字一致，**不在这里造第三套量程**；进度条只是同一个数的可视化。
-                ② 它是**推导值**（据本机时间/真实天气/事件/今日三件事算出来），不是测量值 ——
+                ② 它是**推导值**（据本地时间/真实天气/事件/今日三件事算出来），不是测量值 ——
                    所以那一行小字里必须带口径（`needsNote` 直接来自 `computeNeeds().why`）。
                 ③ 拿不到 ⇒ 显式写「数不出来」+ 原因，**不显示 0.5 装成有值**（本仓铁律）。
                DOM 契约：`data-ws-needs-mood` / `data-ws-needs-energy`（探针读这个；App 里不塞 `window.__*`）。 -->
@@ -491,7 +491,7 @@
   /* ── ⑤ 快捷动作（三个按钮都要有**真**行为或说清楚为什么没有）──────
    *   · 打招呼  → emit('quick','hi')   → 页面里复用「去找他聊聊」那条路（跳 /chat）
    *   · 约他出门 → emit('quick','outing') → 页面里调 world_map_trip_start（角色动身）
-   *   · 送礼物  → 就地打开 `WsGiftSheet`（**方案 B**：地图商店 → 本机背包 → 送出记账）；
+   *   · 送礼物 → 就地打开 `WsGiftSheet`（**方案 B**：地图商店 → 本地背包 → 送出记账）；
    *              送出成功后再 emit('gift', …) 给页面，留给主会话接记忆/事件
    *              （前端目前没有"提交自定义事件"的通路，见 wsGift.ts 顶部）。
    * 三个动作的分派点都收在页面的 onQuick 里（一处就能看全，好测也好改）。 */
@@ -608,7 +608,7 @@
     transition: transform 0.3s cubic-bezier(0, 0, 0, 1);
   }
   .ws-need--none { opacity: 0.8; }
-  /* 口径判词（"据本机时间 19 时 / 真实天气 小雨…"）：必须看得见，但别抢主信息 */
+  /* 口径判词（"据本地时间 19 时 / 真实天气 小雨…"）：必须看得见，但别抢主信息 */
   .ws-need__why {
     margin: -0.2em 0 0.5em;
     font-size: 0.78em;

@@ -78,7 +78,7 @@
       </div>
       <div v-else class="ws-empty">{{ gx("shopsEmpty") }}</div>
 
-      <!-- ③ 最近送出（本机账本） -->
+      <!-- ③ 最近送出（本地账本） -->
       <div class="ws-giftsheet__sec">
         <span>{{ gx("history") }}</span>
         <span v-if="sentTotal" class="ws-tag">{{ sentTotal }}</span>
@@ -173,7 +173,7 @@
     wsToast(fillText(GIFT_TEXT.bagFull, { n: GIFT_KIND_MAX }), "warn");
   }
 
-  /** 送出：扣一件 + 本机记账 + toast；**不谎称写进了记忆** */
+  /** 送出：扣一件 + 本地记账 + toast；**不谎称写进了记忆** */
   function onSend(it: WsGiftItem) {
     if (!canSend.value) {
       wsToast(gx("sentNoRole"), "warn");

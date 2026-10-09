@@ -352,8 +352,8 @@
      两个模块都在 Node 里全量自检过（回归测试 44 项）。 */
   import { roadLayerSpecs, roadStatsLine, visibleRoadCount } from "./wsRoads";
   import { roadSegments, snapToRoad, toLngLat, toXY, type RoadSeg } from "./wsSnap";
-  /* 这张地图长什么样的主题预设（2026-09-20 「这个地图太暗了还有就是给整体地图
-     改成二次元式的那种风格喵」）。**美术参数全在那个文件里**，这里只负责"照它摆图层"：
+  /* 这张地图长什么样的主题预设（2026-09-20 这个地图太暗了还有就是给整体地图
+     改成二次元式的那种风格）。**美术参数全在那个文件里**，这里只负责"照它摆图层"：
        · `night` = 原来的暗色（**保留**，一个字没删，只是把卫星的压暗从 0.34 提到 0.56）；
        · `anime` = 二次元（蔚蓝档案风）：亮蓝天空 + 亮灰底图 + 浅蓝色罩 + 平涂楼体 + 深藏青描边；
        · A/B 开关：URL `?wstheme=night` / `?wstheme=anime`（也会记进 localStorage）。
@@ -1893,7 +1893,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /* 顺序很重要：**先取数据**，再决定用哪条渲染路。
        原来"无 WebGL 就直接 return" ⇒ 低端机只能看到一行提示；现在改成
        **Canvas2D 降级**：用同一批真实楼房画俯视图（形状/朝向/高度来源都在），
-       这样"没有 WebGL 的设备"也能看到小区 —— 顺带让无头环境（本机 WebGL 不可用）**可验证**。 */
+       这样"没有 WebGL 的设备"也能看到小区 —— 顺带让无头环境（无头环境没有 WebGL）**可验证**。 */
     /* 用共享的 `BldFeature`：原来这里自己写了一份 `{geometry?: unknown}`，
        而 `geometry: unknown` 喂不进合并函数（它要 `{type?, coordinates?}`）——
        两份形状描述迟早漂移，所以只留一份。 */

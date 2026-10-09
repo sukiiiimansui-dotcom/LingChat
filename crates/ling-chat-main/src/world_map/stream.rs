@@ -177,7 +177,7 @@ pub fn extract_scalar(buf: &str, key: &str) -> Option<Value> {
 /// ## 出口处的几何净化（路线图 ②）
 ///
 /// `assemble_layout` 是 **AI 精绘布局的唯一产地**，而这份布局是「权威版本」——
-/// 前端收到 `done` 时用它 `loadLayout()` **整份替换**画布（`WsDistrict.vue`），
+/// 前端收到 `done` 时用它 `loadLayout()` **整份替换**画布（旧小区页（WsDistrict.vue，已删除）），
 /// 地图库落盘的也是它。所以净化挂在这里，一处生效、两条通路都覆盖。
 ///
 /// 为什么必须有：提示词写了「建筑不要重叠」（`build_prompt` 规则 1），但**没有任何东西执行它**，

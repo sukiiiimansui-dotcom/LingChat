@@ -11,7 +11,7 @@
 //!
 //! AI 布局一路走到画布的链路是：
 //! `bridge::run_stream` → `stream::assemble_layout` → `Event::Done.layout`
-//! → 前端 `WsDistrict.vue` 的 `paint.loadLayout(ev.layout)`（**整份替换**画布）
+//! → 前端 旧小区页（WsDistrict.vue，已删除）的 `paint.loadLayout(ev.layout)`（**整份替换**画布）
 //!
 //! 中间**没有任何一步检查坐标是否合法**。提示词里确实写了「建筑不要重叠」
 //! （`stream::build_prompt` 规则 1），但**写了不等于模型会遵守**，

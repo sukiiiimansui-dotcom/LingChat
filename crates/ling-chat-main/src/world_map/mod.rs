@@ -1416,7 +1416,7 @@ pub async fn world_map_time() -> Result<Value, String> {
 // 前端拿不到设施数据，地图上也就没有设施图层。下面三个命令把它接出来。
 //
 // 坐标约定（前端最容易踩的一条）：设施坐标 `gx/gy` 是**小区图的格点**，
-// 与 `WorldSim.vue` 的 `WS_GRID = 28` / `WsDistrict` 的 `SKETCH_SIZE = 28` 是同一套，
+// 与 旧入口（WorldSim.vue，已删除）的 `WS_GRID = 28` / `WsDistrict` 的 `SKETCH_SIZE = 28` 是同一套，
 // **不是**经纬度。所以设施图层要铺在 `.ws-neigh__pan` 那个手势变换容器里
 // （与 WsAvatarLayer/WsVehicleMark 同一个 `#pin` 插槽），不要往 GeoJSON 画布上画。
 //

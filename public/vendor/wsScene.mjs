@@ -5,7 +5,7 @@ var TF_RULES = {
     maxCls: 2,
     /** 站间目标间隔（米）：350~500 ⇒ 生成时用 `spacing` 做步长，落点会因路口吸附而落在区间内 */
     spacing: 250,
-    // 机主 2026-09-22：太稀 ⇒ 420 → 250（一处改，生成逻辑跟着变）
+    // 2026-09-22 太稀 ⇒ 420 → 250（一处改，生成逻辑跟着变）
     minGap: 220,
     maxGap: 300,
     /** 优先落在**路口 40m 内**：在这个半径内若有路口，就把站点挪过去 */
@@ -680,7 +680,7 @@ function cameraDefaults() {
   return { ...CAMERA_DEFAULTS };
 }
 var SCENE_LAYER_ORDER = [
-  /* 🌆 **足迹层**（`bld-foot`，2026-10-03「按 zoom 分层」）：`z<14` 时屏上的"楼"就是这一层。
+  /* **足迹层**（`bld-foot`，2026-10-03「按 zoom 分层」）：`z<14` 时屏上的"楼"就是这一层。
      它是**贴在地面上的平面**（`fill`），与路网/水绿同一档 —— 也就是**在它们之下**。
      单列一组（而不是塞进 `buildings`）：混进去会让下面那条"路网被楼体压住"的判据**误报**
      （2026-10-03 加这一层时实测到：`firstOf("buildings")` 取到的是最下面那条 `bld-foot`）。 */
@@ -688,10 +688,10 @@ var SCENE_LAYER_ORDER = [
   { group: "roads", idPrefixes: ["road-casing-", "road-line-"], beforeId: "bld-ext", why: "路是地面上的东西，压在楼上会像从楼顶穿过" },
   { group: "transport", idPrefixes: ["tf-"], beforeId: "bld-ext", why: "交通设施**贴在路之上**（先插路网、后插设施 ⇒ 设施在上）" },
   { group: "buildings", idPrefixes: ["bld-"], excludePrefixes: ["bld-foot"], beforeId: null, why: "楼体在最上（数据层，交互载体）" },
-  /* 🛰 LOD 第 1 步（2026-09-24）：预渲染瓦片层。**它在矢量层之上**是刻意的 ——
+  /* LOD 第 1 步（2026-09-24）：预渲染瓦片层。**它在矢量层之上**是刻意的 ——
      远景（z≤12）要让瓦片**盖住**实时层，中间靠 `raster-opacity` 随 zoom 淡到 0 把画面交还矢量层；
      反过来放（瓦片在下）就得给 12 条路网 + 楼体各写一份"淡入"，那才是新造一套机制。
-     ⚠️ 这条"在上"由 `sceneOrderViolations()` 守着（被矢量层压住 = 远景会露出实时层）。 */
+     这条"在上"由 `sceneOrderViolations` 守着（被矢量层压住 = 远景会露出实时层）。 */
   { group: "prerender", idPrefixes: ["prerender"], beforeId: "ref", why: "预渲染瓦片 = 远景替身，压在矢量层之上、注记之下（靠 zoom 淡出把近景交还实时层）" }
 ];
 function sceneLayerPlan() {
@@ -766,7 +766,7 @@ function lodTierLabel(tier) {
 }
 var LOD_OPACITY_ZERO_ZOOM = 11;
 var LOD_OPACITY_STOPS = [
-  /* 🔴 2026-09-26 机主决定：**预渲染瓦片层（那些"白蓝方片"）不再作为主力**，
+  /* 2026-09-26 用户决定：**预渲染瓦片层（那些"白蓝方片"）不再作为主力**，
      楼改由**矢量层一直显示**（`WS_BLD_VECTOR_MINZOOM` 同步降到 11）。
      ⇒ 瓦片只服务 z<11 的远景，**在 11 严格归零**（与矢量层起点仍然严格对齐，
      自检那条"归零 zoom === 楼房矢量 minzoom"的不变量**继续成立**，没有"两层都不管"的空档）。 */
@@ -1256,11 +1256,11 @@ function themeStyleParts(theme, low = false, transitionMs = 0) {
       id: "base",
       type: "raster",
       source: "base",
-      /* 🔴 高 zoom 淡出（原来的理由「治地面太糊」，2026-10-04 机主**推翻**：他要看得见底图）：
+      /* 高 zoom 淡出（原来的理由「治地面太糊」，2026-10-04 用户**推翻**：他要看得见底图）：
          二次元的亮灰底图**最高只到 z16**，z17~18 就是"把 z16 放大 2~4 倍" ⇒ 那一段才是真会糊的。
          所以窗口抬到 `16.6 → 18.0`：**默认机位 16.4 处底图全不透明**（真瓦片回来了，不再是一块纯色），
-         只在放大复用区淡出，终点处露出 `bg` + `tint` 合成的浅青地面 + 我们自己的路网/楼体（矢量，任何缩放都锐利）。
-         ⚠️ `baseFade` 只覆盖 `raster-opacity` 这一个字段，**不动**主题里写的
+         只在放大复用区淡出，终点处露出 `bg` + `tint` 合成的浅青地面 + 自己的路网/楼体（矢量，任何缩放都锐利）。
+         `baseFade` 只覆盖 `raster-opacity` 这一个字段，**不动**主题里写的
             saturation/contrast/brightness（那些在淡出区间里照样按 zoom 生效）。 */
       paint: theme.baseFade ? {
         ...theme.raster.base,
@@ -1319,7 +1319,7 @@ var WS_BLD_OUTLINE_STOPS = [
   [18, 4.2]
 ];
 var WS_ART_PATCHES = [
-  /* 🆕 art=3：底图整体往"水青"推（**我们没有水系矢量数据** —— 河/湖是栅格底图里的像素，
+  /* art=3：底图整体往"水青"推（**没有水系矢量数据** —— 河/湖是栅格底图里的像素，
      所以只能调 raster 的整体饱和度/亮度，**不能假装给水体单独上色**） */
   { id: "base", key: "raster-saturation", art2: 0.34, art3: 0.6, why: "底图更青（**保守**：0.72 洗掉了路与注记）" },
   { id: "base", key: "raster-brightness-max", art2: 0.98, art3: 0.94, why: "底图更亮但**不顶到 1**（顶到 1 吃掉层次）" },
@@ -1390,7 +1390,7 @@ function bldArtParamsOf(theme, opts) {
     art,
     look,
     ramp,
-    /* ⚠️ **原样透传**（不补默认值）：页面旧实现就是 `THEME?.outline || 兜底` 两步，
+    /* **原样透传**（不补默认值）：页面旧实现就是 `THEME?.outline || 兜底` 两步，
        这里多补一次 `??` 就会让"主题缺 width"时与旧实现不同 ⇒ 逐字段对拍会红。 */
     outline,
     vgrad,
@@ -1517,7 +1517,7 @@ function decorateBuildings(fc, ramp = HEIGHT_COLOR_RAMP, opts = {}) {
     real: 0,
     levels: 0,
     kind: 0,
-    /* ⚠️ 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
+    /* 默认档位 = `base`（App 侧不传 opts ⇒ 行为与这一版之前**逐字节相同**）。
        `roof` = 默认档的屋顶系（2026-10-02 B1）；`detail` 只在代拍页 `?bld=2` 打开。 */
     mode: opts.mode === "detail" ? "detail" : opts.mode === "roof" ? "roof" : "base",
     low: !!opts.low,
@@ -1654,7 +1654,7 @@ function partFeature(src, ring, base, top, part, color, extra = {}) {
   return {
     type: "Feature",
     id: `${String(src.id || "")}#${part}${extra.tier ? "-t" + String(extra.tier) : ""}${extra.idx !== void 0 ? "-" + String(extra.idx) : ""}`,
-    /* 🏢 `zt` = 这个体块属于哪一档（0 一直画 / 1 z≥14 女儿墙 / 2 z≥16 设备箱+天线）。
+    /* `zt` = 这个体块属于哪一档（0 一直画 / 1 z≥14 女儿墙 / 2 z≥16 设备箱+天线）。
        写进属性而不是在图层的 filter 里拼表达式 —— 表达式报错是静默的（见文件头）。 */
     properties: { ...src.properties || {}, part, zt: bldTierOfPart(part), h3d: top, h_base: base, color3d: color, ...extra },
     geometry: { type: "Polygon", coordinates: [ring] }
@@ -2134,7 +2134,7 @@ function createFeatureStore(opts) {
         cap
       };
     },
-    /* ⚠️ `clear()` 必须**连来源键一起清**：`has()` 的语义现在是"仓库里确实还有这一格的要素"
+    /* `clear` 必须**连来源键一起清**：`has` 的语义现在是"仓库里确实还有这一格的要素"
        （见 `retainNear` 的 `dirtySources`）—— 只清要素不清来源键，就会又变回"说已经取过、其实没有"。 */
     clear() {
       byId.clear();
@@ -2407,7 +2407,7 @@ function pickBuildingsByBudget(input) {
     staticMpp: mpp,
     minInView,
     floorAdded: 0,
-    /* 📍 补齐件那几个数**在字面量里就有初值**（第七条起多了 `nearAnchors` / `nearRestored` /
+    /* 补齐件那几个数**在字面量里就有初值**（第七条起多了 `nearAnchors` / `nearRestored` /
        `nearAddedPerAnchor`）：① 关掉时逐字节等于改动前；② 影子对拍（把补齐件整段抠掉再编译）
        两边都带这几个字段 ⇒ 对拍比的仍是"同一份形状"。 */
     nearAnchors: 0,
@@ -2660,7 +2660,7 @@ function districtStyleOf(theme, low, fadeMs) {
        免得给 style 里塞一个值为 undefined 的键（校验器会当它存在）。 */
     ...parts.sky ? { sky: parts.sky } : {},
     sources: parts.sources,
-    /* ⚠️ 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
+    /* 顺序有意义（自下而上）：bg → base → [hi] → [tint] → ref。
        楼房的图层由 `addLayer(l, "ref")` 插到 **ref 之前** ⇒ 自动落在线罩**之上**。
        `ref` 必须留在最后一条：它是楼房层的插入锚点。 */
     layers: parts.layers
@@ -2765,18 +2765,18 @@ function bldLayerSpecsFor(theme, tier, opts = {}) {
     id: "bld-line",
     type: "line",
     source: "bld",
-    /* 🌆 2026-10-03（PLAN-BLD-LOWZOOM §4 表那一笔）：**低缩放不再给同一批要素画第二遍**。
+    /* 2026-10-03（§4 表那一笔）：**低缩放不再给同一批要素画第二遍**。
        足迹档（z<14）已经有一层 `fill`（`bld-foot`）在画同一批要素，再叠一层描边就是方案 §1②
        里那片"深色小面/灯芯绒"（每栋 1~2px，描边把填充整个盖掉）。
-       🔴 **闸开在 `minzoom` 这一侧**（= 描边只在立体档 `z ≥ WS_BLD_FOOTPRINT_MAXZOOM` 画）。
+       **闸开在 `minzoom` 这一侧**（= 描边只在立体档 `z ≥ WS_BLD_FOOTPRINT_MAXZOOM` 画）。
           方案 §4 表把这一步写成"加 `maxzoom`"，但按 MapLibre 语义（`minzoom ≤ z < maxzoom`，
           见上面 `bld-foot` 那段注释）`maxzoom: 14` 是**把 z≥14 的描边整层关掉** —— 那既治不了
           低缩放（z<14 照样两层），又违反同一个方案 §验收 6「**`bld-line` 行为与 v95 同
-          （近景是机主认过的，不许动）**」。⇒ 取**能满足两边意图**的那一侧：低缩放不画、
+          （近景是已确认的，不许动）**」。⇒ 取**能满足两边意图**的那一侧：低缩放不画、
           z≥14 与 v95 逐字节同（`?bldn=`/`?bld=2`/低端档那几条路都不受影响）。
-       ⚠️ 代拍页 `bldLineLayer()` 必须同一份规格（`ws_pages_consistency.mjs` ④b 盯着 minzoom）。 */
+       代拍页 `bldLineLayer` 必须同一份规格（`ws_pages_consistency.mjs` ④b 盯着 minzoom）。 */
     minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-    /* 🖊 **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
+    /* **描边宽度 = 共享取参给的那一个**（`P.lineWidth`）：`art=1` ⇒ 主题给的**固定宽**；
        `art≥2` ⇒ `WS_BLD_OUTLINE_STOPS` 的 zoom 插值。**与代拍页逐字段相同**。 */
     paint: {
       "line-color": P.outline.color,
@@ -3313,7 +3313,7 @@ function roadsPointOfRaw(f) {
 var SPECS = {
   bld: {
     dir: "bldbundle",
-    /* 📦 **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
+    /* **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
        不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
     dirs: ["bldbundle-002", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
@@ -3344,7 +3344,7 @@ var SPECS = {
     sourceKey: (k) => `bundle:${k}`,
     unit: "条"
   },
-  /* 🌊🌳 **水/绿地**（第四种包）：目录 `gwbundle`、格边长 `GW_BUNDLE_CELL_DEG`（= 0.05°）、
+  /* **水/绿地**（第四种包）：目录 `gwbundle`、格边长 `GW_BUNDLE_CELL_DEG`（= 0.05°）、
      计划走**同一个** `bundleCellsForView` —— 也就是说"取哪些格"与楼/路/片区名是同一套格数学，
      差别只有"格边长"这一个参数（口径要漂就一起漂，不会各漂一半）。 */
   gw: {
@@ -3544,18 +3544,18 @@ function createBundleFeed(opts) {
       capped,
       got,
       asked,
-      /* 🧷 钉住的值走**同一套校验**（有限且 > 0）—— 复核代理 2026-10-01 抓到：旧写法用
+      /* 钉住的值走**同一套校验**（有限且 > 0）——  2026-10-01 抓到：旧写法用
          `Number(opts.expectCellDeg)`，`?cell=0` 时 `Number(null)===0` 会被当成合法值 ⇒
          facts 里印「钉 0°」而 `cellDegExpect=null`，同一条回证自相矛盾。 */
       refused,
       cellDeg: effectiveDeg(),
       cellDegPin: pinDeg,
-      /* 🧷 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
+      /* 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,
       dir: activeDir || dirsOf(spec)[0],
       dirs: dirsOf(spec),
-      /* 📐 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
+      /* 跟着格尺寸走的三个预算（报告/排查要能回答"为什么一轮取这么多"） */
       budget: { cellDeg: effectiveDeg(), scale: Math.round(scaleOf() * 100) / 100, maxCells: maxCellsEff(), perRefresh: perRefreshEff(), bytesPerRound: Math.round(bytesThisRound) },
       evictedSources,
       cache: cacheStats(),
@@ -3701,13 +3701,13 @@ function createBundleFeed(opts) {
     },
     facts: counters,
     plan: planned,
-    /* 🔴 **F6（2026-10-01 性能审计 §5.5）**：把**本管道自己那条**索引 promise 露出来。
+    /* **F6（2026-10-01 性能审计 §5.5）**：把**本管道自己那条**索引 promise 露出来。
        宿主（`wsGwLayer`）原来**自己直连** `loadBundleIndex(fetchCell, "gw")`，而 `refresh()` 里
        还有一条 —— 两条各自独立 ⇒ 实测 `gwbundle/index.json` **被取了两次**（@7028.1 / @7130.1）。
        这里**只增加一个入口**：拿到的就是 `ensureIndex()` 内部**同一个** `indexPromise`（谁先到谁发起、
        后来的 await 同一份），**判词 / 去重口径 / 缓存策略 / 目录候选顺序一律没动** ——
        不调它的宿主看到的字节与本条改动之前**完全相同**。
-       ⚠️ 不许拿它当"预取"：它等于"把本来就要读的那一次提前到期"，不是多读一次。 */
+       不许拿它当"预取"：它等于"把本来就要读的那一次提前到期"，不是多读一次。 */
     ensureIndex
   };
 }
@@ -3757,7 +3757,7 @@ async function loadBundleIndex(fetchCell, kind, dir) {
       cells: rawCells ? new Set(rawCells) : null,
       attribution: typeof j?.attribution === "string" && j.attribution ? j.attribution : null,
       real: typeof j?.real === "boolean" ? j.real : null,
-      /* ⚠️ `cellSize` **不走 `num()`**：`num(null)` 会回 0（`Number(null) === 0`），
+      /* `cellSize` **不走 `num`**：`num(null)` 会回 0（`Number(null) === 0`），
          而 0 是坏值（格键除零 ⇒ 一个格都取不到），必须如实归成 **null = 数不出来**。 */
       cellSize: typeof j?.cellSize === "number" && Number.isFinite(j.cellSize) && j.cellSize > 0 ? j.cellSize : null,
       cellBytes,
@@ -5000,7 +5000,7 @@ function createBldPickStore(opts) {
     frozenTotal() {
       return Object.keys(frozen).length;
     },
-    /* 🏙 **双预算挑楼** —— 规则一行都不在这里（在 `wsBldBudget.pickBuildingsByBudget`）。
+    /* **双预算挑楼** —— 规则一行都不在这里（在 `wsBldBudget.pickBuildingsByBudget`）。
        本方法之所以存在：页面与 App **都只认 `createBldPickStore()` 这一个口**
        （2026-09-26 抽真源的初衷），新口径不该让宿主去 import 第二个模块。 */
     pickBudget(input) {
@@ -5030,15 +5030,15 @@ function createBldPickStore(opts) {
         screen: input.screen,
         budgetPx2: input.budgetPx2,
         budgetVerts: input.budgetVerts,
-        /* 🔴 每格上限 K **原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
+        /* 每格上限 K **原样透传**（`undefined` 也有意义：规则模块按默认严格档处理 —— 这里别"顺手补个默认值"，
            否则两处各写一份默认数，改一处漏一处） */
         maxDrawn: input.maxDrawn,
-        /* 🧮 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
-           ⚠️ 本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）；
+        /* 格边长同样**原样透传**（分格的那张网格 = 离线包自己的格 ⇒ 只有一份格数学）。
+           本模块**不判 0.01/0.05**、也不给 `cellDeg` 打默认值（默认值只在规则模块那一处）；
              上面播种用的是 `bldResolvedCellDeg`（**同一个解析口**，不是第二份默认值）。 */
         cellDeg: input.cellDeg,
         minInView: input.minInView,
-        /* 📍 2026-10-04 第七条：传的是**锚点表 + 各锚点的冻结集**（不再是每轮现读的相机中心）；
+        /* 2026-10-04 第七条：传的是**锚点表 + 各锚点的冻结集**（不再是每轮现读的相机中心）；
            `nearK`（栋数）与"关掉"的语义仍归规则模块那一处说了算。 */
         nearAnchors: anchorsOut,
         nearFrozen: frozenOut,
@@ -5236,7 +5236,7 @@ function createBldGlLayer(opts) {
     lastInstances: 0,
     errors: 0,
     lastError: "",
-    /* 🔍 诊断（2026-09-25 首跑 draw=0 / 错误 3 时加的）：把 GL 版本与**每个 shader 的编译日志**都留下来，
+    /* 诊断（2026-09-25 首跑 draw=0 / 错误 3 时加的）：把 GL 版本与**每个 shader 的编译日志**都留下来，
        否则只知道"失败了"、不知道为什么 —— 今天已经因为"没有回执"栽过好几次。 */
     glVersion: "",
     isWebGL2: null,
@@ -5256,7 +5256,7 @@ function createBldGlLayer(opts) {
     id: opts.id || "bld-gl",
     type: "custom",
     renderingMode: "3d",
-    /** 自检/HUD 用：层自己报的可数口径（不是我们从外面猜的） */
+    /** 自检/HUD 用：层自己报的可数口径（不是从外面猜的） */
     glStats: () => ({ ...stats, instances: cur.count }),
     update(boxes) {
       cur = boxes;
@@ -5633,7 +5633,7 @@ var WS_ZONE_KIND_LABEL = {
   park: "公园",
   culture: "文化",
   industrial: "工业",
-  /* 🔴 「没类别」那一档（真包 24 条 = 1.3%）：**不进主导类统计**（它不构成"以什么为主"），
+  /* 「没类别」那一档（真包 24 条 = 1.3%）：**不进主导类统计**（它不构成"以什么为主"），
      但仍然计入 `total`（分母），并如实出现在 `unclassified` 里。 */
   other: "其他"
 };

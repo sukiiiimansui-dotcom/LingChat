@@ -1,7 +1,7 @@
 /**
  * wsMapLibreCss.ts —— MapLibre **样式表**的注入点。
  *
- * 为什么单独留这么一个小模块：2026-10-06 清掉 `useWsMapLibre.ts`（1166 行）时，
+ * 为什么单独留这么一个小模块：2026-10-06 清掉 旧的 MapLibre composable（useWsMapLibre.ts，已删除）（1166 行）时，
  * 那个 composable 里**只剩 `injectCss` 一个函数还有活消费者** —— `WsDistrictMapLibre.vue`
  * 走的是"绕过 composable、自己 import 引擎"那条路。把这个函数原样搬出来，
  * 那条路照旧，别处一行不用改。

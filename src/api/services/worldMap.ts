@@ -1620,7 +1620,7 @@ export async function tripCancel(reason = ""): Promise<void> {
 //     （定义在 `world_map_rs/src/main.rs`，**与真壳同形**，两边的字段契约由
 //      设施层回归测试 的断言守着）
 //
-// 坐标不是经纬度：`gx/gy` 是**小区图的格点**（与 `WorldSim.vue` 的 `WS_GRID=28`、
+// 坐标不是经纬度：`gx/gy` 是**小区图的格点**（与 旧入口（WorldSim.vue，已删除）的 `WS_GRID=28`、
 //    `WsDistrict` 的 `SKETCH_SIZE=28` 同一套）。设施图层要铺在 `#pin` 插槽里
 //    （`.ws-neigh__pan` 那个手势变换容器内），**不要**往 GeoJSON 画布上按经纬度投影 ——
 //    那是行政区划图的坐标系，两套东西。

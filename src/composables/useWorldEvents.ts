@@ -4,7 +4,7 @@
 //   · 纯逻辑（分类 / 历史 / 轮询节奏 / 气泡换算 / 回包分支）→ 本文件顶部的**导出纯函数**
 //     （不 import vue、不碰 DOM、不碰 Tauri，自检里能直接跑断言）
 //   · 本文件下半部分：composable（定时器、invoke、listen、localStorage）
-//   · 组件只负责画：`WsEventFeed.vue`（面板 + 三通道开关）、`WsEventBubble.vue`（地图气泡）
+//   · 组件只负责画：事件面板（WsEventFeed.vue，已删除）（面板 + 三通道开关）、`WsEventBubble.vue`（地图气泡）
 //
 // ══ 后端契约（逐字照抄 `src-tauri/src/world_map/event_cmd.rs`，别猜）══════════
 //

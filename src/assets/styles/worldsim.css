@@ -936,9 +936,9 @@
  *   · 只碰 `transform` / `opacity` —— **不许**动 width/height/margin/top：
  *     这条列表就浮在**每帧都在重画的地图**上面，触发一次重排就是一次掉帧；
  *   · `prefers-reduced-motion: reduce` 由本文件那条全局规则压成 0.001ms（自动只留终态）；
- *   · 低档（`.ws-root.ws-perf-low`）**整条动画摘掉**，见 `WsEventFeed.vue` 的 scoped 规则。
+ *   · 低档（`.ws-root.ws-perf-low`）**整条动画摘掉**，见 事件面板（WsEventFeed.vue，已删除）的 scoped 规则。
  *
- * 这条 keyframes 是**全局**的（`WsEventFeed.vue` 的 `<style scoped>` 引用它，
+ * 这条 keyframes 是**全局**的（事件面板（WsEventFeed.vue，已删除）的 `<style scoped>` 引用它，
  *    名字不带哈希 ⇒ 就是引用这里这一份）。改它 = 改所有引用者，别只改一半。
  */
 @keyframes ws-mg-in-bar {

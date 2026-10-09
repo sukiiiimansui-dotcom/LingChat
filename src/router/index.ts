@@ -32,7 +32,7 @@ const WorldDistrictViz = () => import("../components/views/worldmap/DistrictViz.
 const WorldMapLibrary = () => import("../components/views/worldmap/MapLibrary.vue");
 const WorldPhoneOverlay = () => import("../components/views/worldmap/PhoneOverlay.vue");
 const WsCityEntry = () => import("../components/views/worldsim/WsCityEntry.vue");
-// 老入口（DataV 全国 SVG 下钻那一套，`WorldSim.vue`）**已退役**（2026-10-04 死代码清理，
+// 老入口（DataV 全国 SVG 下钻那一套，旧入口（WorldSim.vue，已删除））**已退役**（2026-10-04 死代码清理，
 //    2 058 行）：它自 2026-09-26 起就没有任何路由/组件引用（`/worldsim` 走上面这行 WsCityEntry），
 //    全仓只剩注释提到它。要回退请看 git 历史（清理前一版），别在这里留一行指向不存在文件的 import。
 

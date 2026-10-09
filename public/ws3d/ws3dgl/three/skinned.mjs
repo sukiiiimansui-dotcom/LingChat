@@ -13,8 +13,8 @@
 // 能纯算的东西全抽成纯函数放在文件上半部（GLB 容器解析 / 包围盒→缩放·贴地 / 最短弧插值 /
 // clip 挑名字）—— 这些在 node 里就能断言，不用开浏览器（见 selftest.mjs 第 7 节）。
 //
-// ⚠️ 出厂的那个 glTF 里有 14 段动画，走 / 跑 / 站的名字见 CLIP_WANT；
-//    模型是"骨架节点 + 两块真蒙皮手掌"，不是全身 SkinnedMesh —— 详见 three/README.md 的模型一节。
+// 出厂的那个 glTF 里有 14 段动画，走 / 跑 / 站的名字见 CLIP_WANT；
+//    模型是"骨架节点 + 两块真蒙皮手掌"，不是全身 SkinnedMesh。
 import {
   Group, Mesh, PlaneGeometry, MeshBasicMaterial, CanvasTexture, Color, Vector3, Box3,
   AnimationMixer, GLTFLoader, SRGBColorSpace,
@@ -31,7 +31,7 @@ export const CLIP_WANT = {
   run: ['Running', 'Run', 'run', 'RUN', 'Sprint'],
 };
 /** 走路/跑步 clip 在 timeScale=1 时"一步跨多快"（米/秒）—— 用来让播放速度跟着真速度走，减少脚底打滑。
- *  ⚠️ 这是**估的**（本机没有真 GPU，看不到画面），真机上对着 ?strideWalk= / ?strideRun= 调。 */
+ *  这是**估的**，真机上对着 ?strideWalk= / ?strideRun= 调。 */
 export const STRIDE = { walk: 2.2, run: 5.6 };
 /** 超过这个速度算跑（player.mjs：走 5.2 m/s，跑 = 5.2 × 2.3） */
 export const RUN_AT = 7.0;

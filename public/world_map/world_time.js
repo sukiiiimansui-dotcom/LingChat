@@ -137,7 +137,7 @@
    * @param {Date}   date      日期（缺省今天）
    * @param {number} lat       纬度
    * @param {number} lng       经度
-   * @param {number} [tzHours] 时区（缺省取本机时区）
+   * @param {number} [tzHours] 时区（缺省取本地时区）
    * @returns {{sunrise,sunset,daylight,solarNoon,polar,declination}}
    *          polar: null=正常 / 'day'=极昼 / 'night'=极夜
    */
@@ -262,7 +262,7 @@
   var _loc = { lat: 23.1291, lng: 113.2644, city: '' };  // 默认广州（与本项目演示城市 440100 一致）
   var _ms = Date.now();          // 逻辑时钟（毫秒时间戳），以服务端为基准
   var _baseMs = _ms;             // 最近一次基准
-  var _baseReal = Date.now();    // 基准时刻的本机时间
+  var _baseReal = Date.now();    // 基准时刻的本地时间
   var _lastReal = Date.now();
   var _timer = null, _syncTimer = null, _running = false;
   var _synced = false, _source = 'local-device';   // server | local-device | manual

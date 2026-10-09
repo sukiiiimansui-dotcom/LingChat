@@ -5,7 +5,7 @@
 // 于是"自适应会不会偷偷降 dpr"这种事**只能靠真机看**。搬到这份无依赖模块之后，
 // selftest_anime.mjs 能在 node 里直接喂坏帧时间断言它（不吃 GPU、不开浏览器）。
 //
-// 口径（主人拍板，2026-10-06）：
+// 口径（2026-10-06 定）：
 //   · dpr 默认 = min(devicePixelRatio, 3)，**自适应画质不许动 dpr**（要的就是这个清晰度）；
 //   · MSAA 默认 0（dpr 3 本身就是超采样），`?msaa=2|4` 保留；
 //   · 阴影半径 90m、隔帧更新；画质档只动 阴影 / LOD / bloom。
@@ -72,7 +72,7 @@ export function pickShadowRes({ quality = 0, levels = LEVELS, query = null } = {
 
 /**
  * 自适应的**下一步**（纯函数：喂一串帧时间，告诉你档位该不该动、为什么动）。
- * 🔴 返回值里**只有 quality**：没有任何一条路能改 dpr。
+ * 返回值里**只有 quality**：没有任何一条路能改 dpr。
  * @param {{frameMs:number[], quality:number, sinceLastChangeMs:number, levels?:Array, cooldownMs?:number, minFrames?:number}} o
  */
 export function adaptiveStep({
@@ -107,7 +107,7 @@ export function renderPath({ hasComposer = false, bloomOn = false, sharpOn = fal
   return 'direct';
 }
 
-/** 描边参数（与 App 2D 那档同色；thickness 见 ART-PLAN-ANIME.md §4） */
+/** 描边参数（与 App 2D 那档同色；thickness 见 §4 的设计口径） */
 export function outlineParams() { return { color: OUTLINE.color, thickness: OUTLINE.thickness }; }
 
 /**
@@ -121,9 +121,9 @@ export function fmtDpr(v) {
 
 /**
  * HUD 上"画质档"那一行里的 dpr 段：**实际生效值 + 浏览器报的原生值**。
- * 为什么要并排显示：主人真机上看到 dpr 1.50，但按 `min(devicePixelRatio,3)` 手机本该报 3 ——
+ * 为什么要并排显示：真机上显示 dpr 1.50，但按 `min(devicePixelRatio,3)` 手机本该报 3 ——
  * 只有把 `window.devicePixelRatio` 的原值摆出来，才能一眼看出是"浏览器被缩放/桌面模式"而不是手机只有 1.5。
- * ⚠️ 这里**只负责显示**，取档逻辑一个字都没动（还是 pickDpr）。
+ * 这里**只负责显示**，取档逻辑一个字都没动（还是 pickDpr）。
  */
 export function dprLabel(dpr, native) {
   return `dpr ${(Number.isFinite(Number(dpr)) ? Number(dpr) : 0).toFixed(2)} (原生 ${fmtDpr(native)})`;

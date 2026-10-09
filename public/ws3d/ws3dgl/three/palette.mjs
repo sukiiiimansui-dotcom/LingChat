@@ -44,8 +44,8 @@ export const ACCENT = { warm: '#ffb454', neon: '#42e8ff', neon2: '#ff4d8d', lamp
  * 二次元档的**三色染色**（受光 / 阴影 / 环境 + 各自强度）—— 现在是"只有明暗阶"，
  * 这三路才让它变成"受光偏暖、背光偏冷、环境染色打底"的动画感。
  * 口径：受光与阴影的强度**相等**（0.70），两边加起来都是 1.0 上下 ⇒ **只换色相、不整体压暗**
- *      （ART-PLAN-ANIME.md §1 要的"暗部亮而不脏"）；环境那一路 0.30 是打底的中性偏冷。
- * 真机观感（暖到什么程度、冷到什么程度）**本机没有 GPU，一个像素都没看过** ⇒ 只能靠主人 A/B 再调这几个数。
+ *      （§1 的设计口径要的"暗部亮而不脏"）；环境那一路 0.30 是打底的中性偏冷。
+ * 真机观感（暖到什么程度、冷到什么程度）需要真机 A/B 再调这几个数。
  */
 export const TOON_TINT = {
   lit: '#fff6e6', litStrength: 0.70,
@@ -71,8 +71,8 @@ export const GROUND = {
  * 三档风格：**共用同一套几何**，只切光照/雾/天空/窗自发光/曝光/bloom（+ 半卡通材质与干净贴图）。
  * 字段含义与 v1 的 gl.mjs STYLES 对齐（名字也照抄，方便 A/B 对色），
  * 多出来的是 three 特有的：exposure 之外还有 env（环境光强）、bloom、shadow。
- * 🔴 顺序 = HUD 的循环顺序（main.mjs 遍历 Object.keys(STYLES)）：day → anime → dusk。
- * 🔴 `day` / `dusk` 两档**必须保持原样**（写实基线，A/B 就靠它们）：新档只加字段，
+ * 顺序 = HUD 的循环顺序（main.mjs 遍历 Object.keys(STYLES)）：day → anime → dusk。
+ * `day` / `dusk` 两档**必须保持原样**（写实基线，A/B 就靠它们）：新档只加字段，
  *    不要往老档里塞 `toon`/`clean` —— 读的时候用 `!!st.xxx`，缺字段就是 false，老路径一个字节不变。
  */
 export const STYLES = {
@@ -88,7 +88,7 @@ export const STYLES = {
     exposure: 1.0, bloom: false, bloomStrength: 0.0, sunSize: 0.045,
   },
   /**
-   * 二次元 · 日式动画的白天（口径见 ART-PLAN-ANIME.md §1，颜色跟 App 2D 那档 `themes.anime` 同调）。
+   * 二次元 · 日式动画的白天（口径见 §1，颜色跟 App 2D 那档 `themes.anime` 同调）。
    * 两个自有的布尔档位（写实两档没有这两个字段 ⇒ 读到 undefined ⇒ 走老路径）：
    *   · `clean`：贴图走"干净鲜艳档"（textures.mjs 去掉雨痕/脏污/裂缝/补丁，提亮加饱和、窗框加粗）；
    *   · `toon` ：楼体五个桶（wall0..3 + shop）换 MeshToonMaterial + 4 级渐变图（半卡通）；
@@ -127,7 +127,7 @@ export const STYLES = {
 export const STYLE_ORDER = Object.keys(STYLES);
 
 /**
- * 描边的**兜底默认值**（描边色与 App 2D 那档 `themes.anime` 的 outline.color 同色，ART-PLAN-ANIME.md §4）。
+ * 描边的**兜底默认值**（描边色与 App 2D 那档 `themes.anime` 的 outline.color 同色，§4 的设计口径）。
  * 真正生效的那一份由风格档决定（`anime` 档的 `outlineThickness` / `outlineColor`），
  * 取参一律走 `toon.mjs` 的 `outlineSpecFor()`；`?outlineW=` 能覆盖粗细（真机上现场调）。
  */

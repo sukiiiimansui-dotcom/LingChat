@@ -1,4 +1,4 @@
-// character.mjs —— 角色**外观**工厂（主人定的第一版：立绘纸片人）。
+// character.mjs —— 角色**外观**工厂（第一版口径：立绘纸片人）。
 //
 // 接口是刻意做成"可替换"的：以后换 B 体素小人 / C glTF 低模 / D Live2D，
 // **只换这个文件**，别处（main.mjs 里的调用点）一行都不用动。
@@ -8,7 +8,7 @@
 //   ch.update(dt, { pos, heading, speed, moving, third, camPos, sunDir, groundY });
 //   ch.setEmotion('平静'); ch.next(); ch.dispose();
 //
-// 纸片人的三条硬要求（主人提的）：只绕 Y 轴朝向相机（保持竖直，不跟着俯仰翻倒）、
+// 纸片人的三条硬要求：只绕 Y 轴朝向相机（保持竖直，不跟着俯仰翻倒）、
 // 近大远小按真实尺寸（站立高 ~1.7m，宽度按立绘宽高比算）、第一人称时隐藏（别把立绘糊在脸上）。
 import {
   Group, Mesh, PlaneGeometry, MeshBasicMaterial, CanvasTexture, DoubleSide, Color, Vector3, SRGBColorSpace,

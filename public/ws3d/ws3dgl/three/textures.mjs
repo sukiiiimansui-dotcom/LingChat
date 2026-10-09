@@ -4,7 +4,7 @@
 // 几何那边把 UV 按 米/tile 缩放 ⇒ 一栋 40m 高的楼贴 7 层窗户，不用给每栋楼单独做贴图。
 // 贴图相位（贴图从哪一格开始）由建筑物自己的随机偏移决定，避免整条街窗户一模一样。
 //
-// 本喵把每张贴图都写成"白天色 + 自发光色"一对：夜里只把 emissiveIntensity 推上去，
+// 每张贴图都写成"白天色 + 自发光色"一对：夜里只把 emissiveIntensity 推上去，
 // 几何与 UV 一根线都不动 —— 两档风格共用同一套材质，切风格不掉帧、不重建。
 import { CanvasTexture, RepeatWrapping, SRGBColorSpace } from '../vendor/three.min.js';
 import { TIERS, GROUND, ACCENT, TILE, SHOP_H, toRgb, hex, shade, vivid, mix } from './palette.mjs';
@@ -17,7 +17,7 @@ const FLOOR = TILE.h / 4;             // 一层 3.3m
 
 /**
  * 「干净鲜艳档」的画法参数（只有 `clean:true` 时参与；写实档一个数都不读 ⇒ 那条路一个字节没动）。
- * 口径见 ART-PLAN-ANIME.md §3：去掉雨痕/脏污/裂缝/补丁，改成提亮的基色 + 加粗加深的窗框 +
+ * 口径见 §3 的设计口径：去掉雨痕/脏污/裂缝/补丁，改成提亮的基色 + 加粗加深的窗框 +
  * 青蓝玻璃 + 底商一条彩色雨棚带 —— BA 的原话是"质感最小化、把力气放在颜色上"。
  */
 export const CLEAN = {

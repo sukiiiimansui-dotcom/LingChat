@@ -210,8 +210,8 @@ function rasterSegments(pts, pad, cb, gx, gz, N) {
 }
 
 /** 空闲格连通域 = 街区（面积太小的丢弃）。
- *  owner：格 → 街区号（+1），给 parcelUsable 判"这块地到底属不属于我这个街区"。
- *  ⚠️ 为什么需要它：街区的**矩形 bbox** 会盖住别的连通域（斜长条街区的 bbox 能铺满全图、
+ *  owner：格 → 街区号（+1），给 parcelUsable 判"这块地到底属不属于当前街区"。
+ * 为什么需要它：街区的**矩形 bbox** 会盖住别的连通域（斜长条街区的 bbox 能铺满全图、
  *  或者一个被路围住的院子是另一个连通域）——只看"格是空的"就会把别人家的地也盖楼，
  *  实测两栋楼直接重叠（楼间距 = 0）。 */
 function findBlocks(occ, N, half, radius, owner) {
@@ -243,7 +243,7 @@ function findBlocks(occ, N, half, radius, owner) {
     const id = blocks.length + 1;
     for (const g of cells) { seen[g] = 2; if (owner) owner[g] = id; }
     // 顺带给世界坐标下的矩形：渲染层要拿它铺"街区地面"（不然只能铺一张铺满屏的大平面，填充率吃亏）
-    // ⚠️ findBlocks 是模块级函数，拿不到 buildCity 里的 wx() 闭包 ⇒ 这里自己算（原来写成 wx(gx0) 直接 ReferenceError）
+    // findBlocks 是模块级函数，拿不到 buildCity 里的 wx() 闭包 ⇒ 这里自己算（原来写成 wx(gx0) 直接 ReferenceError）
     blocks.push({ id, gx0, gx1, gz0, gz1, cells, cx, cz,
       x0: gx0 * CELL - half, z0: gz0 * CELL - half,
       w: (gx1 - gx0) * CELL, d: (gz1 - gz0) * CELL });
@@ -252,7 +252,7 @@ function findBlocks(occ, N, half, radius, owner) {
 }
 
 /** 街区矩形递归二分 → 地块。
- *  ⚠️ 原来 depth 上限是 4：`occ` 掩码里那两个"大自由区"（连通域是斜的长条，
+ * 原来 depth 上限是 4：`occ` 掩码里那两个"大自由区"（连通域是斜的长条，
  *  但 bbox 铺满整张图）在 4 层之后仍然剩 200m+ 见方的地块 ⇒ 生成出 700×400m 的巨型板楼，
  *  横跨 primary 路（实测楼到路中心线最小距离 = 0m）。这里让 depth 放到 10，由
  *  `area < MIN_PARCEL` 说了算，巨型街区自然被切成正常地块。 */
@@ -273,12 +273,12 @@ function splitRect(rc, depth, rng, maxDepth = MAX_SPLIT_DEPTH) {
 }
 
 /** 地块够不够"干净"：footprint 范围内的**每一个格**都得是"本街区自己的空地"。
- *  ⚠️ 两条都是这轮实测撞出来的：
+ * 两条都是这轮实测撞出来的：
  *   ① 原来是"四角 + 中心 5 个探针"：4m 粗格 + 只探 5 点 ⇒ 斜穿地块的窄路（service 4.5m）
  *      正好落在探针之间就漏了，楼直接压上街（实测楼到路中心线最小距离 = 0m，违规 475 处）；
  *   ② 只看"格是空的"不够：街区 bbox 会盖住**别的**连通域（斜长条的 bbox 铺满全图、
  *      或者被路围住的院子）⇒ 两栋不同街区的楼叠在一起（实测楼间距 = 0m）。
- *      owner[] 是格→街区的归属，格号对不上就不是我的地。 */
+ *      owner[] 是格→街区的归属，格号对不上就不是当前街区的地。 */
 function parcelUsable(rc, owner, id, gx, gz, N, occ, legacy) {
   const pad = 3.2;
   const w = rc.w - pad * 2, d = rc.d - pad * 2;
@@ -625,7 +625,7 @@ function buildingFromParcel(rc, blk, rng, radius) {
       : { x: cx, z: cz + side * (d / 2 - d * wf / 2), w, d: d * wf, rot, floors: clamp(floors + rng.int(-3, 5), 2, 42) };
     wing.h = wing.floors * 3.3;
     wing.material = wing.floors >= 34 ? 2 : wing.floors >= 13 ? 1 : 0;
-    // ⚠️ 翼也得有 cos/sin —— 只给 rot 的话网格生成会算出 NaN（踩过一次）
+    // 翼也得有 cos/sin —— 只给 rot 的话网格生成会算出 NaN（踩过一次）
     wing.cos = Math.cos(rot); wing.sin = Math.sin(rot);
     b.wing = wing;
     // 主体缩一点，免得两翼完全重叠

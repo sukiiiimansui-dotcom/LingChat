@@ -10,13 +10,13 @@
 //   · 只有**垂直于光轴**的两个分量会改变纹素相位（沿光轴平移只改深度，网格不动）⇒ 只吸这两个；
 //   · 吸附是"整个刚性平移"（光源与目标一起挪同一个向量）⇒ 光**方向**一个字节都没变；
 //   · 吸完，网格在世界空间里是**固定点阵**：不动的地面点永远落在纹素里的同一个位置 ⇒ 不再重采样。
-//   ⚠️ 不能图省事对世界 x/z 取整：纹素网格长在光空间里，只有当光轴与坐标轴对齐时两者才等价。
+// 不能图省事对世界 x/z 取整：纹素网格长在光空间里，只有当光轴与坐标轴对齐时两者才等价。
 //
 // ## 光空间的基底必须和 three 自己算的一模一样（否则"吸"过去的还是错的网格）
 //   DirectionalLightShadow.updateMatrices → shadowCamera.position = 光源世界位置 → lookAt(light.target)
 //   → Object3D.lookAt → Matrix4.lookAt(eye, target, up)：
 //       z = normalize(eye - target)，x = normalize(cross(up, z))，y = cross(z, x)
-//   up = shadowCamera.up = (0,1,0)（退化时 three 会把 z 抖 1e-4，本喵照抄，见 lightBasis）。
+//   up = shadowCamera.up = (0,1,0)（退化时 three 会把 z 抖 1e-4，此处照抄，见 lightBasis）。
 //   ⇒ 验收判据（selftest_shimmer.mjs）直接拿真 three 的 `light.shadow.matrix` 对拍，不靠嘴说。
 //
 // 本文件**不 import three**（纯数学，node 里能直接断言、能在无浏览器的机器上量的就是这个）。

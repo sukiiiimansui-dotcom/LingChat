@@ -11,7 +11,7 @@
 //
 // 借鉴来源（许可证已核）：
 //   三色染色 / 边缘光这两个**思路**来自 mayacoda/toon-shader（MIT）与 Kenton-GMI/sakura-crossing（MIT）
-//   的公开做法；本文件是照我们自己的数据（palette 的 TOON 级数）重写的实现，没有拷任何 GLSL 文本。
+//   的公开做法；本文件是照本项目的数据（palette 的 TOON 级数）重写的实现，没有拷任何 GLSL 文本。
 //   ZaneAtega/Three-js-Anime-Shader **无 LICENSE** ⇒ 一个字符都没用（只在 ART-PLAN 里当思路索引）。
 import { TOON, OUTLINE, toRgb } from './palette.mjs';
 
@@ -82,7 +82,7 @@ export function toonRampAt(t, { levels = TOON.levels, soft = TOON.soft } = {}) {
 /** 光照点积 → 斜坡坐标（three 的 getGradientIrradiance 用的就是 dotNL*0.5+0.5） */
 export function rampCoord(dotNL) { return clamp01(dotNL * 0.5 + 0.5); }
 
-/** 法线 × 光向 → 受光比 0..1（两个向量在同一个空间即可，本喵这边都是 view space） */
+/** 法线 × 光向 → 受光比 0..1（两个向量在同一个空间即可，这里都是 view space） */
 export function toonRampFor(normal, lightDir, opts) {
   const nl = dot3(normal, lightDir);
   return toonRampAt(rampCoord(nl), opts);
@@ -183,7 +183,7 @@ export function toonUniformGLSL() {
 
 /**
  * 落在 `#include <aomap_fragment>` 之后的算式（此时 `normal` 与 `vViewPosition` 都已在作用域里）。
- * ⚠️ 与 tintAt()/rimAt() 是同一套公式：自检拿一对已知向量两边各算一遍对拍。
+ * 与 tintAt()/rimAt() 是同一套公式：自检拿一对已知向量两边各算一遍对拍。
  */
 export function tintRimBodyGLSL() {
   return [

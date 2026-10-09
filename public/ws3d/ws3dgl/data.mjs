@@ -1,7 +1,7 @@
 // data.mjs —— 取数层：8790 的 API + 8788 的静态真数据（只读，不新造后端）。
 //
-// 实测结论（2026-10-06，本喵一条条打过）：
-//   · 8790 **没有**"给我 footprint + 高度"的接口 —— /api/geo_json、/api/statistics 直接 404；
+// 实测结论（2026-10-06，逐条验证）：
+//   · 8790 **没有**"给出 footprint + 高度"的接口 —— /api/geo_json、/api/statistics 直接 404；
 //     /api/buildings 只有 wsm-rs（8791，那是 Rust 调试服务，原型不依赖它）。
 //   · 但 8790 有 `/api/osm_cache`：它列出 worlddata/osm/ 下**所有**缓存键（含 `road_*`），
 //     键里带网格中心（A*0.002, B*0.002）与半径 ⇒ 这就是一份**真数据的索引**。
@@ -144,7 +144,7 @@ export async function loadRealRoads(pick, lat0, lng0, opts = {}) {
     const r = await fetchJson(url.href, opts.timeoutMs || 20000);
     return { rec, r };
   }));
-  // ⚠️ 必须按 OSM way id 去重：缓存文件是**重叠的圆**，同一条路会在好几个文件里出现
+  // 必须按 OSM way id 去重：缓存文件是**重叠的圆**，同一条路会在好几个文件里出现
   //    （实测不去重会出现 5124 条 / 1200km 的假里程，去掉后才是真实路网）
   const seen = new Set();
   for (const { rec, r } of results) {

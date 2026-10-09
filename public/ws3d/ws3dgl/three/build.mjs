@@ -30,7 +30,7 @@ export const DEFAULT_OPTS = {
  *   `?farSil=0` 远景轮廓不发（M3 的旧行为：>lodMid 的楼是纯平顶棱柱）
  *   `?farR=640` 远景轮廓的距离门槛（默认取 opts.lodMid，与 mid 档的可见距离对齐）
  *   `?modeling=1`（别名 `?model=1`）总回退：M1 相位 0 + M3 轮廓关（配合 style.mjs 的旧分布 = 改动前的城）
- *   ⚠️ 主键叫 modeling 是因为 `?model=` 已被骨骼角色的 glb 路径占用，见 style.mjs 里的说明
+ * 主键叫 modeling 是因为 `?model=` 已被骨骼角色的 glb 路径占用，见 style.mjs 里的说明
  */
 export const BUILD_V1 = { phase: 0, farSilhouette: 0, farRadius: null };
 export const BUILD_V2 = { phase: 1, farSilhouette: 1, farRadius: null };
@@ -59,7 +59,7 @@ export function resolveBuildModel(opts = {}, search) {
  * 为什么要有：4 档材质各只有 1 张 512² 立面贴图铺 886 栋楼 ⇒ 同材质的楼上
  * 窗户**逐格对齐**，"过于重复"的头号来源。按种子给一个 0~1 开间的相位就把这条格线打散了。
  *
- * 🔴 只动 U（开间方向），**不动 V**：竖直方向要对齐地面与层线，动了 V 楼层数就跟贴图对不上。
+ * 只动 U（开间方向），**不动 V**：竖直方向要对齐地面与层线，动了 V 楼层数就跟贴图对不上。
  * 哈希单独一条流取（`rngOf(b.seed)` 的主随机流一个数都不多消费）⇒ 楼体其它几何逐字节不变。
  */
 export function facadePhase(seed, scale = 1) {
@@ -306,7 +306,7 @@ function emitBuilding(b, ctx) {
   const N = (lx, lz) => [lx * cc - lz * cs, 0, lx * cs + lz * cc];
 
   /** 一段墙体（四面），yRef = 这一段的窗户从哪个高度起算（保证层线连续）。
-   *  📌 U 上叠了每栋的相位（M1）：**只有 U 变，V 一个字节都没动**。 */
+   * U 上叠了每栋的相位（M1）：**只有 U 变，V 一个字节都没动**。 */
   const band = (B, w, d, y0, y1, yRef, fill) => {
     const hx = w / 2, hz = d / 2;
     const v0 = (y0 - yRef) / TILE.h + vOff, v1 = (y1 - yRef) / TILE.h + vOff;
@@ -390,7 +390,7 @@ function emitBuilding(b, ctx) {
   /**
    * 远景轮廓①：女儿墙带（4 面 = 8 三角，进常显桶）。
    * **严格内缩在 mid 档真女儿墙的体积里**（真墙厚 0.34 / 高 1.0 ⇒ 这里内缩 0.30 / 高 0.72）：
-   * 主人走近了、mid 分块显形时，真女儿墙正好把它挡在里面 —— 既不重复也不闪面。
+   * 相机走近、mid 分块显形时，真女儿墙正好把它挡在里面 —— 既不重复也不闪面。
    */
   const farRim = (B, w, d, y, c) => {
     const t = 0.30, ph = 0.72;

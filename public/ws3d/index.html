@@ -7,7 +7,7 @@
     /* 明确的一套配色：暖砖 / 冷混凝土 / 蓝绿玻璃 / 抹灰涂料 / 沥青冷灰 / 铺装暖灰 */
     --ink:#eaf2ff; --dim:#9db2cc; --accent:#79d9ff; --accent2:#ffc46b;
     --panel:rgba(10,16,26,.72); --line:rgba(121,217,255,.22);
-    --tap:46px;                       /* 触控目标下限（主人要求 ≥44px） */
+    --tap:46px;                       /* 触控目标下限（需求 ≥44px） */
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;overflow:hidden;background:#0a1018;color:var(--ink);
@@ -158,7 +158,7 @@
 
 <div id="diag" class="panel" data-ui></div>
 
-<!-- ⬇️ 本页专有的一段（原型那份 `world_map/ws3dgl-three.html` 里没有）：一个返回按钮 + 胶水层。
+<!-- 本页专有的一段（原型那份 `world_map/ws3dgl-three.html` 里没有）：一个返回按钮 + 胶水层。
      除这一整段与上面 <title> 那一行、下面那一行 import 之外，本文件与原型**逐字节相同** —— 口径见
      `world_map/WS3D-IN-APP.md`（"再拷一次"就是再拷一遍，然后照这三处补回来）。 -->
 <button id="ws3d-back" data-ui type="button">← 返回</button>
@@ -171,14 +171,14 @@
 </style>
 <script>
   /* 返回：先走浏览器历史（本页是从 App 那一屏点进来的）；历史为空就硬回 /worldsim。
-     ⚠️ 真机上的 **Tauri 返回键**不归这里管（系统键走 Rust 侧），本按钮是"一定出得去"的那条兜底。 */
+     真机上的 **Tauri 返回键**不归这里管（系统键走 Rust 侧），本按钮是"一定出得去"的那条兜底。 */
   document.getElementById('ws3d-back').addEventListener('click', function () {
     if (history.length > 1) history.back(); else location.href = '/worldsim';
   });
 </script>
 
 <script type="module">
-  import './local-roads.mjs';                 // ⬅️ 必须排在 main.mjs 之前：它要在 main 求值前装好 fetch 钩子
+  import './local-roads.mjs';                 // 必须排在 main.mjs 之前：它要在 main 求值前装好 fetch 钩子
   import { boot } from './ws3dgl/three/main.mjs';
   boot().catch((e) => {
     const el = document.getElementById('boot');

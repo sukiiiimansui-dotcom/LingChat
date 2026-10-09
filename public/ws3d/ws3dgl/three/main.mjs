@@ -30,7 +30,7 @@ const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
 const flag = (k, d) => (Q.has(k) ? Q.get(k) !== '0' : d);
 
 // 画质策略（dpr / MSAA / 阴影 / LOD / 渲染路径）全在 quality.mjs 里，**纯逻辑、node 可测**：
-// 梯子只有 阴影 / LOD / bloom 三项，没有 dpr —— 自适应没法把清晰度降掉（主人要的就是 dpr 3）。
+// 梯子只有 阴影 / LOD / bloom 三项，没有 dpr —— 自适应没法把清晰度降掉（目标就是 dpr 3）。
 export { LEVELS, DPR_MAX, DPR_PRESETS, MSAA_MODES, SHADOW_AREA } from './quality.mjs';
 
 export const state = {
@@ -190,7 +190,7 @@ export function probeWebGL2() {
 
 function mountRenderer(withShadows) {
   let canvas = $('#cv');
-  // ⚠️ 丢过上下文的画布**不能复用**：在它上面重建 WebGLRenderer 会读到 null.precision 直接抛
+  // 丢过上下文的画布**不能复用**：在它上面重建 WebGLRenderer 会读到 null.precision 直接抛
   // （v1 的注释里踩过同一个坑：换一张新画布再建）
   if (state.glLostCount > 0 && canvas) {
     const fresh = document.createElement('canvas');
@@ -200,7 +200,7 @@ function mountRenderer(withShadows) {
   }
   const pre = probeWebGL2();
   if (!pre.ok) { renderer = null; return pre; }
-  // ⚠️ 画布 antialias 只在**建渲染器这一下**能定，之后就改不了了；而且只要走 EffectComposer
+  // 画布 antialias 只在**建渲染器这一下**能定，之后就改不了了；而且只要走 EffectComposer
   //（夜景 bloom / ?sharp=1），画面来自 composer 的 RT ⇒ 画布这一项**被架空**，真正生效的是
   // composer RT 的 `samples`（见 setupScene）。所以默认关：dpr 3 本身就是超采样，MSAA 那笔最贵。
   state.msaa = pickMsaa({ query: state.msaaQuery });
@@ -263,7 +263,7 @@ function level() { return LEVELS[Math.min(state.quality, LEVELS.length - 1)]; }
 
 function sizeRenderer() {
   if (!renderer) return;
-  // 🔴 dpr 只由 查询串 / 页面开关 / 默认满档 三者决定，**画质档与自适应都不参与**
+  // dpr 只由 查询串 / 页面开关 / 默认满档 三者决定，**画质档与自适应都不参与**
   const native = window.devicePixelRatio || 1;
   const dpr = pickDpr({ devicePixelRatio: native, query: state.dprQuery, ui: state.dprUi });
   // 原生 dpr 原值单独留一份：HUD 上要跟"实际生效的 dpr"并排显示（浏览器报 1.5 时一眼看出是页面缩放而不是手机就这样）。
@@ -345,7 +345,7 @@ function setupScene() {
   sun.shadow.camera.left = -A; sun.shadow.camera.right = A;
   sun.shadow.camera.top = A; sun.shadow.camera.bottom = -A;
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 700;
-  // bias / normalBias 这一轮**刻意没动**：它们是"跟画面观感绑死"的两个数（本机无 GPU，看不到实际长啥样），
+  // bias / normalBias 这一轮**刻意没动**：它们是"跟画面观感绑死"的两个数（需要真机 A/B 才能定），
   // 改它们等于闭着眼睛调参 —— 这轮只治"纹素网格每帧滑动"这一条（见 shadowsnap.mjs 的说明）。
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.5;
@@ -387,7 +387,7 @@ function capturePrograms(slot = 'programs') {
   try {
     state[slot] = (renderer.info.programs || []).map((p) => ({
       name: p.name || 'unnamed', type: p.shaderType || '',
-      // ⚠️ 这里**不要**把空的 programLog 写成 "failed"：three 只在 (runnable=false 或 programLog 非空) 时才挂 diagnostics，
+      // 这里**不要**把空的 programLog 写成 "failed"：three 只在 (runnable=false 或 programLog 非空) 时才挂 diagnostics，
       // 而 programLog 可能只是一条警告。空日志就照实记 'runnable'，别自己造一个失败出来。
       runnable: p.diagnostics ? !!p.diagnostics.runnable : true,
       diag: p.diagnostics ? String(p.diagnostics.programLog || '(空日志)').slice(0, 400) : null,
@@ -470,7 +470,7 @@ function hud(now) {
   // 括号里的"原生"是浏览器报的 devicePixelRatio **原值**：它是 1.5 就说明是页面缩放/桌面模式把 dpr 除下去了，
   // 不是手机天生只有 1.5（pickDpr 一个字没动，这里只是把它读出来给人看）。
   set('#qual', `${r.quality}/${LEVELS.length - 1} ${L.name} · ${dprLabel(r.dpr, r.dprNative)} · 阴影 ${r.shadowSize || 0}² · ${r.qualityWhy}`);
-  // 按钮上直接写当前档位（主人要求：不要只写快捷键）
+  // 按钮上直接写当前档位（需求：不要只写快捷键）
   set('#b-view', r.third ? '第三人称' : '第一人称');
   set('#b-style', STYLES[r.style].name);
   set('#b-shadow', r.shadows ? '开' : '关');
@@ -486,7 +486,7 @@ function hud(now) {
   set('#b-char', (r.charName || (CHARACTERS[0] && CHARACTERS[0].name) || '—') + clipTag);
 }
 
-// ── 自适应降质（主人真机实测：dpr 2 → 30fps，1.5 → 60fps；这是最大的一笔）──────
+// ── 自适应降质（dpr 与帧率强相关：2 → 30fps，1.5 → 60fps；这是最大的一笔）──────
 const frameHist = [];
 let lastQualChange = 0;
 function adaptive(now) {
@@ -494,7 +494,7 @@ function adaptive(now) {
   frameHist.push(state.frameMs);
   if (frameHist.length > 90) frameHist.shift();
   // 判断本身在 quality.mjs 的 adaptiveStep 里（纯函数、node 可测）；这里只管把结果落到实处。
-  // 🔴 它返回的只有 quality：阴影 / LOD / bloom 会变，dpr 一次都不会变（那是主人的清晰度）。
+  // 它返回的只有 quality：阴影 / LOD / bloom 会变，dpr 一次都不会变（那是用户可感知的清晰度）。
   const step = adaptiveStep({ frameMs: frameHist, quality: state.quality, sinceLastChangeMs: now - lastQualChange, levels: LEVELS });
   if (step.why) state.qualityWhy = step.why;
   if (step.changed) {
@@ -514,7 +514,7 @@ function applyQuality() {
 
 // ── 摇杆（左半屏）────────────────────────────────────────────────────────────
 // player.mjs 只算状态，DOM 由页面画：这里把底盘环摆到"手指落点"（浮起档）或左下角固定位，
-// 拇指钮按 dx/dy 跟手。之前 v1 的 onStick 没人消费 ⇒ 真机上拖了没反馈（主人说"连摇杆都没有"）。
+// 拇指钮按 dx/dy 跟手。之前 v1 的 onStick 没人消费 ⇒ 真机上拖了没反馈（真机反馈"连摇杆都没有"）。
 const stickState = { active: false, x: 0, y: 0, ox: 0, oy: 0, dx: 0, dy: 0, mag: 0, floated: false };
 function onStick(payload) { Object.assign(stickState, payload || {}); }
 function stickAnchor() {
@@ -713,7 +713,7 @@ function tick(dt, now) {
     if (path === 'composer') { composer.render(); state.draws = renderer.info.render.calls; }
     else if (path === 'outline') {
       markOutlineExcluded(scene);
-      // ⚠️ 读数口径：renderer.info 每调一次 renderer.render 就会重置 ⇒ 直接数"描边那一遍"会丢掉主渲染。
+      // 读数口径：renderer.info 每调一次 renderer.render 就会重置 ⇒ 直接数"描边那一遍"会丢掉主渲染。
       // 拆成两半自己调（`OutlineEffect.render` 内部就是这两句），两遍的 calls 相加 = 这一帧的总数，
       // 与不开描边那条路的"一帧总数"同口径，才谈得上 before→after。
       renderer.render(scene, camera);
@@ -723,7 +723,7 @@ function tick(dt, now) {
       state.draws = mainDraws + state.outlineDraws;
       state.outlineCompiled = true;               // 着色器已经在 boot 里编过并留了读数（programsOutline）
     } else { renderer.render(scene, camera); state.draws = renderer.info.render.calls; }
-    // 首帧读数单独留一份：无头第 2 帧就丢上下文，后面的 draws 全是 0/旧值，只有这一份可信
+    // 首帧读数单独留一份：上下文丢失后 draws 全是 0/旧值，只有这一份可信
     if (!state.firstFrame && state.draws > 0) state.firstFrame = { draws: state.draws, path, dpr: state.dpr, msaa: state.msaa, shadowSize: state.shadowSize || 0 };
   }
   const ms = performance.now() - t0;
@@ -836,8 +836,8 @@ export async function boot() {
   say('⑦ 可通行自测（从出生点沿街走 200m）…');
   state.walk = walkTest(san.buildings, res.city.roads, { target: 200 });
 
-  // 🔴 输入 + 屏幕按钮必须**两条路径都接上**：这套线原来接在 `if (r.ok)` 里面 ⇒
-  //    拿不到 WebGL 时（无头、无 GPU 的老手机）**一个按钮都点不动**，连「操作面板」都打不开，
+  // 输入 + 屏幕按钮必须**两条路径都接上**：这套线原来接在 `if (r.ok)` 里面 ⇒
+  //    拿不到 WebGL 时（软件渲染 / 无 GPU 的设备）**一个按钮都点不动**，连「操作面板」都打不开，
   //    只能干看一块诊断面板 —— 与真机反馈的「按钮都点不了」同一类症状，但与 preventDefault 无关。
   //    下游函数（doAction/setStyle/setShadowSize/sizeRenderer/applyStyle）都已对"没有 renderer"做了空值保护。
   // data-ui 上的触摸不算摇杆/视角（按按钮不会甩镜头）；摇杆底盘位置交给 player.mjs
@@ -885,12 +885,12 @@ export async function boot() {
     const st = STYLES[state.style];
     sun.color.set(st.sunColor); sun.intensity = st.sunIntensity;
     sizeRenderer();
-    // 首帧前把着色器全编一遍并**把结果记下来**：本机无头第 2 帧就丢上下文，
-    // 后面的 shader 报错全是"上下文没了"的余波 ⇒ 只有这一步的读数能证明我们的着色器本身没问题。
+    // 首帧前把着色器全编一遍并**把结果记下来**：上下文一丢，
+    // 后面的 shader 报错全是"上下文没了"的余波 ⇒ 只有这一步的读数能证明着色器本身没问题。
     try { renderer.compile(scene, camera); capturePrograms(); }
     catch (e) { state.programs = []; state.programsOk = false; state.programsError = String(e.message || e); }
-    // ⚠️ 这里**故意不**为了"先编一遍描边着色器"多跑一次渲染：本喵试过，在无头 SwiftShader 上
-    // 那一下正好把上下文搞丢（丢一次就重建渲染器，读数全乱）。描边材质的编译错由
+    // 这里**故意不**为了"先编一遍描边着色器"多跑一次渲染：那一下正好把上下文搞丢
+    // （丢一次就重建渲染器，读数全乱）。描边材质的编译错由
     // `renderer.debug.onShaderError` 收原文（见 mountRenderer），不靠额外渲染。
     window.addEventListener('resize', () => { sizeRenderer(); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); });
     if (Q.get('once') === '1') {
@@ -944,7 +944,7 @@ export function nextCharacter() {
   return c;
 }
 
-/** 无头探针用：把状态吐成 JSON（字段名与 v1 对齐，方便 A/B 同一套断言） */
+/** 自动化探针用：把状态吐成 JSON（字段名与 v1 对齐，方便 A/B 同一套断言） */
 export function snapshot() {
   try { return buildSnapshot(); } catch (e) {
     // 探针最怕"快照函数自己抛异常"：那边只会看到一堆 undefined，像"页面全挂了"。
@@ -998,7 +998,7 @@ function buildSnapshot() {
   };
 }
 
-/** 像素采样：无头/真机都能证明"真的画出了东西"（不是白屏） */
+/** 像素采样：用于证明"真的画出了东西"（不是白屏） */
 export function sample() {
   if (!renderer) return null;
   const c = renderer.domElement;

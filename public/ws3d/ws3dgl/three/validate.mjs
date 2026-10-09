@@ -1,6 +1,6 @@
 // validate.mjs —— 布局体检 + 脱困 + 可通行自测（纯逻辑，node 可测）。
 //
-// 为什么单开一个文件：主人真机反馈「碰撞体积挡住路了」。碰撞算法本身是 v1 的 OBB vs 圆推离（正确），
+// 为什么单开一个文件：真机反馈「碰撞体积挡住路了」。碰撞算法本身是 v1 的 OBB vs 圆推离（正确），
 // 挡路的真因是**生成器可能把楼压到街上**、或相邻楼贴得比人还窄。所以这里做三件事：
 //   ① 量：楼体 footprint 到道路中心线的最小距离、楼与楼的最小间距（把数报出来，不靠感觉）；
 //   ② 修：压线的楼按需要的量缩进去，缩不动（<7m）就删掉；贴太近的楼让矮的那栋退一步；
@@ -117,7 +117,7 @@ export function validateLayout(buildings, roads, opts = {}) {
 
 /**
  * 修正：压线的楼缩进去、缩不动就删；贴太近的楼让矮的退一步。
- * 判据（主人给的）：楼体到道路中心线 ≥ 路面半宽 + 0.5m；相邻楼间距 ≥ 2m。
+ * 判据：楼体到道路中心线 ≥ 路面半宽 + 0.5m；相邻楼间距 ≥ 2m。
  */
 export function sanitizeLayout(buildings, roads, opts = {}) {
   const clear = opts.roadClear !== undefined ? opts.roadClear : 0.5;
@@ -175,7 +175,7 @@ export function sanitizeLayout(buildings, roads, opts = {}) {
           const keep = b.h <= o.h ? b : o;                   // 矮的退让（高的通常是塔楼）
           if (gap < 0 || strict) { alive.delete(keep); overlapDropped++; changed++; continue; }
           const need = minGap - gap + 0.15;
-          const alongX = dx > dz;                            // ⚠️ 要缩"决定这个间距的那条轴"
+          const alongX = dx > dz;                            // 要缩"决定这个间距的那条轴"
           const canW = keep.w - need >= minSize, canD = keep.d - need >= minSize;
           if ((alongX && !canW) || (!alongX && !canD)) {     // 那条轴已经缩不动 ⇒ 整个让位
             if (!canW && !canD) { alive.delete(keep); overlapDropped++; changed++; continue; }

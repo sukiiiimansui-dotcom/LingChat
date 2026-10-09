@@ -51,7 +51,7 @@ export function createInput(el, opts = {}) {
   const isUi = (t) => !!(t.target && t.target.closest && t.target.closest('[data-ui]'));
 
   const onTouchStart = (e) => {
-    // 🔴 只有"我们真的接手了这根手指"才阻止默认行为。
+    // 只有"真的接手了这根手指"才阻止默认行为。
     //    原来无条件 preventDefault ⇒ 点在按钮上时浏览器**不再合成 click** ⇒ 所有屏幕按钮点不动。
     let handled = false;
     for (const t of e.changedTouches) {
@@ -215,7 +215,7 @@ export function resolve(pos, r, buildings, info) {
       const d = Math.sqrt(d2);
       const push = r - d;
       const ux = dx / d, uz = dz / d;
-      // ⚠️ 本地方向 → 世界：用 localToWorld 那一套（`x cos − z sin, x sin + z cos`）。
+      // 本地方向 → 世界：用 localToWorld 那一套（`x cos − z sin, x sin + z cos`）。
       // 原来这里套的是 worldToLocal 的符号（转置），rot≈0 时看不出来，rot 一大推的方向就偏了。
       const wx = ux * b.cos - uz * b.sin, wz = ux * b.sin + uz * b.cos;
       pos.x += wx * push; pos.z += wz * push;

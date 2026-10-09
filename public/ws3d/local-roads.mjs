@@ -1,18 +1,18 @@
-// local-roads.mjs —— App 独立页与原型之间的**唯一**一层胶水（原型 16 个文件逐字节没动，见 WS3D-IN-APP.md）。
+// local-roads.mjs —— App 独立页与原型之间的**唯一**一层胶水（原型 16 个文件逐字节没动）。
 //
 // ## 为什么要有它
-// 原型（`ws3dgl-three.html` + `ws3dgl/**`）取数的两跳都指着本机开发服务：
+// 原型（`ws3dgl-three.html` + `ws3dgl/**`）取数的两跳都指着本地开发服务：
 //   ① `:8790/api/osm_cache` 拿"有哪些路网缓存键"（`data.mjs:41-43` → `:57 indexCache`）；
 //   ② 再按键去 8788 静态取 `worlddata/osm/<key>.json`（`data.mjs:139-165`）。
 // 可 **APK 里没有 8790**（没人监听那个端口），而路网本来就在 App 自己的 `public/roadsbundle/` 里
 // （69 格 / 5.92 MB / 24,704 条，schema `{key, roads:[{i,r,n,p}]}`）。所以这一层把请求就地答掉：
 //
 //   · `:8790/api/*`              → **全部本地应答**（一个包都不出网；探针判据「:8790 命中 0 次」就靠这条）
-//   · `/api/osm_cache`           → `./roads-index.json`（由 `world_map/ws3d_make_index.mjs` 从 roadsbundle 生成）
+//   · `/api/osm_cache`           → `./roads-index.json`（由索引脚本从 roadsbundle 生成）
 //   · `worlddata/osm/<键>.json`  → `/roadsbundle/<格>.json` + **schema 转换**（下面是逐字段对照）
 //   · 其它一切（`three.min.js`、`*.mjs`、`/roadsbundle/…`）原样放行 `fetch`
 //
-// 🔴 **必须在 `three/main.mjs` 之前 import**（`index.html` 里就是那个顺序）：`main.mjs` 在模块求值期
+// **必须在 `three/main.mjs` 之前 import**（`index.html` 里就是那个顺序）：`main.mjs` 在模块求值期
 //    就把 `location.search` 读完了，晚一步装钩子就等于没装。
 //
 // ## schema 转换（roadsbundle → 原型 `parseOsmRoads` 要的形状，`data.mjs:124-136`）
@@ -20,10 +20,10 @@
 //   · `id`       = `i`（OSM way id；`data.mjs:156` 拿它当去重键 ⇒ 重叠格里的同一条路只会留一份）
 //   · `highway`  = rank→等级（`prerender_pipeline.py:105-110 HIGHWAY_RANK`
 //                  0 快速路 / 1 主干 / 2 次干 / 3 支路，注释逐字写着"与 wsRoads.ts 的 rank 一致"）。
-//                  ⚠️ 这一步**是有损的**：roadsbundle 只留了 4 档，原始的 residential/service 已经不在包里，
+// 这一步**是有损的**：roadsbundle 只留了 4 档，原始的 residential/service 已经不在包里，
 //                  所以 3 档一律按 tertiary 建模（`city.mjs:14-19 ROAD_SPEC` 里 tertiary = 8 m）。
 //   · `name`     = `n`（真 OSM 名字，57.7% 有）
-//   · `geometry` = `p` 的 `[lng,lat]` → `{lat, lon}`（⚠️ 原型读的是 **`lon`** 不是 `lng`）
+// · `geometry` = `p` 的 `[lng,lat]` → `{lat, lon}`（原型读的是 **`lon`** 不是 `lng`）
 //
 // ## 一个格 5.5 km，而这一页只画半径 300 m ⇒ 格集合由**本层**按 App 自己的口径算
 // 原型的 `pickRoadCaches()`（`data.mjs:72-118`）把每个缓存当"圆心 + 半径"的圆来做贪心集合覆盖。

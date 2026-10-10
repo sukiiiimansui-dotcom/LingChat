@@ -121,14 +121,7 @@ export function createBldLanding(ctx: BldLandingCtx) {
      **判词/决策/半径一条都不在这里重写**：判词走 `bldVerdictText`/`roadsVerdictText`，
         半径走 `fetchRadiusForView`/`fetchRadiusLadder`/`viewHalfMetersOf`，格数学走 `wsFeatureStore`。
         旧的本地 `radiusForView`（那份"两份实现"）在本切片**删除**。 */
-  const LIVE_ON = (() => {
-    try {
-      return /[?&]live=1\b/.test(location.search);
-    } catch {
-      return false;
-    }
-  })();
-  /* ┄┄┄ 行走缓冲接线 BEGIN（有意增量：S6 搬迁闸按这一对标记剔除后再与基线对拍）┄┄┄ */
+  /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
   /**
    * `?walkbuf=0` = **关掉行走缓冲**（2026-10-10）。
    * 关掉必须**逐字节回到改动前**（结果一个不差、判词一字不加）—— 这是真机 A/B 与回归的口子，
@@ -142,7 +135,30 @@ export function createBldLanding(ctx: BldLandingCtx) {
       return false;
     }
   })();
-  /* ┄┄┄ 行走缓冲接线 END ┄┄┄ */
+  /**
+   * `?k=<数字>` = **钉住每格取前几栋（K）**（2026-10-10；真机 A/B 用）。
+   * 不写（或不是正整数）⇒ 按档位（`bldMaxDrawnOf`，严格档 2026-10-10 起是 6）。
+   * 非法值**不编一个数**顶上，如实回落到档位 —— 与 `?bldn=` 那一族的"显式钉住"同款。
+   */
+  const K_PIN = (() => {
+    try {
+      const m = /[?&]k=(\d+)\b/.exec(location.search);
+      if (!m) return null;
+      const n = Number(m[1]);
+      if (!Number.isFinite(n) || n < 0) return null;
+      return Math.floor(n);
+    } catch {
+      return null;
+    }
+  })();
+  /* ┄┄┄ 有意增量 END ┄┄┄ */
+  const LIVE_ON = (() => {
+    try {
+      return /[?&]live=1\b/.test(location.search);
+    } catch {
+      return false;
+    }
+  })();
   const bldLive = bldLiveDecision({ forceLive: LIVE_ON });
   const roadsLive = roadsLiveDecision({ forceLive: LIVE_ON });
   /* 重构：`let liveBldHits` / `let liveRoadHits`（那两个"默认应当是 0"的命中计数）
@@ -367,7 +383,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
                 /* **每格取前 K 栋**（2026-10-03 第五条：「显示哪些楼直接定下来」）：
                    K **只看用户选的档位**（严格档 3 / 多楼房 4000），**与 zoom / 与相机无关** ——
                    所以这里**没有** `zNow` / `bldTierPrev` 之类的相机输入（有它们就又是"集合随缩放变"）。 */
-                maxDrawn: bldMaxDrawnOf(bldDrawMode.value),
+                /* ┄┄┄ 有意增量 BEGIN（原行:                maxDrawn: bldMaxDrawnOf(bldDrawMode.value),）┄┄┄ */
+                /* `?k=<数字>` 钉住每格 K（真机 A/B 用；不写 = 按档位，2026-10-10 起严格档是 6）。
+                   K_PIN 在函数开头解析 ⇒ 它本身不在 S6 对拍段里，只有这一行是替换。 */
+                maxDrawn: K_PIN !== null ? K_PIN : bldMaxDrawnOf(bldDrawMode.value),
+                /* ┄┄┄ 有意增量 END ┄┄┄ */
                 /* 分格的那张网格 = **离线包自己的格**（`index.json.cellSize`，与取数管道同一份）：
                    包自报优先、读不到才退回 0.05（老包）。写死 0.01 会让换包时"格"与包对不上。 */
                 cellDeg: bldCellDegNow(),
@@ -377,12 +397,12 @@ export function createBldLanding(ctx: BldLandingCtx) {
                     `wsBldBudget.WS_BLD_NEAR_K` = 10，不在这里写死）。锚点表与补齐件冻结集都在
                     `store` 里（跨帧、跨视野保持）—— 宿主只负责**如实把实时相机中心喂给它**。 */
                 nearCenter: centerLL ? { lng: Number(centerLL.lng), lat: Number(centerLL.lat) } : null,
-                /* ┄┄┄ 行走缓冲接线 BEGIN（有意增量：S6 搬迁闸按这一对标记剔除后再与基线对拍）┄┄┄ */
+                /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
                 /* **行走缓冲**（2026-10-10）：参照点是**当前相机中心**（每轮现读）——
                    与上面那颗 `nearCenter` 不是一件事：那颗会被 store 播成**按格冻结的锚点**
                    （同一个格里走一公里那几栋一动不动）。`?walkbuf=0` 关掉整段（关掉 = 逐字节回到改动前）。 */
                 walkK: WALK_BUF_OFF ? 0 : WS_BLD_WALK_K,
-                /* ┄┄┄ 行走缓冲接线 END ┄┄┄ */
+                /* ┄┄┄ 有意增量 END ┄┄┄ */
               });
             };
           } catch { return null; }

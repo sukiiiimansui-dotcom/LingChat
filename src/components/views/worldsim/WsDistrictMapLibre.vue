@@ -309,6 +309,8 @@
         `visibleRoadCount` / `roadSegments` 与那些 cap 常量/类型）按 §3 第 5 条**一行都不删**，
         清理归 S9（与 S2 的 `drawContours`、S4 的 `withTimeout` 同一口径）。 */
   import { createBldLanding } from "./wsBldLanding";
+  /* 只读探针出口用（见下面"只读探针出口"那一段）——尺子本体在共享真源 `wsPerfMeter` */
+  import { pmSnapshot } from "./wsPerfMeter";
   /* 重构：**交互命中**（钉子 / 吸附 / 锚点 / AI 示意层 / 信息卡点选）
      整块搬到了 `wsPickInteract.ts`（装配点在 `panel` 之后那一处，理由在模块文件头）。
      宿主里**空出来的 import**（`useWsPanel` 等）按 §3 第 5 条一行都不删，清理归 S9。 */
@@ -1423,6 +1425,24 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     bldStore, roadsStore, bldFlush, roadsFlush, bldTierCrossedFlush,
     bldFeed, roadsFeed, placesFeed, placesGetter, gwLayer,
   } = bldLanding;
+
+  /* ══ 只读探针出口（2026-10-10）══════════════════════════════════════════════════
+     为什么要有它：性能这一摊此前在 App 侧**只有 HUD 那一行**，而"卡"是个毫秒级的事实 ——
+     `wsPerfMeter` 那把尺子**早就被喂着**（`wsOfflineFeed` 里 `pmSpan/pmTimeAsync`），
+     但 `pmSnapshot()` 在 `src/` 里**零消费者** ⇒ 读数根本没有出口（"感觉卡"没法变成数字）。
+     这里只挂两个**只读**口子，与代拍页 `window.__TF__.pmSnapshot()` **同名同形**（两页可比）：
+       · `window.__WS_PM__()`   —— 那把尺子的快照（各 span 的中位/次数量级）；
+       · `window.__WS_FEED__()` —— 三条离线管道的 `facts()` + 水绿地那一份。
+     纪律：出口**不许影响地图**（整个包在 try/catch 里）；**不许**在这里做任何写操作/副作用。
+     拿不到也不许静默 —— 两个函数对象一定挂上，调用时若模块缺符号会自己抛，探针看得见原因。 */
+  try {
+    const w = window as unknown as Record<string, unknown>;
+    w.__WS_PM__ = pmSnapshot;
+    w.__WS_FEED__ = () => ({
+      bld: bldFeed.facts(), roads: roadsFeed.facts(), places: placesFeed.facts(),
+      gw: (() => { try { return gwLayer.facts(); } catch { return null; } })(),
+    });
+  } catch { /* 出口挂不上不影响地图 */ }
 
   /* ══ 名字层（真名标签 + 区名标签）═══════════════════════════════════════════════
      宿主只做四件事：**给它地图/取数/行政区名/画出去的楼**，拿回渲染计划后**照着写 DOM**。

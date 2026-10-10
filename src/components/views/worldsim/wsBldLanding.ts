@@ -418,6 +418,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
                    与上面那颗 `nearCenter` 不是一件事：那颗会被 store 播成**按格冻结的锚点**
                    （同一个格里走一公里那几栋一动不动）。`?walkbuf=0` 关掉整段（关掉 = 逐字节回到改动前）。 */
                 walkK: WALK_BUF_OFF ? 0 : WS_BLD_WALK_K,
+                /* **池修订号**（便宜信号：合并次数 + 仓库栋数 + 淘汰数）—— store 只在它变了时重算
+                   "这一轮新到了哪些要素"，于是"近带增量"挂在**格变动**上、不在每次 pick 上。 */
+                poolRev: (() => {
+                  try { const st = bldStore.stats(); return st.merges + ":" + st.n + ":" + st.dropped; } catch { return null; }
+                })(),
                 /* ┄┄┄ 有意增量 END ┄┄┄ */
               });
             };

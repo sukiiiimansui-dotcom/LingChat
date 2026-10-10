@@ -138,6 +138,13 @@ export interface BldBudgetInputLite<T> {
    * 宿主传 `0` 就是关（`?walkbuf=0`）；没给 ⇒ 规则模块按默认档。
    */
   walkK?: number;
+  /**
+   * **池的修订号**（2026-10-10）：宿主给的**便宜信号**（`仓库 merges + n` 那种两个数拼起来的东西）。
+   * 只有它变了才重算"这一轮新到了哪些要素" —— 于是"近带增量"是**挂在格变动上**的，
+   * 不是每次 pick 都 O(池) 重算（见 `pickBudget` 里那段注释）。
+   * 不给（`undefined`/`null`）⇒ 每轮都按"没有增量信息"处理（= 扫全池，老行为逐字节不变）。
+   */
+  poolRev?: string | number | null;
 }
 
 /**
@@ -302,6 +309,14 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
    * 只增不删；超 `WS_BLD_WALK_BUF_MAX` 才按"离当前中心最远"丢（丢了几栋进 `stats.walkDropped`）。
    */
   const walkFrozen: unknown[] = [];
+  /**
+   * **近带增量**（2026-10-10）：上一轮的池（对象同一性）与"这一轮新到的要素"。
+   * 只在 `poolRev` 变了时重算 ⇒ 挂在**格加入/淘汰**上，不在每次 pick 上。
+   * 第一轮（`lastPoolObjs === null`）视作"整池都是新的" ⇒ 行为与改动前逐字节相同。
+   */
+  let lastPoolObjs: Set<unknown> | null = null;
+  let lastPoolRev: string | number | null | undefined = undefined;
+  let freshFeats: readonly unknown[] = [];
   /** 当前锚点的格键（相机这一轮落在哪一格）——`null` = 还没播过种（此时锚点表本来就是空的） */
   let nearCurrentKey: string | null = null;
 
@@ -432,6 +447,20 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         walkSeed: input.nearCenter,
         walkK: input.walkK,
         walkBuf: walkFrozen as unknown as T[],
+        /* **近带增量**：行走补只扫「这一轮新到的要素 + 继承集」（`walkScanned` 可数）。
+           池没变（`poolRev` 同值）⇒ `freshFeats` 沿用上一轮算好的那批，**不重算**。 */
+        walkCandidates: (() => {
+          const cur = input.features as readonly unknown[];
+          if (input.poolRev !== undefined && input.poolRev !== null && input.poolRev === lastPoolRev) {
+            return (freshFeats.length ? freshFeats : walkFrozen) as unknown as T[];
+          }
+          const prev = lastPoolObjs;
+          const fresh = prev ? cur.filter((f) => !prev.has(f)) : cur;
+          lastPoolObjs = new Set<unknown>(cur);
+          lastPoolRev = input.poolRev;
+          freshFeats = fresh;
+          return fresh.concat(walkFrozen) as unknown as T[];
+        })(),
       });
       /* ③ **按锚点把这一轮新入列的那批冻下来**（引用，不拷）。
              补齐件照口径"追加在结果尾部、按锚点顺序" ⇒ 用 `nearAddedPerAnchor` 就能逐段切开

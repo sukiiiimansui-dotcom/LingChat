@@ -783,6 +783,17 @@ export interface BldBudgetInput<T> {
    * 坏值（非数组/空）⇒ 当作没有；它们**不占** `walkK` 的名额。
    */
   walkBuf?: readonly T[] | null;
+  /**
+   * **行走缓冲"新补"那一半的扫描源**（2026-10-10，Worker 片）：给了就**只扫它**，
+   * 不再扫整池 —— 这是"每 20m 就要付一次"的那笔活从 O(池) 降到 O(新格) 的**唯一机制**。
+   *
+   * 语义（与不传时**逐条相同**，只是候选集变小）：候选 = 这个数组里"还没入列"的那些，
+   * 排序键仍是「距离升序 → id 升序」，取 ≤ `walkK` 栋。**不传 / `null` ⇒ 扫全池**
+   * （= 今天的行为，逐字节不变 ⇒ 老接线、自检、影子对拍都不受影响）。
+   * ⚠️ 它与 `walkBuf` **是两件事**：`walkBuf` 是"继承下来必须保住的"，本字段是"这一轮从哪儿找新的"。
+   *    编排层/Worker 通常传 `walkCandidates = 新到的格 + 继承集`。
+   */
+  walkCandidates?: readonly T[] | null;
 }
 
 /** 双预算挑楼的统计（**HUD 与自检的唯一读数口**；字段全部是有限数/布尔/字符串） */
@@ -897,6 +908,12 @@ export interface BldBudgetStats {
   walkOn: boolean;
   walkRestored: number;
   walkAdded: number;
+  /**
+   * **这一轮"行走补"扫了几个候选**（2026-10-10）—— 增量路的**可数证据**：
+   * 给了 `walkCandidates` 就是那个子集的长度（≈新到的格），没给就是整池长度。
+   * HUD 不念它（人读的那句在 `why` 里）；它是给编排/自检用的（"每 20m 那一笔没退化回全池扫"要能验）。
+   */
+  walkScanned: number;
   /** 这一轮参照点（= 那颗**现读的相机中心**）到最远一栋入列要素的地面米数；没入列 = `null` */
   walkDistM: number | null;
   /**
@@ -973,7 +990,7 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
        两边都带这几个字段 ⇒ 对拍比的仍是"同一份形状"。 */
     nearAnchors: 0, nearAdded: 0, nearRestored: 0, nearPicked: 0, nearAddedPerAnchor: [], nearDistM: null,
     /* 行走缓冲同理（关掉时逐字节等于改动前；影子对拍两边带同一份形状） */
-    walkOn: false, walkRestored: 0, walkAdded: 0, walkDistM: null,
+    walkOn: false, walkRestored: 0, walkAdded: 0, walkDistM: null, walkScanned: 0,
     overBudget: false, why: "",
   };
 
@@ -1364,28 +1381,53 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
         if (d > farM) farM = d;
         stats.walkRestored += 1;
       }
-      /* ② 新补（**离当前中心最近、还没入列**的那几栋；与锚点补齐同一把排序键：距离升序 → id 升序） */
+      /* ② 新补（**离当前中心最近、还没入列**的那几栋；与锚点补齐同一把排序键：距离升序 → id 升序）。
+         **扫描源**：给了 `walkCandidates` 就用它（Worker 片：只扫新到的格 + 继承集 ⇒ O(新格)），
+         没给就扫全池（= 改动前的行为，逐字节不变）。规则（排序键/取几栋/去重）**两处完全同一份代码**。 */
       const cands: Array<{ cand: Cand; i: number; d: number; id: string }> = [];
-      for (let i = 0; i < pool.length; i++) {
-        if (taken[i]) continue;                       /* 已入选的不再补 */
-        const c = pool[i]!;
-        if (c.c.id !== "" && walkIds.has(c.c.id)) continue;
-        if (walkObjs.has(c.f as unknown)) continue;
-        const m2 = bldStaticMeasureOf(c.f);
-        if (!m2) continue;
-        const d = distOf(m2);
-        if (!isFinite(d)) continue;
-        cands.push({ cand: c, i, d, id: c.c.id });
+      const scanSrc = Array.isArray(input.walkCandidates) ? null : pool;
+      if (scanSrc) {
+        for (let i = 0; i < scanSrc.length; i++) {
+          if (taken[i]) continue;                       /* 已入选的不再补 */
+          const c = scanSrc[i]!;
+          if (c.c.id !== "" && walkIds.has(c.c.id)) continue;
+          if (walkObjs.has(c.f as unknown)) continue;
+          const m2 = bldStaticMeasureOf(c.f);
+          if (!m2) continue;
+          const d = distOf(m2);
+          if (!isFinite(d)) continue;
+          cands.push({ cand: c, i, d, id: c.c.id });
+        }
+      } else {
+        /* 子集路：候选不是"池里的下标" ⇒ 现造 `Cand`（格键与 base 同一份格数学） */
+        for (const f0 of input.walkCandidates as readonly T[]) {
+          if (!f0 || typeof f0 !== "object") continue;
+          const id0 = String((f0 as { id?: unknown }).id ?? "");
+          if (id0 !== "" && walkIds.has(id0)) continue;
+          if (walkObjs.has(f0 as unknown)) continue;
+          const m2 = bldStaticMeasureOf(f0);
+          if (!m2) continue;
+          const d = distOf(m2);
+          if (!isFinite(d)) continue;
+          const cell0 = bundleCellOf(m2.cLng, m2.cLat, cellDeg);
+          cands.push({
+            cand: { f: f0, c: bldStaticScreenCost(m2, id0, mpp, ppm), score: m2.score, key: bundleCellKey(cell0.w, cell0.s, cellDeg) },
+            i: -1, d, id: id0,
+          });
+        }
       }
       cands.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.id < B.id ? -1 : A.id > B.id ? 1 : 0)));
       const take = Math.min(walkKOn, cands.length);
       for (let k = 0; k < take; k++) {
         const it = cands[k]!;
-        if (taken[it.i]) continue;
+        /* ⚠️ 子集路的候选**没有池下标**（`i = -1`）：`taken[-1]` 是所有子集候选共用的一个格子 ——
+           原来写成 `taken[it.i]` 会让"第一个入列之后全被 continue 掉"（只补 1 栋）。
+           判据改成"有下标才查/才写"（池路行为不变：那儿的下标都 ≥ 0）。 */
+        if (it.i >= 0 && taken[it.i]) continue;
         if (it.id !== "" && walkIds.has(it.id)) continue;
         if (it.id !== "") walkIds.add(it.id);
         walkObjs.add(it.cand.f as unknown);
-        taken[it.i] = true;
+        if (it.i >= 0) taken[it.i] = true;
         chosen.push(it.cand);
         sumPx += it.cand.c.px;
         sumV += it.cand.c.verts;
@@ -1393,6 +1435,8 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
         stats.walkAdded += 1;
       }
       stats.walkDistM = (stats.walkRestored + stats.walkAdded) > 0 ? Math.round(farM) : null;
+      /* 可数证据：这一轮到底扫了多少候选（增量 vs 全池） */
+      stats.walkScanned = Array.isArray(input.walkCandidates) ? (input.walkCandidates as readonly T[]).length : pool.length;
       /* 可数的那几个字段跟着重算（画出去的变了 ⇒ 不许留旧数） */
       if (stats.walkRestored + stats.walkAdded > 0) {
         stats.chosen = chosen.length;

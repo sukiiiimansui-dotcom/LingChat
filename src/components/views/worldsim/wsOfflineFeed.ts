@@ -447,6 +447,17 @@ export interface BundlePlaceFeature {
  * 解析片区名包。**没有名字的一条都不留**（`ROUTE.md` 铁律：缺名字就不显示、**绝不编**）；
  *    类型不认得的也留着（由 `wsLabels.placeTierOf` 决定显不显示 —— 这里不替它做判断）。
  */
+/**
+ * **包解析的唯一入口**（`kind` → 解析器）——2026-10-10 加。
+ *
+ * 为什么要有它：解析原来在主线程就地调 `SPECS[kind].parse`，搬 Worker 之后
+ * **两条路必须是同一份口径**（Worker 里也调这个函数）⇒ 在这里收一次口，
+ * `SPECS[kind].parse` 与它指向的是同一批函数（`bundleBuildingsOf` 等），没有第二份实现。
+ */
+export function parseBundleJson(kind: BundleKind, json: unknown): unknown[] {
+  return SPECS[kind].parse(json) as unknown[];
+}
+
 export function bundlePlacesOf(json: unknown): BundlePlaceFeature[] {
   const arr = (json as { places?: unknown })?.places;
   if (!Array.isArray(arr)) return [];
@@ -659,6 +670,9 @@ export interface BundleFeedFacts {
   cache: { cells: number; feats: number; hits: number; maxCells: number };
   /** flush 合并窗口实况（`ms=0` = 老行为：逐批 flush） */
   coalesce: { ms: number; merged: number };
+  /** **解析搬 Worker** 的实况（2026-10-10）：`on` = 这一份管道配了它；`fallback` = 历史累计**退回同步**的次数。
+   *  为什么可数：退回同步 = 那 350ms 又回到主线程（且是**静默**回到主线程）——不许静默，所以要有读数。 */
+  parseWorker: { on: boolean; fallback: number };
 }
 
 export interface BundleRefreshReport {
@@ -733,6 +747,16 @@ export interface BundleFeedOptions<T> {
    * **不传 = `DEFAULT_PARSED_CACHE_CELLS`（3 格）** —— 两个宿主都不传 ⇒ 由构造保证两页一致。
    */
   parsedCacheCells?: number;
+  /**
+   * **解析搬 Worker**（2026-10-10）：给了就**先走它**（`kind` + 响应文本 → 要素数组），
+   * 它抛错/超时 ⇒ **退回下面那条同步路**（主线程 `JSON.parse` + `parseBundleJson`），
+   * 并如实计数（`facts().parseWorker.fallback`）—— **不许静默降级**（本项目纪律）。
+   *
+   * 为什么值得搬：单格实测 **1.78MB / `JSON.parse` 中位 350ms**（见上面 `parsedCacheCells` 那段），
+   * 那是**主线程**的 350ms；搬到 Worker 之后主线程只剩"读文本 + 收要素"。
+   * 不传 = 不搬（老行为逐字节不变：页面那条 vendored 路不传 ⇒ 一个字都不动）。
+   */
+  parseAsync?: ((kind: BundleKind, text: string) => Promise<unknown[]>) | null;
 }
 
 /**
@@ -814,6 +838,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
   )));
   const parsedCache = new Map<string, T[]>();
   let cacheHits = 0;
+  /** 解析 Worker 退回同步的次数（历史累计；`facts()` 里如实报 —— 不许静默降级） */
+  let parseWorkerFallback = 0;
   function cacheTake(k: string): T[] | null {
     const v = parsedCache.get(k);
     if (!v) return null;
@@ -944,6 +970,8 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
          `Number(opts.expectCellDeg)`，`?cell=0` 时 `Number(null)===0` 会被当成合法值 ⇒
          facts 里印「钉 0°」而 `cellDegExpect=null`，同一条回证自相矛盾。 */
       refused: refused, cellDeg: effectiveDeg(), cellDegPin: pinDeg,
+      /* 解析搬 Worker 的实况（2026-10-10）：开没开 + 退回同步过几次（**不静默降级**要能读出来） */
+      parseWorker: { on: !!opts.parseAsync, fallback: parseWorkerFallback },
       /* 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,
@@ -1053,21 +1081,42 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
         /* 能拿到 `text` 就**拆成两段**（读流 / 解析）；拿不到就退回 `json`（合在一起计时，如实标 note） */
         let j: unknown;
         let tJson: number;
+        let feats: T[];
+        /* ┄┄┄ 解析搬 Worker BEGIN（有意增量；`?parseworker=0` 由宿主不传 `parseAsync` 实现）┄┄┄ */
+        let rawText: string | null = null;
         if (typeof r.text === "function") {
-          const raw = await r.text();
+          rawText = await r.text();
           const tText = pmNow();
           pmSpan(`feed.read:${spec.dir}`, tText - tNet, by, "读响应流");
-          j = JSON.parse(raw);
+        }
+        if (opts.parseAsync && rawText !== null) {
+          /* Worker 路：主线程**不解析**（那 350ms 挪到后台线程）——失败退回下面的同步路并如实记一笔 */
+          try {
+            const t0w = pmNow();
+            feats = (await opts.parseAsync(opts.kind, rawText)) as T[];
+            pmSpan(`feed.json+parse:${spec.dir}`, pmNow() - t0w, by, "Worker 解析（主线程只读文本）");
+            tJson = 0;
+          } catch (eW) {
+            parseWorkerFallback += 1;
+            opts.onError?.(`${spec.dir} ${cell.key} 解析 Worker 退回同步：${String((eW as Error)?.message || eW).slice(0, 40)}`);
+            feats = spec.parse(JSON.parse(rawText));
+            tJson = pmNow();
+            pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "退回同步解析（Worker 失败）");
+          }
+        } else if (rawText !== null) {
+          j = JSON.parse(rawText);
           tJson = pmNow();
-          pmSpan(`feed.json:${spec.dir}`, tJson - tText, by, "纯 JSON.parse");
+          pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "纯 JSON.parse");
+          feats = spec.parse(j);
         } else {
           j = await r.json();
           tJson = pmNow();
           pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "读流+解析（适配器没给 text()）");
+          feats = spec.parse(j);
         }
-        const feats = spec.parse(j);
+        /* ┄┄┄ 解析搬 Worker END ┄┄┄ */
         const tParse = pmNow();
-        pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
+        pmSpan(`feed.parse:${spec.dir}`, tParse - (tJson || tNet), by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
         pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
         /* 存进"已解析"缓存（默认关）：下次这一格被淘汰后再入镜时，省掉下载 + 解析 */

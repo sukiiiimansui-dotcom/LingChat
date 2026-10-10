@@ -92,6 +92,8 @@ import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
 import type { BldFeature } from "./wsBuildingSources";
 import type { PickBounds, PickFeature } from "./wsBuildingPick";
 import { createGwLayer, type GwMapLike } from "./wsGwLayer";
+/* 解析 Worker 的客户端（`?parseworker=0` 时不接线；见下面 `PARSE_WORKER_OFF` 那段） */
+import { parseInWorker } from "./wsBundleParseClient";
 import { visibleRoadCount } from "./wsRoads";
 import { roadSegments } from "./wsSnap";
 import type { PlacePoint } from "./wsDaily";
@@ -151,6 +153,20 @@ export function createBldLanding(ctx: BldLandingCtx) {
       return null;
     }
   })();
+  /**
+   * `?parseworker=0` = **不把包解析搬 Worker**（退回主线程同步解析）。
+   * 默认开：单格实测 1.78MB / `JSON.parse` 中位 **350ms**，那是主线程的 350ms。
+   * 超时/Worker 不可用 ⇒ `wsOfflineFeed` 那条同步路兜底并**计数**（`facts().parseWorker.fallback`）。
+   */
+  const PARSE_WORKER_OFF = (() => {
+    try {
+      return /[?&]parseworker=0\b/.test(location.search);
+    } catch {
+      return false;
+    }
+  })();
+  /** 给三条离线管道用的解析器（关掉时传 `null` ⇒ 管道走同步路，逐字节回到改动前） */
+  const parseAsync = PARSE_WORKER_OFF ? null : parseInWorker;
   /* ┄┄┄ 有意增量 END ┄┄┄ */
   const LIVE_ON = (() => {
     try {
@@ -519,6 +535,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
 
   /** 离线包的两条管道（**永不发 `/api/*`**：只读静态包） */
   const bldFeed = createBundleFeed<BundleBuildingFeature>({
+    /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+    parseAsync,
+    /* ┄┄┄ 有意增量 END ┄┄┄ */
     kind: "bld",
     store: bldStore,
     view: bundleView,
@@ -531,6 +550,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
     },
   });
   const roadsFeed = createBundleFeed<BundleRoadFeature>({
+    /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+    parseAsync,
+    /* ┄┄┄ 有意增量 END ┄┄┄ */
     kind: "roads",
     store: roadsStore,
     view: bundleView,
@@ -574,6 +596,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
     return placePoints;
   }
   const placesFeed = createBundleFeed<BundlePlaceFeature>({
+    /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+    parseAsync,
+    /* ┄┄┄ 有意增量 END ┄┄┄ */
     kind: "places",
     store: placesStore,
     view: bundleView,

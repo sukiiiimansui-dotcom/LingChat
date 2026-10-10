@@ -276,8 +276,8 @@
      "id": "tint",
      "type": "background",
      "paint": {
-      "background-color": "#BCE7F8",
-      "background-opacity": 0.45
+      "background-color": "#8FC3DA",
+      "background-opacity": 0.55
      }
     },
     {
@@ -292,31 +292,31 @@
    "ramp": [
     [
      3,
-     "#BCE4F9"
+     "#B0E0F8"
     ],
     [
      12,
-     "#AEDDF7"
+     "#BCE5F9"
     ],
     [
      25,
-     "#A2D8F6"
+     "#C8E9FA"
     ],
     [
      45,
-     "#BCE4F9"
+     "#D3EDFB"
     ],
     [
      70,
-     "#D6EFFC"
+     "#DEF1FC"
     ],
     [
      110,
-     "#EBF7FE"
+     "#E9F6FE"
     ],
     [
      200,
-     "#F6FCFF"
+     "#F3FBFF"
     ],
     [
      320,
@@ -346,7 +346,7 @@
     }
    },
    "canvas": {
-    "bg": "#DCEFF7",
+    "bg": "#BDDAE7",
     "empty": "rgba(27,53,80,.75)",
     "bldStroke": "#1B3550",
     "bldStrokeW": 1.2,
@@ -379,11 +379,11 @@
    },
    "look": null,
    "metrics": {
-    "groundHex": "#dceff7",
-    "groundLuma": 0.9244,
-    "rampFloorLuma": 0.8105,
-    "bldGroundRatio": 0.877,
-    "outlineGroundRatio": 10.61,
+    "groundHex": "#bddae7",
+    "groundLuma": 0.8345,
+    "rampFloorLuma": 0.8452,
+    "bldGroundRatio": 1.013,
+    "outlineGroundRatio": 8.58,
     "minGroundContrast": 1,
     "separation": "outline",
     "groundEps": 0.02,
@@ -696,8 +696,8 @@
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#BCE7F8",
-       "background-opacity": 0.45
+       "background-color": "#8FC3DA",
+       "background-opacity": 0.55
       }
      },
      {
@@ -712,15 +712,15 @@
     "ramp": [
      [
       3,
-      "#BCE4F9"
+      "#B0E0F8"
      ],
      [
       25,
-      "#A2D8F6"
+      "#C8E9FA"
      ],
      [
       110,
-      "#EBF7FE"
+      "#E9F6FE"
      ]
     ],
     "roofFallback": "#A8DBF5",
@@ -746,7 +746,7 @@
      }
     },
     "canvas": {
-     "bg": "#DCEFF7",
+     "bg": "#BDDAE7",
      "empty": "rgba(27,53,80,.75)",
      "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
@@ -827,11 +827,11 @@
      ]
     },
     "metrics": {
-     "groundHex": "#dceff7",
-     "groundLuma": 0.9244,
-     "rampFloorLuma": 0.8105,
-     "bldGroundRatio": 0.877,
-     "outlineGroundRatio": 10.61,
+     "groundHex": "#bddae7",
+     "groundLuma": 0.8345,
+     "rampFloorLuma": 0.8452,
+     "bldGroundRatio": 1.013,
+     "outlineGroundRatio": 8.58,
      "minGroundContrast": 1,
      "separation": "outline",
      "groundEps": 0.02,
@@ -1117,8 +1117,8 @@
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#BCE7F8",
-       "background-opacity": 0.45
+       "background-color": "#8FC3DA",
+       "background-opacity": 0.55
       }
      },
      {
@@ -1133,31 +1133,31 @@
     "ramp": [
      [
       3,
-      "#BCE4F9"
+      "#B0E0F8"
      ],
      [
       12,
-      "#AEDDF7"
+      "#BCE5F9"
      ],
      [
       25,
-      "#A2D8F6"
+      "#C8E9FA"
      ],
      [
       45,
-      "#BCE4F9"
+      "#D3EDFB"
      ],
      [
       70,
-      "#D6EFFC"
+      "#DEF1FC"
      ],
      [
       110,
-      "#EBF7FE"
+      "#E9F6FE"
      ],
      [
       200,
-      "#F6FCFF"
+      "#F3FBFF"
      ],
      [
       320,
@@ -1187,7 +1187,7 @@
      }
     },
     "canvas": {
-     "bg": "#DCEFF7",
+     "bg": "#BDDAE7",
      "empty": "rgba(27,53,80,.75)",
      "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
@@ -1220,11 +1220,11 @@
     },
     "look": null,
     "metrics": {
-     "groundHex": "#dceff7",
-     "groundLuma": 0.9244,
-     "rampFloorLuma": 0.8105,
-     "bldGroundRatio": 0.877,
-     "outlineGroundRatio": 10.61,
+     "groundHex": "#bddae7",
+     "groundLuma": 0.8345,
+     "rampFloorLuma": 0.8452,
+     "bldGroundRatio": 1.013,
+     "outlineGroundRatio": 8.58,
      "minGroundContrast": 1,
      "separation": "outline",
      "groundEps": 0.02,
@@ -1496,8 +1496,8 @@
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#BCE7F8",
-       "background-opacity": 0.45
+       "background-color": "#8FC3DA",
+       "background-opacity": 0.55
       }
      },
      {
@@ -1512,31 +1512,31 @@
     "ramp": [
      [
       3,
-      "#BCE4F9"
+      "#B0E0F8"
      ],
      [
       12,
-      "#AEDDF7"
+      "#BCE5F9"
      ],
      [
       25,
-      "#A2D8F6"
+      "#C8E9FA"
      ],
      [
       45,
-      "#BCE4F9"
+      "#D3EDFB"
      ],
      [
       70,
-      "#D6EFFC"
+      "#DEF1FC"
      ],
      [
       110,
-      "#EBF7FE"
+      "#E9F6FE"
      ],
      [
       200,
-      "#F6FCFF"
+      "#F3FBFF"
      ],
      [
       320,
@@ -1566,7 +1566,7 @@
      }
     },
     "canvas": {
-     "bg": "#DCEFF7",
+     "bg": "#BDDAE7",
      "empty": "rgba(27,53,80,.75)",
      "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
@@ -1596,11 +1596,11 @@
     },
     "look": null,
     "metrics": {
-     "groundHex": "#daeef5",
-     "groundLuma": 0.9188,
-     "rampFloorLuma": 0.8105,
-     "bldGroundRatio": 0.882,
-     "outlineGroundRatio": 10.49,
+     "groundHex": "#bcd9e5",
+     "groundLuma": 0.8299,
+     "rampFloorLuma": 0.8452,
+     "bldGroundRatio": 1.018,
+     "outlineGroundRatio": 8.49,
      "minGroundContrast": 1,
      "separation": "outline",
      "groundEps": 0.02,
@@ -1860,8 +1860,8 @@
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#BCE7F8",
-       "background-opacity": 0.1575
+       "background-color": "#8FC3DA",
+       "background-opacity": 0.1925
       }
      },
      {
@@ -1876,31 +1876,31 @@
     "ramp": [
      [
       3,
-      "#BCE4F9"
+      "#B0E0F8"
      ],
      [
       12,
-      "#AEDDF7"
+      "#BCE5F9"
      ],
      [
       25,
-      "#A2D8F6"
+      "#C8E9FA"
      ],
      [
       45,
-      "#BCE4F9"
+      "#D3EDFB"
      ],
      [
       70,
-      "#D6EFFC"
+      "#DEF1FC"
      ],
      [
       110,
-      "#EBF7FE"
+      "#E9F6FE"
      ],
      [
       200,
-      "#F6FCFF"
+      "#F3FBFF"
      ],
      [
       320,
@@ -1930,7 +1930,7 @@
      }
     },
     "canvas": {
-     "bg": "#DCEFF7",
+     "bg": "#BDDAE7",
      "empty": "rgba(27,53,80,.75)",
      "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
@@ -1960,11 +1960,11 @@
     },
     "look": null,
     "metrics": {
-     "groundHex": "#e1e8ea",
-     "groundLuma": 0.904,
-     "rampFloorLuma": 0.8105,
-     "bldGroundRatio": 0.897,
-     "outlineGroundRatio": 10.13,
+     "groundHex": "#d7e1e5",
+     "groundLuma": 0.8745,
+     "rampFloorLuma": 0.8452,
+     "bldGroundRatio": 0.966,
+     "outlineGroundRatio": 9.45,
      "minGroundContrast": 1,
      "separation": "outline",
      "groundEps": 0.02,
@@ -2224,8 +2224,8 @@
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#BCE7F8",
-       "background-opacity": 0.135
+       "background-color": "#8FC3DA",
+       "background-opacity": 0.165
       }
      },
      {
@@ -2240,31 +2240,31 @@
     "ramp": [
      [
       3,
-      "#BCE4F9"
+      "#B0E0F8"
      ],
      [
       12,
-      "#AEDDF7"
+      "#BCE5F9"
      ],
      [
       25,
-      "#A2D8F6"
+      "#C8E9FA"
      ],
      [
       45,
-      "#BCE4F9"
+      "#D3EDFB"
      ],
      [
       70,
-      "#D6EFFC"
+      "#DEF1FC"
      ],
      [
       110,
-      "#EBF7FE"
+      "#E9F6FE"
      ],
      [
       200,
-      "#F6FCFF"
+      "#F3FBFF"
      ],
      [
       320,
@@ -2294,7 +2294,7 @@
      }
     },
     "canvas": {
-     "bg": "#DCEFF7",
+     "bg": "#BDDAE7",
      "empty": "rgba(27,53,80,.75)",
      "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
@@ -2324,11 +2324,11 @@
     },
     "look": null,
     "metrics": {
-     "groundHex": "#cbd1d3",
-     "groundLuma": 0.8138,
-     "rampFloorLuma": 0.8105,
-     "bldGroundRatio": 0.996,
-     "outlineGroundRatio": 8.14,
+     "groundHex": "#c3cbcf",
+     "groundLuma": 0.7917,
+     "rampFloorLuma": 0.8452,
+     "bldGroundRatio": 1.068,
+     "outlineGroundRatio": 7.64,
      "minGroundContrast": 1,
      "separation": "outline",
      "groundEps": 0.02,
@@ -2590,7 +2590,7 @@
       "id": "tint",
       "type": "background",
       "paint": {
-       "background-color": "#BCE7F8",
+       "background-color": "#8FC3DA",
        "background-opacity": 0
       }
      },
@@ -2606,31 +2606,31 @@
     "ramp": [
      [
       3,
-      "#BCE4F9"
+      "#B0E0F8"
      ],
      [
       12,
-      "#AEDDF7"
+      "#BCE5F9"
      ],
      [
       25,
-      "#A2D8F6"
+      "#C8E9FA"
      ],
      [
       45,
-      "#BCE4F9"
+      "#D3EDFB"
      ],
      [
       70,
-      "#D6EFFC"
+      "#DEF1FC"
      ],
      [
       110,
-      "#EBF7FE"
+      "#E9F6FE"
      ],
      [
       200,
-      "#F6FCFF"
+      "#F3FBFF"
      ],
      [
       320,
@@ -2660,7 +2660,7 @@
      }
     },
     "canvas": {
-     "bg": "#DCEFF7",
+     "bg": "#BDDAE7",
      "empty": "rgba(27,53,80,.75)",
      "bldStroke": "#1B3550",
      "bldStrokeW": 1.2,
@@ -2692,8 +2692,8 @@
     "metrics": {
      "groundHex": "#797979",
      "groundLuma": 0.4754,
-     "rampFloorLuma": 0.8105,
-     "bldGroundRatio": 1.705,
+     "rampFloorLuma": 0.8452,
+     "bldGroundRatio": 1.778,
      "outlineGroundRatio": 2.89,
      "minGroundContrast": 1,
      "separation": "outline",

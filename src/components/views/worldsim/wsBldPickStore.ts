@@ -39,6 +39,7 @@ import {
 /* **双预算挑楼**（2026-10-02 已定的 B2）：规则/成本模型/固定常量都在那一份里，
    本模块只做"宿主调哪一个口"的接线（页面与 App 都只认 `createBldPickStore()`）。 */
 import {
+  WS_BLD_WALK_BUF_MAX,
   bldNearKOf,
   bldResolvedCellDeg,
   pickBuildingsByBudget,
@@ -129,12 +130,20 @@ export interface BldBudgetInputLite<T> {
   nearCenter?: { lng: number; lat: number } | null;
   /** 就近补齐的栋数（默认在规则模块里 = 10；`0` = 关闭）；**原样透传** */
   nearK?: number;
+  /**
+   * **行走缓冲一次补几栋**（默认 `WS_BLD_WALK_K` = 10；`0` = 关）—— 原样透传给规则模块。
+   *
+   * 与 `nearK` **分开**：`?bldn=` 那条 A/B 老路关掉"就近补齐"时，行走缓冲照旧工作
+   * （它治的是另一个病：见 `wsBldBudget.WS_BLD_WALK_K` 那段）。
+   * 宿主传 `0` 就是关（`?walkbuf=0`）；没给 ⇒ 规则模块按默认档。
+   */
+  walkK?: number;
 }
 
 /**
- * `pickBudget()` 的统计 = **规则模块那一份 + 编排层自己产出的两个数**（键序：先规则、后编排）。
+ * `pickBudget()` 的统计 = **规则模块那一份 + 编排层自己产出的四个数**（键序：先规则、后编排）。
  *
- * 为什么要有后两个：规则模块只知道"**这一轮**用了几个锚点"（`nearAnchors`），
+ * 为什么要有后几个：规则模块只知道"**这一轮**用了几个锚点"（`nearAnchors`），
  * 而"**手里一共记着几个锚点 / 已经冻结了几批**"是**编排层**的状态 ——
  * HUD 与自检要能读到它（"锚点只增不删"这条得可数，不然就是一句空话）。
  */
@@ -143,6 +152,10 @@ export interface BldPickBudgetStats extends BldBudgetStats {
   nearAnchorTotal: number;
   /** 其中**已经冻结成批**的锚点数（那批要素的**引用**被本实例持有 ⇒ 离线包淘汰也不消失） */
   nearFrozenBatches: number;
+  /** **行走缓冲**现在冻着几栋（本实例持有引用；只增不删，除非超上限） */
+  walkBufN: number;
+  /** 这一轮因为**超上限**被丢掉的行走缓冲条数（**全功能里唯一允许"楼消失"的一支**，必须可数） */
+  walkDropped: number;
 }
 
 /* ══ 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
@@ -283,6 +296,12 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
    *    换包/换城市要换一份**新实例**（`clear()` 只清"按格挑选"那条路的冻结集，不动这里）。 */
   const nearAnchors: Array<{ lng: number; lat: number; key: string }> = [];
   const nearFeat = new Map<string, unknown[]>();
+  /**
+   * **行走缓冲的冻结集**（2026-10-10）——与 `nearFeat` 并列的第三种状态，但参照点**不是格**：
+   * 它冻的是"上一轮以**当前相机中心**为种子补进来的那批引用"⇒ 走到哪补到哪，且已画的绝不消失。
+   * 只增不删；超 `WS_BLD_WALK_BUF_MAX` 才按"离当前中心最远"丢（丢了几栋进 `stats.walkDropped`）。
+   */
+  const walkFrozen: unknown[] = [];
   /** 当前锚点的格键（相机这一轮落在哪一格）——`null` = 还没播过种（此时锚点表本来就是空的） */
   let nearCurrentKey: string | null = null;
 
@@ -407,6 +426,12 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         nearAnchors: anchorsOut,
         nearFrozen: frozenOut,
         nearK: input.nearK,
+        /* **行走缓冲**（2026-10-10）：参照点 = `input.nearCenter`（**当前相机中心**，每轮现读，
+           与上面那张"按格冻结的锚点表"**不是同一件事** —— 那一条只认"进格那一刻"的点）。
+           冻结集是本实例持有的那批**引用**（`walkFrozen`）⇒ 离线包淘汰也不消失。 */
+        walkSeed: input.nearCenter,
+        walkK: input.walkK,
+        walkBuf: walkFrozen as unknown as T[],
       });
       /* ③ **按锚点把这一轮新入列的那批冻下来**（引用，不拷）。
              补齐件照口径"追加在结果尾部、按锚点顺序" ⇒ 用 `nearAddedPerAnchor` 就能逐段切开
@@ -415,6 +440,8 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         ...out.stats,
         nearAnchorTotal: nearAnchors.length,
         nearFrozenBatches: 0,
+        walkBufN: 0,
+        walkDropped: 0,
       };
       const per = Array.isArray(out.stats.nearAddedPerAnchor) ? out.stats.nearAddedPerAnchor : [];
       const addedN = Math.max(0, Number(out.stats.nearAdded) || 0);
@@ -433,6 +460,39 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         }
       }
       for (const a of nearAnchors) if ((nearFeat.get(a.key) || []).length > 0) stats.nearFrozenBatches += 1;
+      /* ④ **行走缓冲的冻结集**（2026-10-10）：本段是**结果的最尾部**（规则模块把它追加在最后），
+             所以"这一轮真的入了列的那批"= 尾部 `walkRestored + walkAdded` 个，直接按引用存下来
+             —— 下一轮原样交回规则模块 ⇒ **已画出去的绝不消失**（哪怕离线包把那几格淘汰了）。
+             超上限（`WS_BLD_WALK_BUF_MAX`）才丢：按"**离当前中心最远**"从远到近丢，并**如实计数**
+             （`walkDropped`）—— 这是全功能里唯一允许"楼消失"的一支，必须能在 HUD 读到。 */
+      if (out.stats.walkOn) {
+        const tailN = Math.max(0, Number(out.stats.walkRestored) || 0) + Math.max(0, Number(out.stats.walkAdded) || 0);
+        const next = tailN > 0 && out.features.length >= tailN ? out.features.slice(out.features.length - tailN) : [];
+        walkFrozen.length = 0;
+        for (const f of next) walkFrozen.push(f as unknown);
+        if (walkFrozen.length > WS_BLD_WALK_BUF_MAX) {
+          const seed = input.nearCenter;
+          const sl = seed && isFinite(Number(seed.lng)) && isFinite(Number(seed.lat)) ? [Number(seed.lng), Number(seed.lat)] : null;
+          if (sl) {
+            const kx = 111320 * Math.cos((sl[1]! * Math.PI) / 180);
+            const withD = walkFrozen.map((f) => {
+              const p = pointOfFeature(f as PickFeature);
+              const d = p ? Math.hypot((p[0] - sl[0]!) * kx, (p[1] - sl[1]!) * 110540) : Infinity;
+              return { f, d: isFinite(d) ? d : Infinity };
+            });
+            /* 远的先丢：稳定排序（距离降序，同距按数组原序 ⇒ 只丢够数的那几个） */
+            withD.sort((a, b) => b.d - a.d);
+            const keep = withD.slice(0, WS_BLD_WALK_BUF_MAX);
+            stats.walkDropped = withD.length - keep.length;
+            walkFrozen.length = 0;
+            /* 存回**原数组顺序**（不是距离序）：冻结集的顺序不该被一次淘汰改掉 */
+            const keepSet = new Set(keep.map((x) => x.f));
+            for (const f of next) if (keepSet.has(f as unknown)) walkFrozen.push(f as unknown);
+            stats.why += " · 行走缓冲超上限：丢 " + stats.walkDropped + " 栋（离中心最远的那几栋）";
+          }
+        }
+        stats.walkBufN = walkFrozen.length;
+      }
       return { features: out.features, stats };
     },
 

@@ -87,7 +87,7 @@ import {
   createBldPickStore,
   type BldPickStats,
 } from "./wsBldPickStore";
-import { bldMaxDrawnOf, bldMetersPerCssPixel, bldPxPerMeter, bldTierOfZoom, type BldBudgetBounds } from "./wsBldBudget";
+import { bldMaxDrawnOf, bldMetersPerCssPixel, bldPxPerMeter, bldTierOfZoom, WS_BLD_WALK_K, type BldBudgetBounds } from "./wsBldBudget";
 import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
 import type { BldFeature } from "./wsBuildingSources";
 import type { PickBounds, PickFeature } from "./wsBuildingPick";
@@ -128,6 +128,21 @@ export function createBldLanding(ctx: BldLandingCtx) {
       return false;
     }
   })();
+  /* ┄┄┄ 行走缓冲接线 BEGIN（有意增量：S6 搬迁闸按这一对标记剔除后再与基线对拍）┄┄┄ */
+  /**
+   * `?walkbuf=0` = **关掉行走缓冲**（2026-10-10）。
+   * 关掉必须**逐字节回到改动前**（结果一个不差、判词一字不加）—— 这是真机 A/B 与回归的口子，
+   * 与 `?bldn=` / `?inview=` 同一族。默认开（它是"走动时楼没了"的正解，
+   * 病根与四条纪律见 `wsBldBudget.WS_BLD_WALK_K` 那段）。
+   */
+  const WALK_BUF_OFF = (() => {
+    try {
+      return /[?&]walkbuf=0\b/.test(location.search);
+    } catch {
+      return false;
+    }
+  })();
+  /* ┄┄┄ 行走缓冲接线 END ┄┄┄ */
   const bldLive = bldLiveDecision({ forceLive: LIVE_ON });
   const roadsLive = roadsLiveDecision({ forceLive: LIVE_ON });
   /* 重构：`let liveBldHits` / `let liveRoadHits`（那两个"默认应当是 0"的命中计数）
@@ -362,6 +377,12 @@ export function createBldLanding(ctx: BldLandingCtx) {
                     `wsBldBudget.WS_BLD_NEAR_K` = 10，不在这里写死）。锚点表与补齐件冻结集都在
                     `store` 里（跨帧、跨视野保持）—— 宿主只负责**如实把实时相机中心喂给它**。 */
                 nearCenter: centerLL ? { lng: Number(centerLL.lng), lat: Number(centerLL.lat) } : null,
+                /* ┄┄┄ 行走缓冲接线 BEGIN（有意增量：S6 搬迁闸按这一对标记剔除后再与基线对拍）┄┄┄ */
+                /* **行走缓冲**（2026-10-10）：参照点是**当前相机中心**（每轮现读）——
+                   与上面那颗 `nearCenter` 不是一件事：那颗会被 store 播成**按格冻结的锚点**
+                   （同一个格里走一公里那几栋一动不动）。`?walkbuf=0` 关掉整段（关掉 = 逐字节回到改动前）。 */
+                walkK: WALK_BUF_OFF ? 0 : WS_BLD_WALK_K,
+                /* ┄┄┄ 行走缓冲接线 END ┄┄┄ */
               });
             };
           } catch { return null; }

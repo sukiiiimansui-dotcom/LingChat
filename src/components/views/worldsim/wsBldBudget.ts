@@ -226,6 +226,45 @@ export const WS_BLD_MAX_DRAWN_MANY = 4000;
 export const WS_BLD_NEAR_K = 10;
 
 /**
+ * **行走缓冲：一次补几栋 / 一共留几栋**（2026-10-10）。
+ *
+ * ## 它补的是哪个洞（与前两条不是同一件事）
+ * `nearK`（就近补齐）的参照点是**锚点**，而锚点由编排层**按格冻结**：`cellDeg` 是离线包自己的格
+ * （细包 `bldbundle-002` 是 **0.01° ≈ 1.11 km**）⇒ **在同一个格里走一公里，"最近 10 栋"一动不动**
+ * （它们还是你**刚进这一格**时的位置）。而俯角 64° 下看得见的地面只是一条**窄带**（比一格窄得多）
+ * ⇒ 人往前走 → 那 10 栋出屏 → 直到**跨格**才有新的 10 栋。这就是「**人物走动，走动时间一长建筑就没**」。
+ * ⇒ 只把摇杆的补刷闸门调小**治不了它**（参照点还是格入口那颗点）。
+ *
+ * ## 口径（三条，缺一条就不是这个东西）
+ *   ① **参照点 = 当前相机中心**（宿主每轮 pick 现读的那一个）——**不是**锚点坐标；
+ *   ② **只增不删**：本轮补进来的那批由编排层**冻住**（`walkBuf` 引用），下一轮无条件入列
+ *      ⇒ 已画出去的楼**不会**因为"我走开了"而消失（与 `nearFrozen` 同一条纪律）；
+ *   ③ 唯一的例外是**超上限**：冻结集超过 `WS_BLD_WALK_BUF_MAX` 时，由编排层丢"离当前中心**最远**"
+ *      的那几栋，并**如实计数**（`walkDropped`）—— 这是全功能里唯一允许"楼消失"的一支。
+ *
+ * 代价：每轮**一次距离扫描**（复用 `bldStaticMeasureOf` 的 WeakMap 记忆，不重算几何），
+ * 与 `nearAnchors` 的"当前锚点那一次扫描"同量级；**不新增** `setData` 次数、不新增图层。
+ * 关掉（`walkK: 0` 或没给 `walkSeed`）⇒ **逐字节回到改动前**（判词一字不加、结果一个不差）。
+ */
+export const WS_BLD_WALK_K = 10;
+
+/** 行走缓冲的**冻结上限**（栋）。超了由编排层丢"离当前中心最远"的，并记 `walkDropped`。 */
+export const WS_BLD_WALK_BUF_MAX = 80;
+
+/**
+ * 行走缓冲栋数的解析（唯一一处）：**显式给有限数**才开（`max(0, floor(v))`，`0` = 关）。
+ *
+ * ⚠️ **`undefined` / `null` / 坏值 ⇒ 关（0）**，与 `bldNearKOf` 的"坏值退回默认档"**故意不同**：
+ * 这是一个**新增能力**，默认关才能让**所有既有调用点逐字节不变**（老接线、老 vendor、老自检
+ * 都不知道有这个字段）。开的那一处是宿主显式传 `WS_BLD_WALK_K`（App：`wsBldLanding`；
+ * 页面：接线时同样显式传）—— "谁要这个能力谁明说"。
+ */
+export function bldWalkKOf(walkK: unknown): number {
+  const n = Number(walkK);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+/**
  * **足迹档 / 立体档的分界线**（2026-10-03 真机验收后拍板）。
  *
  * `z < 14` ⇒ 画**足迹**（平面 `fill`，看得见城市肌理）· `z ≥ 14` ⇒ 画**立体**（挤出楼体）。
@@ -706,6 +745,31 @@ export interface BldBudgetInput<T> {
    * `0` = **关闭补齐**（= 逐字段回到改动前的老口径）；坏值（NaN / 非数）⇒ 退回默认档，不猜。
    */
   nearK?: number;
+  /**
+   * **行走缓冲的参照点 = 当前相机中心**（2026-10-10）。
+   *
+   * 与 `nearCenter` **不是同一件事**：`nearCenter` 会被编排层**播成锚点**（按格冻结、只认第一次那个点），
+   * 而这一颗是**每轮现读**的相机中心 —— 行走缓冲要的正是"你现在在哪"。
+   *   · 给了两个有限数 ⇒ 开启行走缓冲（见 `WS_BLD_WALK_K` 那段）；
+   *   · 没给 / `null` / 坏值 ⇒ **不开启**（老接线逐字节不变，判词一字不加）。
+   * 它只进"行走缓冲"那一支：base 与锚点补齐**一个字节都不读它**。
+   */
+  walkSeed?: { lng: number; lat: number } | null;
+  /**
+   * **行走缓冲一次补几栋**（`0` = 关；**没给 = 关**）。
+   *
+   * 🔴 **默认关是刻意的**（`bldWalkKOf` 那段写了理由）：这是新增能力，默认关 ⇒ 所有既有调用点、
+   * 老 vendor、老自检的输出**逐字节不变**；要它的一侧（App `wsBldLanding`）**显式传**
+   * `WS_BLD_WALK_K`。与 `nearK` 分开也是刻意的：关掉"就近补齐"（`?bldn=` 那条 A/B）
+   * 不等于关掉行走缓冲。
+   */
+  walkK?: number;
+  /**
+   * **行走缓冲的冻结集**（编排层持有，只读引用；与 `nearFrozen` 同一条纪律）——
+   * 上一轮补进来的那批**引用**，本轮无条件入列（**已画出去的不消失**）。
+   * 坏值（非数组/空）⇒ 当作没有；它们**不占** `walkK` 的名额。
+   */
+  walkBuf?: readonly T[] | null;
 }
 
 /** 双预算挑楼的统计（**HUD 与自检的唯一读数口**；字段全部是有限数/布尔/字符串） */
@@ -813,6 +877,16 @@ export interface BldBudgetStats {
    */
   nearDistM: number | null;
   /**
+   * **行走缓冲这一轮入了列几栋**（`walkRestored` = 从冻结集里保住的 · `walkAdded` = 新补的）——
+   * 编排层靠这两个数切开"结果尾部那一段"（行走缓冲照口径追加在**最尾部**）。
+   * `walkOn=false` ⇒ 三个数都是 0（**"关掉"与"补了 0 栋"必须分得开**，所以另给 `walkOn`）。
+   */
+  walkOn: boolean;
+  walkRestored: number;
+  walkAdded: number;
+  /** 这一轮参照点（= 那颗**现读的相机中心**）到最远一栋入列要素的地面米数；没入列 = `null` */
+  walkDistM: number | null;
+  /**
    * 有没有**超出预算**。正常恒 false；只有一种情况会 true：
    * 候选本身不足 `minInView` 栋之后的**兜底破例**（见 `floorAdded`）。
    * 如实报，不许把它藏进"应该是不会发生的"里。
@@ -885,6 +959,8 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
        `nearAddedPerAnchor`）：① 关掉时逐字节等于改动前；② 影子对拍（把补齐件整段抠掉再编译）
        两边都带这几个字段 ⇒ 对拍比的仍是"同一份形状"。 */
     nearAnchors: 0, nearAdded: 0, nearRestored: 0, nearPicked: 0, nearAddedPerAnchor: [], nearDistM: null,
+    /* 行走缓冲同理（关掉时逐字节等于改动前；影子对拍两边带同一份形状） */
+    walkOn: false, walkRestored: 0, walkAdded: 0, walkDistM: null,
     overBudget: false, why: "",
   };
 
@@ -1214,6 +1290,115 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
     }
   }
   /* ┄┄┄ 就近补齐 END ┄┄┄ */
+
+  /* ══════════════ **行走缓冲**（2026-10-10）═════════════════════════════════════════════
+     病根（真机反馈「**人物走动，走动时间一长建筑就没**」）：上面那条"就近补齐"的参照点是**锚点**，
+     而锚点由编排层**按离线包格冻结**（细包 0.01° ≈ 1.11 km）⇒ **同一个格里走一公里，那 10 栋一动不动**。
+     俯角 64° 下可见地面只是一条**窄带** ⇒ 人往前走，那 10 栋出屏，直到**跨格**才有新的 ——
+     摇杆那 100m 的补刷闸门治不了它（参照点没换）。
+
+     这一段只做一件事：把「**离当前相机中心最近、又还没入列**」的那 `walkK` 栋追加到结果**最尾部**，
+     并把**上一轮补过的那批**（`walkBuf`，编排层冻结的**引用**）一起入列。
+     四条纪律（缺一条就不是那个口径）：
+       ① **参照点 = `walkSeed`（当前相机中心）**，不是锚点坐标（这是本段的全部意义）；
+       ② **只增不删**：`walkBuf` 里的引用无条件入列（哪怕离线包已经把它们淘汰出仓库）⇒ 已画的绝不消失；
+       ③ **不占 `walkK` 名额**：`walkBuf` 是"保命"的，不是"新挑"的（与 `nearFrozen` 同款）；
+       ④ **不静默**：补了几栋、保了几栋、最远多少米，全部如实进判词；**关掉时判词一字不加**。
+     代价：一次距离扫描（`bldStaticMeasureOf` 有 WeakMap 记忆 ⇒ 不重算几何），与"当前锚点那次扫描"同量级。
+     `walkK: 0` / 没给 `walkSeed` ⇒ 整段不跑（结果与判词**逐字节**等于改动前）。 */
+  /* ┄┄┄ 行走缓冲 BEGIN（自检的影子对拍按这一对标记整段抠除：抠掉之后必须与 `walkK: 0` 逐字节相同）┄┄┄ */
+  {
+    const walkKOn = bldWalkKOf(input.walkK);
+    const ws0 = input.walkSeed as { lng?: unknown; lat?: unknown } | null | undefined;
+    const wsOk = !!ws0 && typeof ws0 === "object";
+    const wsLng = wsOk ? Number(ws0!.lng) : NaN;
+    const wsLat = wsOk ? Number(ws0!.lat) : NaN;
+    if (walkKOn > 0 && wsOk && isFinite(wsLng) && isFinite(wsLat)) {
+      stats.walkOn = true;
+      const cosLat = Math.cos((wsLat * Math.PI) / 180);
+      const wkx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
+      /** 已入列的 id（`""` 不算）+ 已入列的对象（对象同一性去重 —— 冻结点可能没有 id） */
+      const walkIds = new Set<string>();
+      const walkObjs = new Set<unknown>();
+      for (const c of chosen) {
+        if (c.c.id !== "") walkIds.add(c.c.id);
+        walkObjs.add(c.f as unknown);
+      }
+      const distOf = (m: BldStaticMeasure): number => {
+        const dx = (m.cLng - wsLng) * wkx;
+        const dy = (m.cLat - wsLat) * WS_BLD_M_PER_DEG_LAT;
+        return Math.sqrt(dx * dx + dy * dy);
+      };
+      /* ① 冻结集（**只增不删**的那一半）：先入列，坏值/重复直接跳（不静默：跳了多少照实算进 restored） */
+      const frozenRaw = Array.isArray(input.walkBuf) ? (input.walkBuf as readonly T[]) : [];
+      let farM = 0;
+      for (const f of frozenRaw) {
+        if (!f || typeof f !== "object") continue;
+        if (walkObjs.has(f as unknown)) continue;
+        const id = String((f as { id?: unknown }).id ?? "");
+        if (id !== "" && walkIds.has(id)) continue;
+        const m2 = bldStaticMeasureOf(f);
+        if (!m2) continue;
+        const d = distOf(m2);
+        if (!isFinite(d)) continue;
+        const cost = bldStaticScreenCost(m2, id, mpp, ppm);
+        if (id !== "") walkIds.add(id);
+        walkObjs.add(f as unknown);
+        const cell = bundleCellOf(m2.cLng, m2.cLat, cellDeg);
+        chosen.push({ f, c: cost, score: m2.score, key: bundleCellKey(cell.w, cell.s, cellDeg) });
+        sumPx += cost.px;
+        sumV += cost.verts;
+        if (d > farM) farM = d;
+        stats.walkRestored += 1;
+      }
+      /* ② 新补（**离当前中心最近、还没入列**的那几栋；与锚点补齐同一把排序键：距离升序 → id 升序） */
+      const cands: Array<{ cand: Cand; i: number; d: number; id: string }> = [];
+      for (let i = 0; i < pool.length; i++) {
+        if (taken[i]) continue;                       /* 已入选的不再补 */
+        const c = pool[i]!;
+        if (c.c.id !== "" && walkIds.has(c.c.id)) continue;
+        if (walkObjs.has(c.f as unknown)) continue;
+        const m2 = bldStaticMeasureOf(c.f);
+        if (!m2) continue;
+        const d = distOf(m2);
+        if (!isFinite(d)) continue;
+        cands.push({ cand: c, i, d, id: c.c.id });
+      }
+      cands.sort((A, B) => (A.d !== B.d ? A.d - B.d : (A.id < B.id ? -1 : A.id > B.id ? 1 : 0)));
+      const take = Math.min(walkKOn, cands.length);
+      for (let k = 0; k < take; k++) {
+        const it = cands[k]!;
+        if (taken[it.i]) continue;
+        if (it.id !== "" && walkIds.has(it.id)) continue;
+        if (it.id !== "") walkIds.add(it.id);
+        walkObjs.add(it.cand.f as unknown);
+        taken[it.i] = true;
+        chosen.push(it.cand);
+        sumPx += it.cand.c.px;
+        sumV += it.cand.c.verts;
+        if (it.d > farM) farM = it.d;
+        stats.walkAdded += 1;
+      }
+      stats.walkDistM = (stats.walkRestored + stats.walkAdded) > 0 ? Math.round(farM) : null;
+      /* 可数的那几个字段跟着重算（画出去的变了 ⇒ 不许留旧数） */
+      if (stats.walkRestored + stats.walkAdded > 0) {
+        stats.chosen = chosen.length;
+        stats.px2 = Math.round(sumPx);
+        stats.verts = Math.round(sumV);
+        stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+        const seen = new Set<string>();
+        const keys: string[] = [];
+        for (const c of chosen) if (!seen.has(c.key)) { seen.add(c.key); keys.push(c.key); }
+        stats.cellKeys = keys;
+        stats.cellsChosen = keys.length;
+      }
+      stats.why +=
+        " · 行走补 " + stats.walkAdded + " 栋" +
+        (stats.walkRestored > 0 ? "（保住 " + stats.walkRestored + " 栋）" : "") +
+        (stats.walkDistM !== null ? "（最远 " + stats.walkDistM + " m）" : "");
+    }
+  }
+  /* ┄┄┄ 行走缓冲 END ┄┄┄ */
 
   return { features: chosen.map((c) => c.f), stats };
 }

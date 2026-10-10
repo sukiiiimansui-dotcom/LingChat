@@ -58,10 +58,10 @@
        `useWorldEvents` 里 `drainMemory` 随之改名 `previewMemory`）。
        本页因此**不再**在任何检查点"顺手收一遍队列"。
 
-  ## 2026-10-01（· `WsPhone` 悬浮手机**挂回来了**  当初去掉它的理由是"老入口在小区级本来也不显示它"；但它是这一屏**唯一能点开的玩法入口**
-  （地图/导航、打车、公交地铁、日程、通讯、天气六个 app **早就实现了**，只缺一个挂载点）
-  ⇒ 现在传 `:phone="!guideOpen"`（引导 sheet 开着时不挂，免得挡着那张 sheet）。
-  手机本体一行没改（`worldmap/WsPhone.vue`），挂载点与兜底提示在 `WsSceneView.vue`。
+  ## 2026-10-01 悬浮手机一度挂回；**2026-10-10 按产品决定删除**（右下角那颗 📱）。
+  删除范围 = `/worldsim` 这一屏的挂载点与开关（`WsSceneView.vue` 的 `<WsPhone>` / `phone` /
+  `onPhoneApp()` / `wsPhoneApps` import，以及本页的 `:phone=` 与 `.wsphone-fab` 让位样式）。
+  `worldmap/WsPhone*.vue` 本体**不动** —— 老 `/world` 页仍在用（那是另一条线）。
 
   ## 2026-10-01（当晚第二轮）· 把**世界模拟的皮肤**挂回来（根元素加 `ws-root theme-mint` + import CSS）
   已报「点了角色**连个UI都没有，字直接在地图上显示**」⇒ 实测：**这一屏根本没有 `--ws-*` 令牌表**。
@@ -80,15 +80,13 @@
          `tf=false` 关掉交通设施那条接线 —— 它会发一条 `/api/roads`（真机冷查分钟级、必超时），
          而新入口要**默认 0 条 `/api/*`**（与代拍页默认口径一致）。两个开关都只改"显示/接线"，
          地图本体、层序、取数一行不动（那些仍是同一份共享真源）。
-         `:phone="!guideOpen"`（2026-10-01）把悬浮手机挂上来；它默认是**收起的**
-         （`WsPhone.vue` 自己记偏好、不自动弹出）⇒ 首屏仍然是"地图 + 顶栏"，不挡地图。 -->
+         悬浮手机 2026-10-10 已删（见上面那一段）⇒ 这里不再传 `phone`。 -->
     <WsSceneView
       :key="sceneKey"
       :area="areaLabel"
       adcode=""
       :chrome="false"
       :tf="false"
-      :phone="!guideOpen"
       :joy="joyOn"
       :markers="mapPins"
       @pick-actor="onPickActor"
@@ -349,7 +347,8 @@
      它**没有角色参数** ⇒ 发给的是当前对话角色；目标对不上时本页**不发**（见 `chatCanSend`）。 */
   import { invoke } from "@tauri-apps/api/core";
   /* 提示：push 进 `wsToast` 的模块级队列，由 `WsSceneView` 挂的 `WsToasts` 渲染
-     （本页 `:phone="!guideOpen"` ⇒ 同一条开关；不自己再挂一份渲染处）。 */
+     （2026-10-10 起它**无条件渲染** —— 原来跟悬浮手机共用 `phone` 开关，手机删了开关也就没了；
+     送礼那条"好感 +6"的反馈就靠它）。 */
   import { wsToast } from "./wsToast";
   /* 角色库/当前对话角色（`gameStore`）—— 与孤儿页**同一个 store**（那边的 import 在 `WorldSim.vue:481`；
      `currentRoleId` 的算法照抄 `WorldSim.vue:916-918`，见下面）。 */
@@ -1528,16 +1527,6 @@
      整层已经是 `pointer-events:none`（组件内），气泡本体 `pointer-events:auto` —— 与老宿主一致。 */
   .wsce :deep(.ws-ebx) {
     z-index: 8; /* 压在地图与交通 HUD（6）之上、顶栏（30）之下：它是"刚发生的事"，该被看见 */
-  }
-
-  /* 角色面板开着时，把**悬浮手机的按钮**让开（UI互相挤压）。
-     手机的 z-index 是 `--z-ws-phone:60`，比抽屉的 30 高 ⇒ 那个 52×52 的 会压在面板内容上
-     （截图里它正好盖在"快捷动作/送礼物"那一行的右下角）。
-     只藏**按钮**、不卸载 `WsPhone`：送礼的 toast 渲染处跟手机共用 `phone` 开关
-     （`WsSceneView` 里 `<WsToasts v-if="phone" />`），把它卸了，"好感 +6"那条反馈就看不见了。 */
-  .wsce--panel :deep(.wsphone-fab) {
-    opacity: 0;
-    pointer-events: none;
   }
 
   .wsce__top {

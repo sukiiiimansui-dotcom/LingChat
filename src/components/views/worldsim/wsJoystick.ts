@@ -1415,9 +1415,11 @@ export const JOY_HOME_HOLD_MS = 420;
 export const JOY_HOME_SLOP_PX = 10;
 /** HUD 在让位后的**一行高度**（px）——与自检 ③ 的那组字面量同值（HUD 一行 ≈22px 含 padding） */
 export const JOY_HOME_HUD_ROW_PX = 22;
-/** FAB 的外接矩形（`WsPhone.vue:205-216`：52×52、right 14、bottom 96） */
-export const JOY_HOME_FAB = { w: 52, h: 52, right: 14, bottom: 96 } as const;
-/** 的外接矩形（`WsVerifyPanel.vue:439-444`：44×44、right 8、bottom 8） */
+/* 2026-10-10：原来这里还有一块 `JOY_HOME_FAB`（52×52 / right 14 / bottom 96）——
+   那是**悬浮手机**那颗按钮的外接矩形，摇杆的"回家"要避开它。手机删掉之后那块没人占了，
+   避让框也就一并删除（否则会留下一块**空着的禁区**：摇杆放不进去、又没有任何东西在那儿）。
+   将来若真有按钮落回那个位置，按同样形状补一块即可（自检 ③ 里那组几何断言就是为此留的骨架）。 */
+/** 🔬 校验面板那颗钮的外接矩形（44×44、right 8、bottom 8） */
 export const JOY_HOME_MAG = { w: 44, h: 44, right: 8, bottom: 8 } as const;
 
 /** 一个矩形（容器坐标，CSS px；左上原点） */
@@ -1432,7 +1434,7 @@ export interface JoyHome {
   fx: number;
   fy: number;
 }
-/** 容器里**碰不得**的三块（HUD 让位带 / /）——容器尺寸决定，所以是函数不是常量表 */
+/** 容器里**碰不得**的两块（HUD 让位带 / 校验面板那颗钮）——容器尺寸决定，所以是函数不是常量表 */
 export function joyHomeBoxesOf(w: number, h: number, basePx?: number): JoyHomeBox[] {
   const W = Number.isFinite(w) && w > 0 ? w : 0;
   const H = Number.isFinite(h) && h > 0 ? h : 0;
@@ -1440,7 +1442,6 @@ export function joyHomeBoxesOf(w: number, h: number, basePx?: number): JoyHomeBo
   return [
     /* HUD：`left:8`、`bottom: calc(8px + JOY_HUD_LIFT_PX)`、宽 `W-60`、一行 22 —— 与自检 ③ 同一组数 */
     { l: JOY_INSET_PX, t: H - (JOY_INSET_PX + JOY_HUD_LIFT_PX) - JOY_HOME_HUD_ROW_PX, r: JOY_INSET_PX + (W - 60), b: H - (JOY_INSET_PX + JOY_HUD_LIFT_PX) },
-    { l: W - JOY_HOME_FAB.right - JOY_HOME_FAB.w, t: H - JOY_HOME_FAB.bottom - JOY_HOME_FAB.h, r: W - JOY_HOME_FAB.right, b: H - JOY_HOME_FAB.bottom },
     { l: W - JOY_HOME_MAG.right - JOY_HOME_MAG.w, t: H - JOY_HOME_MAG.bottom - JOY_HOME_MAG.h, r: W - JOY_HOME_MAG.right, b: H - JOY_HOME_MAG.bottom },
   ];
 }

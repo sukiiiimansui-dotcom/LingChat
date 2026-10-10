@@ -89,18 +89,16 @@
       </div>
     </div>
 
-    <!-- 悬浮手机（2026-10-01）：把孤儿 `WsPhone.vue` 挂回 App 入口。
-         `phone` 默认 false ⇒ 老调用点逐字不变（旧入口（WorldSim.vue，已删除）自己已经在挂，见上面那条注释）；
-         新入口 `WsCityEntry.vue` 传 `:phone="!guideOpen"`（引导 sheet 开着时不挂，免得挡着它）。
-         手机本体、八个应用、`READY` 清单全在 `WsPhone.vue` 里 —— 这里**一行渲染逻辑都没有**。
-         z-index 用令牌（手机 `--z-ws-phone:60`，手机自己在样式里定义），不会盖住验证面板。 -->
-    <WsPhone v-if="phone" @open-app="onPhoneApp" />
-
     <!-- toast：`wsToast` 只是往**模块级队列**里推，得有人渲染才看得见。
          实测（无头浏览器探针）：新入口原来没挂这个渲染处 ⇒ 点「音乐」「我的」
          面板行为是对的（不换页），但**页面上一个字都不出现** = 不可接受的"点了没反应"。
-         跟着 `phone` 开关挂：旧入口（WorldSim.vue，已删除）自己挂了一份，**同一队列两边都渲染会弹两条**。 -->
-    <WsToasts v-if="phone" />
+         2026-10-10 删掉悬浮手机（右下角那颗）⇒ 这里**去掉那个开关、无条件渲染**：
+         本组件现在只有 `WsCityEntry.vue` 一个宿主（老入口 WorldSim.vue 已删除）⇒
+         不存在"两边各渲染一份弹两条"的风险；送礼那条"好感 +6"的反馈就靠它。 -->
+    <!-- 《悬浮手机》2026-10-10 已按产品决定删除：`WsPhone.vue` 的挂载点、`phone` 开关、
+         `onPhoneApp()` 与 `wsPhoneApps` 的 import 都已摘除（见 `ws_phone_selftest.mjs` 的负向判据）。
+         `worldmap/WsPhone*.vue` 本体**不动**（那是老 `/world` 页的活）。 -->
+    <WsToasts />
   </div>
 </template>
 
@@ -121,10 +119,6 @@
   import { planEnsureRoadOrder } from "./wsLayerOrder";
   import worldMapApi from "@/api/services/worldMap";
   import { useWsPerf } from "./wsPerf";
-  /* 悬浮手机（2026-10-01）：手机本体与八个应用都在 `worldmap/WsPhone.vue`（**一行不改**），
-     这里只做两件事：**挂上去** + 没接进来的应用被点时**如实提示**。 */
-  import WsPhone from "@/components/views/worldmap/WsPhone.vue";
-  import { phoneNotWiredText } from "@/components/views/worldmap/wsPhoneApps";
   import { wsToast } from "./wsToast";
   /* toast 队列的渲染处（收成组件：**新入口也要弹同一条提示**，见模板里那段注释）。 */
   import WsToasts from "./WsToasts.vue";
@@ -192,17 +186,10 @@
        * 默认 `true` ⇒ 老调用点（旧入口（WorldSim.vue，已删除）的引导主线）**逐字不变**。
        */
       tf?: boolean;
-      /**
-       * 悬浮手机开关（**默认 false**， 2026-10-01）。
-       *
-       * 为什么默认是 **false**（与 `chrome`/`tf` 默认 true 相反）：老调用点 旧入口（WorldSim.vue，已删除）
-       * **自己已经挂了** `<WsPhone>`（`WorldSim.vue:242` 与 `:352`）⇒ 这里若也默认挂，
-       * 老路径上会出现**两部手机**（两个 悬浮按钮）。所以只有新入口 `WsCityEntry.vue` 显式传 `true`。
-       *
-       * 挂的是**同一个组件**（`worldmap/WsPhone.vue`），八个应用、`READY` 清单、收起记忆
-       * 全在那边 —— 这里**不写第二份**（PR 门禁 C1）。
-       */
-      phone?: boolean;
+      /* 2026-10-10 删掉悬浮手机 ⇒ 原来的 `phone?: boolean` 开关**整体移除**：
+         prop、默认值、挂载点、`onPhoneApp()` 与 `wsPhoneApps` 的 import 一起摘；
+         `WsToasts` 改成无条件渲染（本组件现在只有 `WsCityEntry.vue` 一个宿主）。
+         `worldmap/WsPhone*.vue` 本体不动（老 `/world` 页仍在用）。 */
       /**
        * 摇杆 + 近景（角色第一视角）开关（**默认 false**，2026-10-03 已定）。
        *
@@ -214,7 +201,7 @@
        */
       joy?: boolean;
     }>(),
-    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, phone: false, joy: false }
+    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, joy: false }
   );
 
   /**
@@ -240,16 +227,6 @@
      */
     (e: "daily-ready", p: { map: unknown; places?: () => readonly PlacePoint[] }): void;
   }>();
-
-  /**
-   * 手机上**没接进来**的应用被点了（`WsPhone.vue:164` 那条 `emit("open-app", key)` 路径）⇒ 如实提示。
-   *
-   * 这句话的**唯一真源**在 `worldmap/wsPhoneApps.ts`（旧入口（WorldSim.vue，已删除）用同一份）——
-   * 两个宿主各写一份文案，说法迟早漂移（PR 门禁 C1 防的就是这个）。
-   */
-  function onPhoneApp(key: string): void {
-    wsToast(phoneNotWiredText(key), "info");
-  }
 
   /** 交通设施的 HUD 原文（来自 `transportHudLine`，**不改写**） */
   const tfHud = ref("");

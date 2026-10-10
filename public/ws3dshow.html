@@ -369,7 +369,12 @@
          每次生成时写入 = `wsScene.mjs` 的 sha256 前 16 位）。
          为什么非做不可：这个坑**一天之内栽了三次**（`?bld=2` 什么都没变 / 那次截图
          `重取后仍缺` / `ed8fdf6` 换了 vendor 却没换戳）——"靠人记得"已被证明不可靠。 */
-      const BUILD = "ws3dshow-2026-10-05-v101";
+      /* v102（2026-10-11）：**2D 调色板硬伤修复的 A/B 开关** —— 主题 id 白名单加 `anime-old`。
+         那一档 = 2026-10-10 之前的二次元配色（地面 `#DCEFF7` L* 93.3、旧的 8 档色阶），
+         真源在 `wsMapTheme.ts` 的 `ANIME_OLD`，本页不写第二份色板。
+         不写这一行，`?wstheme=anime-old` 会被当"认不出的 id"静默回退成 `anime`
+         —— 那就是"开关点了没反应"那类假开关。 */
+      const BUILD = "ws3dshow-2026-10-11-v102";
       try { document.getElementById("m-build").textContent = BUILD; } catch { /* 元素不在就算了 */ }
 
       /* ⏱ **耗时尺子（唯一一份在共享真源 `wsPerfMeter`，页面只接线）** ——
@@ -521,7 +526,8 @@
       let THEME_ID = "anime";
       try {
         const q = new URLSearchParams(location.search).get("wstheme");
-        if (q === "night" || q === "anime") THEME_ID = q;
+        /* `anime-old`（v102 加）：改前配色的 A/B 档，快照由 `ws_map_theme_selftest.mjs` 生成。 */
+        if (q === "night" || q === "anime" || q === "anime-old") THEME_ID = q;
       } catch { /* 参数坏了就用默认，不因为一个开关把页面搞崩 */ }
 
       /* ── 候选底图 `?bm=<id>`（2026-09-26 反馈：放太大了只能看到线路，**水，绿植啥的都看不到**」）──

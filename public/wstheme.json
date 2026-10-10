@@ -389,6 +389,189 @@
     "groundEps": 0.02,
     "vignetteOpacity": null
    }
+  },
+  "anime-old": {
+   "id": "anime-old",
+   "label": "二次元（改前配色，A/B 用）",
+   "hud": "二次元 · 平涂（改前配色）",
+   "sky": {
+    "sky-color": "#72C8F7",
+    "horizon-color": "#E8F8FF",
+    "fog-color": "#D6EEFC",
+    "sky-horizon-blend": 0.6,
+    "horizon-fog-blend": 0.65,
+    "atmosphere-blend": 0.85,
+    "fog-ground-blend": 0.75
+   },
+   "sources": {
+    "base": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 16,
+     "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    },
+    "ref": {
+     "type": "raster",
+     "tiles": [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+     ],
+     "maxzoom": 16,
+     "tileSize": 256,
+     "crossOrigin": "anonymous"
+    }
+   },
+   "layers": [
+    {
+     "id": "bg",
+     "type": "background",
+     "paint": {
+      "background-color": "#E8F8FF"
+     }
+    },
+    {
+     "id": "base",
+     "type": "raster",
+     "source": "base",
+     "paint": {
+      "raster-opacity": [
+       "interpolate",
+       [
+        "linear"
+       ],
+       [
+        "zoom"
+       ],
+       16.6,
+       1,
+       18,
+       0
+      ],
+      "raster-saturation": 0.55,
+      "raster-contrast": 0.06,
+      "raster-brightness-max": 1
+     }
+    },
+    {
+     "id": "tint",
+     "type": "background",
+     "paint": {
+      "background-color": "#BCE7F8",
+      "background-opacity": 0.45
+     }
+    },
+    {
+     "id": "ref",
+     "type": "raster",
+     "source": "ref",
+     "paint": {
+      "raster-opacity": 0.85
+     }
+    }
+   ],
+   "ramp": [
+    [
+     3,
+     "#BCE4F9"
+    ],
+    [
+     12,
+     "#AEDDF7"
+    ],
+    [
+     25,
+     "#A2D8F6"
+    ],
+    [
+     45,
+     "#BCE4F9"
+    ],
+    [
+     70,
+     "#D6EFFC"
+    ],
+    [
+     110,
+     "#EBF7FE"
+    ],
+    [
+     200,
+     "#F6FCFF"
+    ],
+    [
+     320,
+     "#FFFFFF"
+    ]
+   ],
+   "roofFallback": "#A8DBF5",
+   "antennaFallback": "#FFFFFF",
+   "outline": {
+    "color": "#1B3550",
+    "width": 1.8
+   },
+   "ai": {
+    "park": "rgba(126, 200, 138, 0.60)",
+    "water": "rgba(46, 158, 214, 0.92)"
+   },
+   "road": {
+    "casing": "#6FA6C8",
+    "casingOpacity": 0.95,
+    "rankColors": {
+     "0": "#FFFFFF",
+     "1": "#FBFDFF",
+     "2": "#F4FAFE",
+     "3": "#EBF5FC",
+     "4": "#E3F1FA",
+     "5": "#7FD4F0"
+    }
+   },
+   "canvas": {
+    "bg": "#BDDAE7",
+    "empty": "rgba(27,53,80,.75)",
+    "bldStroke": "#1B3550",
+    "bldStrokeW": 1.2,
+    "aiShadow": "rgba(44,74,99,.22)",
+    "aiStroke": "rgba(27,53,80,.5)",
+    "aiStrokeW": 0.8
+   },
+   "baseFade": {
+    "from": 16.6,
+    "to": 18
+   },
+   "verticalGradient": false,
+   "extrudOpacity": [
+    "interpolate",
+    [
+     "linear"
+    ],
+    [
+     "zoom"
+    ],
+    12.8,
+    0.8,
+    15,
+    0.92,
+    17,
+    1
+   ],
+   "low": {
+    "outlineWidth": 0.6
+   },
+   "look": null,
+   "metrics": {
+    "groundHex": "#dceff7",
+    "groundLuma": 0.9244,
+    "rampFloorLuma": 0.8105,
+    "bldGroundRatio": 0.877,
+    "outlineGroundRatio": 10.61,
+    "minGroundContrast": 1,
+    "separation": "outline",
+    "groundEps": 0.02,
+    "vignetteOpacity": null
+   }
   }
  },
  "looks": {
@@ -837,6 +1020,217 @@
      "groundEps": 0.02,
      "vignetteOpacity": 0.18
     }
+   },
+   "anime-old": {
+    "id": "anime-old",
+    "label": "二次元（改前配色，A/B 用） · 游戏过场",
+    "hud": "二次元 · 平涂（改前配色） · 游戏过场（cel 三档 + 接触阴影）",
+    "sky": {
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.85,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#E8F8FF"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": [
+        "interpolate",
+        [
+         "linear"
+        ],
+        [
+         "zoom"
+        ],
+        16.6,
+        1,
+        18,
+        0
+       ],
+       "raster-saturation": 0.55,
+       "raster-contrast": 0.06,
+       "raster-brightness-max": 1
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#BCE7F8",
+       "background-opacity": 0.45
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#BCE4F9"
+     ],
+     [
+      25,
+      "#A2D8F6"
+     ],
+     [
+      110,
+      "#EBF7FE"
+     ]
+    ],
+    "roofFallback": "#A8DBF5",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#1B3550",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(126, 200, 138, 0.60)",
+     "water": "rgba(46, 158, 214, 0.92)"
+    },
+    "road": {
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
+     }
+    },
+    "canvas": {
+     "bg": "#BDDAE7",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#1B3550",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": {
+     "from": 16.6,
+     "to": 18
+    },
+    "verticalGradient": false,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.8,
+     15,
+     0.92,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": {
+     "shadow": {
+      "color": "#405870",
+      "opacity": 0.42,
+      "blur": 6,
+      "dx": 3,
+      "dy": 4,
+      "width": 1.1
+     },
+     "vignette": {
+      "color": "#1B3550",
+      "opacity": 0.18,
+      "inner": 55,
+      "outer": 100
+     },
+     "road": {
+      "casingAdd": 2.2,
+      "widthScale": 1.25,
+      "glow": null
+     },
+     "skipped": [
+      {
+       "k": "水体（渐变 / 高光边）",
+       "why": "**没有水系矢量源**：本页只取 `/api/buildings`、`/api/roads`；`hydro.rs` 那套 Natural Earth 1:50m 只喂行政区划 SVG，且区级实测 0 环 ⇒ 江面在底图里只是**栅格像素**，无法单独上色/描边。要做得先有水的矢量数据（另一张卡）。"
+      },
+      {
+       "k": "真阴影（投影遮挡）",
+       "why": "MapLibre 的 fill-extrusion **不投阴影**（无 shadow map）⇒ 本版用楼脚印深色薄层 + 贴边模糊线**近似**，不是真阴影。"
+      }
+     ],
+     "reverted": [
+      {
+       "k": "压暗地面（第一版的「深底亮线」）",
+       "why": "**2026-09-24 已定**：「代拍页的地图底都看不清了」⇒ 地面回到 BA 亮底（`bg`/`tint`/`raster` 逐字段等于基准）。而且我自己的调研就写着 MT3D 地面**也是近白** ⇒「深底」不是 MT3D 的事实，方向选错了。**派生件不许改既定的美术方向。**"
+      },
+      {
+       "k": "霓虹辉光（`road-glow-*`）",
+       "why": "**撤了**：它在「深底」前提成立时才有意义 —— BA 亮底上白色辉光与地面**同明度** ⇒ 既看不见、又把路缘糊掉（**降低可读性**）。机制仍在数据里（`look.road.glow`，`null` = 不建层），要开只需改数据；页面那条路有自检守着（注入 glow 数据 ⇒ 层必须建出来）。"
+      },
+      {
+       "k": "远景淡出（大气透视）",
+       "why": "**撤回基准值**（`extrudOpacity` 逐字段等于基准）：亮底上把远景楼调透明 = 楼「化」进地面，与「底要看得清」的诉求相反；它也不在保留清单里（清单 = 接触阴影 / cel 硬边 / 路 casing）。"
+      },
+      {
+       "k": "楼体竖向渐变（受光面/背光面）",
+       "why": "**撤回基准值**（`verticalGradient` 保持 false）：BA 的**平涂**是既定的美术方向，「受光/背光」改用 **cel 分档**表达（结构手段），不再动渐变。"
+      }
+     ]
+    },
+    "metrics": {
+     "groundHex": "#dceff7",
+     "groundLuma": 0.9244,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 0.877,
+     "outlineGroundRatio": 10.61,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": 0.18
+    }
    }
   }
  },
@@ -1230,6 +1624,189 @@
      "groundEps": 0.02,
      "vignetteOpacity": null
     }
+   },
+   "anime-old": {
+    "id": "anime-old",
+    "label": "二次元（改前配色，A/B 用） · 底图 对照·现状（灰度）",
+    "hud": "底图对照 = 现状（灰度，无植被/水体色）",
+    "sky": {
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.85,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#E8F8FF"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": [
+        "interpolate",
+        [
+         "linear"
+        ],
+        [
+         "zoom"
+        ],
+        16.6,
+        1,
+        18,
+        0
+       ],
+       "raster-saturation": 0.55,
+       "raster-contrast": 0.06,
+       "raster-brightness-max": 1
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#BCE7F8",
+       "background-opacity": 0.45
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#BCE4F9"
+     ],
+     [
+      12,
+      "#AEDDF7"
+     ],
+     [
+      25,
+      "#A2D8F6"
+     ],
+     [
+      45,
+      "#BCE4F9"
+     ],
+     [
+      70,
+      "#D6EFFC"
+     ],
+     [
+      110,
+      "#EBF7FE"
+     ],
+     [
+      200,
+      "#F6FCFF"
+     ],
+     [
+      320,
+      "#FFFFFF"
+     ]
+    ],
+    "roofFallback": "#A8DBF5",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#1B3550",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(126, 200, 138, 0.60)",
+     "water": "rgba(46, 158, 214, 0.92)"
+    },
+    "road": {
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
+     }
+    },
+    "canvas": {
+     "bg": "#BDDAE7",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#1B3550",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": {
+     "from": 16.6,
+     "to": 18
+    },
+    "verticalGradient": false,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.8,
+     15,
+     0.92,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": null,
+    "metrics": {
+     "groundHex": "#dceff7",
+     "groundLuma": 0.9244,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 0.877,
+     "outlineGroundRatio": 10.61,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": null
+    }
    }
   },
   "gray16": {
@@ -1606,6 +2183,174 @@
      "groundEps": 0.02,
      "vignetteOpacity": null
     }
+   },
+   "anime-old": {
+    "id": "anime-old",
+    "label": "二次元（改前配色，A/B 用） · 底图 对照·灰底图不淡出",
+    "hud": "底图对照 = 同一张灰底图，但**默认机位不淡出**（分离变量用）",
+    "sky": {
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.85,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#E8F8FF"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": 1,
+       "raster-saturation": 0.55,
+       "raster-contrast": 0.06,
+       "raster-brightness-max": 1
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#BCE7F8",
+       "background-opacity": 0.45
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#BCE4F9"
+     ],
+     [
+      12,
+      "#AEDDF7"
+     ],
+     [
+      25,
+      "#A2D8F6"
+     ],
+     [
+      45,
+      "#BCE4F9"
+     ],
+     [
+      70,
+      "#D6EFFC"
+     ],
+     [
+      110,
+      "#EBF7FE"
+     ],
+     [
+      200,
+      "#F6FCFF"
+     ],
+     [
+      320,
+      "#FFFFFF"
+     ]
+    ],
+    "roofFallback": "#A8DBF5",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#1B3550",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(126, 200, 138, 0.60)",
+     "water": "rgba(46, 158, 214, 0.92)"
+    },
+    "road": {
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
+     }
+    },
+    "canvas": {
+     "bg": "#BDDAE7",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#1B3550",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": null,
+    "verticalGradient": false,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.8,
+     15,
+     0.92,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": null,
+    "metrics": {
+     "groundHex": "#daeef5",
+     "groundLuma": 0.9188,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 0.882,
+     "outlineGroundRatio": 10.49,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": null
+    }
    }
   },
   "topo": {
@@ -1965,6 +2710,174 @@
      "rampFloorLuma": 0.8452,
      "bldGroundRatio": 0.966,
      "outlineGroundRatio": 9.45,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": null
+    }
+   },
+   "anime-old": {
+    "id": "anime-old",
+    "label": "二次元（改前配色，A/B 用） · 底图 候选·地形图（有绿/水）",
+    "hud": "底图候选 = 地形图（**有植被绿 / 水体蓝**，但本区最高只到 z13）",
+    "sky": {
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.85,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 13,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#E8F8FF"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": 1,
+       "raster-saturation": 0.55,
+       "raster-contrast": 0.06,
+       "raster-brightness-max": 1
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#BCE7F8",
+       "background-opacity": 0.1575
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#BCE4F9"
+     ],
+     [
+      12,
+      "#AEDDF7"
+     ],
+     [
+      25,
+      "#A2D8F6"
+     ],
+     [
+      45,
+      "#BCE4F9"
+     ],
+     [
+      70,
+      "#D6EFFC"
+     ],
+     [
+      110,
+      "#EBF7FE"
+     ],
+     [
+      200,
+      "#F6FCFF"
+     ],
+     [
+      320,
+      "#FFFFFF"
+     ]
+    ],
+    "roofFallback": "#A8DBF5",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#1B3550",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(126, 200, 138, 0.60)",
+     "water": "rgba(46, 158, 214, 0.92)"
+    },
+    "road": {
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
+     }
+    },
+    "canvas": {
+     "bg": "#BDDAE7",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#1B3550",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": null,
+    "verticalGradient": false,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.8,
+     15,
+     0.92,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": null,
+    "metrics": {
+     "groundHex": "#e1e8ea",
+     "groundLuma": 0.904,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 0.897,
+     "outlineGroundRatio": 10.13,
      "minGroundContrast": 1,
      "separation": "outline",
      "groundEps": 0.02,
@@ -2334,6 +3247,174 @@
      "groundEps": 0.02,
      "vignetteOpacity": null
     }
+   },
+   "anime-old": {
+    "id": "anime-old",
+    "label": "二次元（改前配色，A/B 用） · 底图 候选·街道图（有绿/水）",
+    "hud": "底图候选 = 街道图（暖色路网 + 绿/水；**上次「变白」的元凶**，留作反面对照）",
+    "sky": {
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.85,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 13,
+      "attribution": "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#E8F8FF"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": 1,
+       "raster-saturation": 0.35,
+       "raster-contrast": 0.04,
+       "raster-brightness-max": 1
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#BCE7F8",
+       "background-opacity": 0.135
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#BCE4F9"
+     ],
+     [
+      12,
+      "#AEDDF7"
+     ],
+     [
+      25,
+      "#A2D8F6"
+     ],
+     [
+      45,
+      "#BCE4F9"
+     ],
+     [
+      70,
+      "#D6EFFC"
+     ],
+     [
+      110,
+      "#EBF7FE"
+     ],
+     [
+      200,
+      "#F6FCFF"
+     ],
+     [
+      320,
+      "#FFFFFF"
+     ]
+    ],
+    "roofFallback": "#A8DBF5",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#1B3550",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(126, 200, 138, 0.60)",
+     "water": "rgba(46, 158, 214, 0.92)"
+    },
+    "road": {
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
+     }
+    },
+    "canvas": {
+     "bg": "#BDDAE7",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#1B3550",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": null,
+    "verticalGradient": false,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.8,
+     15,
+     0.92,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": null,
+    "metrics": {
+     "groundHex": "#cbd1d3",
+     "groundLuma": 0.8138,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 0.996,
+     "outlineGroundRatio": 8.14,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": null
+    }
    }
   },
   "imagery": {
@@ -2694,6 +3775,175 @@
      "groundLuma": 0.4754,
      "rampFloorLuma": 0.8452,
      "bldGroundRatio": 1.778,
+     "outlineGroundRatio": 2.89,
+     "minGroundContrast": 1,
+     "separation": "outline",
+     "groundEps": 0.02,
+     "vignetteOpacity": null
+    }
+   },
+   "anime-old": {
+    "id": "anime-old",
+    "label": "二次元（改前配色，A/B 用） · 底图 候选·卫星影像",
+    "hud": "底图候选 = 卫星影像（**唯一撑到 z17 的**；写实，改美术方向）",
+    "sky": {
+     "sky-color": "#72C8F7",
+     "horizon-color": "#E8F8FF",
+     "fog-color": "#D6EEFC",
+     "sky-horizon-blend": 0.6,
+     "horizon-fog-blend": 0.65,
+     "atmosphere-blend": 0.85,
+     "fog-ground-blend": 0.75
+    },
+    "sources": {
+     "base": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 19,
+      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     },
+     "ref": {
+      "type": "raster",
+      "tiles": [
+       "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "maxzoom": 16,
+      "tileSize": 256,
+      "crossOrigin": "anonymous"
+     }
+    },
+    "layers": [
+     {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+       "background-color": "#E8F8FF"
+      }
+     },
+     {
+      "id": "base",
+      "type": "raster",
+      "source": "base",
+      "paint": {
+       "raster-opacity": 1,
+       "raster-saturation": 0.3,
+       "raster-contrast": 0.08,
+       "raster-brightness-min": 0.18,
+       "raster-brightness-max": 1
+      }
+     },
+     {
+      "id": "tint",
+      "type": "background",
+      "paint": {
+       "background-color": "#BCE7F8",
+       "background-opacity": 0
+      }
+     },
+     {
+      "id": "ref",
+      "type": "raster",
+      "source": "ref",
+      "paint": {
+       "raster-opacity": 0.85
+      }
+     }
+    ],
+    "ramp": [
+     [
+      3,
+      "#BCE4F9"
+     ],
+     [
+      12,
+      "#AEDDF7"
+     ],
+     [
+      25,
+      "#A2D8F6"
+     ],
+     [
+      45,
+      "#BCE4F9"
+     ],
+     [
+      70,
+      "#D6EFFC"
+     ],
+     [
+      110,
+      "#EBF7FE"
+     ],
+     [
+      200,
+      "#F6FCFF"
+     ],
+     [
+      320,
+      "#FFFFFF"
+     ]
+    ],
+    "roofFallback": "#A8DBF5",
+    "antennaFallback": "#FFFFFF",
+    "outline": {
+     "color": "#1B3550",
+     "width": 1.8
+    },
+    "ai": {
+     "park": "rgba(126, 200, 138, 0.60)",
+     "water": "rgba(46, 158, 214, 0.92)"
+    },
+    "road": {
+     "casing": "#6FA6C8",
+     "casingOpacity": 0.95,
+     "rankColors": {
+      "0": "#FFFFFF",
+      "1": "#FBFDFF",
+      "2": "#F4FAFE",
+      "3": "#EBF5FC",
+      "4": "#E3F1FA",
+      "5": "#7FD4F0"
+     }
+    },
+    "canvas": {
+     "bg": "#BDDAE7",
+     "empty": "rgba(27,53,80,.75)",
+     "bldStroke": "#1B3550",
+     "bldStrokeW": 1.2,
+     "aiShadow": "rgba(44,74,99,.22)",
+     "aiStroke": "rgba(27,53,80,.5)",
+     "aiStrokeW": 0.8
+    },
+    "baseFade": null,
+    "verticalGradient": false,
+    "extrudOpacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.8,
+     0.8,
+     15,
+     0.92,
+     17,
+     1
+    ],
+    "low": {
+     "outlineWidth": 0.6
+    },
+    "look": null,
+    "metrics": {
+     "groundHex": "#797979",
+     "groundLuma": 0.4754,
+     "rampFloorLuma": 0.8105,
+     "bldGroundRatio": 1.705,
      "outlineGroundRatio": 2.89,
      "minGroundContrast": 1,
      "separation": "outline",

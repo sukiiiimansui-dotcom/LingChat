@@ -12,6 +12,7 @@
  * 地图被销毁时舞台调 `unbind()` 把它置空 —— 拿不到实例时所有方法都"如实返回空"，绝不抛。
  */
 
+import { bldIdOfFeature } from "./wsBldIdKey";
 import {
   contractActors,
   contractSelection,
@@ -272,7 +273,9 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
           /* 这条要素的代表点：拿它自己几何的第一个坐标（足够当"是哪一栋"，不是要精确的形心） */
           const rp = firstCoordOf(o.geometry);
           if (!rp) continue;
-          return { kind: "bld", id: String(id), lng: rp[0], lat: rp[1] };
+          /* id 口径：能规范化的（MVT 数字 id / 12 位 hex）走 `bldIdOfFeature`；其余原样 —— 老路一字节不变 */
+          const canon = bldIdOfFeature(o as { id?: unknown; properties?: Record<string, unknown> });
+          return { kind: "bld", id: canon ?? String(id), lng: rp[0], lat: rp[1] };
         }
       }
       return null;

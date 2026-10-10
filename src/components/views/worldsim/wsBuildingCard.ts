@@ -30,6 +30,7 @@
  * 只动 `transform` / `opacity`（`CARD_ANIM_PROPS`）；**禁 `backdrop-filter`**（`worldsim.css` 低档显式 `none`）。
  */
 
+import { bldIdOfFeature } from "./wsBldIdKey";
 import { ringCenter, ringsOf } from "./wsBuildingHint";
 import { renderHeight } from "./wsBuildingLook";
 import { WS_GEN_TAG, genName, type GenKind } from "./wsNameGen";
@@ -220,6 +221,9 @@ function fin(v: unknown): number | null {
 export function cardBuildingId(b: CardBuildingInput | null | undefined): string | null {
   if (!b) return null;
   const p = (b.properties || {}) as Record<string, unknown>;
+  /* 先试规范化（MVT 的数字 id / 12 位 hex ⇒ 统一成站内那串 12 位 hex），再退回原来的字符串链 */
+  const canon = bldIdOfFeature({ id: b.id, properties: p });
+  if (canon) return canon;
   for (const v of [p.osm_id, p.id, b.id, b.i, p.i]) {
     const s = str(v);
     if (s) return s;

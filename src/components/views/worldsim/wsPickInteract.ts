@@ -53,6 +53,7 @@
  * —— 它们读的是宿主同名解构出来的**同一个函数**（本文件是唯一实现，没有第二份）。
  * 依赖方向（§2.2）：本模块属 L2，**不 import 宿主**，也不与任何 M* 横向 import（共享量全由宿主注入）。
  */
+import { bldIdOfFeature } from "./wsBldIdKey";
 import { ref } from "vue";
 import { aiFeatureCollection } from "./wsAiLayers";
 import type { WsDistrictPin } from "./wsActors";
@@ -596,7 +597,8 @@ export function createPickInteract(ctx: PickInteractCtx) {
       }
       const f = feats[0];
       if (!f) return;                                   // 点到空处：什么都不弹（不编一栋楼出来）
-      openCard({ kind: "building", building: { id: String((f.properties || {}).osm_id || f.id || ""), properties: (f.properties || {}) as Record<string, unknown> }, click: pt || null });
+      const pickedId = bldIdOfFeature(f) ?? String((f.properties || {}).osm_id || f.id || "");
+      openCard({ kind: "building", building: { id: pickedId, properties: (f.properties || {}) as Record<string, unknown> }, click: pt || null });
     } catch (err) {
       stats.note = stats.note ? `${stats.note} · 点楼：${String((err as Error)?.message || err).slice(0, 40)}` : `点楼：${err}`;
     }
@@ -620,7 +622,7 @@ export function createPickInteract(ctx: PickInteractCtx) {
       const p = m.project(ll);
       if (!p || !Number.isFinite(p.x)) continue;
       const d = Math.hypot(p.x - Number(pt.x), p.y - Number(pt.y));
-      if (d < bestD) { bestD = d; best = { id: String(props.osm_id || f.id || ""), properties: props }; }
+      if (d < bestD) { bestD = d; best = { id: bldIdOfFeature({ id: f.id, properties: props }) ?? String(props.osm_id || f.id || ""), properties: props }; }
     }
     return best;
   }

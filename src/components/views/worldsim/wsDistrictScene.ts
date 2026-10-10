@@ -37,7 +37,7 @@ import { bldArtParamsOf } from "./wsArtParams";
 /* 基准上妆要 `buildingPartSet`（拆件：主体 + 屋顶系，纯函数）。
    本文件**只**用它的纯函数，不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。
    `renderHeight` 已不再直接调（它现在在 `buildingPartSet` 里算，两边各算一次迟早漂移）。 */
-import { buildingPartSet, HEIGHT_COLOR_RAMP, type ShapeMode } from "./wsBuildingLook";
+import { buildingPartSet, heightColorExpression, HEIGHT_COLOR_RAMP, type ShapeMode } from "./wsBuildingLook";
 /* **拆件的 zoom 分档真源**（2026-10-02 B1）：两个固定阈值 + `part→档位` 查表 + 离线可见性判定。
    它是**单向**依赖（本文件 → 它），它不 import 任何东西 ⇒ 不成环。 */
 import {
@@ -489,6 +489,46 @@ export function applyBuildingsTo(
   for (const l of specs) m.addLayer(l, before);
 }
 
+/** 高度色阶表达式：**复用共享真源那一份**，只把输入字段从 `h3d` 换成瓦片带的 `h`
+ *（不写第二份色阶 —— 两页/两条数据路的颜色口径必须同一个字节）。 */
+export function mvtHeightColorExpression(): unknown[] {
+  const base = heightColorExpression() as unknown[];
+  /* base = ["interpolate", ["linear"], ["coalesce", ["get","h3d"], 8], h1,c1, h2,c2, …] */
+  return [base[0], base[1], ["coalesce", ["get", "h"], 8], ...base.slice(3)];
+}
+
+/** `?mvt=1` 的楼房图层规格：与 GeoJSON 路**同一批 id / 同一套 fill-extrusion 语义**，
+ *  但只读瓦片带的属性（`h` / `b`）。瓦片里没有 `color3d`/`h3d`/`part` ⇒ 只出足迹与主体两层。 */
+export function mvtBldLayerSpecs(): Array<Record<string, unknown>> {
+  const color = mvtHeightColorExpression();
+  return [
+    {
+      id: "bld-foot", type: "fill", source: "bld", "source-layer": "bld",
+      minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+      paint: { "fill-color": color, "fill-opacity": WS_BLD_FOOTPRINT_OPACITY },
+    },
+    {
+      id: "bld-ext", type: "fill-extrusion", source: "bld", "source-layer": "bld",
+      minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+      paint: {
+        "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
+        "fill-extrusion-base": 0,
+        "fill-extrusion-opacity": 0.95,
+        "fill-extrusion-color": color,
+      },
+    },
+  ];
+}
+
+/** 建 `vector` 源 + 两条层（幂等：已存在就不重复加）。**只在这一条路上用**。 */
+export function applyMvtTo(m: DistrictMapLike, template: string): void {
+  if (!m.getSource("bld")) {
+    m.addSource("bld", { type: "vector", tiles: [template], minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: 16 });
+  }
+  const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);
+  for (const l of mvtBldLayerSpecs()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
+}
+
 export interface BldFlushOpts<T> {
   /** 仓库并集（宿主持有仓库；合并/淘汰规则在 `wsFeatureStore`） */
   features: () => readonly T[];
@@ -498,6 +538,11 @@ export interface BldFlushOpts<T> {
   map: () => DistrictMapLike | null;
   /** 楼房图层规格（**取自真源** `bldLayerSpecsFor(theme, tier)`） */
   specs: () => Array<Record<string, unknown>>;
+  /**
+   * `?mvt=1`（矢量瓦片先导）：给了且返回非 null ⇒ **改走 `vector` 源**（按 z/x/y 取瓦片），
+   * **不再 `setData`**；不给 / 返回 null ⇒ 走原来的 GeoJSON 路，**逐字节不变**（可逆开关的关那一侧）。
+   */
+  mvt?: () => { template: string } | null;
   /** 没有地图时怎么办（App：交给 2D 自绘；原型页 `?bld=0`：只记数不画） */
   onNoMap?: (data: FeatureCollectionLike) => void;
   /** 落图**之前**（宿主的计数/HUD；**不许在这里改数据**） */
@@ -549,6 +594,14 @@ export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
   const m = opts.map();
   if (!m) {
     opts.onNoMap?.(data);
+    return;
+  }
+  const mvt = opts.mvt ? opts.mvt() : null;
+  if (mvt) {
+    /* 矢量瓦片那条路：**只建源建层，不 setData**（"同批不重传"的语义交给 MapLibre 自己的瓦片缓存）。
+       HUD 的计数仍走 `afterDraw` —— 上层"画了多少栋"的口径不变。 */
+    applyMvtTo(m, mvt.template);
+    opts.afterDraw?.(why, data);
     return;
   }
   applyBuildingsTo(m, data, opts.specs());

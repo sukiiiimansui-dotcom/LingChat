@@ -418,6 +418,7 @@
     viewHalfMetersOf,
     LOD_NEAR_ZOOM,
   } from "./wsScene";
+import { mvtEnabled, setupMvtProtocol } from "./wsMvtTiles";
 import { WS_BLD_VECTOR_MINZOOM } from "./wsDistrictScene";
 /* **挑选/冻结编排 + 美术取参**（2026-09-26 抽出的两份共享真源，**代拍页调的就是这一份**）：
    **App 页用的建筑模型不是 art1，每次滑动建筑都变了，名字也没有**——
@@ -2123,6 +2124,13 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     try {
       const mod = await import(/* @vite-ignore */ ML_URL);
       maplibregl = mod?.default || mod;
+      /* `?mvt=1`（先导）：**建图之前**把 `mvt` 协议注册到主线程与 worker 两处。
+         只注册主线程时 worker 查不到协议、瓦片不落地（实测，见 world_map/mvt-spike/FINDING-MVT-ADDPROTOCOL.md）。
+         关掉 `?mvt=1` 时这里整段不执行 ⇒ 老路一字节不变。失败不静默（读 `window.__WS_MVT__`）。 */
+      if (mvtEnabled()) {
+        try { await setupMvtProtocol(maplibregl); }
+        catch (e) { (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = { enabled: true, error: String((e as Error)?.message || e) }; }
+      }
     } catch (e) {
       /* 原文必须带出来（原来写的是**猜的**一句「vendor/maplibre 缺失？」+ 把异常吞掉）。
          代价：HUD 上那句猜的话把"到底是 404、语法错、还是 worker 起不来"盖住了 ——

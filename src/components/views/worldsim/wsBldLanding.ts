@@ -54,6 +54,9 @@
  * 依赖方向（§2.2）：本模块属 L2，**不 import 宿主**、也不与任何 M* 横向 import（共享量全由宿主注入）；
  * 它要的 `bldFlush` 级别的横向量一件都没有（本片实测**不需要** `wsViewFetch.ts` 那边任何东西）。
  */
+/* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+import { mvtTemplateForHost } from "./wsMvtTiles";
+/* ┄┄┄ 有意增量 END ┄┄┄ */
 import { watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { bldLiveDecision, fetchRadiusForView, roadsLiveDecision, viewHalfMetersOf } from "./wsScene";
@@ -323,6 +326,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
            `?art=2` 把色阶高段推近白；`art=1` 时 `ramp` 是**主题那个引用**（恒等）⇒ 默认零改动。
            形体档 `mode:"base"` = 不拆件（用户 (a′) ⇒ 两页默认档同一条规格）。 */
         specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" }),
+        /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+        /* `?mvt=1`（先导）：注册成功才给模板 ⇒ 走矢量瓦片源、**不 setData**；
+           开关关掉 / 注册失败 ⇒ 返回 null ⇒ 原来那条 GeoJSON 路**逐字节不变**（可逆开关的关那一侧）。 */
+        mvt: () => { const t = mvtTemplateForHost(); return t ? { template: t } : null; },
+        /* ┄┄┄ 有意增量 END ┄┄┄ */
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
         /* **记下"真正画出去的那批楼"**：名字层的锚点/点选降级都只认这一批 ——
            否则会出现已报过的「有的压根没对应楼」（名字指到没画的楼）。

@@ -30,6 +30,7 @@
  * · 页面/宿主：**什么时候调、HUD 怎么念**（`stats.why` 由规则模块产出，宿主**不许**再拼第二份）。
  */
 
+import { bldKeyOfFeature } from "./wsBldIdKey";
 import {
   capBuildingsPerCell,
   type CapCellStats,
@@ -312,9 +313,11 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
   /**
    * **近带增量**（2026-10-10）：上一轮的池（对象同一性）与"这一轮新到的要素"。
    * 只在 `poolRev` 变了时重算 ⇒ 挂在**格加入/淘汰**上，不在每次 pick 上。
-   * 第一轮（`lastPoolObjs === null`）视作"整池都是新的" ⇒ 行为与改动前逐字节相同。
+   * 第一轮（`lastPoolKeys === null`）视作"整池都是新的" ⇒ 行为与改动前逐字节相同。
    */
-  let lastPoolObjs: Set<unknown> | null = null;
+  /* **按 id** 的上一轮池快照（原来是 `Set<对象>` —— MVT 下每次取瓦片都是新对象，等价于"按下标"）。
+     `bldKeyOfFeature` 优先稳定 id，没有 id 的要素退回对象本身 ⇒ `?live=1` 那条路逐字节不变。 */
+  let lastPoolKeys: Set<unknown> | null = null;
   let lastPoolRev: string | number | null | undefined = undefined;
   let freshFeats: readonly unknown[] = [];
   /** 当前锚点的格键（相机这一轮落在哪一格）——`null` = 还没播过种（此时锚点表本来就是空的） */
@@ -454,9 +457,9 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
           if (input.poolRev !== undefined && input.poolRev !== null && input.poolRev === lastPoolRev) {
             return (freshFeats.length ? freshFeats : walkFrozen) as unknown as T[];
           }
-          const prev = lastPoolObjs;
-          const fresh = prev ? cur.filter((f) => !prev.has(f)) : cur;
-          lastPoolObjs = new Set<unknown>(cur);
+          const prev = lastPoolKeys;
+          const fresh = prev ? cur.filter((f) => !prev.has(bldKeyOfFeature(f))) : cur;
+          lastPoolKeys = new Set<unknown>(cur.map((f) => bldKeyOfFeature(f)));
           lastPoolRev = input.poolRev;
           freshFeats = fresh;
           return fresh.concat(walkFrozen) as unknown as T[];
@@ -483,8 +486,10 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
           const arr = nearFeat.get(nearAnchors[i]!.key)!;
           for (let j = 0; j < cnt && off < tail.length; j++, off++) {
             const f = tail[off]!;
-            /* 同一栋只存一次（对象同一性）：冻结点是**引用**，重复 push 会让"欠账"越滚越长 */
-            if (!arr.includes(f as unknown)) arr.push(f as unknown);
+            /* 同一栋只存一次（**按 id**，不是对象同一性 —— MVT 下同一栋每次取都是新对象）：
+               冻结点仍是**引用**（画的就是它），重复 push 会让"欠账"越滚越长。 */
+            const fk = bldKeyOfFeature(f);
+            if (!arr.some((x) => bldKeyOfFeature(x) === fk)) arr.push(f as unknown);
           }
         }
       }
@@ -515,8 +520,8 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
             stats.walkDropped = withD.length - keep.length;
             walkFrozen.length = 0;
             /* 存回**原数组顺序**（不是距离序）：冻结集的顺序不该被一次淘汰改掉 */
-            const keepSet = new Set(keep.map((x) => x.f));
-            for (const f of next) if (keepSet.has(f as unknown)) walkFrozen.push(f as unknown);
+            const keepKeys = new Set(keep.map((x) => bldKeyOfFeature(x.f)));
+            for (const f of next) if (keepKeys.has(bldKeyOfFeature(f))) walkFrozen.push(f as unknown);
             stats.why += " · 行走缓冲超上限：丢 " + stats.walkDropped + " 栋（离中心最远的那几栋）";
           }
         }

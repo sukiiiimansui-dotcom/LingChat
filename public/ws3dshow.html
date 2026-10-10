@@ -473,6 +473,20 @@
 
       const $ = (id) => document.getElementById(id);
       const errs = [];
+      /* `errs` 是**开页至今的历史累计**（69 个 `errs.push` 写点，从来没有复位口）——
+         拿它判"现在坏了没有"会误判：2026-10-10 实测 `__BLD_LAYERS__.errs` 报 1 条，
+         实际是开页那一刻 "Style is not done loading" 的噪声（见 `bldLayerHeal` 那段注释）。
+         ⇒ 这里只加**一个复位出口**与**一个实时条数**，一个写入点都不动：
+            · `window.__ERRS_RESET__(why)` —— 读数/探针在取数前清一次；
+            · `window.__ERRS_N__` —— getter（所以那 69 处写法一个字都不用改）。 */
+      function errsClear(why) {
+        errs.length = 0;
+        try { window.__ERRS_LAST_CLEAR__ = String(why || ""); } catch (e) { /* 忽略 */ }
+      }
+      try {
+        window.__ERRS_RESET__ = errsClear;
+        Object.defineProperty(window, "__ERRS_N__", { get: function () { return errs.length; }, configurable: true });
+      } catch (e) { /* 忽略：拿不到出口也不许影响地图 */ }
       let maplibregl = null;
       let map = null;
       let fcCache = null;
@@ -1936,6 +1950,9 @@
 
       /** 名字层刷新（**只在事件里调**：moveend / zoomend / 新数据到达 / 开页 kick） */
       async function refreshLabels(why) {
+        /* 调用计数（`window.__LBL_REFRESH_N__`）：这一层是**每次落图都重排**的那件重活，
+           而它曾经被同一个 tick 连调两次（见 `flushBld` 尾部那条注释）—— 计数让"每轮几次"可数。 */
+        try { window.__LBL_REFRESH_N__ = (window.__LBL_REFRESH_N__ || 0) + 1; } catch (e) { /* 忽略 */ }
         if (!LABELS_ON) { const el = $("m-labels"); if (el) el.textContent = "🏷 名字层 关（?labels=0）"; return; }
         /* **先让旧 vendor 自愈**（浏览器对 `/vendor/wsScene.mjs` 是 `immutable` 缓存）：
            `ensureVendor()` 会取内容哈希再带版本号重取一次（URL 变了 ⇒ 绕过缓存）。
@@ -3533,8 +3550,11 @@
           }
         } catch (e2) { /* 自检失败不许影响落图 */ }
         renderBldBundleHud();
-        try { refreshLabels("bundle-bld"); } catch (e) { /* 标签失败不影响地图 */ }
-        try { void refreshLabels("bundle-bld"); } catch (e2) { /* 忽略 */ }
+        /* **只调一次**。这里曾经是同一 tick 连调两次（`try { refreshLabels(…) }` + `try { void refreshLabels(…) }`）：
+           `refreshLabels` 是 async ⇒ 不带 `void`/`await` 的那一句**同步抛错也没人接**，
+           而且第二次必然命中规划缓存只是"多一次复用记账 + 一次重投影" —— 整层重排的白工。
+           2026-10-10 删掉重复那一次；`window.__LBL_REFRESH_N__` 让"每轮几次"可数（应当是 1）。 */
+        try { void refreshLabels("bundle-bld"); } catch (e) { /* 标签失败不影响地图 */ }
         if (why) window.__BLD_FLUSH_WHY__ = why;
       }
 

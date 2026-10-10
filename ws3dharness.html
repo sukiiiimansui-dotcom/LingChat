@@ -237,6 +237,48 @@
         check("相机双射：radius 往返相对误差 ≤1%（全部用例）", worstR <= 0.01, { worstRel: Number(worstR.toFixed(6)) });
         check("相机双射：bearing/pitch 往返误差 ≤0.5°（全部用例）", worstAng <= 0.5, { worstDeg: Number(worstAng.toFixed(4)) });
 
+        /* ── ⑤b 中心命中：把相机**正对着夹具里的一栋楼**，看它报出来的 id 是不是那一栋 ──
+           （这个 three 构建没有 `Raycaster`，后端自带射线求交 —— 这一格是它的**行为证据**：
+             对着哪栋就该报哪栋，连问两次还得一致。） */
+        const feats = fx.world.buildings.features || [];
+        const idset = new Set(feats.map((f) => String(f.id ?? "")).filter((x) => x));
+        const ring0 = (() => {
+          const g = feats[0]?.geometry;
+          if (!g) return null;
+          const c = g.type === "Polygon" ? g.coordinates?.[0] : g.type === "MultiPolygon" ? g.coordinates?.[0]?.[0] : null;
+          return Array.isArray(c) && c.length ? c : null;
+        })();
+        let aimed = null;
+        if (ring0) {
+          let sx = 0;
+          let sy = 0;
+          for (const pt of ring0) {
+            sx += Number(pt[0]);
+            sy += Number(pt[1]);
+          }
+          aimed = { lng: sx / ring0.length, lat: sy / ring0.length };
+        }
+        if (aimed) {
+          b.applyView({ ...state, center: aimed, pitch: 0, bearing: 0, radius: 80 });
+          await sleep(250);
+          const p1 = b.centerPick ? b.centerPick() : null;
+          const p2 = b.centerPick ? b.centerPick() : null;
+          const dgp = typeof b.diag === "function" ? b.diag() : null;
+          raw.pick = {
+            want: String(feats[0]?.id ?? ""),
+            got: p1 ? String(p1.id) : null,
+            again: p2 ? String(p2.id) : null,
+            color: dgp?.colorPick || null,
+          };
+          info(`中心命中：对着「${raw.pick.want}」看 ⇒ 报「${raw.pick.got}」（再问一次「${raw.pick.again}」）`);
+          check("centerPick() 报的是**那份数据里的**一栋，而且对着的那栋就是它（连问两次一致）",
+            !!p1 && idset.has(String(p1.id)) && String(p1.id) === String(p2?.id),
+            { ...raw.pick, ids: idset.size });
+          check("命中时 diag.colorPick 记下了这栋的颜色/高度（与 2D 同一个字段）",
+            !!dgp?.colorPick && !!dgp.colorPick.color && dgp.colorPick.h3d > 0,
+            dgp?.colorPick || null);
+        }
+
         /* ── ⑥ 暂停 / 销毁：画布与上下文都要放掉 ── */
         b.pause();
         await sleep(300);

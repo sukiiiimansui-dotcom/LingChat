@@ -37,9 +37,11 @@
  * ⇒ 以后往这个文件里加 three 用法之前，先对着 vendor 那份构建核一遍导出名单。
  */
 
-import { renderHeight } from "./wsBuildingLook";
 import { roadStyleOf } from "./wsRoads";
 import { wsMapTheme } from "./wsMapTheme";
+/* 楼的几何整块搬去了 `wsBldMesh.ts`（叠加层那条路要用**同一份**，见那个文件头）。
+   这里只留"把它产出的扁平数组包成 three 的缓冲"这一步。 */
+import { BLD_CAP, buildBldMeshData, hexToRgb, ringPts } from "./wsBldMesh";
 import {
   contractActors,
   contractTheme,
@@ -72,12 +74,6 @@ const M_PER_DEG = 111319.49079327358;
 const CHAR_NAMES = ["DeepSeek", "诺一钦灵", "风雪"];
 /** 一屏最多画几个立绘（每人一张 512 贴图；超了只画前 N 个并如实报出来） */
 const ACTOR_CAP = 24;
-/**
- * 一次最多画几栋楼（**离锚点最近的先画**）。
- * 为什么要有上限：`bld` 那份 source 是"取回来的一整批"（可能上万栋），而 three 这边是
- * 一坨合并几何 + 软件渲染时最贵的那条路。超出部分**如实报**（`diag.capped`），不静默丢。
- */
-const BLD_CAP = 3500;
 /** 近远裁剪面 */
 const NEAR_M = 0.6;
 
@@ -153,52 +149,12 @@ function toLatLng(f: Frame, x: number, z: number): [number, number] {
 }
 
 /** 主题色阶取色（`color3d` 缺席时的兜底：与 2D 那条 `ramp` 表达式同一个停靠点表） */
-function rampHexAt(themeId: string, h: number): string {
-  const th = wsMapTheme(themeId) as unknown as { ramp?: Array<[number, string]> };
-  const stops = Array.isArray(th.ramp) ? th.ramp : [];
-  if (!stops.length) return "#cccccc";
-  if (h <= stops[0]![0]) return stops[0]![1];
-  for (let i = 1; i < stops.length; i++) {
-    const a = stops[i - 1]!;
-    const b = stops[i]!;
-    if (h <= b[0]) {
-      const t = (h - a[0]) / Math.max(1e-6, b[0] - a[0]);
-      return mixHexStr(a[1], b[1], t);
-    }
-  }
-  return stops[stops.length - 1]![1];
-}
-function hexToRgb(hex: string): [number, number, number] {
-  const s = String(hex || "").trim().replace("#", "");
-  const v = s.length === 3 ? s.split("").map((c) => c + c).join("") : s;
-  const n = Number.parseInt(v.slice(0, 6), 16);
-  if (!Number.isFinite(n)) return [0.8, 0.8, 0.8];
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
-function mixHexStr(a: string, b: string, t: number): string {
-  const ca = hexToRgb(a);
-  const cb = hexToRgb(b);
-  const c = ca.map((x, i) => Math.round((x + (cb[i]! - x) * t) * 255));
-  return "#" + c.map((x) => Math.max(0, Math.min(255, x)).toString(16).padStart(2, "0")).join("");
-}
 
 /* ── 烘进顶点色的 Lambert（**这个 three 构建没有 MeshLambertMaterial**，见文件头）────────
  * 原来场景里是 `AmbientLight(0.62)` + `DirectionalLight(0.38)` 打在 Lambert 材质上；
  * 现在同一套系数在**建几何时**算进顶点色，材质退成 `MeshBasicMaterial`（不受光）。
  * · 顶面：系数取 **1.0** ⇒ 屋顶颜色就是 `color3d` 原色（与 2D 的 `bld-ext` 逐位一致）；
  * · 墙面：按水平法线吃一次 Lambert（0.62 + 0.38 × max(0, n·L̂)）。 */
-const AMBIENT_K = 0.62;
-const SUN_K = 0.38;
-const SUN_DIR: readonly [number, number, number] = (() => {
-  const v: [number, number, number] = [0.35, 1, 0.36];
-  const l = Math.hypot(v[0], v[1], v[2]) || 1;
-  return [v[0] / l, v[1] / l, v[2] / l];
-})();
-/** 某个朝向的漫反射系数（顶面由调用方直接给 1.0） */
-function shadeOf(nx: number, ny: number, nz: number): number {
-  const d = nx * SUN_DIR[0] + ny * SUN_DIR[1] + nz * SUN_DIR[2];
-  return AMBIENT_K + SUN_K * Math.max(0, d);
-}
 /** 朝向归一到 [-180,180)（与 MapLibre 同口径） */
 function normBearing(b: number): number {
   let x = ((b + 180) % 360 + 360) % 360 - 180;
@@ -210,44 +166,7 @@ function clampPitch(p: number): number {
   return Math.max(0, Math.min(70, Number.isFinite(p) ? p : 0));
 }
 
-/** 把环坐标（可能嵌套）读成 [lng,lat] 数组 */
-function ringPts(raw: unknown): Array<[number, number]> {
-  if (!Array.isArray(raw)) return [];
-  const out: Array<[number, number]> = [];
-  for (const p of raw) {
-    if (!Array.isArray(p)) continue;
-    const lng = Number(p[0]);
-    const lat = Number(p[1]);
-    if (Number.isFinite(lng) && Number.isFinite(lat)) out.push([lng, lat]);
-  }
-  return out;
-}
-
-/** 一个（Multi）Polygon 的**外环**列表（洞本轮不画，只计数） */
-function outerRingsOf(geom: unknown): { rings: Array<Array<[number, number]>>; holes: number } {
-  const g = geom as { type?: string; coordinates?: unknown } | null;
-  const rings: Array<Array<[number, number]>> = [];
-  let holes = 0;
-  if (!g) return { rings, holes };
-  if (g.type === "Polygon") {
-    const cs = g.coordinates as unknown[];
-    if (Array.isArray(cs) && cs.length) {
-      rings.push(ringPts(cs[0]));
-      holes += Math.max(0, cs.length - 1);
-    }
-  } else if (g.type === "MultiPolygon") {
-    const cs = g.coordinates as unknown[];
-    for (const poly of Array.isArray(cs) ? cs : []) {
-      const arr = poly as unknown[];
-      if (!Array.isArray(arr) || !arr.length) continue;
-      rings.push(ringPts(arr[0]));
-      holes += Math.max(0, arr.length - 1);
-    }
-  }
-  return { rings, holes };
-}
-
-/** 线要素 → 一串折线（LineString / MultiLineString） */
+/** 线要素 → 一串折线（LineString / MultiLineString）；`ringPts` 从 `wsBldMesh` 借（同一份实现） */
 function linesOf(geom: unknown): Array<Array<[number, number]>> {
   const g = geom as { type?: string; coordinates?: unknown } | null;
   if (!g) return [];
@@ -304,8 +223,8 @@ export function createThreeBackend(): WsRenderBackend {
     new URL(path, typeof location !== "undefined" ? location.href : "http://127.0.0.1/").href;
 
   /** `Float32BufferAttribute` 在这个 three 构建里不存在 ⇒ 自己按 `BufferAttribute` 造一个 */
-  function attr3(arr: number[]): unknown {
-    return new THREE!.BufferAttribute(new Float32Array(arr), 3);
+  function attr3(arr: ArrayLike<number>): unknown {
+    return new THREE!.BufferAttribute(Float32Array.from(arr), 3);
   }
 
   function sizeOf(): { w: number; h: number } {
@@ -406,125 +325,36 @@ export function createThreeBackend(): WsRenderBackend {
     featureIds = [];
     featureMeta = [];
     if (!THREE || !scene || !frame || !fc) return;
-
-    const pos: number[] = [];
-    const col: number[] = [];
-    const triTo: number[] = [];
-    const featBox: number[] = [];
-    /* 超过上限时**先画离锚点最近的**（近处的楼才是用户真正在看的那一批）。
-       排序用要素自己的第一个坐标当代表点 —— 精确到米没必要，这只是"先画谁"的取舍。 */
-    let list = fc.features;
-    if (list.length > BLD_CAP) {
-      const keyed = list.map((f, i) => {
-        const g = (f as { geometry?: unknown }).geometry;
-        const { rings } = outerRingsOf(g);
-        const p0 = rings[0]?.[0];
-        const d = p0 && frame ? Math.hypot(...toLocal(frame, p0[0], p0[1])) : Number.POSITIVE_INFINITY;
-        return { f, i, d };
-      });
-      keyed.sort((a, b) => a.d - b.d);
-      diag.capped = keyed.length - BLD_CAP;
-      list = keyed.slice(0, BLD_CAP).map((k) => k.f);
-    }
-    for (const raw of list) {
-      const f = raw as { id?: unknown; properties?: Record<string, unknown>; geometry?: unknown };
-      const props = f.properties || {};
-      const { rings, holes } = outerRingsOf(f.geometry);
-      if (!rings.length) continue;
-      diag.holesDropped += holes;
-      const h3dRaw = Number(props.h3d);
-      const rh = renderHeight(props);                    // ← 与 2D **同一个函数**
-      const top = Number.isFinite(h3dRaw) && h3dRaw > 0 ? h3dRaw : rh.h;
-      const baseRaw = Number(props.h_base ?? props.min_height ?? 0);
-      const base = Number.isFinite(baseRaw) && baseRaw > 0 ? Math.min(baseRaw, top - 0.4) : 0;
-      if (!(top - base >= 0.4)) continue;
-      if (Number.isFinite(h3dRaw) && h3dRaw > 0) diag.withH3d++;
-      if (typeof props.color3d === "string" && props.color3d) diag.withColor3d++;
-      if (rh.from === "real") diag.fromReal++;
-      else if (rh.from === "levels") diag.fromLevels++;
-      else diag.fromKind++;
-      const hex = typeof props.color3d === "string" && props.color3d ? props.color3d : rampHexAt(themeId, top);
-      const rgb = hexToRgb(hex);
-      const fi = featureIds.length;
-      featureIds.push(String(f.id ?? ""));
-      featureMeta.push({ color: hex, h3d: top, hBase: base });
-      let added = false;
-      const box = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
-      const grow = (x: number, z: number): void => {
-        if (x < box[0]) box[0] = x;
-        if (z < box[1]) box[1] = z;
-        if (x > box[2]) box[2] = x;
-        if (z > box[3]) box[3] = z;
-      };
-      for (const ring of rings) {
-        if (ring.length < 3) continue;
-        const pts = ring.map(([lng, lat]) => toLocal(frame!, lng, lat));
-        for (const p of pts) grow(p[0], p[1]);
-        const tris = triangulateRing(pts);
-        if (!tris.length) continue;
-        added = true;
-        /* 顶盖（法线朝上：算一下叉积，朝下就换序，绝不靠"输入一定是逆时针"） */
-        for (let i = 0; i < tris.length; i += 3) {
-          const a = pts[tris[i]!]!;
-          const b = pts[tris[i + 1]!]!;
-          const c = pts[tris[i + 2]!]!;
-          const up = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-          const q = up >= 0 ? [a, b, c] : [a, c, b];
-          for (const p of q) {
-            pos.push(p[0], top, p[1]);
-            col.push(rgb[0], rgb[1], rgb[2]);
-          }
-          /* 🔴 一个三角形**一个槽**（墙那边每个四边形 2 个三角形、也是 2 个槽）。
-             原来这里 push 三个 ⇒ 槽位与三角形下标错位，`centerPick` 按槽位反查就会指错/指空
-             （2026-10-11 靶场"对着某栋楼问它命中了谁"那条测出来的）。 */
-          triTo.push(fi);
-        }
-        /* 墙：每条边一个四边形（不做背面剔除的取舍 —— 材质用 DoubleSide，朝向错了也看得见） */
-        for (let i = 0; i < pts.length; i++) {
-          const a = pts[i]!;
-          const b = pts[(i + 1) % pts.length]!;
-          if (a[0] === b[0] && a[1] === b[1]) continue;
-          const quad = [
-            [a[0], base, a[1]], [b[0], base, b[1]], [b[0], top, b[1]],
-            [a[0], base, a[1]], [b[0], top, b[1]], [a[0], top, a[1]],
-          ];
-          /* 墙面法线 = 这条边在水平面里转 90°（朝外那一侧由叉积定；DoubleSide 下无所谓正负，
-             只要"同一个朝向拿到同一个系数"） */
-          const ex = b[0] - a[0];
-          const ez = b[1] - a[1];
-          const el = Math.hypot(ex, ez) || 1;
-          const k = shadeOf(-ez / el, 0, ex / el);
-          const wr = rgb[0] * k;
-          const wg = rgb[1] * k;
-          const wb = rgb[2] * k;
-          for (const p of quad) {
-            pos.push(p[0]!, p[1]!, p[2]!);
-            col.push(wr, wg, wb);
-          }
-          triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
-        }
-      }
-      if (added) {
-        diag.buildings++;
-        featBox.push(box[0], box[1], box[2], box[3]);
-      } else {
-        /* 没画成的那一栋要**从名单里退掉**，否则 `centerPick` 会指到一栋画不出来的楼上 */
-        featureIds.pop();
-        featureMeta.pop();
-      }
-    }
-    if (!pos.length) return;
+    /* 几何在 `wsBldMesh.ts` 里算（纯函数、不认识 three）：投影口径由这里注入，
+       于是叠加层那条路能拿**同一份**几何，不会出现"两个引擎各画一套楼"。 */
+    const data = buildBldMeshData({
+      features: fc.features,
+      toLocal: (lng, lat) => toLocal(frame as Frame, lng, lat),
+      themeId,
+      cap: BLD_CAP,
+    });
+    diag.buildings = data.stats.buildings;
+    diag.capped = data.stats.capped;
+    diag.holesDropped = data.stats.holesDropped;
+    diag.withColor3d = data.stats.withColor3d;
+    diag.withH3d = data.stats.withH3d;
+    diag.fromReal = data.stats.fromReal;
+    diag.fromLevels = data.stats.fromLevels;
+    diag.fromKind = data.stats.fromKind;
+    featureIds = data.featureIds;
+    featureMeta = data.featureMeta;
+    if (!data.triangles) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", attr3(pos));
-    g.setAttribute("color", attr3(col));
+    g.setAttribute("position", attr3(data.positions));
+    g.setAttribute("color", attr3(data.colors));
     g.computeVertexNormals();
-    /* 材质不受光：明暗已经在顶点色里（见 `shadeOf` 那一段的说明） */
+    /* 材质不受光：明暗已经在顶点色里（见 `wsBldMesh.ts` 那段说明） */
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
     bldMesh = new THREE.Mesh(g, mat);
     bldMesh.name = "ws-buildings";
     scene.add(bldMesh);
-    triFeature = Int32Array.from(triTo);
-    featAabb = Float32Array.from(featBox);
+    triFeature = Int32Array.from(data.triFeature);
+    featAabb = Float32Array.from(data.boxes);
     diag.tris = triFeature.length;
   }
 

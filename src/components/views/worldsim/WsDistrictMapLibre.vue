@@ -977,6 +977,18 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     try { return /[?&]stylewatch=0\b/.test(location.search); } catch { return false; }
   })();
   let styleWatchTimer = 0;
+  /** **自用验收开关** `?ctxkill=<丢秒>[,<恢复秒>]`（2026-10-11）—— 只在**带参数时**生效（默认一个字节不装）。
+   *  与 `?wsverify=1` / `?selfshot=1` / `?wsfallback=1` 同性质：**自用层，不是产品功能**。
+   *  用途：真机上没有任何入口能造出"死样式" ⇒ 那个宿主级动作（`fallback2d("style-dead", …)`）没法验。
+   *  纪律：只对地图画布真的调 `WEBGL_lose_context`；**拿不到扩展就如实报，绝不退合成事件**（宁可失败不造假）。 */
+  const CTXKILL = (() => {
+    try {
+      const m = /[?&]ctxkill=([0-9.,]+)/.exec(location.search);
+      if (!m) return null;
+      return m[1].split(",").map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+    } catch { return null; }
+  })();
+  let ctxKillTimer = 0;
   /** 「放大才取楼」的去抖定时器（moveend 里用；卸载时要清） */
   let bldTimer = 0;
   /** 名字层在 `zoomend` 之后的去抖（缩放会改变避让结果与区名模式，必须重排一次；卸载时要清） */
@@ -2435,6 +2447,35 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       styleWatchTimer = window.setInterval(() => { try { sw.tick(); } catch { /* 忽略 */ } }, STYLE_WATCH_MS);
     }
 
+    /* ══ **自用验收开关** `?ctxkill=`（2026-10-11，见上面那段注释）══════════════════════════
+       到点对画布调真 `loseContext()`（不给恢复秒 = "丢了不管"）；到恢复点再 `restoreContext()`；
+       并把 `renderKind / fallbackWhy / stats.styleWatch` 三样露在一个只读全局上，供真机读数。 */
+    if (CTXKILL && CTXKILL.length) {
+      const g = (() => { try { const cv = m.getCanvas(); return cv.getContext("webgl2") || cv.getContext("webgl"); } catch { return null; } })();
+      const ext = g && g.getExtension("WEBGL_lose_context");
+      stats.ctxKill = ext
+        ? "开关已装（扩展在）· 计划 " + CTXKILL.join(",") + "s"
+        : "🔴 这个环境没有 WEBGL_lose_context ⇒ 验收开关**无效**（按纪律不造假，不合成事件）";
+      try {
+        const w = window as unknown as Record<string, unknown>;
+        w.__WS_CTXKILL__ = () => ({
+          renderKind: renderKind.value, fallbackWhy: fallbackWhy.value,
+          styleWatch: stats.styleWatch, ctxKill: stats.ctxKill,
+        });
+      } catch { /* 出口挂不上不影响地图 */ }
+      if (ext) {
+        CTXKILL.forEach((sec, i) => {
+          const t = window.setTimeout(() => {
+            try {
+              if (i % 2 === 0) { ext.loseContext(); }
+              else { ext.restoreContext(); }
+            } catch { /* 开关失败不影响地图 */ }
+          }, sec * 1000);
+          if (!ctxKillTimer) ctxKillTimer = t;
+        });
+      }
+    }
+
     /* ⑤ movestart / move / click → wsStageEvents.registerCameraMotion */
     registerCameraMotion(m);
 
@@ -2464,6 +2505,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     if (bldTimer) window.clearTimeout(bldTimer);
     if (healTimer) window.clearInterval(healTimer);   /* 兜底恢复看门狗（2026-10-11） */
     if (styleWatchTimer) window.clearInterval(styleWatchTimer);   /* 样式死亡看门狗（2026-10-11） */
+    if (ctxKillTimer) window.clearTimeout(ctxKillTimer);           /* 自用开关 `?ctxkill=`（2026-10-11） */
     if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
     /* S5（：换批 / 进场淡入 / 退场幽灵 / 传送帧举旗摘旗那**五个**定时器与两帧句柄
        都是 `wsNameHost.ts` 私有的 `let` ⇒ 经这个出口一次清掉（函数体里那五条判据与顺序

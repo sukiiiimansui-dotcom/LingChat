@@ -465,9 +465,19 @@ export function createOverlayBackend(): WsRenderBackend {
   /** 地图画完一帧 ⇒ 同一帧把叠加层也画了（`alignMode === 'render'` 时的唯一驱动） */
   function onMapRender(): void {
     if (state !== "running") return;
+    const now = performance.now();
     syncCamera();
     drawOnce();
     frames++;
+    /* fps 两种模式都要数：`render` 模式原来只 `frames++`，`stats().fps` 恒为 0
+       ⇒ "它到底在不在出帧"这条判据在叠加层上读不出东西（2026-10-11 真页面探针实测）。 */
+    fpsFrames++;
+    if (!fpsAt) fpsAt = now;
+    if (now - fpsAt >= 1000) {
+      fps = (fpsFrames * 1000) / (now - fpsAt);
+      fpsAt = now;
+      fpsFrames = 0;
+    }
   }
 
   function tick(): void {

@@ -268,6 +268,50 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
       };
     },
 
+    /** 探针用：脚本化平移（`duration: 0` = 立刻，便于逐帧对拍；真机手势走地图自己的那条路） */
+    panBy(dx: number, dy: number): boolean {
+      const m = map as unknown as { panBy?: (o: [number, number], opt?: unknown) => unknown } | null;
+      if (!m?.panBy) return false;
+      try {
+        m.panBy([Number(dx) || 0, Number(dy) || 0], { duration: 0 });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    /**
+     * **图层清单**（只读）：`bld*` 那几层的 `visibility` —— "地图自己那套楼"现在显不显示。
+     *
+     * 真机反馈"地图和立体楼两层同时在画"⇒ 修的时候要把地图那套楼藏掉，而**藏没藏、还原没还原**
+     * 必须是可读的（不许静默）。所以这里如实报出来。
+     */
+    layers(): Array<{ id: string; visibility: string | null }> {
+      const out: Array<{ id: string; visibility: string | null }> = [];
+      const m = map as unknown as {
+        getStyle?: () => { layers?: Array<{ id?: string }> } | undefined;
+        getLayoutProperty?: (id: string, k: string) => unknown;
+      };
+      try {
+        const layers = m?.getStyle?.()?.layers || [];
+        for (const l of layers) {
+          const id = String(l?.id || "");
+          if (!id.startsWith("bld")) continue;
+          let vis: string | null = null;
+          try {
+            const v = m.getLayoutProperty?.(id, "visibility");
+            vis = v === undefined || v === null ? null : String(v);
+          } catch {
+            vis = "?";
+          }
+          out.push({ id, visibility: vis });
+        }
+      } catch {
+        /* 拿不到就给空表（如实：不是"没有楼"，是"读不到"） */
+      }
+      return out;
+    },
+
     /**
      * **经纬度 → 屏幕像素**（真地图的 `project()`；纯数学，不需要 GL）。
      * §1.3 那条"同楼四角 ≤1.5 px"的对拍要拿它与叠加层那边的 `camera.project()` 比。

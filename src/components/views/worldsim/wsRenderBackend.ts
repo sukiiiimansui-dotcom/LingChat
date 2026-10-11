@@ -582,6 +582,51 @@ if (typeof window !== "undefined") {
      * （`camera.project()`）。两条都**不需要 GL**（纯数学）⇒ 本机也能量"楼与底图对不对得齐"。
      * 谁没在台上就返回 `null`（如实，不编）。
      */
+    /** 脚本化平移（逐帧对拍用）：`mapPanBy(dx, dy)` */
+    mapPanBy: (dx: number, dy: number) => {
+      try {
+        const b = mapBackendNow() as unknown as { panBy?: (a: number, c: number) => boolean } | null;
+        return b?.panBy ? b.panBy(dx, dy) : false;
+      } catch {
+        return false;
+      }
+    },
+    /** 叠加层**上次真的画出去那一帧**里，某个经纬度落在屏幕哪儿（逐帧对拍读它） */
+    overlayLastDrawProject: (lng: number, lat: number) => {
+      try {
+        const b = liveBackend as unknown as { projectFromLastDraw?: (a: number, c: number) => [number, number] | null } | null;
+        return b?.projectFromLastDraw ? b.projectFromLastDraw(Number(lng), Number(lat)) : null;
+      } catch {
+        return null;
+      }
+    },
+    /** 切换叠加层的对齐模式（`render` = 同帧 / `raf` = 各跑各的）—— A/B 对比 */
+    overlayAlignMode: (m: string) => {
+      try {
+        const b = liveBackend as unknown as { setAlignMode?: (x: string) => string } | null;
+        return b?.setAlignMode ? b.setAlignMode(String(m)) : null;
+      } catch {
+        return null;
+      }
+    },
+    /** 叠加层这一帧实际画的那批楼（id 表 + 计数）—— 与地图那份做差集，判"是不是同一批" */
+    overlayIdsJson: () => {
+      try {
+        const b = liveBackend as unknown as { diag?: () => unknown } | null;
+        return JSON.stringify(b?.diag ? b.diag() : null);
+      } catch {
+        return "null";
+      }
+    },
+    /** 地图 `bld*` 图层的 `visibility` 清单（"地图自己那套楼"显不显示） */
+    mapLayersJson: () => {
+      try {
+        const b = mapBackendNow() as unknown as { layers?: () => unknown } | null;
+        return JSON.stringify(b?.layers ? b.layers() : null);
+      } catch {
+        return "null";
+      }
+    },
     mapProject: (lng: number, lat: number) => {
       try {
         const b = mapBackendNow() as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;

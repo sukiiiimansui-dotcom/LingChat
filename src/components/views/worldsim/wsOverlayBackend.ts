@@ -201,7 +201,10 @@ export function createOverlayBackend(): WsRenderBackend {
       refreshTimer = 0;
       void (async () => {
         const fc = await grabBld();
-        if (fc) rebuild(curThemeId, fc);
+        if (fc) {
+          lastSource = "source";
+          rebuild(curThemeId, fc);
+        }
       })();
     }, REFRESH_DEBOUNCE_MS);
   }
@@ -211,11 +214,48 @@ export function createOverlayBackend(): WsRenderBackend {
   };
 
   let curThemeId = "anime";
+  /**
+   * 怎么跟地图对齐（**这是"拖动时位移不一致"那条的头号嫌疑**）：
+   *   · `render`（默认）：挂 `map.on('render')` —— 地图画完一帧就叫我们，**同一帧**用它的相机画叠加层；
+   *   · `raf`：自己的 `requestAnimationFrame`（老行为）。地图与叠加层各跑各的节奏，
+   *     拖动时相机读数可能差一帧 ⇒ **静止看不出来、一动就按速度成比例地错开**。
+   * 保留两种是为了让探针在**同一页面、同一段拖动**里 A/B 对比（不是靠讲道理）。
+   */
+  let alignMode: "render" | "raf" = "render";
+  /** 上一次**真的画出去**那一帧的相机矩阵（逐帧对拍要看"屏幕上是什么"，不是"现在是什么"） */
+  let lastDraw: { mwInv: number[]; proj: number[]; w: number; h: number } | null = null;
+  /** 这一帧那批楼**从哪儿来**（`world` = 舞台交进来的那份 / `source` = 从地图 source 现捞的） */
+  let lastSource = "none";
+
+  /** 真的画一帧（并把"画的时候"的相机矩阵快照下来 —— 逐帧对拍读的就是它） */
+  function drawOnce(): void {
+    if (state !== "running" || !renderer || !scene || !camera) return;
+    const { w, h } = sizeOf();
+    try {
+      lastDraw = {
+        mwInv: Array.from(camera.matrixWorldInverse.elements as number[]) as number[],
+        proj: Array.from(camera.projectionMatrix.elements as number[]) as number[],
+        w,
+        h,
+      } as { mwInv: number[]; proj: number[]; w: number; h: number };
+    } catch {
+      lastDraw = null;
+    }
+    renderer.render(scene, camera);
+    draws = renderer.info?.render?.calls ?? 0;
+  }
+
+  /** 地图画完一帧 ⇒ 同一帧把叠加层也画了（`alignMode === 'render'` 时的唯一驱动） */
+  function onMapRender(): void {
+    if (state !== "running") return;
+    syncCamera();
+    drawOnce();
+    frames++;
+  }
 
   function tick(): void {
     if (state !== "running" || !renderer || !scene || !camera) return;
     const now = performance.now();
-    frames++;
     fpsFrames++;
     if (!fpsAt) fpsAt = now;
     if (now - fpsAt >= 1000) {
@@ -229,13 +269,33 @@ export function createOverlayBackend(): WsRenderBackend {
       anchor = { lat: v.center.lat, lng: v.center.lng, cos: Math.cos((v.center.lat * Math.PI) / 180) };
       void (async () => {
         const fc = await grabBld();
-        if (fc) rebuild(curThemeId, fc);
+        if (fc) {
+          lastSource = "source";
+          rebuild(curThemeId, fc);
+        }
       })();
     }
     syncCamera();
-    renderer.render(scene, camera);
-    draws = renderer.info?.render?.calls ?? 0;
+    drawOnce();
     raf = requestAnimationFrame(tick);
+  }
+
+  /** 挂驱动：`render` 模式挂地图的帧回调，`raf` 模式自己数帧 */
+  function attachDrive(): void {
+    if (alignMode === "render" && map?.on) {
+      map.on("render", onMapRender);
+      drawOnce();          // 先画一帧（地图可能暂时不重绘）
+    } else if (!raf) {
+      raf = requestAnimationFrame(tick);
+    }
+  }
+  function detachDrive(): void {
+    try {
+      map?.off?.("render", onMapRender);
+    } catch {
+      /* ignore */
+    }
+    stopLoop();
   }
 
   function stopLoop(): void {
@@ -274,11 +334,12 @@ export function createOverlayBackend(): WsRenderBackend {
         curThemeId = s.theme || contractTheme.value.theme || "anime";
         /* 楼：先用舞台交进来的那份世界数据（拿不到就去地图 source 里捞一次） */
         const fc = world?.buildings ?? (await grabBld());
+        lastSource = world?.buildings ? "world" : fc ? "source" : "none";
         syncCamera();
         if (fc) rebuild(world?.themeId || curThemeId, fc);
         map?.on?.("sourcedata", onSourceData);
         state = "running";
-        raf = requestAnimationFrame(tick);
+        attachDrive();
       } catch (e) {
         const msg = "叠加层起不来：" + String((e as Error)?.message || e);
         errors.push(msg);
@@ -350,18 +411,18 @@ export function createOverlayBackend(): WsRenderBackend {
     },
 
     pause(): void {
-      stopLoop();
+      detachDrive();
       state = "paused";
     },
 
     resume(): void {
       if (!renderer) return;
       state = "running";
-      if (!raf) raf = requestAnimationFrame(tick);
+      attachDrive();
     },
 
     destroy(): void {
-      stopLoop();
+      detachDrive();
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = 0;
       disposeMesh();
@@ -408,6 +469,57 @@ export function createOverlayBackend(): WsRenderBackend {
       } catch {
         return null;
       }
+    },
+
+    /**
+     * 给探针看的原始读数（**只读**）：这一帧叠加层实际画的那批楼是哪一批。
+     *
+     * 为什么要它：真机反馈"地图与叠加层的楼不是同一批、明显错位"。要判定是"同一批但投影错位"
+     * 还是"两套不同的楼"，就得把**两边各自的 id 表**摆出来做差集 —— 猜没有意义。
+     */
+    diag(): { buildings: number; triangles: number; ids: string[]; idsCapped: boolean; source: string } {
+      const ids = data?.featureIds ?? [];
+      return {
+        buildings: data?.stats.buildings ?? 0,
+        triangles: data?.triangles ?? 0,
+        ids,
+        idsCapped: false,
+        source: lastSource,
+      };
+    },
+
+    /**
+     * **上一次真的画出去那一帧**里，某个经纬度（地面 y=0）落在屏幕的哪儿。
+     * 逐帧对拍要读的是"屏幕上是什么"，不是"现在是什么" —— 所以用快照矩阵手算，
+     * 不借 three 的 `project()`（它算的是**当下**的相机）。
+     */
+    projectFromLastDraw(lng: number, lat: number): [number, number] | null {
+      if (!lastDraw) return null;
+      const xy = toLocal(Number(lng), Number(lat));
+      const v = [xy[0], 0, xy[1], 1];
+      const mul = (m: number[], p: number[]): number[] => {
+        const o = [0, 0, 0, 0];
+        for (let i = 0; i < 4; i++) {
+          o[i] = m[i * 4]! * p[0]! + m[i * 4 + 1]! * p[1]! + m[i * 4 + 2]! * p[2]! + m[i * 4 + 3]! * p[3]!;
+        }
+        return o;
+      };
+      const cam = mul(lastDraw.mwInv, v);
+      const clip = mul(lastDraw.proj, cam);
+      if (!Number.isFinite(clip[3]!) || Math.abs(clip[3]!) < 1e-9) return null;
+      const ndcX = clip[0]! / clip[3]!;
+      const ndcY = clip[1]! / clip[3]!;
+      return [((ndcX + 1) / 2) * lastDraw.w, ((1 - ndcY) / 2) * lastDraw.h];
+    },
+
+    /** 探针用：切换对齐模式（`render` = 同帧；`raf` = 各跑各的）——A/B 对比用 */
+    setAlignMode(m: string): string {
+      const want = m === "raf" ? "raf" : "render";
+      if (want === alignMode) return alignMode;
+      alignMode = want;
+      detachDrive();
+      attachDrive();
+      return alignMode;
     },
 
     stats(): WsRenderStats {

@@ -15,6 +15,7 @@
 import { bldIdOfFeature } from "./wsBldIdKey";
 import {
   contractActors,
+  metersPerPixelAt,
   contractSelection,
   contractTheme,
   ledgerMark,
@@ -266,6 +267,28 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
         rendering: state === "running",
         note: `canvas ${c?.width || 0}×${c?.height || 0}`,
       };
+    },
+
+    /**
+     * **口径对拍**（只读）：地图自己的"米每像素" vs 我们用 `metersPerPixelAt` 算的那个。
+     *
+     * 为什么要它：真机反馈"拖动时叠加层与地图走得不一样远"——最像的一个原因是**比例口径不同**
+     * （两边米每像素只要差一点，静止看中心是 0 误差、越靠边越错、拖起来差得更明显）。
+     * 这条把两个数**摆出来**，比值必须是 1.00。
+     */
+    scaleProbe(): { zoom: number; lat: number; mapMpp: number | null; ourMpp: number; ratio: number | null } | null {
+      const m = map as unknown as { getZoom?: () => number; getCenter?: () => { lat: number }; transform?: { pixelsPerMeter?: number } } | null;
+      try {
+        const zoom = Number(m?.getZoom?.() ?? NaN);
+        const lat = Number(m?.getCenter?.().lat ?? NaN);
+        const ppm = Number(m?.transform?.pixelsPerMeter ?? NaN);
+        if (!Number.isFinite(zoom) || !Number.isFinite(lat)) return null;
+        const ourMpp = metersPerPixelAt(lat, zoom);
+        const mapMpp = Number.isFinite(ppm) && ppm > 0 ? 1 / ppm : null;
+        return { zoom, lat, mapMpp, ourMpp, ratio: mapMpp ? ourMpp / mapMpp : null };
+      } catch {
+        return null;
+      }
     },
 
     /** 探针用：脚本化平移（`duration: 0` = 立刻，便于逐帧对拍；真机手势走地图自己的那条路） */

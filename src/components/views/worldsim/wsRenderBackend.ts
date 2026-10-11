@@ -182,14 +182,30 @@ export interface WsRenderBackend {
  * 一、度量换算（**纯函数**：契约单位只有米与经纬度，这里就是那条桥）
  * ══════════════════════════════════════════════════════════════════════════ */
 
-/** Web Mercator 在给定纬度、给定 zoom（512px 瓦片）下，一个 CSS 像素等于多少米 */
+/**
+ * zoom 0、赤道上，一个 CSS 像素等于多少米 —— **512 px 瓦片**口径。
+ *
+ * 🔴 2026-10-11 更正：这里原来是 `156543.03392804097`（= 2πR/256），那是**256 px 瓦片**的老口径。
+ * 而 MapLibre 的 `zoom` 是按 **512 px 瓦片**定义的，vendor 里逐字可查：
+ *   · `_tileSize = 512`；
+ *   · `worldSize() { return this._tileSize * this._scale }`（`_scale = 2^zoom`）；
+ *   · `_pixelPerMeter = Vt(1, this.center.lat) * this.worldSize`（`Vt(alt,lat) = alt/(C·cos lat)`，
+ *     C = 地球周长 40075016.68557849 米）。
+ * ⇒ 米每像素 = `C·cos(lat) / (512 · 2^zoom)`，也就是这里这个数。
+ * 用错口径的后果**在真机上肉眼可见**：算出来的"视口半高"整整大了一倍 ⇒ three / 叠加层的相机
+ * 站远一倍、楼按一半的尺度画 ⇒ **静止时越靠边越错、拖动时走得比地图慢一半**
+ * （真机两条反馈：「不是同一个楼、明显错位」「移动时位移不一致」）。
+ */
+export const METERS_PER_PIXEL_Z0 = 40075016.68557849 / 512; // ≈ 78271.517
+
+/** Web Mercator 在给定纬度、给定 zoom（**512 px 瓦片**）下，一个 CSS 像素等于多少米 */
 export function metersPerPixelAt(lat: number, zoom: number): number {
-  return (156543.03392804097 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  return (METERS_PER_PIXEL_Z0 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
 }
 
 /** `metersPerPixelAt` 的反函数（两个后端各自用它把自己的画布换算回 zoom） */
 export function zoomForMetersPerPixel(lat: number, mpp: number): number {
-  const k = (156543.03392804097 * Math.cos((lat * Math.PI) / 180)) / mpp;
+  const k = (METERS_PER_PIXEL_Z0 * Math.cos((lat * Math.PI) / 180)) / mpp;
   return Math.log2(k);
 }
 
@@ -582,6 +598,15 @@ if (typeof window !== "undefined") {
      * （`camera.project()`）。两条都**不需要 GL**（纯数学）⇒ 本机也能量"楼与底图对不对得齐"。
      * 谁没在台上就返回 `null`（如实，不编）。
      */
+    /** 口径对拍：地图自己的米每像素 vs 我们的（比值必须 1.00） */
+    mapScaleJson: () => {
+      try {
+        const b = mapBackendNow() as unknown as { scaleProbe?: () => unknown } | null;
+        return JSON.stringify(b?.scaleProbe ? b.scaleProbe() : null);
+      } catch {
+        return "null";
+      }
+    },
     /** 脚本化平移（逐帧对拍用）：`mapPanBy(dx, dy)` */
     mapPanBy: (dx: number, dy: number) => {
       try {

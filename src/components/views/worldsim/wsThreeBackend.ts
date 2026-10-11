@@ -754,9 +754,15 @@ export function createThreeBackend(): WsRenderBackend {
    */
   const pointers = new Map<number, { x: number; y: number }>();
   let viewListener: ((s: WsRenderState) => void) | null = null;
-  /** 手势开始时的那一份状态（总位移法：每步都从它算，避免逐步累加漂移） */
-  let gestureBase: WsRenderState | null = null;
-  let gestureRef: { x: number; y: number; dist: number; ang: number; ground: [number, number] | null } | null = null;
+  /**
+   * 上一次算过的指针几何（中点 / 两指距离 / 两指夹角）。
+   *
+   * 🔴 为什么是"增量 + 每步回读相机"而不是"起点快照 + 总位移"：后者有个反馈陷阱 ——
+   *    相机一动，同一个屏幕点底下的那块地也跟着动，于是总位移会被前一次的修正量污染
+   *    （表现是拖到一半开始跟不上手）。这里每步都拿**当前**相机算这两点之间的地面位移，
+   *    误差不累积、回读的是真值（与相机那条纪律同源）。
+   */
+  let last: { x: number; y: number; dist: number; ang: number } | null = null;
   let gestureMode: "pan" | "rotate" = "pan";
 
   /** 屏幕像素 → 地面（局部框架里 y=0 那个平面）上的点；射线朝天/平行时给 null */
@@ -804,24 +810,27 @@ export function createThreeBackend(): WsRenderBackend {
     if (out && viewListener) viewListener(out);
   }
 
-  function gestureRefOf(): { x: number; y: number; dist: number; ang: number; ground: [number, number] | null } {
+  /** 当前指针的几何量（单指就是那个点；双指给中点/距离/夹角） */
+  function geomOf(): { x: number; y: number; dist: number; ang: number } | null {
     const ps = Array.from(pointers.values());
     if (ps.length >= 2) {
       const dx = ps[1]!.x - ps[0]!.x;
       const dy = ps[1]!.y - ps[0]!.y;
-      const cx = (ps[0]!.x + ps[1]!.x) / 2;
-      const cy = (ps[0]!.y + ps[1]!.y) / 2;
-      return { x: cx, y: cy, dist: Math.max(1, Math.hypot(dx, dy)), ang: Math.atan2(dy, dx), ground: groundAtPx(cx, cy) };
+      return {
+        x: (ps[0]!.x + ps[1]!.x) / 2,
+        y: (ps[0]!.y + ps[1]!.y) / 2,
+        dist: Math.max(1, Math.hypot(dx, dy)),
+        ang: Math.atan2(dy, dx),
+      };
     }
-    const p = ps[0] || { x: 0, y: 0 };
-    return { x: p.x, y: p.y, dist: 0, ang: 0, ground: groundAtPx(p.x, p.y) };
+    if (ps.length === 1) return { x: ps[0]!.x, y: ps[0]!.y, dist: 0, ang: 0 };
+    return null;
   }
 
+  /** 起手 / 换手：把参照系挪到"现在"（不动相机） */
   function beginGesture(mode: "pan" | "rotate"): void {
-    const v = readViewNow();
-    gestureBase = v ? { ...v, actors: v.actors.map((a) => ({ ...a })) } : null;
-    gestureRef = gestureRefOf();
     gestureMode = mode;
+    last = geomOf();
   }
 
   function onPointerDown(e: PointerEvent): void {
@@ -840,40 +849,41 @@ export function createThreeBackend(): WsRenderBackend {
   function onPointerMove(e: PointerEvent): void {
     if (state !== "running" || !pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (!gestureBase || !gestureRef || !curState) return;
-    const now = gestureRefOf();
-    const base = gestureBase;
+    if (!curState) return;
+    const now = geomOf();
+    if (!now) return;
+    if (!last) {
+      last = now;
+      return;
+    }
+    const cur = readViewNow();
+    if (!cur) return;
+    const g1 = groundAtPx(last.x, last.y);
+    const g2 = groundAtPx(now.x, now.y);
     const two = pointers.size >= 2;
     if (two) {
       /* 双指：捏合 + 扭转 + 竖向拖（俯仰）+ 中点平移，一次算全 */
-      const k = gestureRef.dist / now.dist;
-      const dBearing = ((now.ang - gestureRef.ang) * 180) / Math.PI;
-      const dPitch = (gestureRef.y - now.y) * 0.4;
-      const radius = saneRadius(base.radius * k);
-      let center = base.center;
-      if (gestureRef.ground && now.ground) {
-        center = shiftCenter(base.center, gestureRef.ground[0] - now.ground[0], gestureRef.ground[1] - now.ground[1]);
-      }
-      applyGesture({ center, radius, bearing: normBearing(base.bearing + dBearing), pitch: clampPitch(base.pitch + dPitch) });
-      return;
+      const radius = saneRadius(cur.radius * (last.dist / now.dist));
+      const bearing = normBearing(cur.bearing + ((now.ang - last.ang) * 180) / Math.PI);
+      const pitch = clampPitch(cur.pitch + (last.y - now.y) * 0.4);
+      const center = g1 && g2 ? shiftCenter(cur.center, g1[0] - g2[0], g1[1] - g2[1]) : cur.center;
+      applyGesture({ center, radius, bearing, pitch });
+    } else if (gestureMode === "rotate") {
+      applyGesture({
+        bearing: normBearing(cur.bearing - (now.x - last.x) * 0.4),
+        pitch: clampPitch(cur.pitch + (last.y - now.y) * 0.4),
+      });
+    } else if (g1 && g2) {
+      /* 平移：两块地之间的位移就是中心要挪的量（正负号见上面那段说明） */
+      applyGesture({ center: shiftCenter(cur.center, g1[0] - g2[0], g1[1] - g2[1]) });
     }
-    if (gestureMode === "rotate") {
-      const dBearing = (now.x - gestureRef.x) * 0.4 * -1;
-      const dPitch = (gestureRef.y - now.y) * 0.4;
-      applyGesture({ bearing: normBearing(base.bearing + dBearing), pitch: clampPitch(base.pitch + dPitch) });
-      return;
-    }
-    /* 平移：按"手指按住的那块地"走 */
-    if (gestureRef.ground && now.ground) {
-      applyGesture({ center: shiftCenter(base.center, gestureRef.ground[0] - now.ground[0], gestureRef.ground[1] - now.ground[1]) });
-    }
+    last = now;
   }
 
   function endPointer(e: PointerEvent): void {
     if (!pointers.delete(e.pointerId)) return;
     if (pointers.size === 0) {
-      gestureBase = null;
-      gestureRef = null;
+      last = null;
       return;
     }
     /* 还剩手指 ⇒ 用剩下的重新起一手（不然会突然跳一下） */
@@ -920,8 +930,7 @@ export function createThreeBackend(): WsRenderBackend {
     c.removeEventListener("wheel", onWheel);
     c.removeEventListener("contextmenu", onContextMenu);
     pointers.clear();
-    gestureBase = null;
-    gestureRef = null;
+    last = null;
   }
   function onContextMenu(e: Event): void {
     if (state === "running") e.preventDefault?.();

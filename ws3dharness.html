@@ -149,8 +149,14 @@
           bad
         );
 
+        /* 本机实测：**一个页面只能成功建一次 WebGL 上下文**（先跑 three 再 destroy，第二次创建
+           就被 Chromium 挡："Web page caused context loss and was blocked"）。所以这几节按
+           `?only=` 分开跑，探测时**两次导航**（见 world_map/ws_three_harness_probe.mjs）。 */
+        const ONLY = (new URLSearchParams(location.search).get("only") || "").trim();
+        let b = null;
+        if (ONLY !== "overlay") {
         /* ── ④ 把 three 后端拉起来（真 WebGL2：软件渲染） ── */
-        const b = createThreeBackend();
+        b = createThreeBackend();
         window.__HARNESS_B__ = b;   // 给探针/诊断留个把手（这一页是自用测试页，不随 app 发布）
         const state = {
           center: { lat: Number(fx.view.center.lat), lng: Number(fx.view.center.lng) },
@@ -389,6 +395,9 @@
           Math.abs((twistAfter?.radius ?? 0) - (twistBefore?.radius ?? 0)) / Math.max(1, twistBefore?.radius ?? 1) < 0.02
             && Math.abs((twistAfter?.pitch ?? 0) - (twistBefore?.pitch ?? 0)) < 0.5, raw.twist);
 
+        }
+
+        if (ONLY !== "three") {
         /* ── ⑦ overlay（地图之上那一层）：假地图驱动 ──────────────────────────
            叠加层的定义是"地图在下层画，楼叠上去；相机每帧从地图读；输入全归地图"。
            这一节用一张**假地图**（四个 getter + 画布尺寸 + source）驱动它，判据：
@@ -456,6 +465,9 @@
         await sleep(250);
         check("拆掉之后叠加层不留画布", ovlHost.querySelectorAll("canvas").length === 0, { left: ovlHost.querySelectorAll("canvas").length });
 
+        if (b) {
+        }
+
         /* ── ⑥ 暂停 / 销毁：画布与上下文都要放掉 ── */
         b.pause();
         await sleep(300);
@@ -468,6 +480,7 @@
         raw.canvas.afterDestroy = canvasN();
         check("destroy() 之后 stage 里一块画布都不剩", canvasN() === 0, raw.canvas);
 
+        }
         /* ── ⑦ 控制台 ── */
         raw.errs = errs.slice(0, 20);
         check("靶场里控制台 error/warn = 0", errs.length === 0, errs.slice(0, 6));

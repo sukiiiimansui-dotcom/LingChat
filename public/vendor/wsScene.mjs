@@ -1219,6 +1219,240 @@ function applyPitchGuard(map) {
 }
 
 // src/components/views/worldsim/wsMapTheme.ts
+var ANIME = {
+  id: "anime",
+  label: "二次元（蔚蓝档案）",
+  hud: "二次元 · 平涂",
+  separation: "outline",
+  sky: {
+    /* 2026-09-20 二轮（"① 颜色再鲜 ② 整体更亮"）：
+       天空换成**彩度更高**的蓝（亮度基本不变、纯度和蓝味都上去了）。 */
+    "sky-color": "#72C8F7",
+    // 明亮天蓝（比上一版 #7EC8F0 更纯）
+    "horizon-color": "#E8F8FF",
+    // 近白的地平线（略偏青，和地面同调）
+    "fog-color": "#D6EEFC",
+    // 淡蓝白雾，**不是暗雾**：远景要"化开"成亮的
+    /* 二轮+（"要能看见天空（基沃托斯的天空）"）：
+       把**地平线那圈白雾带**调明显 —— `horizon-fog-blend` 抬到 0.65 让近白的雾色
+       往天上多铺一点，`fog-ground-blend` 抬到 0.75 让雾和地面交界更"化开"。
+       **没验**：MapLibre 文档写着 `fog-color` 需要 **3D 地形**（"Requires 3D terrain"），
+          而**没接 terrain** ⇒ 这圈雾带到底画不画得出来，**没有真机图不敢说**。
+          真正一定生效的是 `sky-color`/`horizon-color` 那条天空渐变（天空层本身）。 */
+    "sky-horizon-blend": 0.6,
+    "horizon-fog-blend": 0.65,
+    "atmosphere-blend": 0.85,
+    "fog-ground-blend": 0.75
+  },
+  bg: "#E8F8FF",
+  // 近白兜底：`sky` 万一没生效，背景也不会是黑的
+  sources: {
+    /* 「亮灰底图」而不是卫星：卫星照片再调都是**写实**，跟平涂天生打架。
+       实测这套服务 z14/z16 是**真内容**（7265/5753B，亮度 0.937），z17 变 2521B 占位图
+       ⇒ 所以 maxzoom 必须钉在 16（让地图库放大复用 z16，别去要占位图）。 */
+    base: {
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+      ],
+      maxzoom: 16,
+      attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors"
+    },
+    hi: null,
+    // ← 二次元**没有高分层**（不用卫星）。少一层 = 少一份流量，低端档也轻松
+    ref: {
+      /* 注记要和底图配套：亮底必须用**浅灰系列**的注记（深字），
+         继续用 `Dark_Gray_Reference`（浅字）会变成"白字压白底"= 等于没字。
+         实测（涪陵 z16）：这套注记瓦片是 **872B 全透明**（那个点位本来就没标注）
+         ⇒ "有没有字"这件事**这一轮没验成**，别当成"标签已修好"。 */
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+      ],
+      maxzoom: 16
+    }
+  },
+  raster: {
+    /* 底图源本身已经 0.937（很亮），所以这里**不再上提**，只用对比度拉一点层次：
+       0.937 →(对比度 0.08, 绕 0.5)→ 0.975 →(×0.96 压一点点)→ **0.936**。
+       为什么要压：不压的话地面跟最亮的楼（`#E8F6FF`）一样白，画面会"过曝"。
+       色罩再叠上去 → 最终地面 **0.919**（见 `tint` 的注释）。 */
+    base: {
+      /* 二轮：亮度**拉满到 1.0**（上一版 0.96 还压着一档）、对比再降一点（更平更干净）、
+         彩度 0.15 → 0.55。底图是灰度的，"加彩度"加不出颜色来（灰上加饱和还是灰）——
+         真正给地面**上色**的是下面那层 `tint`；这里加彩度是为了让瓦片里本来就有色的部分
+         （绿地/水面在灰度图里也带一点点色偏）更明显。 */
+      "raster-opacity": 1,
+      "raster-saturation": 0.55,
+      "raster-contrast": 0.06,
+      "raster-brightness-max": 1
+    },
+    hi: null,
+    ref: { "raster-opacity": 0.85 }
+  },
+  /* 色罩：`background` 图层 + **冷青** + 0.55 不透明度（2026-10-10 之前是 0.45 的 `#BCE7F8`）。
+       "去灰"靠的就是这一层：底图是灰的，**只有盖颜色才上得了色**
+       （在灰度上做色相旋转是空操作）。
+  
+       2026-10-10 客观硬伤修复（依据 `world-map/ART-PLAYBOOK.md` §1.1 的明度阶梯 + §8 第 3 条）：
+         旧值坏在哪（现算，不是感觉）：地面合成色 `#DCEFF7` 的 CIE L* = **93.3**，而矮楼
+           `#BCE4F9` = 88.5、中楼 `#A2D8F6` = 83.7 ⇒ **楼比脚下的地面暗**，对比只有 1.14:1 / 1.30:1
+           （WCAG 1.4.11 对非文字图形要求 ≥ 3:1）。明度阶梯一塌，楼能"立起来"就只剩 1.8px 描边
+           这一条边缘线索 —— 这是"静态图片感"的机制，不是审美分歧。
+         新值算式（自检直接跑公式，不认嘴）：底图 0.937 →(对比度 0.06)→ 0.965 →(×1.0)→ 0.965，
+           再叠 55% 的 `#8FC3DA`（伽马亮度 0.728）⇒ 地面 = 0.965×0.45 + 0.728×0.55 = **0.8345**，
+           合成色 `#BDDAE7`、**CIE L* = 85.4**（落进目标带 84~87，旧值 93.3 在带外）。
+         注意：地面**变暗**了，这推翻了 2026-09-20 那轮"整体更亮（地面 ≥0.92）"的口径 ——
+           那一轮的判据已按新基准改写（自检里那条钉的是 84~87 这条带，不是"越亮越好"）。
+  
+       A/B 逃生口（改前那套配色仍可取到）：`?wstheme=anime-old`
+         （`parseWsMapThemeParam` 认这个 id，取到的是 `ANIME_OLD` —— 地面回到 L* 93.3 / `#DCEFF7`、
+          色阶回到改前那 8 档）。
+         可达范围要如实说：App 侧（`WsDistrictMapLibre` 的 `resolveThemeId`）走 URL 参数这条路可用；
+         代拍页 `public/ws3dshow.html` 的主题 id 白名单是写死的 `night|anime`（那一页不在本轮改动范围）
+         ⇒ 在那一页上要 A/B 得先给它的白名单补一个 id。 */
+  tint: { color: "#8FC3DA", opacity: 0.55 },
+  /* 平涂分档：矮 → 中 → 高（高楼**更白更亮**，像 BA 里打了高光的塔楼）。
+  
+       2026-10-10 客观硬伤修复（依据 `ART-PLAYBOOK.md` §1.4 + §8 第 4 条）——旧色阶两个硬伤：
+         ① **重复档**：`[3]` 与 `[45]` 是同一个 hex `#BCE4F9` ⇒ 3 层楼和 15 层楼一个颜色；
+         ② **非单调**：L* 88.5 → 85.7 → 83.7 → 88.5 → 93.0 → …，中段往下走，
+            "越高越亮"这个语义被自己打断（而且最暗的 25m 档 0.810 **比地面 0.834 还暗**）。
+  
+       新色阶的口径（全部能在本机用 `node ws_map_theme_selftest.mjs` 复算，不靠观感）：
+         · **8 档严格单调**：CIE L* 86.7 → 100.0、伽马亮度 0.845 → 1.000，逐档递增；
+         · **无重复 hex**；彩度逐档下降（0.282 → 0.000），读起来就是"越高越白"；
+         · **相邻档最小可辨差**：ΔL* ≥ 1.7 **且** CIE76 ΔE*ab ≥ 3.0（现测 1.77 / 3.20）。
+           为什么口径不是 ΔL* ≥ 3：8 档有 7 个间隔，可用的明度区间只有地面到纯白
+           （L* 85.4 → 100 = 14.6）⇒ 均匀步长的数学上限是 14.6 / 7 = **2.09**（实测 1.77 是因为
+           8 位色只有 256 级，取不到理想的均匀点）；ΔL* ≥ 3 需要跨度 21，**做不到**。
+           真正以**硬边色块**出现在屏幕上的那三档（`wsGameLook` 抽 pick(0)/pick(2)/pick(5)）
+           另守 ΔL* ≥ 3（现测 3.87 / 5.63）。
+         · **最低档仍在地面之上**：0.845 / 地面 0.834 = **1.013 倍**（旧值最暗档是 0.810，比地面暗）；
+         · 档数与高度停靠点**一个都没动**（仍是 8 档 / 3,12,25,45,70,110,200,320）⇒
+           派生件（`?look=2` 的 cel 三档、预渲染瓦片取色位置）逐字不变。
+       A/B 逃生口：`?wstheme=anime-old`（口径与可达范围见上面 `tint` 那段注释）。 */
+  ramp: [
+    [3, "#B0E0F8"],
+    // 矮楼：淡天蓝（本族里最饱和的一档）
+    [12, "#BCE5F9"],
+    [25, "#C8E9FA"],
+    [45, "#D3EDFB"],
+    [70, "#DEF1FC"],
+    [110, "#E9F6FE"],
+    [200, "#F3FBFF"],
+    // 高/塔楼：近白（高光）
+    [320, "#FFFFFF"]
+  ],
+  roofFallback: "#A8DBF5",
+  /* 屋顶压顶在 BA 风里**不能压暗**（那套做法是写实的"女儿墙"）——
+     改成**更浅**的一档，读起来就是"楼顶被光照到"，还是平涂。 */
+  antennaFallback: "#FFFFFF",
+  /* 描边：**二轮加重**（用户 ③）—— 1.2px → **1.8px**、颜色更深（`#2C4A63` → `#1B3550`）。
+     为什么敢加重：BA 风里**这是楼与地的主要分隔手段**（加重时地面 0.924 本来就比矮楼亮，
+     明度差是负的）⇒ 描边越清楚，"楼立起来"的感觉越强。自检按 WCAG 1.4.11
+     （非文字图形 ≥ 3:1）算：**加重当时**对地面是 10.6:1；
+     2026-10-10 地面压到 L* 85.4（`#BDDAE7`）之后是 **8.6:1**（自检钉 ≥5:1）—— 余量仍然很大，
+     所以"再重一点"直接调 `outline.width` 到 2.2 也不会糊成一片。 */
+  outline: { color: "#1B3550", width: 1.8 },
+  /* AI 示意层：水体换成**明亮青蓝**（用户 ④"水体换色"），公园淡绿。
+     只有"示意水体"能这么染；**真实江面在灰度底图里，染不了**（见 `ai` 字段的说明）。
+     2026-09-29 透明度 **0.5 → 0.8**：真机报「江没变化」——
+     查出来是两件事叠加：① `wsGwLayer` 有个并发 bug（`null.cellSize`）让水/绿层**每轮都不画**（已修）；
+     ② 就算画出来，alpha 0.5 压在这层浅青地面上合成色 ≈ `#92DAF3`、对地对比度只有 **1.30**
+     （观感审计算过：0.8 ⇒ `#6FC1E7`、**1.61**；更深的 `rgba(56,150,200,.8)` ⇒ 2.0）。
+     ⇒ 现在换成 0.8（**只动透明度、不动色相**，与"二次元浅底"方向不冲突）。
+     注：这条同时影响"示意水体"与 gw 真水（**两处用的是同一个 `ai.water`**）——真水是 OSM 多边形、
+     样式仍与示意件可区分（示意件另有暖色调与描边口径），没有把示意混成事实。 */
+  ai: { park: "rgba(126, 200, 138, 0.60)", water: "rgba(46, 158, 214, 0.92)" },
+  /* 2026-10-04 地图是**纯色**的，观感差——
+     推翻的就是本节原来那条「治地面太糊 ⇒ z13.6 起淡出、z14.8 起完全不用照片」。
+     旧值坏在哪：小区级**默认机位 z16.4** 早就过了 `to=14.8` ⇒ 底图整层 `raster-opacity = 0`
+     ⇒ 屏上只剩 `bg` + `tint` 合成出来的**单色地面**（≈ `#D4F0FC`，亮度 0.921、**方差 0**）——
+     屏幕上的那块"纯色"就是它，不是瓦片坏、也不是取色错。
+     现在把窗口整体抬到**源的真实细节上限之上**：
+       · `from = 16.6` ⇒ z ≤ 16.6 底图**全不透明**（默认机位 16.4 落在里面 ⇒ 真瓦片回来了）；
+       · `to = 18.0`  ⇒ 只在**放大复用区**（源 maxzoom = 16，z17 起是 2~4 倍拉伸，那一段才是真会糊的）
+                        淡出；终点处与 `bg`+`tint` 单色的亮度**只差 0.002** ⇒ 不"咔"一下跳色
+                        （`tint` 的不透明度就是为这件事定的；自检里有一条钉这个 Δ）。
+     `to = 18` **只影响 `raster-opacity` 这一条表达式**：底图源的取瓦片上限由 `baseMaxZoomFor`
+        夹在 **16**（= 主题自己声明的 `sources.base.maxzoom`）⇒ **永远不去要 z17 那张 2521B 占位图**。
+     观感（瓦片够不够清楚、和自己的矢量路网叠一起会不会花）**只能在真机上判**；
+        这里就是**一对常量**：他说"再淡一点 / 再清楚一点"，只动这一行，别的都不用碰。 */
+  baseFade: { from: 16.6, to: 18 },
+  /* 路网：浅底那一套 —— **路芯近白 + 蓝灰描边**（BA/地图 App 的常见做法：
+     靠描边把路"勾"出来，而不是靠路芯比地面亮）。描边比地面暗一档 ⇒ 看得见。
+     2026-10-02 用户「**道路清晰**」这一刀：**只动下面两个值**（幅度按"一档"取，保守）——
+       · `casing` `#8FBBD4` → `#6FA6C8`：对地面 `#DCEFF7` 的伽马亮度差 **0.220 → 0.309**、
+         WCAG 对比 **1.73:1 → 2.23:1**（2026-10-10 地面压到 L* 85.4 之后同样是 Δ=0.220 /
+          **1.80:1** —— 结论不变：描边仍比地面暗一档，且过自检钉的 ≥1.5:1）；描边是这条路上唯一"勾边"的手段，它越清楚路越好读。
+       · `casingOpacity` **0.9 → 0.95**：压掉描边与底图混出来的那层灰。
+       路芯（`rankColors`）**一个都没动**：它本来就近白（rank0 `#FFFFFF` 比地面亮），
+          再改就是把"浅底平涂"换成另一种设计，超出"更清晰"这条要求。
+       **这两个值是预渲染瓦片配色指纹的输入**（`wsPrerenderPalette` → 管线 `load_theme`）
+          ⇒ 改了就必须重跑 离线数据生成脚本 重画瓦片；漏跑会让
+          `ws_lod_selftest` / `ws_prerender_selftest` 的**指纹对拍变红**（那是刻意的抓手）。
+          （2026-10-01 这条改过一次又撤回：重跑时 Overpass 全线 504 ⇒ 清单自报 `roads=0`，
+           整次重跑作废。本轮 Overpass 已恢复，瓦片随主题一起重画。） */
+  road: {
+    casing: "#6FA6C8",
+    casingOpacity: 0.95,
+    rankColors: {
+      0: "#FFFFFF",
+      1: "#FBFDFF",
+      2: "#F4FAFE",
+      3: "#EBF5FC",
+      4: "#E3F1FA",
+      5: "#7FD4F0"
+    }
+  },
+  /* 2D 降级路：底色取**和 3D 地面同一个色**（`#BDDAE7`，就是 `groundHex(anime)` 算出来的那个；
+     色罩改过一次，这里**必须跟着改** —— 自检钉的就是"两条路同色"，不然低端机是另一个世界），
+     描边取和 3D 同族的深藏青 —— 这样低端机看到的和满血机是"同一座城"，
+     而不是"浅蓝界面 + 黑地图"。 */
+  canvas: {
+    bg: "#BDDAE7",
+    empty: "rgba(27,53,80,.75)",
+    bldStroke: "#1B3550",
+    bldStrokeW: 1.2,
+    aiShadow: "rgba(44,74,99,.22)",
+    aiStroke: "rgba(27,53,80,.5)",
+    aiStrokeW: 0.8
+  },
+  verticalGradient: false,
+  // ← 平涂的关键：关掉竖向渐变，楼是一块纯色板
+  extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.8, 15, 0.92, 17, 1],
+  low: {
+    dropSky: true,
+    /* 这里和任务书"低端关描边"**故意不一致**，理由要写清楚：
+       色区别的是楼与地，靠描边当主要线索（2026-10-10 地面压暗后楼比地亮了，
+       但明度差仍不足 WCAG 的 3:1，见自检里那组对比度）⇒ **描边仍是主分隔手段**。
+       低端档真把描边关了，楼会整片"化"进地面（比掉几帧难看多了）。
+       所以低端只把它**变细到 0.6px**（同样是一条 line 层，要素数没变，省的是像素填充）。 */
+    outlineWidth: 0.6,
+    dropTint: true
+  },
+  measuredLuma: { base: 0.937, hi: null },
+  /** 二次元：明度比这条不变量**不设阈值**（1.0 = 只要不比地暗就行）。
+      2026-10-10 之后它不再是空条件：色阶最低档 0.845 / 地面 0.834 = **1.013**，
+      真正在承重（改回旧色阶那版 0.810 会直接跌破 1.0）。 */
+  minGroundContrast: 1
+};
+var ANIME_OLD = {
+  ...ANIME,
+  id: "anime-old",
+  label: "二次元（改前配色，A/B 用）",
+  hud: "二次元 · 平涂（改前配色）",
+  tint: { color: "#BCE7F8", opacity: 0.45 },
+  ramp: [
+    [3, "#BCE4F9"],
+    [12, "#AEDDF7"],
+    [25, "#A2D8F6"],
+    [45, "#BCE4F9"],
+    [70, "#D6EFFC"],
+    [110, "#EBF7FE"],
+    [200, "#F6FCFF"],
+    [320, "#FFFFFF"]
+  ]
+};
 function baseMaxZoomFor(theme) {
   const f = theme && theme.baseFade;
   if (!f || typeof f.to !== "number" || !Number.isFinite(f.to)) return void 0;
@@ -2202,9 +2436,15 @@ function bldBundleCellsForView(bounds, center, maxCells = 6, size = BLD_BUNDLE_C
 // src/components/views/worldsim/wsBldBudget.ts
 var WS_BLD_BUDGET_PX2 = 4e5;
 var WS_BLD_BUDGET_VERTS = 4e4;
-var WS_BLD_MAX_DRAWN = 3;
+var WS_BLD_MAX_DRAWN = 6;
 var WS_BLD_MAX_DRAWN_MANY = 4e3;
 var WS_BLD_NEAR_K = 10;
+var WS_BLD_WALK_K = 10;
+var WS_BLD_WALK_BUF_MAX = 80;
+function bldWalkKOf(walkK) {
+  const n = Number(walkK);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
 var WS_BLD_FOOTPRINT_MAXZOOM = WS_BLD_DETAIL_ROOF_ZOOM;
 var WS_BLD_TIER_HYSTERESIS = 0.25;
 function bldTierOfZoom(zoom, prevTier) {
@@ -2416,6 +2656,12 @@ function pickBuildingsByBudget(input) {
     nearPicked: 0,
     nearAddedPerAnchor: [],
     nearDistM: null,
+    /* 行走缓冲同理（关掉时逐字节等于改动前；影子对拍两边带同一份形状） */
+    walkOn: false,
+    walkRestored: 0,
+    walkAdded: 0,
+    walkDistM: null,
+    walkScanned: 0,
     overBudget: false,
     why: ""
   };
@@ -2647,6 +2893,115 @@ function pickBuildingsByBudget(input) {
       }
     }
   }
+  {
+    const walkKOn = bldWalkKOf(input.walkK);
+    const ws0 = input.walkSeed;
+    const wsOk = !!ws0 && typeof ws0 === "object";
+    const wsLng = wsOk ? Number(ws0.lng) : NaN;
+    const wsLat = wsOk ? Number(ws0.lat) : NaN;
+    if (walkKOn > 0 && wsOk && isFinite(wsLng) && isFinite(wsLat)) {
+      stats.walkOn = true;
+      const cosLat = Math.cos(wsLat * Math.PI / 180);
+      const wkx = WS_BLD_M_PER_DEG_LNG * (isFinite(cosLat) ? cosLat : 1);
+      const walkIds = /* @__PURE__ */ new Set();
+      const walkObjs = /* @__PURE__ */ new Set();
+      for (const c of chosen) {
+        if (c.c.id !== "") walkIds.add(c.c.id);
+        walkObjs.add(c.f);
+      }
+      const distOf = (m) => {
+        const dx = (m.cLng - wsLng) * wkx;
+        const dy = (m.cLat - wsLat) * WS_BLD_M_PER_DEG_LAT;
+        return Math.sqrt(dx * dx + dy * dy);
+      };
+      const frozenRaw = Array.isArray(input.walkBuf) ? input.walkBuf : [];
+      let farM = 0;
+      for (const f of frozenRaw) {
+        if (!f || typeof f !== "object") continue;
+        if (walkObjs.has(f)) continue;
+        const id = String(f.id ?? "");
+        if (id !== "" && walkIds.has(id)) continue;
+        const m2 = bldStaticMeasureOf(f);
+        if (!m2) continue;
+        const d = distOf(m2);
+        if (!isFinite(d)) continue;
+        const cost = bldStaticScreenCost(m2, id, mpp, ppm);
+        if (id !== "") walkIds.add(id);
+        walkObjs.add(f);
+        const cell = bundleCellOf(m2.cLng, m2.cLat, cellDeg);
+        chosen.push({ f, c: cost, score: m2.score, key: bundleCellKey(cell.w, cell.s, cellDeg) });
+        sumPx += cost.px;
+        sumV += cost.verts;
+        if (d > farM) farM = d;
+        stats.walkRestored += 1;
+      }
+      const cands = [];
+      const scanSrc = Array.isArray(input.walkCandidates) ? null : pool;
+      if (scanSrc) {
+        for (let i = 0; i < scanSrc.length; i++) {
+          if (taken[i]) continue;
+          const c = scanSrc[i];
+          if (c.c.id !== "" && walkIds.has(c.c.id)) continue;
+          if (walkObjs.has(c.f)) continue;
+          const m2 = bldStaticMeasureOf(c.f);
+          if (!m2) continue;
+          const d = distOf(m2);
+          if (!isFinite(d)) continue;
+          cands.push({ cand: c, i, d, id: c.c.id });
+        }
+      } else {
+        for (const f0 of input.walkCandidates) {
+          if (!f0 || typeof f0 !== "object") continue;
+          const id0 = String(f0.id ?? "");
+          if (id0 !== "" && walkIds.has(id0)) continue;
+          if (walkObjs.has(f0)) continue;
+          const m2 = bldStaticMeasureOf(f0);
+          if (!m2) continue;
+          const d = distOf(m2);
+          if (!isFinite(d)) continue;
+          const cell0 = bundleCellOf(m2.cLng, m2.cLat, cellDeg);
+          cands.push({
+            cand: { f: f0, c: bldStaticScreenCost(m2, id0, mpp, ppm), score: m2.score, key: bundleCellKey(cell0.w, cell0.s, cellDeg) },
+            i: -1,
+            d,
+            id: id0
+          });
+        }
+      }
+      cands.sort((A, B) => A.d !== B.d ? A.d - B.d : A.id < B.id ? -1 : A.id > B.id ? 1 : 0);
+      const take = Math.min(walkKOn, cands.length);
+      for (let k = 0; k < take; k++) {
+        const it = cands[k];
+        if (it.i >= 0 && taken[it.i]) continue;
+        if (it.id !== "" && walkIds.has(it.id)) continue;
+        if (it.id !== "") walkIds.add(it.id);
+        walkObjs.add(it.cand.f);
+        if (it.i >= 0) taken[it.i] = true;
+        chosen.push(it.cand);
+        sumPx += it.cand.c.px;
+        sumV += it.cand.c.verts;
+        if (it.d > farM) farM = it.d;
+        stats.walkAdded += 1;
+      }
+      stats.walkDistM = stats.walkRestored + stats.walkAdded > 0 ? Math.round(farM) : null;
+      stats.walkScanned = Array.isArray(input.walkCandidates) ? input.walkCandidates.length : pool.length;
+      if (stats.walkRestored + stats.walkAdded > 0) {
+        stats.chosen = chosen.length;
+        stats.px2 = Math.round(sumPx);
+        stats.verts = Math.round(sumV);
+        stats.overBudget = sumPx > budgetPx2 || sumV > budgetVerts;
+        const seen = /* @__PURE__ */ new Set();
+        const keys = [];
+        for (const c of chosen) if (!seen.has(c.key)) {
+          seen.add(c.key);
+          keys.push(c.key);
+        }
+        stats.cellKeys = keys;
+        stats.cellsChosen = keys.length;
+      }
+      stats.why += " · 行走补 " + stats.walkAdded + " 栋" + (stats.walkRestored > 0 ? "（保住 " + stats.walkRestored + " 栋）" : "") + (stats.walkDistM !== null ? "（最远 " + stats.walkDistM + " m）" : "");
+    }
+  }
   return { features: chosen.map((c) => c.f), stats };
 }
 
@@ -2852,6 +3207,44 @@ function applyBuildingsTo(m, data, specs) {
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : void 0);
   for (const l of specs) m.addLayer(l, before);
 }
+function mvtHeightColorExpression() {
+  const base = heightColorExpression();
+  return [base[0], base[1], ["coalesce", ["get", "h"], 8], ...base.slice(3)];
+}
+function mvtBldLayerSpecs() {
+  const color = mvtHeightColorExpression();
+  return [
+    {
+      id: "bld-foot",
+      type: "fill",
+      source: "bld",
+      "source-layer": "bld",
+      minzoom: WS_BLD_VECTOR_MINZOOM,
+      maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+      paint: { "fill-color": color, "fill-opacity": WS_BLD_FOOTPRINT_OPACITY }
+    },
+    {
+      id: "bld-ext",
+      type: "fill-extrusion",
+      source: "bld",
+      "source-layer": "bld",
+      minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+      paint: {
+        "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
+        "fill-extrusion-base": 0,
+        "fill-extrusion-opacity": 0.95,
+        "fill-extrusion-color": color
+      }
+    }
+  ];
+}
+function applyMvtTo(m, template) {
+  if (!m.getSource("bld")) {
+    m.addSource("bld", { type: "vector", tiles: [template], minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: 16 });
+  }
+  const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : void 0);
+  for (const l of mvtBldLayerSpecs()) if (!m.getLayer(l.id)) m.addLayer(l, before);
+}
 function flushBldStore(opts, why = "flush") {
   let drawn = opts.features();
   if (opts.pick) {
@@ -2867,6 +3260,12 @@ function flushBldStore(opts, why = "flush") {
   const m = opts.map();
   if (!m) {
     opts.onNoMap?.(data);
+    return;
+  }
+  const mvt = opts.mvt ? opts.mvt() : null;
+  if (mvt) {
+    applyMvtTo(m, mvt.template);
+    opts.afterDraw?.(why, data);
     return;
   }
   applyBuildingsTo(m, data, opts.specs());
@@ -3246,6 +3645,9 @@ function gwPointOf(f) {
   }
   return n ? [x / n, y / n] : null;
 }
+function parseBundleJson(kind, json) {
+  return SPECS[kind].parse(json);
+}
 function bundlePlacesOf(json) {
   const arr = json?.places;
   if (!Array.isArray(arr)) return [];
@@ -3421,6 +3823,7 @@ function createBundleFeed(opts) {
   )));
   const parsedCache = /* @__PURE__ */ new Map();
   let cacheHits = 0;
+  let parseWorkerFallback = 0;
   function cacheTake(k) {
     const v = parsedCache.get(k);
     if (!v) return null;
@@ -3550,6 +3953,8 @@ function createBundleFeed(opts) {
       refused,
       cellDeg: effectiveDeg(),
       cellDegPin: pinDeg,
+      /* 解析搬 Worker 的实况（2026-10-10）：开没开 + 退回同步过几次（**不静默降级**要能读出来） */
+      parseWorker: { on: !!opts.parseAsync, fallback: parseWorkerFallback },
       /* 这一场**实际拿去对拍**的期望值（= 调用方显式钉；没钉 = null）——
          判词里的「前端 X°」必须念它，不能拿包自报的 `cellDeg` 冒充「前端的期望」。 */
       cellDegExpect: pinDeg,
@@ -3637,21 +4042,39 @@ function createBundleFeed(opts) {
         pmSpan(`feed.net:${spec.dir}`, tNet - t0, by);
         let j;
         let tJson;
+        let feats;
+        let rawText = null;
         if (typeof r.text === "function") {
-          const raw = await r.text();
+          rawText = await r.text();
           const tText = pmNow();
           pmSpan(`feed.read:${spec.dir}`, tText - tNet, by, "读响应流");
-          j = JSON.parse(raw);
+        }
+        if (opts.parseAsync && rawText !== null) {
+          try {
+            const t0w = pmNow();
+            feats = await opts.parseAsync(opts.kind, rawText);
+            pmSpan(`feed.json+parse:${spec.dir}`, pmNow() - t0w, by, "Worker 解析（主线程只读文本）");
+            tJson = 0;
+          } catch (eW) {
+            parseWorkerFallback += 1;
+            opts.onError?.(`${spec.dir} ${cell.key} 解析 Worker 退回同步：${String(eW?.message || eW).slice(0, 40)}`);
+            feats = spec.parse(JSON.parse(rawText));
+            tJson = pmNow();
+            pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "退回同步解析（Worker 失败）");
+          }
+        } else if (rawText !== null) {
+          j = JSON.parse(rawText);
           tJson = pmNow();
-          pmSpan(`feed.json:${spec.dir}`, tJson - tText, by, "纯 JSON.parse");
+          pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "纯 JSON.parse");
+          feats = spec.parse(j);
         } else {
           j = await r.json();
           tJson = pmNow();
           pmSpan(`feed.json:${spec.dir}`, tJson - tNet, by, "读流+解析（适配器没给 text()）");
+          feats = spec.parse(j);
         }
-        const feats = spec.parse(j);
         const tParse = pmNow();
-        pmSpan(`feed.parse:${spec.dir}`, tParse - tJson, by);
+        pmSpan(`feed.parse:${spec.dir}`, tParse - (tJson || tNet), by);
         opts.store.merge(feats, spec.sourceKey(cell.key));
         pmSpan(`feed.merge:${spec.dir}`, pmNow() - tParse, by);
         cachePut(cell.key, feats);
@@ -4917,6 +5340,43 @@ function capBuildingsPerCell(feats, input = {}) {
   };
 }
 
+// src/components/views/worldsim/wsBldIdKey.ts
+var BLD_HEX_ID_LEN = 12;
+var BLD_MAX_NUM_ID = 281474976710655;
+var HEX12 = /^[0-9a-f]{12}$/;
+function bldHexOfNumber(n) {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v) || !Number.isInteger(v) || v < 0 || v > BLD_MAX_NUM_ID) return null;
+  return v.toString(16).padStart(BLD_HEX_ID_LEN, "0");
+}
+function bldIdOfFeature(f) {
+  if (!f || typeof f !== "object") return null;
+  if (typeof f.id === "number") {
+    const h = bldHexOfNumber(f.id);
+    if (h) return h;
+  }
+  const p = f.properties || {};
+  for (const v of [p.osm_id, p.store_id, p.id, f.i, p.i]) {
+    if (typeof v === "string" && HEX12.test(v.trim().toLowerCase())) return v.trim().toLowerCase();
+    if (typeof v === "string" && /^\d+$/.test(v.trim())) {
+      const h = bldHexOfNumber(Number(v.trim()));
+      if (h) return h;
+    }
+    if (typeof v === "number") {
+      const h = bldHexOfNumber(v);
+      if (h) return h;
+    }
+  }
+  return null;
+}
+function bldKeyOfFeature(f) {
+  if (f && typeof f === "object") {
+    const id = bldIdOfFeature(f);
+    if (id) return id;
+  }
+  return f;
+}
+
 // src/components/views/worldsim/wsBldPickStore.ts
 var WS_BLD_CELL_CAP_REF_DEG = 0.05;
 var WS_BLD_INVIEW_DEFAULT = 10;
@@ -4951,6 +5411,10 @@ function createBldPickStore(opts) {
   const frozen = opts?.frozen ?? {};
   const nearAnchors = [];
   const nearFeat = /* @__PURE__ */ new Map();
+  const walkFrozen = [];
+  let lastPoolKeys = null;
+  let lastPoolRev = void 0;
+  let freshFeats = [];
   let nearCurrentKey = null;
   return {
     pick(input) {
@@ -5042,12 +5506,34 @@ function createBldPickStore(opts) {
            `nearK`（栋数）与"关掉"的语义仍归规则模块那一处说了算。 */
         nearAnchors: anchorsOut,
         nearFrozen: frozenOut,
-        nearK: input.nearK
+        nearK: input.nearK,
+        /* **行走缓冲**（2026-10-10）：参照点 = `input.nearCenter`（**当前相机中心**，每轮现读，
+           与上面那张"按格冻结的锚点表"**不是同一件事** —— 那一条只认"进格那一刻"的点）。
+           冻结集是本实例持有的那批**引用**（`walkFrozen`）⇒ 离线包淘汰也不消失。 */
+        walkSeed: input.nearCenter,
+        walkK: input.walkK,
+        walkBuf: walkFrozen,
+        /* **近带增量**：行走补只扫「这一轮新到的要素 + 继承集」（`walkScanned` 可数）。
+           池没变（`poolRev` 同值）⇒ `freshFeats` 沿用上一轮算好的那批，**不重算**。 */
+        walkCandidates: (() => {
+          const cur = input.features;
+          if (input.poolRev !== void 0 && input.poolRev !== null && input.poolRev === lastPoolRev) {
+            return freshFeats.length ? freshFeats : walkFrozen;
+          }
+          const prev = lastPoolKeys;
+          const fresh = prev ? cur.filter((f) => !prev.has(bldKeyOfFeature(f))) : cur;
+          lastPoolKeys = new Set(cur.map((f) => bldKeyOfFeature(f)));
+          lastPoolRev = input.poolRev;
+          freshFeats = fresh;
+          return fresh.concat(walkFrozen);
+        })()
       });
       const stats = {
         ...out.stats,
         nearAnchorTotal: nearAnchors.length,
-        nearFrozenBatches: 0
+        nearFrozenBatches: 0,
+        walkBufN: 0,
+        walkDropped: 0
       };
       const per = Array.isArray(out.stats.nearAddedPerAnchor) ? out.stats.nearAddedPerAnchor : [];
       const addedN = Math.max(0, Number(out.stats.nearAdded) || 0);
@@ -5060,11 +5546,38 @@ function createBldPickStore(opts) {
           const arr = nearFeat.get(nearAnchors[i].key);
           for (let j = 0; j < cnt && off < tail.length; j++, off++) {
             const f = tail[off];
-            if (!arr.includes(f)) arr.push(f);
+            const fk = bldKeyOfFeature(f);
+            if (!arr.some((x) => bldKeyOfFeature(x) === fk)) arr.push(f);
           }
         }
       }
       for (const a of nearAnchors) if ((nearFeat.get(a.key) || []).length > 0) stats.nearFrozenBatches += 1;
+      if (out.stats.walkOn) {
+        const tailN = Math.max(0, Number(out.stats.walkRestored) || 0) + Math.max(0, Number(out.stats.walkAdded) || 0);
+        const next = tailN > 0 && out.features.length >= tailN ? out.features.slice(out.features.length - tailN) : [];
+        walkFrozen.length = 0;
+        for (const f of next) walkFrozen.push(f);
+        if (walkFrozen.length > WS_BLD_WALK_BUF_MAX) {
+          const seed2 = input.nearCenter;
+          const sl = seed2 && isFinite(Number(seed2.lng)) && isFinite(Number(seed2.lat)) ? [Number(seed2.lng), Number(seed2.lat)] : null;
+          if (sl) {
+            const kx = 111320 * Math.cos(sl[1] * Math.PI / 180);
+            const withD = walkFrozen.map((f) => {
+              const p = pointOfFeature(f);
+              const d = p ? Math.hypot((p[0] - sl[0]) * kx, (p[1] - sl[1]) * 110540) : Infinity;
+              return { f, d: isFinite(d) ? d : Infinity };
+            });
+            withD.sort((a, b) => b.d - a.d);
+            const keep = withD.slice(0, WS_BLD_WALK_BUF_MAX);
+            stats.walkDropped = withD.length - keep.length;
+            walkFrozen.length = 0;
+            const keepKeys = new Set(keep.map((x) => bldKeyOfFeature(x.f)));
+            for (const f of next) if (keepKeys.has(bldKeyOfFeature(f))) walkFrozen.push(f);
+            stats.why += " · 行走缓冲超上限：丢 " + stats.walkDropped + " 栋（离中心最远的那几栋）";
+          }
+        }
+        stats.walkBufN = walkFrozen.length;
+      }
       return { features: out.features, stats };
     },
     frozenObject() {
@@ -6771,6 +7284,8 @@ function fin(v) {
 function cardBuildingId(b) {
   if (!b) return null;
   const p = b.properties || {};
+  const canon = bldIdOfFeature({ id: b.id, properties: p });
+  if (canon) return canon;
   for (const v of [p.osm_id, p.id, b.id, b.i, p.i]) {
     const s = str(v);
     if (s) return s;
@@ -7145,6 +7660,8 @@ export {
   WS_BLD_VECTOR_MINZOOM,
   WS_BLD_VERTS_PER_SEGMENT,
   WS_BLD_VIEW_CAP,
+  WS_BLD_WALK_BUF_MAX,
+  WS_BLD_WALK_K,
   WS_FETCH_R_BACKEND_MAX,
   WS_FETCH_R_LADDER,
   WS_FETCH_R_LIMIT_WHY,
@@ -7174,6 +7691,7 @@ export {
   adminLabelsFrom,
   applyBuildingsTo,
   applyGwLayers,
+  applyMvtTo,
   applyPitchGuard,
   art3Summary,
   artPatchValueOf,
@@ -7206,6 +7724,7 @@ export {
   bldTierOfZoom,
   bldVerdictState,
   bldVerdictText,
+  bldWalkKOf,
   buildBldBoxes,
   buildSkyGeometry,
   buildTransport,
@@ -7324,6 +7843,8 @@ export {
   mercatorYOf,
   metersBetween,
   metersToMercator,
+  mvtBldLayerSpecs,
+  mvtHeightColorExpression,
   namePointsOfCell,
   nameVerdictLine,
   namesCellUrl,
@@ -7334,6 +7855,7 @@ export {
   panDamping,
   parseArtParam,
   parseBldnParam,
+  parseBundleJson,
   parseInViewParam,
   parseLookParam,
   pickBuildingsByBudget,

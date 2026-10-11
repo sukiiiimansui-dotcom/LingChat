@@ -21,6 +21,7 @@
 import { BLD_CAP, buildBldMeshData, type BldMeshData } from "./wsBldMesh";
 import {
   contractTheme,
+  metersPerPixelAt,
   saneRadius,
   viewRadiusOf,
   type WsRenderActor,
@@ -40,6 +41,44 @@ const M_PER_DEG = 111319.49079327358;
 const REANCHOR_M = 2000;
 /** `sourcedata` 之后的补建防抖（毫秒） */
 const REFRESH_DEBOUNCE_MS = 400;
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 🔧 自用对齐探针（`?wsalign=1`）—— **给真机用的量具**，不是产品功能
+ * ══════════════════════════════════════════════════════════════════════════
+ * 本机量不到"拖动时叠加层与地图差多少像素"（一个页面只能建一次 WebGL 上下文，叠加层常常
+ * 起不来）⇒ 把这把尺子装进页面，让**真机**把数带回来：
+ *   · 固定一栋楼的一个角（开的时候选一次、经纬度冻住，绝不每帧换目标）；
+ *   · 每次地图 `render` 算一次屏幕空间像素差：`map.project(角)` vs 叠加层
+ *     **上一次真的画出去那一帧**的投影（`projectFromLastDraw`）；
+ *   · 记 `cur / max / 中位`（近 N 次）+ 当时的 `center/zoom/bearing/pitch` + 计数；
+ *   · **停手 1 秒**再记一组（静止基准）；回传走 `<img>` beacon 到 8795 的 `__wslog`，
+ *     `moveend` 必发一条、其余**最多每 2 秒一条**（不刷屏）。
+ *   · 顺带把"米每像素口径"的比值一起带回去（用 `map.unproject` 在屏幕横轴上量 200 px
+ *     对应多少米 —— **不动地图、不借内部字段**）。
+ *
+ * 🔴 纪律：① **只读**（不碰渲染、不改地图状态）② 默认不装（没这个参数 ⇒ 这段代码一步都不跑）
+ *   ③ 这一段属**自用层**：将来给上游提 PR 时要**整段剔除**（连 `?wsalign=` 的判定一起）。
+ */
+
+/** 自用开关：`?wsalign=1` 才装 */
+export function alignProbeWanted(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("wsalign") === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 一行回传（`<img>` beacon；跨端口没问题，不用 fetch ⇒ 不会因 CORS/预检卡住） */
+function beacon(row: Record<string, unknown>): void {
+  try {
+    const j = encodeURIComponent(JSON.stringify(row));
+    const img = new Image();
+    img.src = `http://127.0.0.1:8795/__wslog?tag=align_phone&j=${j}`;
+  } catch {
+    /* 回传失败不影响页面（它本来就只是量具） */
+  }
+}
 
 /** 只写用得到的形状（**不 import maplibre 的类型**：引擎结构不许泄进这里） */
 interface OverlayMapLike {
@@ -214,6 +253,16 @@ export function createOverlayBackend(): WsRenderBackend {
   };
 
   let curThemeId = "anime";
+  /* ── 自用对齐探针的状态（`?wsalign=1` 才用；默认全是空转） ── */
+  const alignOn = alignProbeWanted();
+  let alignCorner: [number, number] | null = null;
+  const alignErrs: number[] = [];
+  let alignMax = 0;
+  let alignCur = 0;
+  let alignReports = 0;
+  let alignLastReportAt = 0;
+  let alignStaticTimer = 0;
+  let alignBadge: HTMLElement | null = null;
   /**
    * 怎么跟地图对齐（**这是"拖动时位移不一致"那条的头号嫌疑**）：
    *   · `render`（默认）：挂 `map.on('render')` —— 地图画完一帧就叫我们，**同一帧**用它的相机画叠加层；
@@ -243,6 +292,171 @@ export function createOverlayBackend(): WsRenderBackend {
     }
     renderer.render(scene, camera);
     draws = renderer.info?.render?.calls ?? 0;
+    /* 自用对齐探针：**画完**才采（采的就是"屏幕上这一帧"）—— 没开开关时 alignOn=false，一步不跑 */
+    if (alignOn && alignCorner) {
+      try {
+        alignSample();
+      } catch {
+        /* 量具自己抛错不许影响渲染 */
+      }
+    }
+  }
+
+  /* ── 自用对齐探针（只在 `?wsalign=1` 时真跑） ───────────────────────────────── */
+  /** 选一个"固定的角"：拿地图 `bld` 源里第一栋的第一个环点，投票到屏幕中心最近的那个 —— **只选一次** */
+  async function alignPickCorner(): Promise<void> {
+    if (!alignOn || alignCorner) return;
+    try {
+      const fc = await grabBld();
+      const feats = (fc?.features || []) as Array<{ geometry?: unknown }>;
+      const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+      const { w, h } = sizeOf();
+      const cx = w / 2;
+      const cy = h / 2;
+      let best: [number, number] | null = null;
+      let bestD = Number.POSITIVE_INFINITY;
+      for (const f of feats) {
+        const g = f?.geometry as { type?: string; coordinates?: unknown } | null;
+        const cs = g?.coordinates as unknown;
+        const first = Array.isArray(cs) && Array.isArray(cs[0]) && Array.isArray((cs[0] as unknown[])[0])
+          ? ((cs[0] as unknown[])[0] as unknown[])
+          : Array.isArray(cs) && Array.isArray(cs[0])
+            ? (cs[0] as unknown[])
+            : null;
+        if (!first) continue;
+        const lng = Number(first[0]);
+        const lat = Number(first[1]);
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+        const p = m?.project?.([lng, lat]);
+        if (!p) continue;
+        const d = Math.hypot(p.x - cx, p.y - cy);
+        if (d < bestD) {
+          bestD = d;
+          best = [lng, lat];
+        }
+      }
+      alignCorner = best;
+      if (best && map) {
+        const m2 = map as unknown as { on?: (ev: string, cb: () => void) => void };
+        m2.on?.("moveend", () => {
+          alignFlush("moveend");
+          if (alignStaticTimer) window.clearTimeout(alignStaticTimer);
+          /* 停手 1 秒后再记一组（静止基准）—— 真机上"静止对不齐"与"动起来才错"是两回事 */
+          alignStaticTimer = window.setTimeout(() => alignFlush("static"), 1000);
+        });
+      }
+    } catch {
+      /* 选不到角就不装（如实：量不到就不量，不编一个坐标） */
+    }
+  }
+
+  /** 当前那一帧的像素差（地图当下 vs 叠加层上次画出去那一帧） */
+  function alignSample(): void {
+    if (!alignOn || !alignCorner || !map) return;
+    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+    const a = m?.project?.(alignCorner);
+    const b = this_projectFromLastDraw(alignCorner[0], alignCorner[1]);
+    if (!a || !b) return;
+    const d = Math.hypot(a.x - b[0], a.y - b[1]);
+    alignCur = d;
+    alignErrs.push(d);
+    if (alignErrs.length > 240) alignErrs.shift();
+    if (d > alignMax) alignMax = d;
+    alignBadgePaint();
+    const now = performance.now();
+    if (now - alignLastReportAt > 2000) alignFlush("moving");
+  }
+
+  /** 回传一条（`moveend` 必发；其余按 2 秒节流） */
+  function alignFlush(kind: string): void {
+    if (!alignOn || !alignCorner) return;
+    const m = map as unknown as {
+      getCenter?: () => { lat: number; lng: number };
+      getZoom?: () => number;
+      getBearing?: () => number;
+      getPitch?: () => number;
+      unproject?: (p: [number, number]) => { lat: number; lng: number };
+    } | null;
+    let mppRatio: number | null = null;
+    try {
+      /* 不动地图、不借内部字段：屏幕横轴上量 200 px 对应多少米（unproject 两次） */
+      const { w, h } = sizeOf();
+      const c0 = m?.unproject?.([w / 2, h / 2]);
+      const c1 = m?.unproject?.([w / 2 + 200, h / 2]);
+      if (c0 && c1) {
+        const kx = 111320 * Math.cos((((c0.lat + c1.lat) / 2) * Math.PI) / 180);
+        const ky = 110540;
+        const dMeters = Math.hypot((c1.lng - c0.lng) * kx, (c1.lat - c0.lat) * ky);
+        const measured = dMeters / 200;
+        const ours = metersPerPixelAt(Number(m?.getCenter?.().lat ?? 0), Number(m?.getZoom?.() ?? 0));
+        mppRatio = measured > 0 ? Number((ours / measured).toFixed(4)) : null;
+      }
+    } catch {
+      mppRatio = null;
+    }
+    const sorted = [...alignErrs].sort((x, y) => x - y);
+    const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    alignReports++;
+    alignLastReportAt = performance.now();
+    beacon({
+      kind,
+      corner: alignCorner,
+      cur: Number(alignCur.toFixed(3)),
+      max: Number(alignMax.toFixed(3)),
+      med: med === null ? null : Number(med.toFixed(3)),
+      n: alignErrs.length,
+      reports: alignReports,
+      center: m?.getCenter?.() ?? null,
+      zoom: m?.getZoom?.() ?? null,
+      bearing: m?.getBearing?.() ?? null,
+      pitch: m?.getPitch?.() ?? null,
+      mppRatio,
+      bld: data?.stats.buildings ?? 0,
+      tris: data?.triangles ?? 0,
+    });
+  }
+
+  /** HUD 上看得见的那一行（自用；关掉开关就没有它） */
+  function alignBadgePaint(): void {
+    if (!alignOn) return;
+    try {
+      if (!alignBadge) {
+        alignBadge = document.createElement("div");
+        alignBadge.className = "ws-align-badge";
+        alignBadge.style.cssText =
+          "position:fixed;left:8px;bottom:8px;z-index:9999;background:#000a;color:#8fe;font:12px ui-monospace,monospace;padding:2px 6px;border-radius:4px;pointer-events:none";
+        document.body.appendChild(alignBadge);
+      }
+      const sorted = [...alignErrs].sort((x, y) => x - y);
+      const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+      alignBadge.textContent = `align: cur ${alignCur.toFixed(2)} / max ${alignMax.toFixed(2)} / med ${med.toFixed(2)} px · n=${alignErrs.length} · 报 ${alignReports}`;
+    } catch {
+      /* 徽标画不出来不影响量具 */
+    }
+  }
+
+  /** 给 `stats().note` 用的那一句（自用；没开开关就是空串） */
+  function alignNote(): string {
+    if (!alignOn) return "";
+    return ` / align(cur ${alignCur.toFixed(2)} max ${alignMax.toFixed(2)} px · n=${alignErrs.length})`;
+  }
+
+  /** `projectFromLastDraw` 的本地实现（对象方法只是转发；自用探针也要调它） */
+  function this_projectFromLastDraw(lng: number, lat: number): [number, number] | null {
+    if (!lastDraw) return null;
+    const xy = toLocal(Number(lng), Number(lat));
+    const v = [xy[0], 0, xy[1], 1];
+    const mul = (m: number[], p: number[]): number[] => {
+      const o = [0, 0, 0, 0];
+      for (let i = 0; i < 4; i++) {
+        o[i] = m[i * 4]! * p[0]! + m[i * 4 + 1]! * p[1]! + m[i * 4 + 2]! * p[2]! + m[i * 4 + 3]! * p[3]!;
+      }
+      return o;
+    };
+    const cam = mul(lastDraw.mwInv, v);
+    const clip = mul(lastDraw.proj, cam);
+    if (!Number.isFinite(clip[3]!) || Math.abs(clip[3]!) < 1e-9) return null;
+    return [((clip[0]! / clip[3]! + 1) / 2) * lastDraw.w, ((1 - clip[1]! / clip[3]!) / 2) * lastDraw.h];
   }
 
   /** 地图画完一帧 ⇒ 同一帧把叠加层也画了（`alignMode === 'render'` 时的唯一驱动） */
@@ -340,6 +554,11 @@ export function createOverlayBackend(): WsRenderBackend {
         map?.on?.("sourcedata", onSourceData);
         state = "running";
         attachDrive();
+        /* 自用对齐探针（`?wsalign=1`）：选一次固定角 + 画个徽标；没开开关时这两句都是空转 */
+        if (alignOn) {
+          void alignPickCorner();
+          alignBadgePaint();
+        }
       } catch (e) {
         const msg = "叠加层起不来：" + String((e as Error)?.message || e);
         errors.push(msg);
@@ -423,6 +642,14 @@ export function createOverlayBackend(): WsRenderBackend {
 
     destroy(): void {
       detachDrive();
+      if (alignStaticTimer) window.clearTimeout(alignStaticTimer);
+      alignStaticTimer = 0;
+      try {
+        alignBadge?.remove?.();
+      } catch {
+        /* ignore */
+      }
+      alignBadge = null;
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = 0;
       disposeMesh();
@@ -494,22 +721,13 @@ export function createOverlayBackend(): WsRenderBackend {
      * 不借 three 的 `project()`（它算的是**当下**的相机）。
      */
     projectFromLastDraw(lng: number, lat: number): [number, number] | null {
-      if (!lastDraw) return null;
-      const xy = toLocal(Number(lng), Number(lat));
-      const v = [xy[0], 0, xy[1], 1];
-      const mul = (m: number[], p: number[]): number[] => {
-        const o = [0, 0, 0, 0];
-        for (let i = 0; i < 4; i++) {
-          o[i] = m[i * 4]! * p[0]! + m[i * 4 + 1]! * p[1]! + m[i * 4 + 2]! * p[2]! + m[i * 4 + 3]! * p[3]!;
-        }
-        return o;
-      };
-      const cam = mul(lastDraw.mwInv, v);
-      const clip = mul(lastDraw.proj, cam);
-      if (!Number.isFinite(clip[3]!) || Math.abs(clip[3]!) < 1e-9) return null;
-      const ndcX = clip[0]! / clip[3]!;
-      const ndcY = clip[1]! / clip[3]!;
-      return [((ndcX + 1) / 2) * lastDraw.w, ((1 - ndcY) / 2) * lastDraw.h];
+      return this_projectFromLastDraw(lng, lat);
+    },
+
+    /** 自用对齐探针的读数（没开开关就是 null） */
+    alignStats(): { on: boolean; cur: number; max: number; n: number; reports: number } | null {
+      if (!alignOn) return null;
+      return { on: true, cur: Number(alignCur.toFixed(3)), max: Number(alignMax.toFixed(3)), n: alignErrs.length, reports: alignReports };
     },
 
     /** 探针用：切换对齐模式（`render` = 同帧；`raf` = 各跑各的）——A/B 对比用 */
@@ -532,7 +750,8 @@ export function createOverlayBackend(): WsRenderBackend {
         rendering: state === "running",
         note: `${st?.buildings ?? 0} 栋（叠加在地图上） / ${data?.triangles ?? 0} 三角`
           + ` / 相机跟地图：${lastSeen ? "在跟" : "还没读到"}`
-          + (errors.length ? ` / ⚠️ ${errors[0]}` : ""),
+          + (errors.length ? ` / ⚠️ ${errors[0]}` : "")
+          + alignNote(),
       };
     },
   } as WsRenderBackend & { bindMap(m: unknown): void; unbindMap(): void };

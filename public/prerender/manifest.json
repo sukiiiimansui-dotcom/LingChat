@@ -1,23 +1,23 @@
 {
- "_note": "由 world_map/prerender_pipeline.py 生成（LOD 第 2 步：真楼脚印 + 道路），别手改",
- "generatedBy": "world_map/prerender_pipeline.py",
+ "_note": "由预渲染管线 prerender_pipeline.py 生成（LOD 第 2 步：真楼脚印 + 道路），别手改",
+ "generatedBy": "prerender_pipeline.py",
  "style": "anime",
  "kinds": {
   "real": 195
  },
- "kindsNote": "本目录只有 real（本轮管线用真楼脚印 + OSM 道路画的）。示意/占位瓦片在 /prerender-demo/，不在这里 —— 机主 2026-09-25 拍板「占位默认不画」。",
+ "kindsNote": "本目录只有 real（本轮管线用真楼脚印 + OSM 道路画的）。示意/占位瓦片在 /prerender-demo/，不在这里 —— 2026-09-25 定：占位默认不画。",
  "themeLabel": "二次元（蔚蓝档案）",
- "themeFingerprint": "564e25cbc72454fcdf80f341fb02c35dff857b4cdbb1f6eee10dfc575b421bb4",
+ "themeFingerprint": "3d2aa9f4efee075181352e73cbb7232ea83b59cb5a9d9ba1d52d0ea136d4a595",
  "palette": {
-  "ground": "#dceff7",
+  "ground": "#bddae7",
   "blocks": [
-   "#BCE4F9",
-   "#AEDDF7",
-   "#A2D8F6",
-   "#BCE4F9",
-   "#D6EFFC",
-   "#EBF7FE",
-   "#F6FCFF",
+   "#B0E0F8",
+   "#BCE5F9",
+   "#C8E9FA",
+   "#D3EDFB",
+   "#DEF1FC",
+   "#E9F6FE",
+   "#F3FBFF",
    "#FFFFFF"
   ],
   "outline": "#1B3550",
@@ -278,19 +278,63 @@
      "failed": false
     }
    }
+  },
+  {
+   "ts": 1791668848,
+   "bbox": [
+    106.25221,
+    29.12655,
+    107.00221,
+    30.12413
+   ],
+   "zoomRange": [
+    8,
+    12
+   ],
+   "tiles": 195,
+   "tilesWritten": 195,
+   "tilesSkipped": 0,
+   "cost": {
+    "fetchSecs": 17.2,
+    "drawSecs": 17396.2
+   },
+   "data": {
+    "buildings": {
+     "features": 654763,
+     "missing": false,
+     "disks": 34,
+     "disksReusedFromCache": 0,
+     "secs": 7961.2
+    },
+    "roads": {
+     "elements": 7156,
+     "subBboxes": [
+      "106.4,29.44,106.5,29.54",
+      "106.4,29.54,106.5,29.64",
+      "106.4,29.64,106.5,29.66",
+      "106.5,29.44,106.6,29.54",
+      "106.5,29.54,106.6,29.64",
+      "106.5,29.64,106.6,29.66",
+      "106.6,29.44,106.66,29.54",
+      "106.6,29.54,106.66,29.64",
+      "106.6,29.64,106.66,29.66"
+     ],
+     "failed": false
+    }
+   }
   }
  ],
  "batchesNote": "分批跑的历史（每批一个 bbox；`--merge` 把各批并起来）。顶层 bbox/zoomRange 是**并集**，tiles 是**各批的并集**；顶层 cost/data 只是**最后一批**的，看历史请读 batches[]。",
  "tileCount": 195,
  "tileCountReal": 195,
- "totalBytes": 4275797,
- "bytesReal": 4275797,
+ "totalBytes": 4307622,
+ "bytesReal": 4307622,
  "staleFiles": [],
  "staleNote": "输出目录里**不在本轮计划内**的 PNG（大概是上一个 bbox/zoom 留下的）。**没有**并进 `tiles`：它们不是本轮真数据的产物，标成 real 就是撒谎；页面按清单判「缺图」，所以留它们会让那一格显示为「缺」——要么重跑覆盖，要么手工清掉。",
  "timings": {
-  "fetchSecs": 16.0,
-  "drawSecs": 802.5,
-  "totalSecs": 822.5
+  "fetchSecs": 17.2,
+  "drawSecs": 17396.2,
+  "totalSecs": 17419.6
  },
  "data": {
   "buildings": {
@@ -341,13 +385,13 @@
   "note": "`cov` = 该瓦片被**盘上已有的圆**盖住的采样比例（4×4）。cov=0 是「这一片还没铺盘」（≠「这里没有楼房」）；cov=1 是「取样点全在某个盘里」。"
  },
  "cost": {
-  "fetchSecs": 16.0,
-  "drawSecs": 802.5,
-  "fetchSecsPerTile": 0.08,
-  "drawSecsPerTile": 4.115,
+  "fetchSecs": 17.2,
+  "drawSecs": 17396.2,
+  "fetchSecsPerTile": 0.09,
+  "drawSecsPerTile": 89.211,
   "disks": 34,
   "disksReusedFromCache": 0,
-  "verdict": "取数 16.0s / 渲染 802.5s"
+  "verdict": "取数 17.2s / 渲染 17396.2s"
  },
  "attribution": "楼房数据 © Overture Maps Foundation（ODbL 1.0）· 由 OpenStreetMap 等来源合成",
  "license": "ODbL-1.0（楼脚印）· ODbL（OSM 道路）",
@@ -383,7 +427,7 @@
   "11/1629/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 70866,
+   "bytes": 69674,
    "bld": 111813,
    "sketch": null,
    "tier": "blocks",
@@ -394,7 +438,7 @@
   "11/1629/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 57134,
+   "bytes": 56454,
    "bld": 91273,
    "sketch": null,
    "tier": "blocks",
@@ -405,7 +449,7 @@
   "11/1630/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 87668,
+   "bytes": 86761,
    "bld": 96028,
    "sketch": null,
    "tier": "blocks",
@@ -416,7 +460,7 @@
   "11/1630/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 62003,
+   "bytes": 61480,
    "bld": 72388,
    "sketch": null,
    "tier": "blocks",
@@ -427,7 +471,7 @@
   "12/3259/1695": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 62173,
+   "bytes": 63447,
    "bld": 74941,
    "sketch": 2276,
    "tier": "mixed",
@@ -438,7 +482,7 @@
   "12/3259/1696": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 45660,
+   "bytes": 47023,
    "bld": 57232,
    "sketch": 2532,
    "tier": "mixed",
@@ -449,7 +493,7 @@
   "12/3260/1695": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 96973,
+   "bytes": 100162,
    "bld": 67118,
    "sketch": 7044,
    "tier": "mixed",
@@ -460,7 +504,7 @@
   "12/3260/1696": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 70887,
+   "bytes": 74830,
    "bld": 47021,
    "sketch": 7220,
    "tier": "mixed",
@@ -471,7 +515,7 @@
   "12/3261/1695": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 49400,
+   "bytes": 51021,
    "bld": 33688,
    "sketch": 1865,
    "tier": "mixed",
@@ -482,7 +526,7 @@
   "12/3261/1696": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 70360,
+   "bytes": 73650,
    "bld": 29630,
    "sketch": 6191,
    "tier": "mixed",
@@ -493,7 +537,7 @@
   "10/814/422": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 47142,
+   "bytes": 47126,
    "bld": 85974,
    "sketch": null,
    "tier": "blocks",
@@ -504,7 +548,7 @@
   "10/814/423": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 52974,
+   "bytes": 52269,
    "bld": 161210,
    "sketch": null,
    "tier": "blocks",
@@ -515,7 +559,7 @@
   "10/814/424": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 53733,
+   "bytes": 53494,
    "bld": 140046,
    "sketch": null,
    "tier": "blocks",
@@ -526,7 +570,7 @@
   "10/814/425": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 21744,
+   "bytes": 21633,
    "bld": 34548,
    "sketch": null,
    "tier": "blocks",
@@ -537,7 +581,7 @@
   "10/815/422": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 52819,
+   "bytes": 52440,
    "bld": 78014,
    "sketch": null,
    "tier": "blocks",
@@ -548,7 +592,7 @@
   "10/815/423": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 68764,
+   "bytes": 68553,
    "bld": 151322,
    "sketch": null,
    "tier": "blocks",
@@ -559,7 +603,7 @@
   "10/815/424": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 56683,
+   "bytes": 56593,
    "bld": 113711,
    "sketch": null,
    "tier": "blocks",
@@ -570,7 +614,7 @@
   "10/815/425": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 26258,
+   "bytes": 25887,
    "bld": 28851,
    "sketch": null,
    "tier": "blocks",
@@ -581,7 +625,7 @@
   "10/816/422": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 25681,
+   "bytes": 25219,
    "bld": 30908,
    "sketch": null,
    "tier": "blocks",
@@ -592,7 +636,7 @@
   "10/816/423": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 24245,
+   "bytes": 24061,
    "bld": 29702,
    "sketch": null,
    "tier": "blocks",
@@ -603,7 +647,7 @@
   "10/816/424": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 25452,
+   "bytes": 25527,
    "bld": 26576,
    "sketch": null,
    "tier": "blocks",
@@ -614,7 +658,7 @@
   "10/816/425": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12588,
+   "bytes": 12436,
    "bld": 12759,
    "sketch": null,
    "tier": "blocks",
@@ -625,7 +669,7 @@
   "11/1628/844": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 35773,
+   "bytes": 35396,
    "bld": 19796,
    "sketch": null,
    "tier": "blocks",
@@ -636,7 +680,7 @@
   "11/1628/845": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 28846,
+   "bytes": 28511,
    "bld": 27313,
    "sketch": null,
    "tier": "blocks",
@@ -647,7 +691,7 @@
   "11/1628/846": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 23670,
+   "bytes": 23519,
    "bld": 31481,
    "sketch": null,
    "tier": "blocks",
@@ -658,7 +702,7 @@
   "11/1628/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 33633,
+   "bytes": 33219,
    "bld": 33618,
    "sketch": null,
    "tier": "blocks",
@@ -669,7 +713,7 @@
   "11/1628/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 32082,
+   "bytes": 31645,
    "bld": 35887,
    "sketch": null,
    "tier": "blocks",
@@ -680,7 +724,7 @@
   "11/1628/849": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 31512,
+   "bytes": 31050,
    "bld": 40937,
    "sketch": null,
    "tier": "blocks",
@@ -691,7 +735,7 @@
   "11/1628/850": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 27636,
+   "bytes": 27432,
    "bld": 20624,
    "sketch": null,
    "tier": "blocks",
@@ -702,7 +746,7 @@
   "11/1629/844": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 56539,
+   "bytes": 55512,
    "bld": 28221,
    "sketch": null,
    "tier": "blocks",
@@ -713,7 +757,7 @@
   "11/1629/845": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 49954,
+   "bytes": 49160,
    "bld": 52178,
    "sketch": null,
    "tier": "blocks",
@@ -724,7 +768,7 @@
   "11/1629/846": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 41774,
+   "bytes": 41099,
    "bld": 71374,
    "sketch": null,
    "tier": "blocks",
@@ -735,7 +779,7 @@
   "11/1629/849": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 63352,
+   "bytes": 62435,
    "bld": 59516,
    "sketch": null,
    "tier": "blocks",
@@ -746,7 +790,7 @@
   "11/1629/850": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 42545,
+   "bytes": 42046,
    "bld": 27620,
    "sketch": null,
    "tier": "blocks",
@@ -757,7 +801,7 @@
   "11/1630/844": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 34899,
+   "bytes": 34486,
    "bld": 14088,
    "sketch": null,
    "tier": "blocks",
@@ -768,7 +812,7 @@
   "11/1630/845": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 46771,
+   "bytes": 45896,
    "bld": 41719,
    "sketch": null,
    "tier": "blocks",
@@ -779,7 +823,7 @@
   "11/1630/846": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 39304,
+   "bytes": 38902,
    "bld": 60789,
    "sketch": null,
    "tier": "blocks",
@@ -790,7 +834,7 @@
   "11/1630/849": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 33688,
+   "bytes": 33218,
    "bld": 38212,
    "sketch": null,
    "tier": "blocks",
@@ -801,7 +845,7 @@
   "11/1630/850": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 32520,
+   "bytes": 32263,
    "bld": 17743,
    "sketch": null,
    "tier": "blocks",
@@ -812,7 +856,7 @@
   "11/1631/844": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 41644,
+   "bytes": 41206,
    "bld": 12171,
    "sketch": null,
    "tier": "blocks",
@@ -823,7 +867,7 @@
   "11/1631/845": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 48431,
+   "bytes": 47712,
    "bld": 36548,
    "sketch": null,
    "tier": "blocks",
@@ -834,7 +878,7 @@
   "11/1631/846": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 38534,
+   "bytes": 38106,
    "bld": 34270,
    "sketch": null,
    "tier": "blocks",
@@ -845,7 +889,7 @@
   "11/1631/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 49296,
+   "bytes": 48886,
    "bld": 28572,
    "sketch": null,
    "tier": "blocks",
@@ -856,7 +900,7 @@
   "11/1631/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 42914,
+   "bytes": 42859,
    "bld": 31844,
    "sketch": null,
    "tier": "blocks",
@@ -867,7 +911,7 @@
   "11/1631/849": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 37804,
+   "bytes": 37387,
    "bld": 27889,
    "sketch": null,
    "tier": "blocks",
@@ -878,7 +922,7 @@
   "11/1631/850": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 41123,
+   "bytes": 40668,
    "bld": 18336,
    "sketch": null,
    "tier": "blocks",
@@ -889,7 +933,7 @@
   "11/1632/844": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 37281,
+   "bytes": 36702,
    "bld": 10882,
    "sketch": null,
    "tier": "blocks",
@@ -900,7 +944,7 @@
   "11/1632/845": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 33795,
+   "bytes": 33275,
    "bld": 24913,
    "sketch": null,
    "tier": "blocks",
@@ -911,7 +955,7 @@
   "11/1632/846": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 31919,
+   "bytes": 31547,
    "bld": 21834,
    "sketch": null,
    "tier": "blocks",
@@ -922,7 +966,7 @@
   "11/1632/847": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 38020,
+   "bytes": 37787,
    "bld": 13851,
    "sketch": null,
    "tier": "blocks",
@@ -933,7 +977,7 @@
   "11/1632/848": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 29860,
+   "bytes": 29897,
    "bld": 14934,
    "sketch": null,
    "tier": "blocks",
@@ -944,7 +988,7 @@
   "11/1632/849": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 43256,
+   "bytes": 42563,
    "bld": 18294,
    "sketch": null,
    "tier": "blocks",
@@ -955,7 +999,7 @@
   "11/1632/850": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 32077,
+   "bytes": 31885,
    "bld": 12759,
    "sketch": null,
    "tier": "blocks",
@@ -966,7 +1010,7 @@
   "12/3256/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 3914,
+   "bytes": 4132,
    "bld": 7175,
    "sketch": null,
    "tier": "footprint",
@@ -977,7 +1021,7 @@
   "12/3256/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5337,
+   "bytes": 5596,
    "bld": 8563,
    "sketch": null,
    "tier": "footprint",
@@ -988,7 +1032,7 @@
   "12/3256/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 2847,
+   "bytes": 2958,
    "bld": 7536,
    "sketch": null,
    "tier": "footprint",
@@ -999,7 +1043,7 @@
   "12/3256/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4155,
+   "bytes": 4308,
    "bld": 8547,
    "sketch": null,
    "tier": "footprint",
@@ -1010,7 +1054,7 @@
   "12/3256/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 3823,
+   "bytes": 3942,
    "bld": 6708,
    "sketch": null,
    "tier": "footprint",
@@ -1021,7 +1065,7 @@
   "12/3256/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 3359,
+   "bytes": 3454,
    "bld": 8947,
    "sketch": null,
    "tier": "footprint",
@@ -1032,7 +1076,7 @@
   "12/3256/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5296,
+   "bytes": 5495,
    "bld": 12061,
    "sketch": null,
    "tier": "footprint",
@@ -1043,7 +1087,7 @@
   "12/3256/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 2122,
+   "bytes": 2152,
    "bld": 8376,
    "sketch": null,
    "tier": "footprint",
@@ -1054,7 +1098,7 @@
   "12/3256/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 2386,
+   "bytes": 2426,
    "bld": 10499,
    "sketch": null,
    "tier": "footprint",
@@ -1065,7 +1109,7 @@
   "12/3256/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4222,
+   "bytes": 4347,
    "bld": 14960,
    "sketch": null,
    "tier": "footprint",
@@ -1076,7 +1120,7 @@
   "12/3256/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4793,
+   "bytes": 4993,
    "bld": 11606,
    "sketch": null,
    "tier": "footprint",
@@ -1087,7 +1131,7 @@
   "12/3256/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 2632,
+   "bytes": 2662,
    "bld": 9260,
    "sketch": null,
    "tier": "footprint",
@@ -1098,7 +1142,7 @@
   "12/3256/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5175,
+   "bytes": 5490,
    "bld": 9178,
    "sketch": null,
    "tier": "footprint",
@@ -1109,7 +1153,7 @@
   "12/3256/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 2699,
+   "bytes": 2771,
    "bld": 3821,
    "sketch": null,
    "tier": "footprint",
@@ -1120,7 +1164,7 @@
   "12/3257/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 18528,
+   "bytes": 18885,
    "bld": 17100,
    "sketch": null,
    "tier": "footprint",
@@ -1131,7 +1175,7 @@
   "12/3257/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 21858,
+   "bytes": 22231,
    "bld": 19198,
    "sketch": null,
    "tier": "footprint",
@@ -1142,7 +1186,7 @@
   "12/3257/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 9141,
+   "bytes": 9300,
    "bld": 15924,
    "sketch": null,
    "tier": "footprint",
@@ -1153,7 +1197,7 @@
   "12/3257/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 16474,
+   "bytes": 16914,
    "bld": 20461,
    "sketch": null,
    "tier": "footprint",
@@ -1164,7 +1208,7 @@
   "12/3257/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 19696,
+   "bytes": 20029,
    "bld": 17155,
    "sketch": null,
    "tier": "footprint",
@@ -1175,7 +1219,7 @@
   "12/3257/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10733,
+   "bytes": 10862,
    "bld": 21374,
    "sketch": null,
    "tier": "footprint",
@@ -1186,7 +1230,7 @@
   "12/3257/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 26079,
+   "bytes": 26203,
    "bld": 30949,
    "sketch": null,
    "tier": "footprint",
@@ -1197,7 +1241,7 @@
   "12/3257/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 20055,
+   "bytes": 20128,
    "bld": 22787,
    "sketch": null,
    "tier": "footprint",
@@ -1208,7 +1252,7 @@
   "12/3257/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13416,
+   "bytes": 13557,
    "bld": 22076,
    "sketch": null,
    "tier": "footprint",
@@ -1219,7 +1263,7 @@
   "12/3257/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 33279,
+   "bytes": 33468,
    "bld": 32032,
    "sketch": null,
    "tier": "footprint",
@@ -1230,7 +1274,7 @@
   "12/3257/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 23670,
+   "bytes": 23968,
    "bld": 28014,
    "sketch": null,
    "tier": "footprint",
@@ -1241,7 +1285,7 @@
   "12/3257/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 16950,
+   "bytes": 17292,
    "bld": 25333,
    "sketch": null,
    "tier": "footprint",
@@ -1252,7 +1296,7 @@
   "12/3257/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 23066,
+   "bytes": 23371,
    "bld": 20733,
    "sketch": null,
    "tier": "footprint",
@@ -1263,7 +1307,7 @@
   "12/3257/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8297,
+   "bytes": 8509,
    "bld": 8749,
    "sketch": null,
    "tier": "footprint",
@@ -1274,7 +1318,7 @@
   "12/3258/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 18124,
+   "bytes": 18438,
    "bld": 21726,
    "sketch": null,
    "tier": "footprint",
@@ -1285,7 +1329,7 @@
   "12/3258/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 18446,
+   "bytes": 18876,
    "bld": 23300,
    "sketch": null,
    "tier": "footprint",
@@ -1296,7 +1340,7 @@
   "12/3258/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7238,
+   "bytes": 7495,
    "bld": 18531,
    "sketch": null,
    "tier": "footprint",
@@ -1307,7 +1351,7 @@
   "12/3258/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 23596,
+   "bytes": 23934,
    "bld": 30359,
    "sketch": null,
    "tier": "footprint",
@@ -1318,7 +1362,7 @@
   "12/3258/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 27494,
+   "bytes": 28054,
    "bld": 26534,
    "sketch": null,
    "tier": "footprint",
@@ -1329,7 +1373,7 @@
   "12/3258/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10565,
+   "bytes": 10725,
    "bld": 29011,
    "sketch": null,
    "tier": "footprint",
@@ -1340,7 +1384,7 @@
   "12/3258/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 25998,
+   "bytes": 26098,
    "bld": 58869,
    "sketch": null,
    "tier": "footprint",
@@ -1351,7 +1395,7 @@
   "12/3258/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 22214,
+   "bytes": 22313,
    "bld": 51785,
    "sketch": null,
    "tier": "footprint",
@@ -1362,7 +1406,7 @@
   "12/3258/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14500,
+   "bytes": 14561,
    "bld": 48114,
    "sketch": null,
    "tier": "footprint",
@@ -1373,7 +1417,7 @@
   "12/3258/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 21092,
+   "bytes": 21280,
    "bld": 48496,
    "sketch": null,
    "tier": "footprint",
@@ -1384,7 +1428,7 @@
   "12/3258/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 22943,
+   "bytes": 23069,
    "bld": 34752,
    "sketch": null,
    "tier": "footprint",
@@ -1395,7 +1439,7 @@
   "12/3258/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 21190,
+   "bytes": 21527,
    "bld": 31667,
    "sketch": null,
    "tier": "footprint",
@@ -1406,7 +1450,7 @@
   "12/3258/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 19753,
+   "bytes": 20223,
    "bld": 23645,
    "sketch": null,
    "tier": "footprint",
@@ -1417,7 +1461,7 @@
   "12/3258/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 9070,
+   "bytes": 9210,
    "bld": 10111,
    "sketch": null,
    "tier": "footprint",
@@ -1428,7 +1472,7 @@
   "12/3259/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13955,
+   "bytes": 14287,
    "bld": 15342,
    "sketch": null,
    "tier": "footprint",
@@ -1439,7 +1483,7 @@
   "12/3259/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 15504,
+   "bytes": 15935,
    "bld": 16496,
    "sketch": null,
    "tier": "footprint",
@@ -1450,7 +1494,7 @@
   "12/3259/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8808,
+   "bytes": 9016,
    "bld": 19277,
    "sketch": null,
    "tier": "footprint",
@@ -1461,7 +1505,7 @@
   "12/3259/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 25275,
+   "bytes": 25708,
    "bld": 33109,
    "sketch": null,
    "tier": "footprint",
@@ -1472,7 +1516,7 @@
   "12/3259/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 20476,
+   "bytes": 20647,
    "bld": 27449,
    "sketch": null,
    "tier": "footprint",
@@ -1483,7 +1527,7 @@
   "12/3259/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12414,
+   "bytes": 12646,
    "bld": 33967,
    "sketch": null,
    "tier": "footprint",
@@ -1494,7 +1538,7 @@
   "12/3259/1694": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 50724,
+   "bytes": 51463,
    "bld": 80104,
    "sketch": 1427,
    "tier": "mixed",
@@ -1505,7 +1549,7 @@
   "12/3259/1697": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 39730,
+   "bytes": 40172,
    "bld": 43626,
    "sketch": 373,
    "tier": "mixed",
@@ -1516,7 +1560,7 @@
   "12/3259/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 22117,
+   "bytes": 22412,
    "bld": 26821,
    "sketch": null,
    "tier": "footprint",
@@ -1527,7 +1571,7 @@
   "12/3259/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 21192,
+   "bytes": 21476,
    "bld": 21107,
    "sketch": null,
    "tier": "footprint",
@@ -1538,7 +1582,7 @@
   "12/3259/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 20010,
+   "bytes": 20547,
    "bld": 16188,
    "sketch": null,
    "tier": "footprint",
@@ -1549,7 +1593,7 @@
   "12/3259/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7369,
+   "bytes": 7498,
    "bld": 7591,
    "sketch": null,
    "tier": "footprint",
@@ -1560,7 +1604,7 @@
   "12/3260/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10434,
+   "bytes": 10778,
    "bld": 8943,
    "sketch": null,
    "tier": "footprint",
@@ -1571,7 +1615,7 @@
   "12/3260/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7298,
+   "bytes": 7568,
    "bld": 9497,
    "sketch": null,
    "tier": "footprint",
@@ -1582,7 +1626,7 @@
   "12/3260/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10045,
+   "bytes": 10218,
    "bld": 19575,
    "sketch": null,
    "tier": "footprint",
@@ -1593,7 +1637,7 @@
   "12/3260/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 25763,
+   "bytes": 26269,
    "bld": 27548,
    "sketch": null,
    "tier": "footprint",
@@ -1604,7 +1648,7 @@
   "12/3260/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 16567,
+   "bytes": 16718,
    "bld": 17975,
    "sketch": null,
    "tier": "footprint",
@@ -1615,7 +1659,7 @@
   "12/3260/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 17894,
+   "bytes": 18010,
    "bld": 37819,
    "sketch": null,
    "tier": "footprint",
@@ -1626,7 +1670,7 @@
   "12/3260/1694": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 78332,
+   "bytes": 80088,
    "bld": 79023,
    "sketch": 3523,
    "tier": "mixed",
@@ -1637,7 +1681,7 @@
   "12/3260/1697": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 29097,
+   "bytes": 29621,
    "bld": 39315,
    "sketch": 683,
    "tier": "mixed",
@@ -1648,7 +1692,7 @@
   "12/3260/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10355,
+   "bytes": 10672,
    "bld": 22945,
    "sketch": null,
    "tier": "footprint",
@@ -1659,7 +1703,7 @@
   "12/3260/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7714,
+   "bytes": 7894,
    "bld": 13735,
    "sketch": null,
    "tier": "footprint",
@@ -1670,7 +1714,7 @@
   "12/3260/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10932,
+   "bytes": 11389,
    "bld": 11242,
    "sketch": null,
    "tier": "footprint",
@@ -1681,7 +1725,7 @@
   "12/3260/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4090,
+   "bytes": 4207,
    "bld": 5549,
    "sketch": null,
    "tier": "footprint",
@@ -1692,7 +1736,7 @@
   "12/3261/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5440,
+   "bytes": 5690,
    "bld": 8410,
    "sketch": null,
    "tier": "footprint",
@@ -1703,7 +1747,7 @@
   "12/3261/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 9034,
+   "bytes": 9350,
    "bld": 9459,
    "sketch": null,
    "tier": "footprint",
@@ -1714,7 +1758,7 @@
   "12/3261/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8597,
+   "bytes": 8727,
    "bld": 17780,
    "sketch": null,
    "tier": "footprint",
@@ -1725,7 +1769,7 @@
   "12/3261/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14302,
+   "bytes": 14847,
    "bld": 23855,
    "sketch": null,
    "tier": "footprint",
@@ -1736,7 +1780,7 @@
   "12/3261/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14831,
+   "bytes": 15150,
    "bld": 15121,
    "sketch": null,
    "tier": "footprint",
@@ -1747,7 +1791,7 @@
   "12/3261/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14087,
+   "bytes": 14202,
    "bld": 27443,
    "sketch": null,
    "tier": "footprint",
@@ -1758,7 +1802,7 @@
   "12/3261/1694": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 36185,
+   "bytes": 36612,
    "bld": 44693,
    "sketch": 785,
    "tier": "mixed",
@@ -1769,7 +1813,7 @@
   "12/3261/1697": {
    "kind": "real",
    "src": "overture+osm+sketch",
-   "bytes": 26037,
+   "bytes": 26497,
    "bld": 31646,
    "sketch": 321,
    "tier": "mixed",
@@ -1780,7 +1824,7 @@
   "12/3261/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 17987,
+   "bytes": 18284,
    "bld": 18154,
    "sketch": null,
    "tier": "footprint",
@@ -1791,7 +1835,7 @@
   "12/3261/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8187,
+   "bytes": 8395,
    "bld": 12412,
    "sketch": null,
    "tier": "footprint",
@@ -1802,7 +1846,7 @@
   "12/3261/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13173,
+   "bytes": 13730,
    "bld": 13023,
    "sketch": null,
    "tier": "footprint",
@@ -1813,7 +1857,7 @@
   "12/3261/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 6567,
+   "bytes": 6738,
    "bld": 6636,
    "sketch": null,
    "tier": "footprint",
@@ -1824,7 +1868,7 @@
   "12/3262/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 6764,
+   "bytes": 7032,
    "bld": 7398,
    "sketch": null,
    "tier": "footprint",
@@ -1835,7 +1879,7 @@
   "12/3262/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14000,
+   "bytes": 14369,
    "bld": 8846,
    "sketch": null,
    "tier": "footprint",
@@ -1846,7 +1890,7 @@
   "12/3262/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7486,
+   "bytes": 7667,
    "bld": 12791,
    "sketch": null,
    "tier": "footprint",
@@ -1857,7 +1901,7 @@
   "12/3262/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 18347,
+   "bytes": 18734,
    "bld": 18030,
    "sketch": null,
    "tier": "footprint",
@@ -1868,7 +1912,7 @@
   "12/3262/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14089,
+   "bytes": 14573,
    "bld": 13319,
    "sketch": null,
    "tier": "footprint",
@@ -1879,7 +1923,7 @@
   "12/3262/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8534,
+   "bytes": 8680,
    "bld": 14070,
    "sketch": null,
    "tier": "footprint",
@@ -1890,7 +1934,7 @@
   "12/3262/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 19493,
+   "bytes": 19801,
    "bld": 20226,
    "sketch": null,
    "tier": "footprint",
@@ -1901,7 +1945,7 @@
   "12/3262/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13229,
+   "bytes": 13483,
    "bld": 14842,
    "sketch": null,
    "tier": "footprint",
@@ -1912,7 +1956,7 @@
   "12/3262/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10136,
+   "bytes": 10301,
    "bld": 16001,
    "sketch": null,
    "tier": "footprint",
@@ -1923,7 +1967,7 @@
   "12/3262/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 17382,
+   "bytes": 17794,
    "bld": 19290,
    "sketch": null,
    "tier": "footprint",
@@ -1934,7 +1978,7 @@
   "12/3262/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10566,
+   "bytes": 10957,
    "bld": 12263,
    "sketch": null,
    "tier": "footprint",
@@ -1945,7 +1989,7 @@
   "12/3262/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8540,
+   "bytes": 8841,
    "bld": 11726,
    "sketch": null,
    "tier": "footprint",
@@ -1956,7 +2000,7 @@
   "12/3262/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 16438,
+   "bytes": 16813,
    "bld": 13231,
    "sketch": null,
    "tier": "footprint",
@@ -1967,7 +2011,7 @@
   "12/3262/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7060,
+   "bytes": 7317,
    "bld": 6542,
    "sketch": null,
    "tier": "footprint",
@@ -1978,7 +2022,7 @@
   "12/3263/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5590,
+   "bytes": 5841,
    "bld": 6827,
    "sketch": null,
    "tier": "footprint",
@@ -1989,7 +2033,7 @@
   "12/3263/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8183,
+   "bytes": 8594,
    "bld": 8204,
    "sketch": null,
    "tier": "footprint",
@@ -2000,7 +2044,7 @@
   "12/3263/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 6816,
+   "bytes": 6959,
    "bld": 14645,
    "sketch": null,
    "tier": "footprint",
@@ -2011,7 +2055,7 @@
   "12/3263/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 17059,
+   "bytes": 17382,
    "bld": 21298,
    "sketch": null,
    "tier": "footprint",
@@ -2022,7 +2066,7 @@
   "12/3263/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 15940,
+   "bytes": 16365,
    "bld": 14622,
    "sketch": null,
    "tier": "footprint",
@@ -2033,7 +2077,7 @@
   "12/3263/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8741,
+   "bytes": 8817,
    "bld": 12492,
    "sketch": null,
    "tier": "footprint",
@@ -2044,7 +2088,7 @@
   "12/3263/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13901,
+   "bytes": 14394,
    "bld": 17813,
    "sketch": null,
    "tier": "footprint",
@@ -2055,7 +2099,7 @@
   "12/3263/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12392,
+   "bytes": 12788,
    "bld": 13262,
    "sketch": null,
    "tier": "footprint",
@@ -2066,7 +2110,7 @@
   "12/3263/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7955,
+   "bytes": 8221,
    "bld": 13212,
    "sketch": null,
    "tier": "footprint",
@@ -2077,7 +2121,7 @@
   "12/3263/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 15068,
+   "bytes": 15593,
    "bld": 15355,
    "sketch": null,
    "tier": "footprint",
@@ -2088,7 +2132,7 @@
   "12/3263/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10786,
+   "bytes": 11190,
    "bld": 10958,
    "sketch": null,
    "tier": "footprint",
@@ -2099,7 +2143,7 @@
   "12/3263/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 9813,
+   "bytes": 9954,
    "bld": 11495,
    "sketch": null,
    "tier": "footprint",
@@ -2110,7 +2154,7 @@
   "12/3263/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12670,
+   "bytes": 13108,
    "bld": 11987,
    "sketch": null,
    "tier": "footprint",
@@ -2121,7 +2165,7 @@
   "12/3263/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5333,
+   "bytes": 5498,
    "bld": 6052,
    "sketch": null,
    "tier": "footprint",
@@ -2132,7 +2176,7 @@
   "12/3264/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7069,
+   "bytes": 7371,
    "bld": 9183,
    "sketch": null,
    "tier": "footprint",
@@ -2143,7 +2187,7 @@
   "12/3264/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13435,
+   "bytes": 13797,
    "bld": 10539,
    "sketch": null,
    "tier": "footprint",
@@ -2154,7 +2198,7 @@
   "12/3264/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7852,
+   "bytes": 8012,
    "bld": 12912,
    "sketch": null,
    "tier": "footprint",
@@ -2165,7 +2209,7 @@
   "12/3264/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 16961,
+   "bytes": 17359,
    "bld": 20170,
    "sketch": null,
    "tier": "footprint",
@@ -2176,7 +2220,7 @@
   "12/3264/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13252,
+   "bytes": 13505,
    "bld": 16198,
    "sketch": null,
    "tier": "footprint",
@@ -2187,7 +2231,7 @@
   "12/3264/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8293,
+   "bytes": 8468,
    "bld": 11013,
    "sketch": null,
    "tier": "footprint",
@@ -2198,7 +2242,7 @@
   "12/3264/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 16293,
+   "bytes": 16842,
    "bld": 12849,
    "sketch": null,
    "tier": "footprint",
@@ -2209,7 +2253,7 @@
   "12/3264/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 11945,
+   "bytes": 12281,
    "bld": 9529,
    "sketch": null,
    "tier": "footprint",
@@ -2220,7 +2264,7 @@
   "12/3264/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 6089,
+   "bytes": 6272,
    "bld": 9930,
    "sketch": null,
    "tier": "footprint",
@@ -2231,7 +2275,7 @@
   "12/3264/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12808,
+   "bytes": 13280,
    "bld": 11944,
    "sketch": null,
    "tier": "footprint",
@@ -2242,7 +2286,7 @@
   "12/3264/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 11116,
+   "bytes": 11537,
    "bld": 11289,
    "sketch": null,
    "tier": "footprint",
@@ -2253,7 +2297,7 @@
   "12/3264/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12520,
+   "bytes": 12887,
    "bld": 13420,
    "sketch": null,
    "tier": "footprint",
@@ -2264,7 +2308,7 @@
   "12/3264/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 15236,
+   "bytes": 15670,
    "bld": 12810,
    "sketch": null,
    "tier": "footprint",
@@ -2275,7 +2319,7 @@
   "12/3264/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5913,
+   "bytes": 6130,
    "bld": 5779,
    "sketch": null,
    "tier": "footprint",
@@ -2286,7 +2330,7 @@
   "12/3265/1688": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 6640,
+   "bytes": 6853,
    "bld": 7439,
    "sketch": null,
    "tier": "footprint",
@@ -2297,7 +2341,7 @@
   "12/3265/1689": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7529,
+   "bytes": 7689,
    "bld": 8131,
    "sketch": null,
    "tier": "footprint",
@@ -2308,7 +2352,7 @@
   "12/3265/1690": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 2712,
+   "bytes": 2750,
    "bld": 5869,
    "sketch": null,
    "tier": "footprint",
@@ -2319,7 +2363,7 @@
   "12/3265/1691": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7416,
+   "bytes": 7627,
    "bld": 7650,
    "sketch": null,
    "tier": "footprint",
@@ -2330,7 +2374,7 @@
   "12/3265/1692": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 14772,
+   "bytes": 14986,
    "bld": 6773,
    "sketch": null,
    "tier": "footprint",
@@ -2341,7 +2385,7 @@
   "12/3265/1693": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 3138,
+   "bytes": 3192,
    "bld": 6131,
    "sketch": null,
    "tier": "footprint",
@@ -2352,7 +2396,7 @@
   "12/3265/1694": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5370,
+   "bytes": 5581,
    "bld": 6746,
    "sketch": null,
    "tier": "footprint",
@@ -2363,7 +2407,7 @@
   "12/3265/1695": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 5844,
+   "bytes": 6146,
    "bld": 4264,
    "sketch": null,
    "tier": "footprint",
@@ -2374,7 +2418,7 @@
   "12/3265/1696": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4531,
+   "bytes": 4698,
    "bld": 4254,
    "sketch": null,
    "tier": "footprint",
@@ -2385,7 +2429,7 @@
   "12/3265/1697": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7907,
+   "bytes": 8264,
    "bld": 5707,
    "sketch": null,
    "tier": "footprint",
@@ -2396,7 +2440,7 @@
   "12/3265/1698": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 8442,
+   "bytes": 8821,
    "bld": 7042,
    "sketch": null,
    "tier": "footprint",
@@ -2407,7 +2451,7 @@
   "12/3265/1699": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 12392,
+   "bytes": 12810,
    "bld": 8586,
    "sketch": null,
    "tier": "footprint",
@@ -2418,7 +2462,7 @@
   "12/3265/1700": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 11272,
+   "bytes": 11636,
    "bld": 7953,
    "sketch": null,
    "tier": "footprint",
@@ -2429,7 +2473,7 @@
   "12/3265/1701": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4365,
+   "bytes": 4491,
    "bld": 3377,
    "sketch": null,
    "tier": "footprint",
@@ -2440,7 +2484,7 @@
   "8/203/105": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 13702,
+   "bytes": 13638,
    "bld": 331528,
    "sketch": null,
    "tier": "blocks",
@@ -2451,7 +2495,7 @@
   "8/203/106": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 9810,
+   "bytes": 9775,
    "bld": 231456,
    "sketch": null,
    "tier": "blocks",
@@ -2462,7 +2506,7 @@
   "9/407/211": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 37993,
+   "bytes": 37625,
    "bld": 331528,
    "sketch": null,
    "tier": "blocks",
@@ -2473,7 +2517,7 @@
   "9/407/212": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 26906,
+   "bytes": 26559,
    "bld": 231456,
    "sketch": null,
    "tier": "blocks",
@@ -2484,7 +2528,7 @@
   "8/204/105": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 4358,
+   "bytes": 4318,
    "bld": 45979,
    "sketch": null,
    "tier": "blocks",
@@ -2495,7 +2539,7 @@
   "8/204/106": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 3246,
+   "bytes": 3243,
    "bld": 30225,
    "sketch": null,
    "tier": "blocks",
@@ -2506,7 +2550,7 @@
   "9/408/211": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 10375,
+   "bytes": 10220,
    "bld": 45979,
    "sketch": null,
    "tier": "blocks",
@@ -2517,7 +2561,7 @@
   "9/408/212": {
    "kind": "real",
    "src": "overture+osm",
-   "bytes": 7578,
+   "bytes": 7507,
    "bld": 30225,
    "sketch": null,
    "tier": "blocks",

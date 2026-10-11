@@ -38,6 +38,8 @@
  */
 
 import { roadStyleOf } from "./wsRoads";
+/* 相机模型（与 MapLibre 同一套针孔）也是共用件：叠加层那条路读地图相机，用的是**同一份**换算 */
+import { FOV_Y, M_PER_DEG, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
 import { wsMapTheme } from "./wsMapTheme";
 /* 楼的几何整块搬去了 `wsBldMesh.ts`（叠加层那条路要用**同一份**，见那个文件头）。
    这里只留"把它产出的扁平数组包成 three 的缓冲"这一步。 */
@@ -65,17 +67,10 @@ const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
 const CHAR_MOD_PATH = "/ws3d/ws3dgl/three/character.mjs";
 /** 立绘根目录（原型 `character.mjs` 的 `assetsBase`） */
 const ASSETS_BASE = "/ws3d/ws3dgl/assets/characters/";
-/** MapLibre 的相机模型：垂直视场角（弧度）= 36.87°。写在这里是因为**两个后端必须同一个光学模型**，
- *  不然"切过去视野一样"就只是句口号。探针会实测投影残差（见 `centerPick` 与投影对拍那两条断言）。 */
-const FOV_Y = 0.6435011087932844;
-/** 每度多少米（球面近似，R = 6378137）：局部平面框架用，与 MapLibre 的"地面真米"同口径 */
-const M_PER_DEG = 111319.49079327358;
 /** 立绘名单（原型 `character.mjs` 的 `CHARACTERS` 顺序；名字对不上的角色用第 0 个的立绘） */
 const CHAR_NAMES = ["DeepSeek", "诺一钦灵", "风雪"];
 /** 一屏最多画几个立绘（每人一张 512 贴图；超了只画前 N 个并如实报出来） */
 const ACTOR_CAP = 24;
-/** 近远裁剪面 */
-const NEAR_M = 0.6;
 
 export interface WsThreeDiag {
   buildings: number;
@@ -239,36 +234,20 @@ export function createThreeBackend(): WsRenderBackend {
     const { h } = sizeOf();
     const radius = saneRadius(s.radius);
     const mpp = (2 * radius) / h;
-    const dist = radius / Math.tan(FOV_Y / 2);
-    const b = (s.bearing * Math.PI) / 180;
-    const p = (Math.max(0, Math.min(88, s.pitch)) * Math.PI) / 180;
     const [cx, cz] = toLocal(frame, s.center.lng, s.center.lat);
-    const fx = Math.sin(b);
-    const fz = -Math.cos(b);                      // 地面上的朝向（bearing 0 = 正北 = -z）
-    const dx = fx * Math.sin(p);
-    const dz = fz * Math.sin(p);
-    const dy = -Math.cos(p);                      // pitch 0 ⇒ 垂直向下看
-    const px = cx - dx * dist;
-    const py = -dy * dist;
-    const pz = cz - dz * dist;
-    /* 相机基（**显式给**，不用 `lookAt`：pitch=0 时 up×forward 退化，three 会自己加个 1e-4 的扰动，
-       那个扰动决定"屏幕上方是哪边"—— 靠它就等于靠实现细节。这里 x 轴恒为水平、指向屏幕右方。） */
-    const zx = -dx, zy = -dy, zz = -dz;           // 相机 +Z = 从目标指向相机
-    const xx = Math.cos(b), xy = 0, xz = Math.sin(b);
-    // y = z × x
-    const yx = zy * xz - zz * xy;
-    const yy = zz * xx - zx * xz;
-    const yz = zx * xy - zy * xx;
+    /* 相机模型（含"与 MapLibre 同一套针孔"那条式子）在 `wsThreeCam.ts`：叠加层那条路也用同一份，
+       两份实现迟早漂成"两个引擎看到的不是同一眼"。 */
+    const f = camFrameOf(cx, cz, radius, s.bearing, s.pitch);
     const m = new THREE!.Matrix4();
     m.makeBasis(
-      new THREE!.Vector3(xx, xy, xz),
-      new THREE!.Vector3(yx, yy, yz),
-      new THREE!.Vector3(zx, zy, zz)
+      new THREE!.Vector3(f.xAxis[0], f.xAxis[1], f.xAxis[2]),
+      new THREE!.Vector3(f.yAxis[0], f.yAxis[1], f.yAxis[2]),
+      new THREE!.Vector3(f.zAxis[0], f.zAxis[1], f.zAxis[2])
     );
     camera.quaternion.setFromRotationMatrix(m);
-    camera.position.set(px, py, pz);
-    camera.near = Math.max(NEAR_M, dist / 900);
-    camera.far = Math.max(4000, dist * 24 + radius * 8);
+    camera.position.set(f.pos[0], f.pos[1], f.pos[2]);
+    camera.near = nearOf(f.dist);
+    camera.far = farOf(f.dist, radius);
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld(true);
     lastMpp = mpp;

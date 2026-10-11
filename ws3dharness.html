@@ -62,6 +62,7 @@
     <script type="module">
       /* 只读/驱动 three 后端本身，**不 import App 外壳**（没有 Vue、没有地图、没有路由） */
       import { createThreeBackend } from "/src/components/views/worldsim/wsThreeBackend";
+      import { createOverlayBackend } from "/src/components/views/worldsim/wsOverlayBackend";
       import {
         contractActors,
         contractTheme,
@@ -387,6 +388,73 @@
         check("纯扭转不该改半径与俯仰（两指距离、中点都没动）",
           Math.abs((twistAfter?.radius ?? 0) - (twistBefore?.radius ?? 0)) / Math.max(1, twistBefore?.radius ?? 1) < 0.02
             && Math.abs((twistAfter?.pitch ?? 0) - (twistBefore?.pitch ?? 0)) < 0.5, raw.twist);
+
+        /* ── ⑦ overlay（地图之上那一层）：假地图驱动 ──────────────────────────
+           叠加层的定义是"地图在下层画，楼叠上去；相机每帧从地图读；输入全归地图"。
+           这一节用一张**假地图**（四个 getter + 画布尺寸 + source）驱动它，判据：
+             · 相机真的跟着地图走（≤1 m / ≤0.01°）；
+             · 画布 `pointer-events: none`（不接管输入）；
+             · 楼画出来了、且**不画立绘**（角色仍归地图那一层）；
+             · 拆掉之后一块画布都不剩。 */
+        const ovlHost = document.createElement("div");
+        ovlHost.style.cssText = "position:fixed;left:0;top:600px;width:932px;height:557px";
+        document.body.appendChild(ovlHost);
+        const fakeMap = {
+          _c: { lat: state.center.lat, lng: state.center.lng },
+          _z: 16.2,
+          _b: -18,
+          _p: 38,
+          getCenter() { return { lat: this._c.lat, lng: this._c.lng }; },
+          getZoom() { return this._z; },
+          getBearing() { return this._b; },
+          getPitch() { return this._p; },
+          getCanvas() { return { clientWidth: 932, clientHeight: 557 }; },
+          getSource(id) { return String(id) === "bld" ? { getData: async () => fx.world.buildings } : undefined; },
+          on() {},
+          off() {},
+        };
+        const ob = createOverlayBackend();
+        ob.bindMap(fakeMap);
+        let ovlErr = null;
+        try {
+          await ob.init(ovlHost, state, { buildings: fx.world.buildings, roads: null, themeId: fx.world.themeId });
+        } catch (e) {
+          ovlErr = String(e?.message || e);
+        }
+        await sleep(700);
+        const seen1 = ob.readView();
+        const want1 = { lat: fakeMap._c.lat, lng: fakeMap._c.lng };
+        const meters1 = seen1 ? metersBetweenCenters(want1, seen1.center) : null;
+        /* 把假地图挪一挪：中心 / 缩放 / 朝向 / 俯仰一起变 ⇒ 叠加层的相机必须跟着变 */
+        fakeMap._c = { lat: state.center.lat + 0.004, lng: state.center.lng + 0.005 };
+        fakeMap._z = 15.4;
+        fakeMap._b = 42;
+        fakeMap._p = 12;
+        await sleep(700);
+        const seen2 = ob.readView();
+        const meters2 = seen2 ? metersBetweenCenters({ lat: fakeMap._c.lat, lng: fakeMap._c.lng }, seen2.center) : null;
+        const ovlCanvas = ovlHost.querySelector("canvas");
+        raw.overlay = {
+          err: ovlErr,
+          before: seen1 ? { c: seen1.center, b: seen1.bearing, p: seen1.pitch } : null,
+          after: seen2 ? { c: seen2.center, b: seen2.bearing, p: seen2.pitch } : null,
+          wantAfter: { b: fakeMap._b, p: fakeMap._p },
+          meters: [meters1 === null ? null : Number(meters1.toFixed(3)), meters2 === null ? null : Number(meters2.toFixed(3))],
+          canvas: ovlCanvas ? { pointerEvents: getComputedStyle(ovlCanvas).pointerEvents, w: ovlCanvas.clientWidth, h: ovlCanvas.clientHeight } : null,
+          stats: ob.stats(),
+        };
+        info(`叠加层：起=${ovlErr ? "失败：" + ovlErr : "ok"} · 跟地图误差 ${raw.overlay.meters[0]} m / ${raw.overlay.meters[1]} m · ${JSON.stringify(raw.overlay.stats)}`);
+        check("叠加层起得来（透明画布 + 楼）", !ovlErr && !!seen1, raw.overlay);
+        check("**相机每帧跟地图**：中心误差 ≤1 m、朝向/俯仰逐值一致（两段机位都算）",
+          meters1 !== null && meters1 <= 1 && meters2 !== null && meters2 <= 1
+            && Math.abs((seen2?.bearing ?? 0) - fakeMap._b) < 0.01 && Math.abs((seen2?.pitch ?? 0) - fakeMap._p) < 0.01,
+          raw.overlay);
+        check("**不接管输入**：叠加层画布 pointer-events 是 none", raw.overlay.canvas?.pointerEvents === "none", raw.overlay.canvas);
+        check("叠加层画的是楼（stats 里有栋数），且**不画立绘**",
+          /\d+ 栋/.test(String(raw.overlay.stats?.note || "")) && (seen2?.actors?.length ?? 1) === 0, raw.overlay.stats);
+        ob.destroy();
+        await sleep(250);
+        check("拆掉之后叠加层不留画布", ovlHost.querySelectorAll("canvas").length === 0, { left: ovlHost.querySelectorAll("canvas").length });
 
         /* ── ⑥ 暂停 / 销毁：画布与上下文都要放掉 ── */
         b.pause();

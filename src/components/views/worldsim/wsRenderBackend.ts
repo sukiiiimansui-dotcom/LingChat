@@ -44,11 +44,14 @@ export type WsRenderBackendId = "map" | "three" | "overlay";
  *    它的实现要求（透明画布 / 不接管输入 / 不进后处理 / 每帧从地图读相机 / 动态物第一批：
  *    红绿灯·街边设施·交通工具 / `webglcontextlost` 兜底）一条都还没做，见 `OVERLAY_GAP`。
  */
-export const WS_RENDER_IMPLEMENTED: readonly WsRenderBackendId[] = ["map", "three"];
+export const WS_RENDER_IMPLEMENTED: readonly WsRenderBackendId[] = ["map", "three", "overlay"];
 
-/** `overlay` 为什么还不能选（**一句话，HUD 与 chip 都用它**；空串 = 能选） */
-export const OVERLAY_GAP =
-  "叠加层（overlay）本轮只留契约位，还没实现：透明画布 / 不接管输入 / 每帧跟地图读相机 / 红绿灯与车辆那批动态物都没做";
+/**
+ * 三种状态都实现了（`overlay` 在 2026-10-11 上线：透明画布 + 每帧跟地图读相机 + 楼）。
+ * 这个常量留着是为了别处不必改：空串 = "都能选"。O2 那批动态物（红绿灯/车流）还没做，
+ * 但它们不影响"能不能选叠加层"。
+ */
+export const OVERLAY_GAP = "";
 
 /** `localStorage` 键（与现存 17 个 `wsm:v1:*` 同口径） */
 export const WS_RENDER_KEY = "wsm:v1:renderer";
@@ -353,8 +356,9 @@ export function hasRenderBackend(id: WsRenderBackendId): boolean {
 export function createRenderBackend(id: WsRenderBackendId): WsRenderBackend {
   const make = factories.get(id);
   if (!make) {
-    /* `overlay` 是"契约里有、本轮没实现"的那一个：给一句**人话**，别让用户看到"没有注册" */
-    throw new Error(id === "overlay" ? `未实现：${OVERLAY_GAP}` : `没有注册这个渲染后端：${id}`);
+    /* 三种状态都实现了（`overlay` 于 2026-10-11 上线）⇒ 走到这里就是**没人注册**这个 id，
+       给一句能查的实话（舞台上 `registerRenderBackend` 那三行是唯一注册点）。 */
+    throw new Error(`没有注册这个渲染后端：${id}`);
   }
   return make();
 }

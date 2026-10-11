@@ -32,7 +32,7 @@
          切到 3D 时它**整个被卸载**（`map.remove()` ⇒ WebGL 上下文当场释放），
          这就是"任何时刻最多一个后端在渲染"那条硬要求的实现方式（见下面 3D 宿主那一段）。 -->
     <WsDistrictMapLibre
-      v-if="showMap"
+      v-if="showMap || showOverlay"
       :area="area"
       :adcode="adcode"
       :radius="radius"
@@ -46,10 +46,14 @@
       @pick-actor="emit('pick-actor', $event)"
     />
 
-    <!-- 3D 宿主机（双引擎并列 ：`rendererLive === "three"` 时才有这个 div，
-         three 的画布由 `wsThreeBackend` 挂进来（`init(host, …)`）。
-         它与上面那块地图**互斥**（同一个 `v-if` 的两支）⇒ 不可能同时存在两个画布。 -->
-    <div v-else ref="threeHost" class="ws-sceneview__three"></div>
+    <!-- 🧊 叠加层宿主（`rendererLive === "overlay"`）：地图**照常在下层画**，这里只放一块
+         `pointer-events:none` 的透明画布（`wsOverlayBackend` 挂进来）——
+         输入全归地图，相机每帧从地图读（见 PLAN-OVERLAY-BACKEND.md）。 -->
+    <div v-if="showOverlay" ref="overlayHost" class="ws-sceneview__overlay"></div>
+
+    <!-- 3D 宿主机（`rendererLive === "three"`）：与上面那块地图**互斥**（地图会被卸载），
+         three 的画布由 `wsThreeBackend` 挂进来（`init(host, …)`）。 -->
+    <div v-if="showThree" ref="threeHost" class="ws-sceneview__three"></div>
 
     <!-- 失败即回退那句话（§4.5）：3D 起不来时必须**看得见原因**，
          且已经自动回到地图 —— 不许白屏、也不许静默退回。用户点掉它就消失。 -->
@@ -125,6 +129,7 @@
   /* 双引擎并列（2026-10-07 · ：契约 + 两个后端。**两个实现只在这里注册一次** ——
      舞台是唯一同时知道两边的那个地方（见文件末尾"双引擎舞台"那一段）。 */
   import { createMapBackend } from "./wsMapBackend";
+  import { createOverlayBackend } from "./wsOverlayBackend";
   import { createThreeBackend } from "./wsThreeBackend";
   import {
     clearFallback,
@@ -145,6 +150,8 @@
 
   registerRenderBackend("map", () => createMapBackend({ themeNow: () => contractTheme.value }));
   registerRenderBackend("three", () => createThreeBackend());
+  /* 地图之上那一层（透明画布 + 每帧跟地图读相机 + 楼）—— 这是 chip 上的"3D" */
+  registerRenderBackend("overlay", () => createOverlayBackend());
 
   const props = withDefaults(
     defineProps<{
@@ -348,10 +355,16 @@
    * `bldStore` 重新落图，不走网络）。实测耗时见 `switchLog`（探针也读它）。 */
   const rootEl = ref<HTMLElement | null>(null);
   const threeHost = ref<HTMLElement | null>(null);
-  /** 地图那一支在不在（模板读它；**它是 `rendererLive` 的镜像**，没有第二份状态） */
+  const overlayHost = ref<HTMLElement | null>(null);
+  /** 三条分支在不在（模板读它们；**都是 `rendererLive` 的镜像**，没有第二份状态） */
   const showMap = computed(() => rendererLive.value === "map");
+  const showThree = computed(() => rendererLive.value === "three");
+  /** 叠加层：地图**留在台上**（`showMap || showOverlay` 都渲染它），上面再加一块透明画布 */
+  const showOverlay = computed(() => rendererLive.value === "overlay");
 
   type MapBound = WsRenderBackend & { bind?: (m: unknown) => void; unbind?: () => void };
+  /** 地图实例留一份：叠加层要 `bindMap()` 它（每帧读相机、订阅 `sourcedata`） */
+  let mapInstance: unknown = null;
   let mapBackend: MapBound | null = null;
   let active: WsRenderBackend | null = null;
   /** 地图还没就绪时先把"要恢复的视野"存在这儿，`scene-ready` 一到就喂进去 */
@@ -370,7 +383,12 @@
   /** 地图就绪：把实例绑给 map 后端，并把"欠着的那次 applyView"补上 */
   async function adoptMapBackend(m: unknown): Promise<void> {
     await ensureMapBackend();
+    mapInstance = m;
     mapBackend?.bind?.(m);
+    /* 叠加层可能已经先起来了（它不等地图 ready）⇒ 实例一到就交给它 */
+    if (active && active.id === "overlay") {
+      (active as WsRenderBackend & { bindMap?: (x: unknown) => void }).bindMap?.(m);
+    }
     active = mapBackend;
     setLiveBackend(active);
     if (pendingView && mapBackend) {
@@ -430,6 +448,9 @@
     };
   }
 
+  /** 旧后端是不是叠加层（它不拥有世界数据、也不能被 pause —— 地图还在下面画） */
+  const leavingOverlayFrom = (b: WsRenderBackend | null): boolean => !!b && b.id === "overlay";
+
   async function doSwap(next: WsRenderBackendId): Promise<void> {
     if (next === rendererLive.value) return;
     if (swapping) {
@@ -443,24 +464,38 @@
     let view: WsRenderState | null = old?.readView() ?? pendingView ?? null;
     let ok = true;
     let why = "";
+    /* 🧊 叠加层这条支的规矩（与另两条**不同**，见 PLAN-OVERLAY-BACKEND.md）：
+       · 地图**不卸载、不暂停**（它在下层照常画）；
+       · 世界数据从 **map 后端**捞（叠加层自己不拥有数据）；
+       · 两个后端同时活着是**设计**，不是违规。 */
+    const toOverlay = next === "overlay";
     try {
-      /* ⓪ `overlay` 这一轮**只留契约位**（用户给过退路）⇒ 在这里就抛一句人话，
-            然后照 `PLAN §4.5` 走"失败即回退"（HUD 看得见原因 + 自动回 map）。
-            放在最前面是刻意的：连 DOM 都不换一下，用户不会看到闪一下的 3D。 */
       const nb = next === "map" ? null : createRenderBackend(next);
-      /* ① 旧后端还活着的时候把该拿的拿到手（世界数据必须现在捞：等一下 source 就没了） */
-      const world = old ? await old.captureWorld() : null;
+      /* ① 旧后端还活着的时候把该拿的拿到手。⚠️ 从叠加层切走时，世界数据要向 **map 后端**要
+            （叠加层不拥有它，而且地图还活着，source 也还在）。 */
+      const world = leavingOverlayFrom(old) ? await mapBackend?.captureWorld?.() ?? null : old ? await old.captureWorld() : null;
       if (old && !view) view = old.readView();
-      old?.pause();
-      /* ② 换 DOM：旧后端在这一刻**真的被卸载**（地图组件卸载 ⇒ `map.remove()` / three 下一条路
-            由 `destroy()` 放掉上下文）。`setLiveBackend(null)` 保证探针不会读到"两个都在跑"。 */
+      if (!toOverlay && !leavingOverlayFrom(old)) old?.pause();
+      /* 离开叠加层：把那一层拆掉（放掉它的 WebGL 上下文）；地图那一层不动 */
+      if (leavingOverlayFrom(old) && !toOverlay) old?.destroy();
+      /* ② 换 DOM。⚠️ 进叠加层时地图**留在台上**（模板里 `showMap || showOverlay` 都渲染它）
+            ⇒ 这里只多挂一块透明画布。 */
       rendererLive.value = next;
       setLiveBackend(null);
-      active = null;
+      if (!leavingOverlayFrom(old) || toOverlay) active = null;
       await nextTick();
       await twoFrames();
       /* ③ 起新的 */
-      if (!nb) {
+      if (toOverlay) {
+        const host = overlayHost.value;
+        if (!host) throw new Error("叠加层宿主元素没挂上（模板里缺 .ws-sceneview__overlay）");
+        const ob = nb as WsRenderBackend & { bindMap?: (m: unknown) => void };
+        ob.bindMap?.(mapInstance);
+        await ob.init(host, view ?? fallbackView(), world);
+        ob.resume();
+        active = ob;
+        setLiveBackend(ob);
+      } else if (!nb) {
         await ensureMapBackend(view);
         active = mapBackend;             // 真正"在跑"要等 `scene-ready`（`bind` + `resume`）
         setLiveBackend(active);
@@ -479,7 +514,8 @@
         nb.resume();
         active = nb;
         setLiveBackend(nb);
-        dropMapBackend();
+        dropMapBackend();          // 切到 three ⇒ 地图在这一刻被卸载（模板 v-if 换支）
+        mapInstance = null;
         pendingView = null;
       }
     } catch (e) {
@@ -546,7 +582,7 @@
       active?.pause();
       /* 地图那一支的销毁归 `WsDistrictMapLibre` 自己（它 `onBeforeUnmount` 里 `map.remove()`）；
          three 这一支没有别人管 ⇒ 在这里放掉上下文（不然整屏切走会剩一个活着的 WebGL 上下文）。 */
-      if (active && active.id === "three") active.destroy();
+      if (active && (active.id === "three" || active.id === "overlay")) active.destroy();
     } catch {
       /* 卸载期的异常不该再往外抛 */
     }
@@ -570,6 +606,15 @@
     inset: 0;
     overflow: hidden;
     background: #0a1018;
+  }
+  /* 🧊 叠加层宿主：**透明**、且在 HUD 之下（楼压在地图上，HUD 压在楼上面）。
+     真正的"不接管输入"写在画布自己的 `pointer-events:none` 上（见 `wsOverlayBackend`）。 */
+  .ws-sceneview__overlay {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: transparent;
   }
 
   /* 失败即回退那句话：**必须在屏幕上**（不是 console、不是 title）—— 判据是"看得见原因"。

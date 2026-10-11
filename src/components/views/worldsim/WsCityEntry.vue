@@ -981,6 +981,14 @@
   }
 
   onMounted(() => {
+    /* `?renderer=three|map|overlay`：**验版/调试入口**（chip 只在"地图 ⇄ 叠加层"之间切）。
+       独立那条 `three`（换渲染器、自己管相机）不占 chip，只能从这里进 —— 见 `toggleRenderer` 那段。 */
+    try {
+      const want = new URLSearchParams(location.search).get("renderer");
+      if (want === "three" || want === "overlay" || want === "map") setRendererPref(want);
+    } catch {
+      /* 参数读不出来就算了（默认还是地图） */
+    }
     installed.value = store.installed();
 /* 对齐下一个整点重算一次基线（一次性 setTimeout 链；卸载时清掉，见 onBeforeUnmount） */
     armNeedsHour();
@@ -1220,14 +1228,21 @@
        · 字面读 **`rendererLive`**（屏幕上**真的**是谁）—— 3D 起不来时舞台已经回退成地图，
          这时 chip 必须如实显示"地图"，不能显示一个没生效的「3D」；
        · 点一下只改偏好，**真切换在舞台里**（本页不碰相机、不碰画布、不碰 DOM）。 */
-  const rendererChipText = computed(() => (rendererLive.value === "three" ? "🧊 3D" : "🗺 地图"));
+  const rendererChipText = computed(() => (rendererLive.value === "map" ? "🗺 地图" : "🧊 立体楼"));
   const rendererChipTitle = computed(() => {
-    if (rendererLive.value === "three") return "当前用 three.js 渲染（同一座城、同一套配色）。点一下换回地图";
-    if (rendererPref.value === "three") return "three.js 那条路没起来（原因在屏幕上那条提示里），现在仍用地图";
-    return "当前用地图渲染（MapLibre，默认）。点一下换成 three.js（同一座城、同一套配色）";
+    if (rendererLive.value === "overlay") return "叠加层：地图照常在下层画，楼是立体地叠上去的（拖动/缩放仍归地图）。点一下关掉";
+    if (rendererPref.value === "overlay") return "叠加层没起来（原因在屏幕上那条提示里），现在仍用地图";
+    return "当前是地图（MapLibre，默认）。点一下在地图之上叠一层立体的楼（同一座城、同一套配色）";
   });
+  /**
+   * chip 上的"3D"= **叠加层**（地图 + 立体的楼）。
+   *
+   * 为什么不是那条独立 `three`：真机实测反馈"3D 只有楼、跟地图不一样"，把它摆在一级入口
+   * 会让人每次都要分辨两个 3D。⇒ 独立那条（换渲染器、自己管相机、没有底图）**不占 chip**，
+   * 只在 `?renderer=three` 与验版面里可达。
+   */
   function toggleRenderer(): void {
-    setRendererPref(rendererPref.value === "three" ? "map" : "three");
+    setRendererPref(rendererPref.value === "overlay" ? "map" : "overlay");
   }
 
   /* ── ① 走近：一次判定（滞回状态由本页拿着，喂回下一次）── */

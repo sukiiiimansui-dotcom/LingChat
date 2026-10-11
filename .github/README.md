@@ -41,7 +41,7 @@ LingChat 的个人实验分支：想给聊天加一层「世界」，让角色�
 - 本仓库在改的分支：[`dev`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/dev)
 - 进度都记在：**[issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)**
 
-## 改了什么
+## 当前进行方案与过去方案对比
 
 |  | 原来方案 | 现在方案 |
 |---|---|---|

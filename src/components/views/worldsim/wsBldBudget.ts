@@ -393,11 +393,25 @@ export function bldRingVertices(ringPoints: number): number {
   return 5 * (n - 1);
 }
 
-/** Web Mercator：**1 CSS 像素代表多少米**（赤道 156543.03392 @ z0，随纬度按 cos 缩） */
+/**
+ * Web Mercator：**1 CSS 像素代表多少米**（赤道 `C / tileSize` @ z0，随纬度按 cos 缩；`C` = 赤道周长）。
+ *
+ * 🔴 **2026-10-11 口径更正（原来是错的、而且是仓里"同一份换算两个值"的那一份）**：
+ *   旧值 `156543.03392` = **C / 256**（**256px 瓦片**的老口径）；而本仓用的 MapLibre vendor 里
+ *   `_tileSize = 512`（`worldSize() = _tileSize · _scale`）⇒ 真尺是 **C / 512 ≈ 78271.517**。
+ *   旧值**整整大一倍** ⇒ 屏幕换算出来的像素宽高各小一倍、**px² 小四倍** ⇒ 挑楼的像素安全闸
+ *   一直在用一把**比真尺长一倍**的尺子（`wsRenderBackend.METERS_PER_PIXEL_Z0` 那处已先改，
+ *   见 `3e1e2fb0`；这是**第二份**）。
+ *   **实测影响面（真包真池 68 格 / 30,533 栋、z13）**：`Σpx²` 从 18,087 变 72,348（正好 4×），
+ *   但**画几栋 / 出楼格 / 被闸拦掉**在 K=6 / 20 / 4000 三档下**逐字相同**（像素闸根本没咬住 ——
+ *   真正咬住的是顶点预算）⇒ 这次更正是**纯单位更正、零观感变化**。
+ *   ⚠️ 若将来把两个预算调小到会咬住，这一把尺子必须与 MapLibre 同口径（本函数就是那一份）。
+ */
 export function bldMetersPerCssPixel(zoom: number, lat: number): number {
   const z = isFinite(zoom) ? zoom : 0;
   const la = isFinite(lat) ? Math.max(-85, Math.min(85, lat)) : 0;
-  return (156543.03392 * Math.cos((la * Math.PI) / 180)) / Math.pow(2, z);
+  /* `40075016.686` = 赤道周长（米）；`512` = MapLibre vendor 的 `_tileSize` */
+  return ((40075016.686 / 512) * Math.cos((la * Math.PI) / 180)) / Math.pow(2, z);
 }
 
 /**

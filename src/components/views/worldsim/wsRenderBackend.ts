@@ -113,6 +113,14 @@ export interface WsRenderWorld {
   buildings: WsRenderFc | null;
   roads: WsRenderFc | null;
   themeId: string;
+  /**
+   * 交接那一刻各自捞到几条（**如实记**，不是判据）。
+   *
+   * 为什么要它：真机反馈过"只有楼、路大多数时候没有"。路网是**异步落图**的，
+   * 切换那一刻可能还没到；没有这两个数就分不清"three 没画"还是"地图上本来就没有"。
+   * three 那条路会把它写进 `stats().note`（见 `wsThreeBackend.stats`）。
+   */
+  counts?: { buildings: number; roads: number };
 }
 
 export interface WsRenderStats {

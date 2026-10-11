@@ -68,6 +68,9 @@ export const WS_CENTER_RING: Array<[number, number]> = (() => {
   return out;
 })();
 
+/** 交接那次抓数据的**等待上限**（毫秒）：路网/楼房是异步落图的，抓一次常常抓空 */
+export const CAPTURE_WAIT_MS = 3000;
+
 export interface WsMapBackendOpts {
   /** 主题（宿主推进来的那一份；`readView` 原样带回） */
   themeNow?: () => { theme: string; timeOfDay: number; clock: string };
@@ -127,11 +130,28 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
         return null;
       }
     };
-    /* 顺序要紧：两个 source 都在 MapLibre 里，而它下一刻就要被销毁了 ⇒ 必须在这里 await 完 */
-    const buildings = await grab("bld");
-    const roads = await grab("roads");
+    /* 顺序要紧：两个 source 都在 MapLibre 里，而它下一刻就要被销毁了 ⇒ 必须在这里 await 完。
+     *
+     * 🔴 这两份数据是**异步落图**的：`bld` 与 `roads` 各自等数据回来才 `setData`。
+     *    原来只抓**一次**，抓不到就 `null` ⇒ 用户手快（或路网慢）时切过去就是"只有楼、没有路"，
+     *    而且**再也没有补的机会**（地图那一刻就销毁了）。现在改成**有上限地等**：
+     *    每 150 ms 重试一次，最多等 `CAPTURE_WAIT_MS`；等不到也照样把它交出去，
+     *    但**如实记下各自几条**（`counts`），让下游能说清"是没有数据，还是没画"。 */
+    let buildings = await grab("bld");
+    let roads = await grab("roads");
+    const deadline = Date.now() + CAPTURE_WAIT_MS;
+    while ((!buildings || !roads) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (!buildings) buildings = await grab("bld");
+      if (!roads) roads = await grab("roads");
+    }
     if (!buildings && !roads) return null;
-    return { buildings, roads, themeId: th };
+    return {
+      buildings,
+      roads,
+      themeId: th,
+      counts: { buildings: buildings?.features?.length ?? 0, roads: roads?.features?.length ?? 0 },
+    };
   }
 
   return {

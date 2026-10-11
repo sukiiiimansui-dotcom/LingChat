@@ -638,6 +638,16 @@ export function createThreeBackend(): WsRenderBackend {
     }
   }
 
+  /** 交接那份数据里"路/楼是空的"就写出来（真机反馈过"只有楼、路大多数时候没有"） */
+  function worldNote(): string {
+    const c = curWorld?.counts;
+    if (!c) return "";
+    const parts: string[] = [];
+    if (c.roads === 0) parts.push("交接时地图上还没有路网数据（路网是异步落图的）");
+    if (c.buildings === 0) parts.push("交接时地图上还没有楼房数据");
+    return parts.length ? ` / ⚠️ ${parts.join("；")}` : "";
+  }
+
   function tick(): void {
     if (state !== "running" || !renderer || !scene || !camera) return;
     const now = performance.now();
@@ -862,16 +872,21 @@ export function createThreeBackend(): WsRenderBackend {
     const g2 = groundAtPx(now.x, now.y);
     const two = pointers.size >= 2;
     if (two) {
-      /* 双指：捏合 + 扭转 + 竖向拖（俯仰）+ 中点平移，一次算全 */
+      /* 双指：捏合 + 扭转 + 竖向拖（俯仰）+ 中点平移，一次算全。
+         🔴 扭转的**符号**照 MapLibre 抄：它的 `angleWith` 是 `atan2(新.x*旧.y − 新.y*旧.x, 新.x*旧.x + 新.y*旧.y)`
+         = 旧角 − 新角，然后 `setBearing(bearing + bearingDelta)`
+         ⇒ **bearing 增量 = −(新角 − 旧角)**。原来写成 `+`，真机上双指扭转与地图方向相反。 */
       const radius = saneRadius(cur.radius * (last.dist / now.dist));
-      const bearing = normBearing(cur.bearing + ((now.ang - last.ang) * 180) / Math.PI);
-      const pitch = clampPitch(cur.pitch + (last.y - now.y) * 0.4);
+      const bearing = normBearing(cur.bearing - ((now.ang - last.ang) * 180) / Math.PI);
+      const pitch = clampPitch(cur.pitch + (last.y - now.y) * 0.5);
       const center = g1 && g2 ? shiftCenter(cur.center, g1[0] - g2[0], g1[1] - g2[1]) : cur.center;
       applyGesture({ center, radius, bearing, pitch });
     } else if (gestureMode === "rotate") {
+      /* 右键 / Ctrl 拖：MapLibre 那条是 `bearingDelta = (cur.x − 起点.x) * rotateSpeed`（默认 0.8）
+         ⇒ 向右拖 = bearing 增大；俯仰那条是 `(两指 dy 平均) * −0.5`，向下拖 = 俯仰减小。 */
       applyGesture({
-        bearing: normBearing(cur.bearing - (now.x - last.x) * 0.4),
-        pitch: clampPitch(cur.pitch + (last.y - now.y) * 0.4),
+        bearing: normBearing(cur.bearing + (now.x - last.x) * 0.8),
+        pitch: clampPitch(cur.pitch + (last.y - now.y) * 0.5),
       });
     } else if (g1 && g2) {
       /* 平移：两块地之间的位移就是中心要挪的量（正负号见上面那段说明） */
@@ -1191,7 +1206,7 @@ export function createThreeBackend(): WsRenderBackend {
         dpr: renderer?.getPixelRatio?.() ?? 1,
         fps: Math.round(fps * 10) / 10,
         rendering: state === "running",
-        note: `${diag.buildings} 栋${diag.capped ? `（另有 ${diag.capped} 栋超上限未画）` : ""} / ${diag.tris} 三角 / 路 ${diag.roadSegs} 段 / 立绘 ${diag.actors}${diag.holesDropped ? ` / 洞未画 ${diag.holesDropped}` : ""}`,
+        note: `${diag.buildings} 栋${diag.capped ? `（另有 ${diag.capped} 栋超上限未画）` : ""} / ${diag.tris} 三角 / 路 ${diag.roadSegs} 段 / 立绘 ${diag.actors}${diag.holesDropped ? ` / 洞未画 ${diag.holesDropped}` : ""}${worldNote()}`,
       };
     },
 

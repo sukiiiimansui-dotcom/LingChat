@@ -346,6 +346,48 @@
         });
         check("相机变完**契约里读到的就是新那一份**（后端叫了 viewListener）", sees.length >= 2 && !!vPinch, { calls: sees.length });
 
+        /* ── ⑤d **方向**判据：纯扭转（顺时针 40°，两指距离不变）───────────────
+           为什么单列：上一版那条只断言"bearing 变了"——**符号反了照样绿**，真机上"双指扭转跟地图
+           相反"就是这么漏过去的。这里把 MapLibre 的算式抄进来**算期望增量**再比：
+             `angleWith(this=新, 参数=旧) = atan2(新.x*旧.y − 新.y*旧.x, 新.x*旧.x + 新.y*旧.y)` = 旧角 − 新角，
+             `setBearing(bearing + bearingDelta)` ⇒ **Δbearing = −(新角 − 旧角)**。
+           公式改成别的，期望值跟着变（不硬编码数字）。 */
+        const mapLibreTwistDelta = (nx, ny, ox, oy) => (Math.atan2(nx * oy - ny * ox, nx * ox + ny * oy) * 180) / Math.PI;
+        const shortest = (d) => (((d + 180) % 360) + 360) % 360 - 180;
+        const c0 = { x: 440, y: 300 };
+        const half = 40;
+        const th = (40 * Math.PI) / 180;
+        const twistBefore = b.readView();
+        const oldVec = { x: half, y: 0 };
+        const newVec = { x: half * Math.cos(th), y: half * Math.sin(th) };
+        const t1 = { x: c0.x - half, y: c0.y };
+        const t2 = { x: c0.x + half, y: c0.y };
+        const u1 = { x: c0.x - newVec.x, y: c0.y - newVec.y };
+        const u2 = { x: c0.x + newVec.x, y: c0.y + newVec.y };
+        fire("pointerdown", PointerEvent, { pointerId: 11, clientX: t1.x, clientY: t1.y });
+        fire("pointerdown", PointerEvent, { pointerId: 12, clientX: t2.x, clientY: t2.y });
+        fire("pointermove", PointerEvent, { pointerId: 12, clientX: u2.x, clientY: u2.y });
+        fire("pointermove", PointerEvent, { pointerId: 11, clientX: u1.x, clientY: u1.y });
+        fire("pointerup", PointerEvent, { pointerId: 11, clientX: u1.x, clientY: u1.y, buttons: 0 });
+        fire("pointerup", PointerEvent, { pointerId: 12, clientX: u2.x, clientY: u2.y, buttons: 0 });
+        await sleep(150);
+        const twistAfter = b.readView();
+        const want = mapLibreTwistDelta(newVec.x, newVec.y, oldVec.x, oldVec.y);
+        const have = shortest((twistAfter?.bearing ?? 0) - (twistBefore?.bearing ?? 0));
+        raw.twist = {
+          want: Number(want.toFixed(4)), have: Number(have.toFixed(4)),
+          bearing: [twistBefore?.bearing, twistAfter?.bearing],
+          radius: [twistBefore?.radius, twistAfter?.radius],
+          pitch: [twistBefore?.pitch, twistAfter?.pitch],
+        };
+        info(`纯扭转 40°（顺时针）：MapLibre 公式给 ${want.toFixed(3)}° / 实测 ${have.toFixed(3)}°（bearing ${twistBefore?.bearing?.toFixed(2)}° → ${twistAfter?.bearing?.toFixed(2)}°）`);
+        check("**方向**：双指纯扭转的 Δbearing 与 MapLibre 公式**同号**（顺时针扭转 ⇒ 按 −(新角−旧角) 走）",
+          Math.sign(want) === Math.sign(have) && Math.abs(want) > 1, raw.twist);
+        check("**大小**：同一扭转的 |Δbearing − 期望| ≤ 0.5°", Math.abs(have - want) <= 0.5, raw.twist);
+        check("纯扭转不该改半径与俯仰（两指距离、中点都没动）",
+          Math.abs((twistAfter?.radius ?? 0) - (twistBefore?.radius ?? 0)) / Math.max(1, twistBefore?.radius ?? 1) < 0.02
+            && Math.abs((twistAfter?.pitch ?? 0) - (twistBefore?.pitch ?? 0)) < 0.5, raw.twist);
+
         /* ── ⑥ 暂停 / 销毁：画布与上下文都要放掉 ── */
         b.pause();
         await sleep(300);

@@ -642,9 +642,12 @@ if (typeof window !== "undefined") {
         const h = Math.max(1, Math.round(rect?.height || 0));
         const radius = saneRadius(s.radius);
         const cos0 = Math.cos((s.center.lat * Math.PI) / 180);
+        /* 🔴 相机是绕**视野中心**摆的（`camFrameOf` 的第一个参数是"看向哪里"）；
+           目标点是同一个局部框架里的另一个点。2026-10-11 第一版把**目标点自己**当成了
+           视野中心 ⇒ 每个点都投到画布正中（那张表因此全是"误差 = dPx"的假象）。 */
         const x = (Number(lng) - s.center.lng) * M_PER_DEG * cos0;
         const z = (s.center.lat - Number(lat)) * M_PER_DEG;
-        const fr = camFrameOf(x, z, radius, s.bearing, s.pitch);
+        const fr = camFrameOf(0, 0, radius, s.bearing, s.pitch);
         /* 世界 → 相机：基的转置（x/y/z 轴都是单位正交） */
         const px = fr.pos[0];
         const py = fr.pos[1];

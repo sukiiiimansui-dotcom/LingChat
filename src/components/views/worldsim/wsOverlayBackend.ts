@@ -458,6 +458,29 @@ export function createOverlayBackend(): WsRenderBackend {
     }
     const sorted = [...alignErrs].sort((x, y) => x - y);
     const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    /* 🆕 **画布几何**（下一号嫌疑）：两套投影在纯数学上已经逐点 ≤0.005 px（见
+       world_map/ws_proj_table_probe.mjs 那张表）⇒ 屏上若真错开，只剩"两块画布不一样大/
+       不一样位/不一样 DPR"这类**非数学**因素。这里把它们如实报出去。 */
+    let geom: Record<string, unknown> | null = null;
+    try {
+      const doc = document;
+      const mapCv = doc.querySelector(".maplibregl-canvas") || doc.querySelector(".ws-dml__cv");
+      const ovlCv = renderer?.domElement as HTMLCanvasElement | undefined;
+      const box = (el: Element | null | undefined): unknown => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const c = el as HTMLCanvasElement;
+        return {
+          cls: String((el as HTMLElement).className || ""),
+          rect: [Number(r.left.toFixed(2)), Number(r.top.toFixed(2)), Number(r.width.toFixed(2)), Number(r.height.toFixed(2))],
+          buf: [c.width ?? null, c.height ?? null],
+          style: [(el as HTMLElement).style?.width || "", (el as HTMLElement).style?.height || ""],
+        };
+      };
+      geom = { dpr: typeof devicePixelRatio === "number" ? devicePixelRatio : null, map: box(mapCv), overlay: box(ovlCv) };
+    } catch {
+      geom = null;
+    }
     alignReports++;
     alignLastReportAt = performance.now();
     beacon({
@@ -472,6 +495,7 @@ export function createOverlayBackend(): WsRenderBackend {
       centerErr: alignCenterErr === null ? null : Number(alignCenterErr.toFixed(3)),
       fit: alignFit(),
       raw: alignRaw.slice(-3),
+      geom: geom,
       reports: alignReports,
       center: m?.getCenter?.() ?? null,
       zoom: m?.getZoom?.() ?? null,

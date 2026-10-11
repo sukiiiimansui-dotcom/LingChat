@@ -1217,7 +1217,10 @@ export function createThreeBackend(): WsRenderBackend {
         if (!id) continue;
         const meta = featureMeta[hit.fi];
         diag.colorPick = meta ? { id, color: meta.color, h3d: meta.h3d, hBase: meta.hBase } : null;
-        return { kind: "bld", id, lng: hit.point[0], lat: hit.point[2] };
+        /* 🔴 契约里这个字段是**经纬度**（2D 那条路给的就是经纬度）⇒ 命中点是局部米，
+           必须换回去；直接塞 `hit.point[0]/[2]` 是"米当度用"，数值上小得离谱（2026-10-11 修）。 */
+        const ll = frame ? toLatLng(frame, hit.point[0], hit.point[2]) : null;
+        return { kind: "bld", id, lng: ll ? ll[0] : 0, lat: ll ? ll[1] : 0 };
       }
       diag.colorPick = null;
       return null;

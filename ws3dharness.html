@@ -274,6 +274,10 @@
           check("centerPick() 报的是**那份数据里的**一栋，而且对着的那栋就是它（连问两次一致）",
             !!p1 && idset.has(String(p1.id)) && String(p1.id) === String(p2?.id),
             { ...raw.pick, ids: idset.size });
+          const pickM = p1 && aimed && b.centerPick ? metersBetweenCenters(aimed, { lat: p1.lat, lng: p1.lng }) : null;
+          raw.pick.metersToAimed = pickM === null ? null : Number(pickM.toFixed(3));
+          check("命中点回的是**经纬度**（不是局部米当度用）：与对着的那点差 < 40 m",
+            pickM !== null && pickM < 40, { meters: raw.pick.metersToAimed, got: p1 && { lng: p1.lng, lat: p1.lat } });
           check("命中时 diag.colorPick 记下了这栋的颜色/高度（与 2D 同一个字段）",
             !!dgp?.colorPick && !!dgp.colorPick.color && dgp.colorPick.h3d > 0,
             dgp?.colorPick || null);

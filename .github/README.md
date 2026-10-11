@@ -5,30 +5,33 @@
 **这不是官方仓库**　官方项目在这 → [SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)　要下载、要反馈都去那边
 
 [![官方仓库](https://img.shields.io/badge/官方仓库-SlimeBoyOwO%2FLingChat-blue?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat)
-[![开发分支](https://img.shields.io/badge/开发分支-feat%2Fworldsim-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
-[![状态](https://img.shields.io/badge/状态-实验性%20·%20尚不完善-orange?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat/issues/858)
+[![开发分支](https://img.shields.io/badge/开发分支-dev-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
+[![状态](https://img.shields.io/badge/状态-实验性%20·%20仍在完善-orange?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat/issues/858)
 
 </div>
 
 <!-- LOC-BADGE:BEGIN（这段由 .github/workflows/loc-badge.yml 每天重写，别手改） -->
 | 代码量（不含空行与整行注释） | 本仓 | 官方 `dev` | 净增 |
 |---|---:|---:|---:|
-| Rust | 77,822 | 55,242 | +22,580 |
-| TypeScript | 57,547 | 31,132 | +26,415 |
-| Vue | 55,904 | 42,136 | +13,768 |
+| Rust | 77,822 | 59,606 | +18,216 |
+| TypeScript | 57,547 | 31,355 | +26,192 |
+| Vue | 55,904 | 42,488 | +13,416 |
 | JavaScript | 11,104 | 924 | +10,180 |
 | HTML | 10,491 | 247 | +10,244 |
 | CSS | 4,769 | 3,002 | +1,767 |
 | Python | 694 | 461 | +233 |
 | Shell | 107 | 98 | +9 |
-| **合计** | **218,438**（21.8 万行） | **133,242**（13.3 万行） | **+85,196** |
+| **合计** | **218,438**（21.8 万行） | **138,181**（13.8 万行） | **+80,257** |
 <!-- LOC-BADGE:END -->
 
 ---
+## 当前阶段
 
-![当前部分功能演示](docs/worldsim/worldsim-demo-2026-10-03.jpg)
+正在尝试将maplibre几何挤出楼房替换为three.js
 
-> 上图为当前部分功能演示（重庆 · 渝中半岛一带；右侧是角色面板与立绘）。
+
+地图正在尝试自写 MVT 瓦片 用数字id取楼房数据
+
 
 ## 这是什么
 

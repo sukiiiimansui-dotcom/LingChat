@@ -150,6 +150,7 @@
 
         /* ── ④ 把 three 后端拉起来（真 WebGL2：软件渲染） ── */
         const b = createThreeBackend();
+        window.__HARNESS_B__ = b;   // 给探针/诊断留个把手（这一页是自用测试页，不随 app 发布）
         const state = {
           center: { lat: Number(fx.view.center.lat), lng: Number(fx.view.center.lng) },
           radius: Number(fx.view.radius),
@@ -259,7 +260,11 @@
           aimed = { lng: sx / ring0.length, lat: sy / ring0.length };
         }
         if (aimed) {
-          b.applyView({ ...state, center: aimed, pitch: 0, bearing: 0, radius: 80 });
+          /* ⚠️ 半径要**大到相机在屋顶之上**：`radius: 80` 时相机只在地面上方 240 米，
+             而夹具里这栋楼带 `#antenna` 部件（是栋高楼）⇒ 射线从**楼体内部**往下走，
+             一个三角形都撞不到，`centerPick()` 合法地给 null（2026-10-11 实测：
+             同一机位半径 300 就稳定命中它）。这不是命中逻辑的毛病，是几何。 */
+          b.applyView({ ...state, center: aimed, pitch: 0, bearing: 0, radius: 300 });
           await sleep(250);
           const p1 = b.centerPick ? b.centerPick() : null;
           const p2 = b.centerPick ? b.centerPick() : null;
@@ -271,9 +276,11 @@
             color: dgp?.colorPick || null,
           };
           info(`中心命中：对着「${raw.pick.want}」看 ⇒ 报「${raw.pick.got}」（再问一次「${raw.pick.again}」）`);
-          check("centerPick() 报的是**那份数据里的**一栋，而且对着的那栋就是它（连问两次一致）",
-            !!p1 && idset.has(String(p1.id)) && String(p1.id) === String(p2?.id),
-            { ...raw.pick, ids: idset.size });
+          /* 同一栋楼在 `bld` 里可能拆成几个部件（`<楼id>#body` / `#antenna` …）⇒ 比"楼号"而不是整串 id */
+          const baseOf = (x) => String(x || "").split("#")[0];
+          check("centerPick() 报的是**那份数据里的**一栋，而且就是对着的那栋楼（同一栋的部件算同一栋；连问两次一致）",
+            !!p1 && idset.has(String(p1.id)) && baseOf(p1.id) === baseOf(feats[0]?.id) && String(p1.id) === String(p2?.id),
+            { ...raw.pick, aimedBase: baseOf(feats[0]?.id), ids: idset.size });
           const pickM = p1 && aimed && b.centerPick ? metersBetweenCenters(aimed, { lat: p1.lat, lng: p1.lng }) : null;
           raw.pick.metersToAimed = pickM === null ? null : Number(pickM.toFixed(3));
           check("命中点回的是**经纬度**（不是局部米当度用）：与对着的那点差 < 40 m",

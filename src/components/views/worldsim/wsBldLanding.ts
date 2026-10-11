@@ -55,7 +55,7 @@
  * 它要的 `bldFlush` 级别的横向量一件都没有（本片实测**不需要** `wsViewFetch.ts` 那边任何东西）。
  */
 /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
-import { mvtTemplateForHost } from "./wsMvtTiles";
+import { mvtCoverageRun, mvtEnabled, mvtTemplateForHost } from "./wsMvtTiles";
 /* ┄┄┄ 有意增量 END ┄┄┄ */
 import { watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
@@ -338,6 +338,16 @@ export function createBldLanding(ctx: BldLandingCtx) {
         afterDraw: (_why0, data) => {
           setDrawnBld((data as { features?: unknown[] })?.features || []);
         },
+        /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+        /* `?mvt=1` 时每轮落图后登记一次"视口覆盖的瓦片"（R1 主路上 id 表的唯一来源）。
+           关闭时 `mvtCoverageRun` 立刻返回 null（一字节不碰）；不 await（登记不拖住落图）。 */
+        afterMvtRegister: () => {
+          if (!mvtEnabled()) return;
+          const mv = map as unknown as { getBounds?: () => unknown; getZoom?: () => number } | null;
+          if (!mv || typeof mv.getBounds !== "function") return;
+          void mvtCoverageRun(mv.getBounds() as never, typeof mv.getZoom === "function" ? mv.getZoom() : null);
+        },
+        /* ┄┄┄ 有意增量 END ┄┄┄ */
         /* **近景挑选 = 与代拍页同一份编排**（`wsBldPickStore`）。
            2026-10-02 换口径（每格 4 栋**改成双预算挑楼** ——
            候选 = 视野内**全部**楼，预算 = **Σ投影 px²（`WS_BLD_BUDGET_PX2`）+ Σ顶点（`WS_BLD_BUDGET_VERTS`）**，

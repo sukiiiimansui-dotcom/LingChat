@@ -543,6 +543,11 @@ export interface BldFlushOpts<T> {
    * **不再 `setData`**；不给 / 返回 null ⇒ 走原来的 GeoJSON 路，**逐字节不变**（可逆开关的关那一侧）。
    */
   mvt?: () => { template: string } | null;
+  /**
+   * `?mvt=1` 专属：每轮落图**之后**调一次（宿主在这里登记"视口覆盖的瓦片"，见 `wsMvtCoverage`）。
+   * 不给 / 关掉开关 ⇒ 什么都不发生（老路一字节不变）。
+   */
+  afterMvtRegister?: () => void;
   /** 没有地图时怎么办（App：交给 2D 自绘；原型页 `?bld=0`：只记数不画） */
   onNoMap?: (data: FeatureCollectionLike) => void;
   /** 落图**之前**（宿主的计数/HUD；**不许在这里改数据**） */
@@ -602,10 +607,12 @@ export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
        HUD 的计数仍走 `afterDraw` —— 上层"画了多少栋"的口径不变。 */
     applyMvtTo(m, mvt.template);
     opts.afterDraw?.(why, data);
+    opts.afterMvtRegister?.();
     return;
   }
   applyBuildingsTo(m, data, opts.specs());
   opts.afterDraw?.(why, data);
+  opts.afterMvtRegister?.();
 }
 
 export interface RoadsFlushOpts<T> {

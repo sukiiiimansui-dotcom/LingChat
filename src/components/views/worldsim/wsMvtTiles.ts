@@ -34,6 +34,7 @@ export const MVT_WORKER_PROBE = "/mvt-worker-probe.js";
 export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
 
 import { decodeMvtFeatures } from "./wsMvtDecode";
+import { createCoverageRegistrar, type CoverageBounds, type CoverageResult } from "./wsMvtCoverage";
 
 /** gzip 魔数 */
 export const MVT_GZIP_MAGIC: readonly number[] = [0x1f, 0x8b];
@@ -214,6 +215,8 @@ export interface MvtRuntime {
   registeredAt: number;
   /** 运行期选出来的路（协议 / 普通 URL） */
   mode: MvtMode;
+  /** 主线程"视口覆盖登记"（R1 主路上 id 表的唯一来源；计数与耗时都在 `facts()`） */
+  coverage: ReturnType<typeof createCoverageRegistrar> | null;
   /** 宿主该用的瓦片模板（跟着 `mode` 走） */
   template: string;
 }
@@ -250,9 +253,15 @@ export async function setupMvtProtocol(
     (tiles as { noteFallbackPlain?: () => void }).noteFallbackPlain?.();
   }
   const template = mode === "protocol" ? (opts.template || MVT_TILE_TEMPLATE) : MVT_PLAIN_TEMPLATE;
-  RUNTIME = { tiles, idTable, enabled: true, registeredAt: Date.now(), mode, template };
+  /* 主线程登记器：**R1 主路上 id 表的唯一来源**（worker 那条路不经过我们的 loader） */
+  const coverage = createCoverageRegistrar({ idTable, template, maxTiles: 24, concurrency: 4 });
+  RUNTIME = { tiles, idTable, enabled: true, registeredAt: Date.now(), mode, template, coverage };
+  /* ⚠️ 用 **getter** 暴露：页面读的时候要拿到**实时**计数（一次性快照会让"登记的块数"永远是 0）。 */
   (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = {
-    enabled: true, mode, template, probe: cap, tiles: tiles.facts(), ids: idTable.facts(),
+    enabled: true, mode, template, probe: cap,
+    get tiles() { return tiles.facts(); },
+    get ids() { return idTable.facts(); },
+    get coverage() { return coverage.facts(); },
   };
   return RUNTIME;
 }
@@ -260,6 +269,20 @@ export async function setupMvtProtocol(
 /** 给宿主用：`?mvt=1` 时返回**本次运行期选出来**的瓦片模板，否则 `null`（关掉那条路**一字节都不碰**） */
 export function mvtTemplateForHost(): string | null {
   return mvtEnabled() && RUNTIME && RUNTIME.enabled ? RUNTIME.template : null;
+}
+
+/**
+ * 宿主每轮落图后调一次：**主线程登记当前视口覆盖的瓦片**（节流与每轮上限在 registrar 里）。
+ * 关闭 / 未注册 ⇒ 立刻 return（那条路一字节都不碰）。**不 await**：登记不该拖住落图。
+ */
+export function mvtCoverageRun(bounds: CoverageBounds | null | undefined, zoom: number | null | undefined): Promise<CoverageResult | null> {
+  if (!RUNTIME || !RUNTIME.coverage) return Promise.resolve(null);
+  return RUNTIME.coverage.run(bounds, zoom).catch(() => null);
+}
+
+/** 覆盖登记的实时计数（探针/HUD 读） */
+export function mvtCoverageFacts(): ReturnType<ReturnType<typeof createCoverageRegistrar>["facts"]> | null {
+  return RUNTIME && RUNTIME.coverage ? RUNTIME.coverage.facts() : null;
 }
 
 /** 运行期选路的结果（HUD/探针读；`mode === "plain"` 说明 worker 没有解压器、已自动回落） */

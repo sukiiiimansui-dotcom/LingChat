@@ -153,11 +153,7 @@
            就被 Chromium 挡："Web page caused context loss and was blocked"）。所以这几节按
            `?only=` 分开跑，探测时**两次导航**（见 world_map/ws_three_harness_probe.mjs）。 */
         const ONLY = (new URLSearchParams(location.search).get("only") || "").trim();
-        let b = null;
-        if (ONLY !== "overlay") {
-        /* ── ④ 把 three 后端拉起来（真 WebGL2：软件渲染） ── */
-        b = createThreeBackend();
-        window.__HARNESS_B__ = b;   // 给探针/诊断留个把手（这一页是自用测试页，不随 app 发布）
+        /* 机位（两节都要用：three 那节做往返/命中/手势，overlay 那节喂假地图）—— 所以提到条件之前 */
         const state = {
           center: { lat: Number(fx.view.center.lat), lng: Number(fx.view.center.lng) },
           radius: Number(fx.view.radius),
@@ -169,6 +165,11 @@
           actors: contractActors.value.map((a) => ({ ...a })),
           selection: null,
         };
+        let b = null;
+        if (ONLY !== "overlay") {
+        /* ── ④ 把 three 后端拉起来（真 WebGL2：软件渲染） ── */
+        b = createThreeBackend();
+        window.__HARNESS_B__ = b;   // 给探针/诊断留个把手（这一页是自用测试页，不随 app 发布）
         const beforeInit = canvasN();
         const t0 = performance.now();
         try {

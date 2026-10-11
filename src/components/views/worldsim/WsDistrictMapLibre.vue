@@ -961,6 +961,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   let map: any = null;
   /* S3（：`let raf = 0;`（fps 采样那个 rAF 句柄）跟着 `startFps` 搬去了 `wsHudStats.ts`。 */
   let alive = true;
+  /** **兜底恢复看门狗**（2026-10-11）：周期与定时器。低频是刻意的 —— 每次检查只有
+   *  `getSource` / `getLayer` 两次只读调用（零分配），而"早 2 秒补回来"与"晚 2 秒"观感一样。 */
+  const HEAL_WATCHDOG_MS = 2000;
+  let healTimer = 0;
   /** 「放大才取楼」的去抖定时器（moveend 里用；卸载时要清） */
   let bldTimer = 0;
   /** 名字层在 `zoomend` 之后的去抖（缩放会改变避让结果与区名模式，必须重排一次；卸载时要清） */
@@ -2369,6 +2373,26 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /* ④ load → wsStageEvents.registerMapLoad（本片最大的一处） */
     registerMapLoad(m);
 
+    /* ══ **兜底恢复接线**（2026-10-11）════════════════════════════════════════════════════
+       为什么：GL 上下文丢失后 MapLibre 会销毁 style（vendor 源码 `_contextLost` 存一份
+       `_lostContextStyle` → `style.destroy()` → `style=null`），恢复只在"备份还在 + setStyle 的
+       异步加载能跑完"时成立；第二次丢失落在那个窗口里就把唯一备份覆盖成 `{style:null}`
+       ⇒ 此后任何恢复都再也拉不回样式 ⇒ 屏幕上"楼房莫名消失"。
+       ⇒ 三个钩子挂同一个**幂等**动作（`bldLanding.bldHeal`：源或层不在才补、健康时纯读）：
+         ① canvas 的 `webglcontextlost`（真机最常见时机：切后台被系统回收 GPU）；
+         ② `webglcontextrestored`（有恢复事件时第一时间补，不等看门狗）；
+         ③ **2s 低频看门狗**（有些 WebView 根本不发恢复事件 ⇒ 这条是兜底中的兜底）。
+       计数不静默：`bldHeal` 把"补了几次 / 最后耗时 / 为什么补"写进 `stats.bldHeal`（HUD 可读）。 */
+    {
+      const cv = (() => { try { return m.getCanvas ? m.getCanvas() : null; } catch { return null; } })();
+      const healWhy = (why: string) => { try { bldLanding.bldHeal(why); } catch { /* 兜底不许影响地图 */ } };
+      if (cv && cv.addEventListener) {
+        cv.addEventListener("webglcontextlost", () => healWhy("ctxlost"), false);
+        cv.addEventListener("webglcontextrestored", () => healWhy("ctxrestored"), false);
+      }
+      healTimer = window.setInterval(() => healWhy("watchdog"), HEAL_WATCHDOG_MS);
+    }
+
     /* ⑤ movestart / move / click → wsStageEvents.registerCameraMotion */
     registerCameraMotion(m);
 
@@ -2396,6 +2420,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     unlockPageGestures();
     stopTimer();
     if (bldTimer) window.clearTimeout(bldTimer);
+    if (healTimer) window.clearInterval(healTimer);   /* 兜底恢复看门狗（2026-10-11） */
     if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
     /* S5（：换批 / 进场淡入 / 退场幽灵 / 传送帧举旗摘旗那**五个**定时器与两帧句柄
        都是 `wsNameHost.ts` 私有的 `let` ⇒ 经这个出口一次清掉（函数体里那五条判据与顺序

@@ -529,6 +529,49 @@ export function applyMvtTo(m: DistrictMapLike, template: string): void {
   for (const l of mvtBldLayerSpecs()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
 }
 
+/**
+ * **楼房源/层在不在**（2026-10-11；**只读**，兜底看门狗的"健康判据"）。
+ *
+ * 为什么单独一个函数：GL 上下文丢失后 MapLibre 会把 style 销毁（vendor 源码 `_contextLost`：
+ * `_lostContextStyle = _getStyleAndImages()` → `style.destroy()` → `style=null`），此后**没有任何东西**
+ * 会重建 `bld` 源与挤出层（落图通路只在新数据到达时跑）⇒ 屏幕上就是"楼房莫名消失"。
+ * 这个判据是"**健康时零行为变化**"的关键：false 才动手，true 时连一次写都不做。
+ */
+export function bldLayersPresent(m: DistrictMapLike | null | undefined): boolean {
+  try {
+    if (!m) return false;
+    return !!(m.getSource("bld") && m.getLayer("bld-ext"));
+  } catch {
+    return false;   /* 读不出来 = 不健康（兜底动作是幂等的，多做一次不会坏） */
+  }
+}
+
+/**
+ * **幂等补层**（2026-10-11）：缺哪条补哪条 —— 治的是"**源在、层缺**"那一半。
+ *
+ * 为什么需要它：`applyBuildingsTo` 在**源已存在**时只 `setData`（早退），**不会补缺层**；而"源在层缺"
+ * 正是"`addLayer` 抛过 / 样式部分重建"的形状（GL 上下文丢失后的恢复链只治了一半）。
+ * 健康时它只是**每条规格一次 `getLayer` 只读**（零写）；补层用与首次建层**同一个**插入锚点
+ * （`sceneLayerPlan` 的 buildings 计划，取不到才退回 `ref`）⇒ 层序不会因为"补"而变。
+ * 返回**补了几条**（可数，交给调用方记账）。
+ */
+export function ensureBldLayers(m: DistrictMapLike | null | undefined, specs: Array<Record<string, unknown>>): number {
+  if (!m) return 0;
+  let added = 0;
+  try {
+    const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);
+    for (const l of specs) {
+      const id = String(l.id ?? "");
+      if (!id || m.getLayer(id)) continue;
+      m.addLayer(l, before);
+      added += 1;
+    }
+  } catch {
+    /* 补层失败不抛（下一次事件/看门狗再来；静默与否由调用方的计数负责） */
+  }
+  return added;
+}
+
 export interface BldFlushOpts<T> {
   /** 仓库并集（宿主持有仓库；合并/淘汰规则在 `wsFeatureStore`） */
   features: () => readonly T[];

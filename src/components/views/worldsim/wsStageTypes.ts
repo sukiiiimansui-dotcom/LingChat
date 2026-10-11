@@ -172,6 +172,9 @@ export interface StageStats {
   bldMode: number;
   parts: number;
   bldPick: string;
+  /** **兜底恢复**那一行（2026-10-11）：补了几次 / 最后一次耗时 / 为什么补 / 健康判定几次。
+   *  可选：老宿主不写 ⇒ 不显示（HUD 只在有值时摆出来）。 */
+  bldHeal?: string;
   roadsBundle: string;
   bldVerdict: string;
   roadsVerdict: string;

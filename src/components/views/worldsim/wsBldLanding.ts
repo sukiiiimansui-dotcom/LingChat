@@ -79,7 +79,9 @@ import {
 import { createFeatureStore } from "./wsFeatureStore";
 import {
   WS_BLD_VECTOR_MINZOOM,
+  bldLayersPresent,
   bldLayerSpecsFor,
+  ensureBldLayers,
   flushBldStore,
   flushRoadsStore,
   type BldPickAnyStats,
@@ -463,6 +465,53 @@ export function createBldLanding(ctx: BldLandingCtx) {
        顺序反过来（先写后落图）等于把滞回关掉，见上面那段注释。 */
     bldFlushedTier = bldTierNow;
   }
+  /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+  /* ══ **兜底恢复（幂等看门狗）**（2026-10-11）════════════════════════════════════════
+     病根：GL 上下文丢失后 MapLibre 销毁 style（vendor 源码 `_contextLost`：存一份 `_lostContextStyle`
+     → `style.destroy()` → `style=null`），而**恢复**只在"那份备份还在、且 setStyle 的异步加载能跑完"
+     时成立；第二次丢失若落在这个窗口里，`_getStyleAndImages()` 会把**唯一那份备份覆盖成 `{style:null}`**
+     ⇒ 此后任何恢复都再也拉不回样式。⇒ App 自己必须能拉回来。
+     三条纪律：**幂等**（健康时一次写都不做）· **不新增第二套建源建层**（只调既有 `bldFlush`）·
+     **不静默**（次数/最后耗时/原因进 `stats.bldHeal`）。 */
+  const heal = { checks: 0, runs: 0, lastMs: null as number | null, lastWhy: "" };
+  function bldHeal(why: string): boolean {
+    const map = mapNow();
+    if (!aliveNow() || !map) return false;
+    heal.checks += 1;
+    try {
+      /* 样式还没落地 ⇒ 什么都不做（那一刻 addSource 会抛 `Style is not done loading.`） */
+      const loaded = typeof (map as unknown as { isStyleLoaded?: () => boolean }).isStyleLoaded === "function"
+        ? (map as unknown as { isStyleLoaded: () => boolean }).isStyleLoaded()
+        : true;
+      if (!loaded) return false;
+    } catch { return false; }
+    if (bldLayersPresent(map as unknown as BldMapLike)) return false;   /* 健康 ⇒ 纯读，零写 */
+    const t0 = Date.now();
+    let addedLayers = 0;
+    try {
+      /* **先补缺层、再落图**：`applyBuildingsTo` 在源已存在时只 setData（不补层）⇒
+         "源在、层缺"那一半必须在这里补（补层用的是与首次建层同一个插入锚点）。 */
+      addedLayers = ensureBldLayers(
+        map as unknown as BldMapLike,
+        bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" })
+      );
+      bldFlush("heal:" + why);
+      heal.runs += 1;
+      heal.lastMs = Date.now() - t0;
+      heal.lastWhy = why;
+    } catch (e) {
+      heal.lastWhy = why + "(抛:" + String((e as Error)?.message || e).slice(0, 30) + ")";
+    }
+    stats.bldHeal = "🩹 兜底恢复 " + heal.runs + " 次（补层 " + addedLayers + " · 最后 " + (heal.lastMs === null ? "?" : heal.lastMs + "ms")
+      + (heal.lastWhy ? " · " + heal.lastWhy : "") + "）· 健康判定 " + heal.checks + " 次";
+    return true;
+  }
+  /** 只读读数（自检/探针用） */
+  function bldHealFacts(): { checks: number; runs: number; lastMs: number | null; lastWhy: string } {
+    return { checks: heal.checks, runs: heal.runs, lastMs: heal.lastMs, lastWhy: heal.lastWhy };
+  }
+
+  /* ┄┄┄ 有意增量 END ┄┄┄ */
   /** 上一次 flush 的原因（面板回证：是离线包来的还是 live 来的） */
   let bldFlushWhy = "";
   /** 上一次"近景挑楼"的口径（需要 100 栋/视野）——面板回证用，没挑过就是空串 */
@@ -661,5 +710,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
     LIVE_ON, bldLive, roadsLive, liveRadiusFor,
     bldStore, roadsStore, bldFlush, roadsFlush, bldTierCrossedFlush,
     bldFeed, roadsFeed, placesFeed, placesGetter, gwLayer,
+    /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+    /* 兜底恢复（2026-10-11）：宿主挂到 ctxlost/ctxrestored + 低频看门狗上 */
+    bldHeal, bldHealFacts,
+    /* ┄┄┄ 有意增量 END ┄┄┄ */
   };
 }

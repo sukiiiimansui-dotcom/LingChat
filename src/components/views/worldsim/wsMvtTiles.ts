@@ -24,8 +24,16 @@ export function mvtEnabled(search?: string): boolean {
 
 /** 瓦片模板（`mvt://` 由协议 loader 转成站点路径；见 `protocolHandler`） */
 export const MVT_TILE_TEMPLATE = "mvt://mvt/{z}/{x}/{y}.pbf";
+/** 运行期选出来的路：`protocol` = R1（协议 + worker 注册）· `plain` = 普通 URL 源（R3/R4） */
+export type MvtMode = "protocol" | "plain";
 /** worker 侧协议脚本（同源静态文件；**必须**注入，否则 worker 查不到协议 ⇒ 瓦片不落地） */
 export const MVT_WORKER_SCRIPT = "/mvt-worker-protocol.js";
+/** worker 能力探针（只问一件事：worker 里有没有 `DecompressionStream`） */
+export const MVT_WORKER_PROBE = "/mvt-worker-probe.js";
+/** 普通 URL 源用的模板（不注册协议那条路；HTTP 侧靠 `Content-Encoding`，真机用不压缩落盘） */
+export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
+
+import { decodeMvtFeatures } from "./wsMvtDecode";
 
 /** gzip 魔数 */
 export const MVT_GZIP_MAGIC: readonly number[] = [0x1f, 0x8b];
@@ -35,6 +43,11 @@ export function mvtIsGzip(u8: Uint8Array | null | undefined): boolean {
 }
 
 export interface MvtTilesFacts {
+  /** 已登记元数据的瓦片数 / 要素数 / 元数据冲突数 / 解码失败数（③ 的判据读数） */
+  registeredTiles: number;
+  registeredFeatures: number;
+  metaConflicts: number;
+  decodeFailures: number;
   requests: number;
   ok: number;
   empty: number;
@@ -43,11 +56,17 @@ export interface MvtTilesFacts {
   decompressed: number;
   passthrough: number;
   fallback: number;
+  /** 运行期自适应：worker 没有解压器 ⇒ 回落普通 URL 源的次数（0/1，**不静默**） */
+  fallbackPlain: number;
   registeredMain: boolean;
   registeredWorker: boolean | "unknown";
 }
 
 export interface MvtTilesOptions {
+  /** id→元数据唯一真源：**在本层解码瓦片后登记**（不依赖 `querySourceFeatures`/渲染器） */
+  idTable?: { registerTileFromFeatures(tileKey: string, features: readonly unknown[]): { added: number; skipped: number }; facts(): { conflicts: number }; };
+  /** 注入解码（自检/测试用）；缺省用本仓的 `decodeMvtFeatures` */
+  decode?: (bytes: Uint8Array) => Array<{ id: number; properties: Record<string, unknown> }>;
   /** 注入取字节（自检/测试用）；缺省用全局 `fetch` */
   fetchBytes?: (url: string, init?: { signal?: AbortSignal }) => Promise<{ status: number; u8: Uint8Array }>;
   /** 注入解压（自检/测试用）；缺省用 `DecompressionStream("gzip")` */
@@ -61,6 +80,8 @@ export interface MvtTiles {
   protocolHandler(params: { url?: string } | string, abort?: AbortController): Promise<{ data: ArrayBuffer }>;
   /** 注册到主线程 + 往 worker 注入（幂等；同一实例重复调只做一次） */
   register(ml: { addProtocol?: unknown; importScriptInWorkers?: unknown }): Promise<void>;
+  /** 运行期自适应选了普通 URL 源（worker 没解压器）⇒ 计数 */
+  noteFallbackPlain(): void;
   facts(): MvtTilesFacts;
 }
 
@@ -72,9 +93,15 @@ export async function mvtDefaultGunzip(u8: Uint8Array): Promise<Uint8Array | nul
   return new Uint8Array(await new Response(stream as unknown as BodyInit).arrayBuffer());
 }
 
+/** 解码入口（同步实现；留一层壳，便于注入/替换） */
+function decodeMvtFeaturesAsync(bytes: Uint8Array): Array<{ id: number; properties: Record<string, unknown> }> {
+  return decodeMvtFeatures(bytes) as unknown as Array<{ id: number; properties: Record<string, unknown> }>;
+}
+
 export function createMvtTiles(opts: MvtTilesOptions = {}): MvtTiles {
   const facts: MvtTilesFacts = { requests: 0, ok: 0, empty: 0, errors: 0, gzipSeen: 0, decompressed: 0,
-    passthrough: 0, fallback: 0, registeredMain: false, registeredWorker: "unknown" };
+    passthrough: 0, fallback: 0, fallbackPlain: 0, registeredMain: false, registeredWorker: "unknown",
+    registeredTiles: 0, registeredFeatures: 0, metaConflicts: 0, decodeFailures: 0 };
   let registered = false;
 
   const fetchBytes = opts.fetchBytes || (async (url: string, init?: { signal?: AbortSignal }) => {
@@ -113,11 +140,28 @@ export function createMvtTiles(opts: MvtTilesOptions = {}): MvtTiles {
       facts.passthrough += 1;                              // 上层已按 Content-Encoding 解好
     }
     facts.ok += 1;
+    /* ③ **在这条路上就登记**（不依赖浏览器查询 API）：解 id/属性 → 唯一真源。
+       解码失败/属性缺失**如实计数**，绝不让它变成"表里悄悄少几栋"。 */
+    if (opts.idTable) {
+      try {
+        const feats = (opts.decode || decodeMvtFeaturesAsync)(u8);
+        const tileKey = url.replace(/^\//, "").replace(/\.pbf.*$/, "");
+        const r = opts.idTable.registerTileFromFeatures(tileKey, feats);
+        facts.registeredTiles += 1;
+        facts.registeredFeatures += r.added;
+        facts.metaConflicts = opts.idTable.facts().conflicts;
+      } catch (e) {
+        facts.decodeFailures += 1;
+        throw e;
+      }
+    }
     return { data: u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer };
   }
 
   return {
     protocolHandler,
+    /** 宿主选路时调用（计数，供 HUD/探针读） */
+    noteFallbackPlain() { facts.fallbackPlain += 1; },
     async register(ml) {
       if (registered) return;
       registered = true;
@@ -144,11 +188,34 @@ export function createMvtTiles(opts: MvtTilesOptions = {}): MvtTiles {
 }
 
 /* ── 运行时单例：宿主在拿到 maplibre 模块**之后、建图之前**调一次 `setupMvtProtocol()` ── */
+/** 问一次 worker 的能力（浏览器里跑；拿不到答案 ⇒ 按"没有解压器"处理，选更保守的那条路） */
+export async function probeWorkerCapabilities(url: string = MVT_WORKER_PROBE, timeoutMs = 1500):
+  Promise<{ hasDecompressionStream: boolean; answered: boolean }> {
+  try {
+    const W = (globalThis as { Worker?: new (u: string) => Worker }).Worker;
+    if (typeof W !== "function") return { hasDecompressionStream: false, answered: false };
+    const w = new W(url);
+    const answer = await new Promise<{ hasDecompressionStream: boolean } | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), timeoutMs);
+      w.onmessage = (e: MessageEvent) => { clearTimeout(timer); resolve(e.data as { hasDecompressionStream: boolean }); };
+      w.onerror = () => { clearTimeout(timer); resolve(null); };
+    });
+    try { w.terminate(); } catch { /* 已关就忽略 */ }
+    return answer ? { hasDecompressionStream: !!answer.hasDecompressionStream, answered: true } : { hasDecompressionStream: false, answered: false };
+  } catch {
+    return { hasDecompressionStream: false, answered: false };
+  }
+}
+
 export interface MvtRuntime {
   tiles: MvtTiles;
   idTable: ReturnType<typeof import("./wsMvtIdTable").createMvtIdTable>;
   enabled: boolean;
   registeredAt: number;
+  /** 运行期选出来的路（协议 / 普通 URL） */
+  mode: MvtMode;
+  /** 宿主该用的瓦片模板（跟着 `mode` 走） */
+  template: string;
 }
 let RUNTIME: MvtRuntime | null = null;
 
@@ -167,22 +234,35 @@ export async function setupMvtProtocol(
   if (!mvtEnabled()) return null;
   if (RUNTIME) return RUNTIME;
   const { createMvtIdTable } = await import("./wsMvtIdTable");
-  const tiles = createMvtTiles({ workerScriptUrl: opts.workerScriptUrl === undefined ? MVT_WORKER_SCRIPT : opts.workerScriptUrl });
   const idTable = opts.idTable || createMvtIdTable({ maxTiles: 64 });
-  try { await tiles.register(ml as { addProtocol?: unknown; importScriptInWorkers?: unknown }); }
-  catch (e) {
-    (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = { enabled: true, error: String((e as Error)?.message || e), tiles: tiles.facts() };
-    return null;
+  const tiles = createMvtTiles({ workerScriptUrl: opts.workerScriptUrl === undefined ? MVT_WORKER_SCRIPT : opts.workerScriptUrl, idTable });
+  /* **运行期自适应**：先问 worker 有没有解压器 —— 没有就不注册协议、直接走普通 URL 源，并计数。
+     拿不到答案（探针超时/无 Worker）⇒ 也按"没有"处理（选更保守、在两个发货口径下都能落地的那条）。 */
+  const cap = await probeWorkerCapabilities();
+  const mode: MvtMode = cap.hasDecompressionStream ? "protocol" : "plain";
+  if (mode === "protocol") {
+    try { await tiles.register(ml as { addProtocol?: unknown; importScriptInWorkers?: unknown }); }
+    catch (e) {
+      (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = { enabled: true, error: String((e as Error)?.message || e), tiles: tiles.facts() };
+      return null;
+    }
+  } else {
+    (tiles as { noteFallbackPlain?: () => void }).noteFallbackPlain?.();
   }
-  RUNTIME = { tiles, idTable, enabled: true, registeredAt: Date.now() };
+  const template = mode === "protocol" ? (opts.template || MVT_TILE_TEMPLATE) : MVT_PLAIN_TEMPLATE;
+  RUNTIME = { tiles, idTable, enabled: true, registeredAt: Date.now(), mode, template };
   (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = {
-    enabled: true, template: opts.template || MVT_TILE_TEMPLATE,
-    tiles: tiles.facts(), ids: idTable.facts(),
+    enabled: true, mode, template, probe: cap, tiles: tiles.facts(), ids: idTable.facts(),
   };
   return RUNTIME;
 }
 
-/** 给宿主用：`?mvt=1` 时返回瓦片模板，否则 `null`（关掉那条路**一字节都不碰**） */
+/** 给宿主用：`?mvt=1` 时返回**本次运行期选出来**的瓦片模板，否则 `null`（关掉那条路**一字节都不碰**） */
 export function mvtTemplateForHost(): string | null {
-  return mvtEnabled() && RUNTIME ? (RUNTIME.enabled ? MVT_TILE_TEMPLATE : null) : null;
+  return mvtEnabled() && RUNTIME && RUNTIME.enabled ? RUNTIME.template : null;
+}
+
+/** 运行期选路的结果（HUD/探针读；`mode === "plain"` 说明 worker 没有解压器、已自动回落） */
+export function mvtMode(): MvtMode | null {
+  return RUNTIME ? RUNTIME.mode : null;
 }

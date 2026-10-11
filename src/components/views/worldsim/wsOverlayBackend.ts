@@ -260,6 +260,13 @@ export function createOverlayBackend(): WsRenderBackend {
   const alignOn = alignProbeWanted();
   let alignCorner: [number, number] | null = null;
   const alignErrs: number[] = [];
+  /** 逐帧 `(离画布中心多少像素, 误差)` —— 用来分清"误差∝距离(比例差)"与"误差≈常数(整体偏移)" */
+  const alignPairs: Array<{ d: number; e: number }> = [];
+  /** 屏外 / 相机背后 / 投不出来的样本：**单独计数、不进 cur·med·max** */
+  let alignOffScreen = 0;
+  /** 地图中心那一点的两边投影差（**基准点**：不为 0 就说明相机/画布基准有问题，不是尺度） */
+  let alignCenterErr: number | null = null;
+  let alignRaw: Array<{ mx: number; my: number; ox: number; oy: number; d: number; e: number }> = [];
   let alignMax = 0;
   let alignCur = 0;
   let alignReports = 0;
@@ -353,21 +360,73 @@ export function createOverlayBackend(): WsRenderBackend {
     }
   }
 
-  /** 当前那一帧的像素差（地图当下 vs 叠加层上次画出去那一帧） */
+  /**
+   * 当前那一帧的像素差（地图当下 vs 叠加层上次画出去那一帧）。
+   *
+   * 🔴 2026-10-11 改（真机那 8 条回传暴露的问题）：原来**什么点都计**，而目标角可能早就跑到
+   * 屏幕外 1.1 km（真机 `center.lat` 与 `corner.lat` 差 0.0102°），在高俯仰下两套投影只要略有
+   * 差异就会被放大成几百像素 ⇒ `cur/med/max` 全被"远点在俯视下的放大"主导，没有意义。
+   * 现在：**只统计落在画布内（留边距）的点**；屏外/相机背后/投不出来的**单独计数**（`offScreen`），
+   * 不进 cur·med·max。同时记 `dPx`（离画布中心多少像素）与中心基准点误差。
+   */
   function alignSample(): void {
     if (!alignOn || !alignCorner || !map) return;
-    const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+    const m = map as unknown as {
+      project?: (c: [number, number]) => { x: number; y: number };
+      getCenter?: () => { lat: number; lng: number };
+    } | null;
+    const { w, h } = sizeOf();
+    /* 基准点：地图中心那一点。它必须 ≈0 —— 不为 0 说明相机/画布基准不对，与"尺度/远近"无关。 */
+    try {
+      const c = m?.getCenter?.();
+      if (c) {
+        const a0 = m?.project?.([c.lng, c.lat]);
+        const b0 = this_projectFromLastDraw(c.lng, c.lat);
+        if (a0 && b0) alignCenterErr = Math.hypot(a0.x - b0[0], a0.y - b0[1]);
+      }
+    } catch {
+      /* 基准点量不到就先不算（不影响屏内点那一组） */
+    }
     const a = m?.project?.(alignCorner);
     const b = this_projectFromLastDraw(alignCorner[0], alignCorner[1]);
-    if (!a || !b) return;
-    const d = Math.hypot(a.x - b[0], a.y - b[1]);
-    alignCur = d;
-    alignErrs.push(d);
+    const cx = w / 2;
+    const cy = h / 2;
+    const inView = (x: number, y: number): boolean => x >= 8 && x <= w - 8 && y >= 8 && y <= h - 8;
+    if (!a || !b) {
+      alignOffScreen++;
+      return;
+    }
+    if (!inView(a.x, a.y) || !inView(b[0], b[1])) {
+      /* 地图那侧或叠加层那侧把这个点投到屏外/背后 ⇒ 排除（两边都得在屏内才有可比性） */
+      alignOffScreen++;
+      return;
+    }
+    const e = Math.hypot(a.x - b[0], a.y - b[1]);
+    const dPx = Math.hypot(a.x - cx, a.y - cy);
+    alignCur = e;
+    alignErrs.push(e);
+    alignPairs.push({ d: dPx, e });
     if (alignErrs.length > 240) alignErrs.shift();
-    if (d > alignMax) alignMax = d;
+    if (alignPairs.length > 240) alignPairs.shift();
+    if (e > alignMax) alignMax = e;
+    if (alignRaw.length < 3) alignRaw.push({ mx: Number(a.x.toFixed(2)), my: Number(a.y.toFixed(2)), ox: Number(b[0].toFixed(2)), oy: Number(b[1].toFixed(2)), d: Number(dPx.toFixed(2)), e: Number(e.toFixed(2)) });
     alignBadgePaint();
     const now = performance.now();
     if (now - alignLastReportAt > 2000) alignFlush("moving");
+  }
+
+  /** 最小二乘拟合 `err ≈ a + b·dPx`：`a` 大 = 整体偏移；`b` 大 = 比例/尺度差 */
+  function alignFit(): { a: number; b: number; n: number } | null {
+    const ps = alignPairs;
+    if (ps.length < 4) return null;
+    let sx = 0; let sy = 0; let sxx = 0; let sxy = 0;
+    for (const p of ps) { sx += p.d; sy += p.e; sxx += p.d * p.d; sxy += p.d * p.e; }
+    const n = ps.length;
+    const den = n * sxx - sx * sx;
+    if (Math.abs(den) < 1e-9) return null;
+    const b = (n * sxy - sx * sy) / den;
+    const a = (sy - b * sx) / n;
+    return { a: Number(a.toFixed(3)), b: Number(b.toFixed(4)), n };
   }
 
   /** 回传一条（`moveend` 必发；其余按 2 秒节流） */
@@ -408,6 +467,11 @@ export function createOverlayBackend(): WsRenderBackend {
       max: Number(alignMax.toFixed(3)),
       med: med === null ? null : Number(med.toFixed(3)),
       n: alignErrs.length,
+      /* 🆕 屏外计数（**不进 cur·med·max**）+ 中心基准点 + (dPx,err) 拟合 + 至少 3 组原始屏幕坐标 */
+      offScreen: alignOffScreen,
+      centerErr: alignCenterErr === null ? null : Number(alignCenterErr.toFixed(3)),
+      fit: alignFit(),
+      raw: alignRaw.slice(-3),
       reports: alignReports,
       center: m?.getCenter?.() ?? null,
       zoom: m?.getZoom?.() ?? null,
@@ -432,7 +496,11 @@ export function createOverlayBackend(): WsRenderBackend {
       }
       const sorted = [...alignErrs].sort((x, y) => x - y);
       const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
-      alignBadge.textContent = `align: cur ${alignCur.toFixed(2)} / max ${alignMax.toFixed(2)} / med ${med.toFixed(2)} px · n=${alignErrs.length} · 报 ${alignReports}`;
+      const f = alignFit();
+      alignBadge.textContent = `align: cur ${alignCur.toFixed(2)} / max ${alignMax.toFixed(2)} / med ${med.toFixed(2)} px`
+        + ` · 中心 ${alignCenterErr === null ? "?" : alignCenterErr.toFixed(2)}`
+        + ` · 拟合 a=${f ? f.a : "?"} b=${f ? f.b : "?"}`
+        + ` · 屏外 ${alignOffScreen} · n=${alignErrs.length} · 报 ${alignReports}`;
     } catch {
       /* 徽标画不出来不影响量具 */
     }

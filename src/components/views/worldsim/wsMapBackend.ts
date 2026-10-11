@@ -303,6 +303,18 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
       }
     },
 
+    /** **屏幕像素 → 经纬度**（真地图的 `unproject()`；纯数学，不需要 GL）—— §1.3 表要用它取"屏内目标点" */
+    unproject(p: [number, number]): [number, number] | null {
+      const m = map as unknown as { unproject?: (q: [number, number]) => { lng: number; lat: number } } | null;
+      if (!m?.unproject) return null;
+      try {
+        const ll = m.unproject([Number(p[0]), Number(p[1])]);
+        return Number.isFinite(ll?.lng) && Number.isFinite(ll?.lat) ? [ll.lng, ll.lat] : null;
+      } catch {
+        return null;
+      }
+    },
+
     /**
      * **图层清单**（只读）：`bld*` 那几层的 `visibility` —— "地图自己那套楼"现在显不显示。
      *

@@ -26,6 +26,7 @@
 
 import { computed, ref, type ComputedRef, type Ref } from "vue";
 import { metersBetween } from "./wsFeatureStore";
+import { FOV_Y, M_PER_DEG, camFrameOf } from "./wsThreeCam";
 
 /** 后端 id。`map` 是默认；坏值一律回落到它（§4.4）。 */
 export type WsRenderBackendId = "map" | "three" | "overlay";
@@ -598,6 +599,73 @@ if (typeof window !== "undefined") {
      * （`camera.project()`）。两条都**不需要 GL**（纯数学）⇒ 本机也能量"楼与底图对不对得齐"。
      * 谁没在台上就返回 `null`（如实，不编）。
      */
+    /** 屏幕像素 → 经纬度（真地图的 `unproject`；§1.3 表用它取"屏内目标点"） */
+    mapUnproject: (x: number, y: number) => {
+      try {
+        const b = mapBackendNow() as unknown as { unproject?: (q: [number, number]) => [number, number] | null } | null;
+        return b?.unproject ? b.unproject([Number(x), Number(y)]) : null;
+      } catch {
+        return null;
+      }
+    },
+    /**
+     * **§1.3 表用**：让地图相机换一组 `{pitch, bearing, zoom}`（其余保持）——
+     * 探针要扫"误差 vs 俯仰"，而 App 的俯仰没有 URL 入口。
+     */
+    mapApplyViewJson: (patchJson: string) => {
+      try {
+        const b = mapBackendNow() as unknown as { applyView?: (s: WsRenderState) => void; readView?: () => WsRenderState | null } | null;
+        const cur = b?.readView?.();
+        if (!b?.applyView || !cur) return "null";
+        const patch = JSON.parse(String(patchJson || "{}")) as Partial<WsRenderState>;
+        b.applyView({ ...cur, ...patch });
+        return JSON.stringify(b.readView?.() ?? null);
+      } catch {
+        return "null";
+      }
+    },
+    /**
+     * **§1.3 表用**：用**我们的模型**（`wsThreeCam` 的相机 + 针孔投影，纯数学）把某个经纬度
+     * 投成屏幕像素 —— 不需要 GL、不需要上下文，也不要求叠加层活着。
+     * 与叠加层相机走的是**同一套模型**（同一个 `camFrameOf`），所以拿它与真地图的
+     * `map.project()` 比，量的就是"两套投影差多少像素"。
+     */
+    overlayPixelFromState: (lng: number, lat: number) => {
+      try {
+        const b = mapBackendNow() as unknown as { readView?: () => WsRenderState | null } | null;
+        const s = b?.readView?.();
+        if (!s) return null;
+        const doc = typeof document !== "undefined" ? document : null;
+        const el = doc?.querySelector?.(".ws-sceneview") as HTMLElement | null;
+        const rect = el?.getBoundingClientRect?.();
+        const w = Math.max(1, Math.round(rect?.width || 0));
+        const h = Math.max(1, Math.round(rect?.height || 0));
+        const radius = saneRadius(s.radius);
+        const cos0 = Math.cos((s.center.lat * Math.PI) / 180);
+        const x = (Number(lng) - s.center.lng) * M_PER_DEG * cos0;
+        const z = (s.center.lat - Number(lat)) * M_PER_DEG;
+        const fr = camFrameOf(x, z, radius, s.bearing, s.pitch);
+        /* 世界 → 相机：基的转置（x/y/z 轴都是单位正交） */
+        const px = fr.pos[0];
+        const py = fr.pos[1];
+        const pz = fr.pos[2];
+        const rx = x - px;
+        const ry = 0 - py;
+        const rz = z - pz;
+        const cxA = rx * fr.xAxis[0] + ry * fr.xAxis[1] + rz * fr.xAxis[2];
+        const cyA = rx * fr.yAxis[0] + ry * fr.yAxis[1] + rz * fr.yAxis[2];
+        const czA = rx * fr.zAxis[0] + ry * fr.zAxis[1] + rz * fr.zAxis[2];
+        const depth = -czA; // 相机看向 -Z
+        if (!(depth > 1e-6)) return null;
+        const tanHalf = Math.tan(FOV_Y / 2);
+        const aspect = w / h;
+        const ndcX = cxA / depth / (tanHalf * aspect);
+        const ndcY = cyA / depth / tanHalf;
+        return [((ndcX + 1) / 2) * w, ((1 - ndcY) / 2) * h];
+      } catch {
+        return null;
+      }
+    },
     /** 口径对拍：地图自己的米每像素 vs 我们的（比值必须 1.00） */
     mapScaleJson: () => {
       try {

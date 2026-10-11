@@ -38,7 +38,7 @@
 LingChat 的个人实验分支：想给聊天加一层「世界」，让角色不只在聊天框里，还能在一张**真实的地图**上活动喵。
 
 - 官方项目：**[SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)**（想玩官方的去这里）
-- 本仓库在改的分支：[`feat/worldsim`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
+- 本仓库在改的分支：[`dev`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/dev)
 - 进度都记在：**[issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)**
 
 ## 改了什么

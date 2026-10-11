@@ -405,6 +405,11 @@ export interface WsCanvasInfo {
   /** 在舞台（`.ws-sceneview`）里 = 后端画布；在外面的另有用户 */
   inStage: boolean;
   /**
+   * 这个画布**接不接输入**（`pointer-events` 的计算值）。
+   * 叠加层那条路的判据用它："两块画布，但**只有一块接输入**"（那一块是地图）。
+   */
+  pe: string;
+  /**
    * `'webgl2'` / `'webgl'` / `'2d'` / `'none'` / `'?'`（没查）。
    *
    * **默认不查**（`'?'`）：`getContext` 这个调用本身会**给还没有上下文的画布建一个上下文**，
@@ -439,6 +444,14 @@ export function canvasInfo(doc: Document = document, probeGl = false): WsCanvasI
       id: cv.id || "",
       parent: String((cv.parentElement && cv.parentElement.className) || "").slice(0, 60),
       inStage: !!(cv.closest && cv.closest(".ws-sceneview")),
+      pe: (() => {
+        try {
+          const w = cv.ownerDocument?.defaultView || window;
+          return String(w.getComputedStyle(cv).pointerEvents || "");
+        } catch {
+          return "?";
+        }
+      })(),
       gl,
     };
   };
@@ -500,6 +513,15 @@ export function countCanvases(doc: Document = document): number {
   return n;
 }
 
+/** 地图后端（舞台登记；只给 §1.3 的像素对拍用） */
+let mapBackendRef: unknown = null;
+export function setMapBackendRef(b: unknown): void {
+  mapBackendRef = b;
+}
+export function mapBackendNow(): unknown {
+  return mapBackendRef;
+}
+
 /** 舞台上那个后端（舞台在挂载/卸载时写它；只给探针与 stats 用） */
 let liveBackend: WsRenderBackend | null = null;
 export function setLiveBackend(b: WsRenderBackend | null): void {
@@ -555,6 +577,28 @@ if (typeof window !== "undefined") {
     /** canvas 的 GL 体检（**显式调用**：它会给没上下文的画布建上下文，别在轮询里调） */
     canvasGlJson: () => JSON.stringify(canvasInfo(document, true)),
     diagJson: () => JSON.stringify(probeBackendDiag()),
+    /**
+     * **§1.3 像素对拍**用的两个投影：地图侧（真 MapLibre 的 `project()`）与叠加层侧
+     * （`camera.project()`）。两条都**不需要 GL**（纯数学）⇒ 本机也能量"楼与底图对不对得齐"。
+     * 谁没在台上就返回 `null`（如实，不编）。
+     */
+    mapProject: (lng: number, lat: number) => {
+      try {
+        const b = mapBackendNow() as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
+        const p = b?.project?.([Number(lng), Number(lat)]);
+        return p ? [p.x, p.y] : null;
+      } catch {
+        return null;
+      }
+    },
+    overlayProject: (lng: number, lat: number) => {
+      try {
+        const b = liveBackend as unknown as { projectLngLat?: (a: number, c: number) => [number, number] | null } | null;
+        return b?.projectLngLat ? b.projectLngLat(Number(lng), Number(lat)) : null;
+      } catch {
+        return null;
+      }
+    },
     /** 舞台上那份"世界数据"的 JSON（靶场探针的夹具来源；拿不到就是 `null`）。
      *  返回的是 **Promise**：`captureWorld` 要等 `getData`。探针那边必须用
      *  WebDriver 的 `execute/async` 取 —— 写成同步 `JSON.stringify(promise)` 只会得到

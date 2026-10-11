@@ -143,6 +143,7 @@
     rendererLive,
     rendererPref,
     setLiveBackend,
+    setMapBackendRef,
     type WsRenderBackend,
     type WsRenderBackendId,
     type WsRenderState,
@@ -420,6 +421,7 @@
       const mb = createRenderBackend("map") as MapBound;
       await mb.init(rootEl.value || document.body, seed ?? fallbackView(), null);
       mapBackend = mb;
+      setMapBackendRef(mb);          // §1.3 像素对拍要拿真地图的 `project()`
       if (!active) {
         active = mb;
         setLiveBackend(mb);

@@ -269,6 +269,20 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
     },
 
     /**
+     * **经纬度 → 屏幕像素**（真地图的 `project()`；纯数学，不需要 GL）。
+     * §1.3 那条"同楼四角 ≤1.5 px"的对拍要拿它与叠加层那边的 `camera.project()` 比。
+     */
+    project(c: [number, number]): { x: number; y: number } | null {
+      if (!map?.project) return null;
+      try {
+        const p = map.project([Number(c[0]), Number(c[1])]);
+        return Number.isFinite(p?.x) && Number.isFinite(p?.y) ? { x: p.x, y: p.y } : null;
+      } catch {
+        return null;
+      }
+    },
+
+    /**
      * 屏幕正中那栋楼 = `queryRenderedFeatures` 在正中那一圈里**第一个命中的 `bld-*` 要素**。
      * 用渲染器的命中而不是自己算几何 ⇒ 这条判据是**真的在问地图"你画的是哪栋"**。
      */

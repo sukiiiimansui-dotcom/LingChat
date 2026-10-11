@@ -391,6 +391,25 @@ export function createOverlayBackend(): WsRenderBackend {
       state = "destroyed";
     },
 
+    /**
+     * **局部经纬度 → 屏幕像素**（§1.3 那条"同楼四角 ≤1.5 px"的判据要用它）。
+     *
+     * 为什么要有：叠加层的楼与 2D 底图必须**对得齐**，而"看着齐"不算判据 —— 得拿同一栋楼的
+     * 同一个角，在地图那边 `map.project()` 与这边 `camera.project()` 各算一遍、比像素。
+     * 这里投的是**地面点（y=0）**：底图上那个经纬度就在地面上。
+     */
+    projectLngLat(lng: number, lat: number): [number, number] | null {
+      if (!THREE || !camera) return null;
+      try {
+        const { w, h } = sizeOf();
+        const [x, z] = toLocal(Number(lng), Number(lat));
+        const v = new THREE.Vector3(x, 0, z).project(camera);
+        return [((v.x + 1) / 2) * w, ((1 - v.y) / 2) * h];
+      } catch {
+        return null;
+      }
+    },
+
     stats(): WsRenderStats {
       const st = data?.stats;
       return {

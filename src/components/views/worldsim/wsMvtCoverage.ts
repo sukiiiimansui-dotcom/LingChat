@@ -113,7 +113,12 @@ export function createCoverageRegistrar(deps: CoverageDeps) {
   function urlOf(key: string): string {
     const t = deps.template.replace(/^mvt:\/\//, "/");
     const [z, x, y] = key.split("/");
-    return t.replace("{z}", z).replace("{x}", x).replace("{y}", y.replace(/\..*$/, "") + (t.endsWith(".pbf") ? ".pbf" : ""));
+    /* ⚠️ 模板里 `{y}` **后面已经带 `.pbf`** 了 ⇒ 这里只替换占位符本身。
+       第一版写成"给 y 再补一个 .pbf" ⇒ 请求变成 `…/27129.pbf.pbf` ⇒ **全 404、登记恒 0**
+       （本机自检没抓到，因为注入 fetch 用的正则太宽；是 **App 页探针**用资源名抓出来的）。 */
+    let u = t.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+    if (!/\.pbf(\?|$)/.test(u)) u += ".pbf";
+    return u;
   }
 
   async function registerOne(key: string): Promise<boolean> {

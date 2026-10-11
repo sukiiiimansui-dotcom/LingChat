@@ -529,10 +529,14 @@
         pendingView = view;
         setLiveBackend(null);
         active = null;
-        /* 旧的 map 后端必须丢掉：它手里那个 MapLibre 实例**已经被 `map.remove` 了**
-           （切到 three 时组件卸载），留着它 `readView()` 读的是个死实例。
-           `dropMapBackend()` 之后下面那句会建一个**干净**的、并且带着交接视野的新后端。 */
-        dropMapBackend();
+        /* 🔴 只有"地图组件被卸载过"（切到 `three` 那条路）才需要丢掉旧后端重来：
+           那时它手里的 MapLibre 实例**已经被 `map.remove` 了**，留着 `readView()` 读的是死实例。
+           ⚠️ 叠加层失败时地图**一直在台上**（模板里 `showMap || showOverlay` 都渲染它、
+           我们也没 pause 过它）⇒ 旧后端仍然有效；此时丢掉它，下面那句会建一个新的，
+           而新的要等一次**永远不会再来的** `scene-ready`（组件已经挂着了）⇒ 地图后端永远
+           不 bind、`stats.rendering` 恒 false（2026-10-11 真页面探针实测到的那条红：
+           "切回 map 成功"超时 150 s，live 是 map 但 stats 是 null）。 */
+        if (next === "three") dropMapBackend();
       }
       /* 2026-10-08：**当场**把 map 后端重新建起来，并把交接的那一眼交代给它。
          为什么不等 `scene-ready`：地图是异步才绑上来的，中间这段时间 `liveBackend` 是 null

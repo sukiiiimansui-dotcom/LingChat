@@ -175,6 +175,9 @@ export interface StageStats {
   /** **兜底恢复**那一行（2026-10-11）：补了几次 / 最后一次耗时 / 为什么补 / 健康判定几次。
    *  可选：老宿主不写 ⇒ 不显示（HUD 只在有值时摆出来）。 */
   bldHeal?: string;
+  /** **样式/上下文死亡看门狗**那一行（2026-10-11）：恢复了几次 / 最后一次耗时 / 原因。
+   *  可选：老宿主不写 ⇒ 不显示。 */
+  styleWatch?: string;
   roadsBundle: string;
   bldVerdict: string;
   roadsVerdict: string;

@@ -311,6 +311,8 @@
   import { createBldLanding } from "./wsBldLanding";
   /* 只读探针出口用（见下面"只读探针出口"那一段）——尺子本体在共享真源 `wsPerfMeter` */
   import { pmSnapshot } from "./wsPerfMeter";
+  /* 样式/上下文死亡看门狗（见下面"样式/上下文死亡看门狗"那一段） */
+  import { createStyleWatch } from "./wsStyleWatch";
   /* 重构：**交互命中**（钉子 / 吸附 / 锚点 / AI 示意层 / 信息卡点选）
      整块搬到了 `wsPickInteract.ts`（装配点在 `panel` 之后那一处，理由在模块文件头）。
      宿主里**空出来的 import**（`useWsPanel` 等）按 §3 第 5 条一行都不删，清理归 S9。 */
@@ -965,6 +967,16 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    *  `getSource` / `getLayer` 两次只读调用（零分配），而"早 2 秒补回来"与"晚 2 秒"观感一样。 */
   const HEAL_WATCHDOG_MS = 2000;
   let healTimer = 0;
+  /** **样式/上下文死亡看门狗**（2026-10-11）：真机上"丢了上下文但**没有 restored 事件**"那条主症状
+   *  （`~/chk/wslog/phone1.jsonl`：68 秒没有任何恢复事件，样式一直死着）——`bldHeal` 管不了它
+   *  （样式没就绪时它**故意**早退），引擎守卫的恢复轮询又只在掉进 2D 之后才跑 ⇒ 活着的 WebGL 路没人看。
+   *  周期 1s（纯读）· **连续**死够 5s 才动作（防抖）· 动作走既有 `fallback2d` 并写可见原因。 */
+  const STYLE_WATCH_MS = 1000;
+  const STYLE_DEAD_MS = 5000;
+  const STYLE_WATCH_OFF = (() => {
+    try { return /[?&]stylewatch=0\b/.test(location.search); } catch { return false; }
+  })();
+  let styleWatchTimer = 0;
   /** 「放大才取楼」的去抖定时器（moveend 里用；卸载时要清） */
   let bldTimer = 0;
   /** 名字层在 `zoomend` 之后的去抖（缩放会改变避让结果与区名模式，必须重排一次；卸载时要清） */
@@ -2393,6 +2405,36 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       healTimer = window.setInterval(() => healWhy("watchdog"), HEAL_WATCHDOG_MS);
     }
 
+    /* ══ **样式/上下文死亡看门狗**（2026-10-11）══════════════════════════════════════════
+       与上面 `bldHeal` 的分工（写清楚，免得两套兜底打架）：
+         · `bldHeal`：**样式活着**、`bld` 源或挤出层缺 ⇒ 先补缺层、再走既有落图通路；
+         · 本条：**样式本身死了**（`isStyleLoaded()===false` 或 `getStyle()` 空）且**连续** ≥5s ⇒ 交给既有降级路。
+       两者互斥（样式死了的时候 `bldHeal` 本来就早退）⇒ 不会同时动作。
+       `?stylewatch=0` 时**整段不装**（那份代码路径逐字节不变）。 */
+    if (!STYLE_WATCH_OFF) {
+      const sw = createStyleWatch({
+        deadMs: STYLE_DEAD_MS,
+        isDead: () => {
+          if (renderKind.value !== "webgl" || !m) return false;   /* 只盯活着的 WebGL 路 */
+          try {
+            const loaded = typeof m.isStyleLoaded === "function" ? m.isStyleLoaded() : true;
+            const st = typeof m.getStyle === "function" ? m.getStyle() : null;
+            return !loaded || !st;
+          } catch { return false; }   /* 判据读不出来 ⇒ 不当作死（宁可漏，不误判） */
+        },
+        onDead: (why) => {
+          try {
+            fallbackWhy.value = why;                                  /* 可见原因（面板/样式 JSON 共用那一格） */
+            fallback2d("style-dead", fc, why, "temp", m);             /* 既有降级通路：临时类，可恢复 */
+            const f = sw.facts();
+            stats.styleWatch = "🕰 样式死亡恢复 " + f.fires + " 次（最后 " + (f.lastFireMs === null ? "?" : f.lastFireMs + "ms") + " · " + why + "）";
+            try { scheduleBundleHud(); } catch { /* HUD 失败不影响恢复 */ }
+          } catch { /* 恢复动作失败不许把看门狗弄死 */ }
+        },
+      });
+      styleWatchTimer = window.setInterval(() => { try { sw.tick(); } catch { /* 忽略 */ } }, STYLE_WATCH_MS);
+    }
+
     /* ⑤ movestart / move / click → wsStageEvents.registerCameraMotion */
     registerCameraMotion(m);
 
@@ -2421,6 +2463,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     stopTimer();
     if (bldTimer) window.clearTimeout(bldTimer);
     if (healTimer) window.clearInterval(healTimer);   /* 兜底恢复看门狗（2026-10-11） */
+    if (styleWatchTimer) window.clearInterval(styleWatchTimer);   /* 样式死亡看门狗（2026-10-11） */
     if (zoomNameTimer) window.clearTimeout(zoomNameTimer);
     /* S5（：换批 / 进场淡入 / 退场幽灵 / 传送帧举旗摘旗那**五个**定时器与两帧句柄
        都是 `wsNameHost.ts` 私有的 `let` ⇒ 经这个出口一次清掉（函数体里那五条判据与顺序

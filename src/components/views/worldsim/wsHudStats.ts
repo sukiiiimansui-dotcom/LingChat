@@ -124,6 +124,9 @@ export function createHudStats(ctx: HudStatsCtx) {
     facNote: "", 
     /** 低档的原因（被**实际渲染路**压下来的，见 `wsPerf.forceLowTier`）。空串 = 没被压 */
     perf: "",
+    /** **样式/上下文死亡看门狗**那一行（2026-10-11；`WsDistrictMapLibre` 写）：恢复几次 / 最后耗时 / 原因。
+     *  空串 = 没动作过（**不是**"没装" —— 装没装看 `?stylewatch`）。 */
+    styleWatch: "",
   });
   /* 形体档写进 stats：探针/HUD 要能读出"这一屏是默认档还是拆件档"（回证） */
   stats.bldMode = WS_BLD_MODE;

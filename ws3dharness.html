@@ -279,6 +279,62 @@
             dgp?.colorPick || null);
         }
 
+        /* ── ⑤c 手势：**合成 pointer/wheel 事件**，断言"相机真的跟着动" ──
+           为什么在靶场做：真页面那条路在本机走不到（MapLibre 一渲染就把 GL 弄死，见文件头）。
+           判据 = 事件前后 `readView()` 的差：拖了就是 center 变了、滚轮就是 radius 变了、
+           双指扭转就是 bearing 变了；而且**契约里读到的必须是变完之后那一份**（相机 → 契约那一半）。 */
+        const canvas = stage.querySelector("canvas");
+        const view0 = b.readView ? b.readView() : null;
+        const fire = (type, Ctor, opts) => {
+          const r = canvas.getBoundingClientRect();
+          const ev = new Ctor(type, Object.assign({
+            bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: "touch",
+            isPrimary: true, buttons: 1, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+          }, opts || {}));
+          canvas.dispatchEvent(ev);
+        };
+        const sees = [];
+        b.setViewListener && b.setViewListener((s) => sees.push(s));
+        b.applyView({ ...state, radius: state.radius, pitch: state.pitch, bearing: state.bearing });
+        await sleep(120);
+        const vBefore = b.readView();
+        /* 单指拖 120px */
+        fire("pointerdown", PointerEvent, { clientX: 400, clientY: 300 });
+        fire("pointermove", PointerEvent, { clientX: 520, clientY: 300 });
+        fire("pointerup", PointerEvent, { clientX: 520, clientY: 300, buttons: 0 });
+        await sleep(120);
+        const vPan = b.readView();
+        /* 滚轮 */
+        canvas.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -240, clientX: 400, clientY: 300 }));
+        await sleep(120);
+        const vZoom = b.readView();
+        /* 双指：两指分开 + 扭转 */
+        fire("pointerdown", PointerEvent, { pointerId: 1, clientX: 380, clientY: 300 });
+        fire("pointerdown", PointerEvent, { pointerId: 2, clientX: 460, clientY: 300 });
+        fire("pointermove", PointerEvent, { pointerId: 2, clientX: 500, clientY: 380 });
+        fire("pointerup", PointerEvent, { pointerId: 1, clientX: 380, clientY: 300, buttons: 0 });
+        fire("pointerup", PointerEvent, { pointerId: 2, clientX: 500, clientY: 380, buttons: 0 });
+        await sleep(120);
+        const vPinch = b.readView();
+        raw.gesture = {
+          canvas: canvas ? { w: canvas.clientWidth, h: canvas.clientHeight, touchAction: getComputedStyle(canvas).touchAction } : null,
+          before: vBefore ? { c: vBefore.center, r: vBefore.radius, b: vBefore.bearing, p: vBefore.pitch } : null,
+          afterPan: vPan ? { c: vPan.center, r: vPan.radius, b: vPan.bearing, p: vPan.pitch } : null,
+          afterZoom: vZoom ? { r: vZoom.radius } : null,
+          afterPinch: vPinch ? { r: vPinch.radius, b: vPinch.bearing, p: vPinch.pitch } : null,
+          listenerCalls: sees.length,
+        };
+        const panM = vBefore && vPan ? metersBetweenCenters(vBefore.center, vPan.center) : 0;
+        info(`手势读数：拖 120px ⇒ center 挪 ${panM.toFixed(2)} m / ${vBefore?.radius?.toFixed(1)}→${vPan?.radius?.toFixed(1)} m · 滚轮 ⇒ radius ${vPan?.radius?.toFixed(1)}→${vZoom?.radius?.toFixed(1)} m · 双指 ⇒ bearing ${vZoom?.bearing?.toFixed(2)}→${vPinch?.bearing?.toFixed(2)}° / radius ${vPinch?.radius?.toFixed(1)} m`);
+        check("**拖得动**：单指拖 120px ⇒ center 真的挪了（>1 m）", panM > 1, { meters: Number(panM.toFixed(3)) });
+        check("**缩得动**：滚轮 ⇒ radius 变小（放大）", !!vZoom && vZoom.radius < (vPan?.radius ?? 0) * 0.99, {
+          before: vPan?.radius, after: vZoom?.radius,
+        });
+        check("**双指**：捏合 + 扭转 ⇒ radius 与 bearing 都跟着变", !!vPinch && vPinch.bearing !== vZoom?.bearing && vPinch.radius !== vZoom?.radius, {
+          bearing: [vZoom?.bearing, vPinch?.bearing], radius: [vZoom?.radius, vPinch?.radius],
+        });
+        check("相机变完**契约里读到的就是新那一份**（后端叫了 viewListener）", sees.length >= 2 && !!vPinch, { calls: sees.length });
+
         /* ── ⑥ 暂停 / 销毁：画布与上下文都要放掉 ── */
         b.pause();
         await sleep(300);

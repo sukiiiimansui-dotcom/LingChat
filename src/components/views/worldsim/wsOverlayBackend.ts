@@ -218,6 +218,9 @@ export function createOverlayBackend(): WsRenderBackend {
     bldMesh = new THREE.Mesh(g, mat);
     bldMesh.name = "ws-overlay-buildings";
     scene.add(bldMesh);
+    /* 数据是**后到**的（`sourcedata` / 重锚）⇒ 重建完立刻画一帧：
+       渲染是"地图画完一帧"驱动的，地图静止时不会再来 render，等它就等于这一批楼不显示。 */
+    drawOnce();
   }
 
   /** 从地图 source 里捞一份 `bld`（与 `three` 那条路同一条数据通路） */

@@ -137,6 +137,17 @@ export interface WsRenderBackend {
   setSelection(sel: WsRenderSelection | null): void;
   /** 换后端时把"这个世界"捞出来（拿不到就返回 null，**绝不编**） */
   captureWorld(): Promise<WsRenderWorld | null>;
+  /**
+   * **后端自己动了相机**（用户在它自己的画布上拖/捏/滚轮）时叫一声。
+   *
+   * 为什么需要它：两个后端各自管自己的相机，而"切回去还是同一眼"这件事只有舞台知道怎么办
+   * （把这份状态记成 `pendingView`，切回时喂给另一个后端）。没有这一声，用户在 three 里拖到
+   * 哪儿，切回地图时就会被弹回切换前那一份视野。
+   *
+   * ⚠️ 可选：`map` 那条路不需要它（地图自己的手势只有它自己知道，舞台在切换那一刻
+   * `readView()` 一次就够）。实现方不必有，调用方要判空。
+   */
+  setViewListener?(cb: ((s: WsRenderState) => void) | null): void;
   /** 停渲染（隐藏的那个必须停；RAF / 地图重绘都停） */
   pause(): void;
   resume(): void;

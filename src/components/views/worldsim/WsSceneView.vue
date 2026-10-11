@@ -470,6 +470,12 @@
         if (!host) throw new Error("3D 宿主元素没挂上（模板里缺 .ws-sceneview__three）");
         await nb.init(host, view ?? fallbackView(), world);
         if (view) nb.applyView(view);
+        /* 🔴 2026-10-11：用户在 three 里**自己拖/捏/滚轮**改了相机 ⇒ 后端叫一声，舞台把它记成
+           `pendingView`（切回地图时喂回去的那一份就是它）。没有这一句，three 里拖到哪儿、
+           切回地图都会被弹回切换前那一眼 —— "同一视野"只做了一半。 */
+        nb.setViewListener?.((s) => {
+          pendingView = s;
+        });
         nb.resume();
         active = nb;
         setLiveBackend(nb);

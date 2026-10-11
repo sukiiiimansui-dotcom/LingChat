@@ -85,6 +85,7 @@ export interface WsThreeDiag {
   buildings: number;
   /** 因为超过 `BLD_CAP` 而**没画**的栋数（0 = 全画了） */
   capped: number;
+  /** 三角形总数（= `triFeature.length`：一个三角形一个槽） */
   tris: number;
   holesDropped: number;
   withColor3d: number;
@@ -198,6 +199,17 @@ function shadeOf(nx: number, ny: number, nz: number): number {
   const d = nx * SUN_DIR[0] + ny * SUN_DIR[1] + nz * SUN_DIR[2];
   return AMBIENT_K + SUN_K * Math.max(0, d);
 }
+/** 朝向归一到 [-180,180)（与 MapLibre 同口径） */
+function normBearing(b: number): number {
+  let x = ((b + 180) % 360 + 360) % 360 - 180;
+  if (x === -180) x = 180;
+  return x;
+}
+/** 俯仰夹到 [0,70] —— 上界与地图那边 `cameraDefaults().maxPitch` 同口径 */
+function clampPitch(p: number): number {
+  return Math.max(0, Math.min(70, Number.isFinite(p) ? p : 0));
+}
+
 /** 把环坐标（可能嵌套）读成 [lng,lat] 数组 */
 function ringPts(raw: unknown): Array<[number, number]> {
   if (!Array.isArray(raw)) return [];
@@ -462,7 +474,10 @@ export function createThreeBackend(): WsRenderBackend {
             pos.push(p[0], top, p[1]);
             col.push(rgb[0], rgb[1], rgb[2]);
           }
-          triTo.push(fi, fi, fi);
+          /* 🔴 一个三角形**一个槽**（墙那边每个四边形 2 个三角形、也是 2 个槽）。
+             原来这里 push 三个 ⇒ 槽位与三角形下标错位，`centerPick` 按槽位反查就会指错/指空
+             （2026-10-11 靶场"对着某栋楼问它命中了谁"那条测出来的）。 */
+          triTo.push(fi);
         }
         /* 墙：每条边一个四边形（不做背面剔除的取舍 —— 材质用 DoubleSide，朝向错了也看得见） */
         for (let i = 0; i < pts.length; i++) {
@@ -486,7 +501,7 @@ export function createThreeBackend(): WsRenderBackend {
             pos.push(p[0]!, p[1]!, p[2]!);
             col.push(wr, wg, wb);
           }
-          triTo.push(fi, fi);
+          triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
         }
       }
       if (added) {
@@ -687,6 +702,7 @@ export function createThreeBackend(): WsRenderBackend {
       /* ignore */
     }
     window.removeEventListener("resize", onResize);
+    detachGestures();
     for (const av of avatars) {
       try {
         av.ch?.dispose?.();
@@ -721,6 +737,204 @@ export function createThreeBackend(): WsRenderBackend {
     scene = null;
     camera = null;
     host = null;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+   * 手势：输入 → 相机（"three 也能像地图一样拖"）
+   * ══════════════════════════════════════════════════════════════════════════
+   * 这一版给的是 MapLibre 那一套手感的**最小集**：
+   *   · 单指拖 / 左键拖 = **平移**（按"拖起来的那块地"算，任何俯仰角都对得上）；
+   *   · 滚轮 = **缩放**（**锚在光标下那块地**上，与地图同一种感觉）；
+   *   · 双指 = 捏合缩放 + 扭转朝向 + 竖向拖改俯仰（同一手势里一起算）；
+   *   · 右键拖 / Ctrl 拖 = 旋转 + 俯仰（桌面端那套）。
+   * 每动一下就 `cameraToView()` 反解出契约四量、并**叫一声** `viewListener`
+   * （舞台据此记下视野，切回地图时就是同一眼 —— 见 `wsRenderBackend.setViewListener`）。
+   *
+   * ⚠️ 手感参数（0.4°/px、轮子 0.0015）是**按地图那套数量级取的估计值**，真机手感只能真机判。
+   */
+  const pointers = new Map<number, { x: number; y: number }>();
+  let viewListener: ((s: WsRenderState) => void) | null = null;
+  /** 手势开始时的那一份状态（总位移法：每步都从它算，避免逐步累加漂移） */
+  let gestureBase: WsRenderState | null = null;
+  let gestureRef: { x: number; y: number; dist: number; ang: number; ground: [number, number] | null } | null = null;
+  let gestureMode: "pan" | "rotate" = "pan";
+
+  /** 屏幕像素 → 地面（局部框架里 y=0 那个平面）上的点；射线朝天/平行时给 null */
+  function groundAtPx(px: number, py: number): [number, number] | null {
+    if (!THREE || !camera) return null;
+    const { w, h } = sizeOf();
+    const tip = new THREE.Vector3(((px / w) * 2 - 1), -(((py / h) * 2 - 1)), 0.5).unproject(camera);
+    const ox = camera.position.x;
+    const oy = camera.position.y;
+    const oz = camera.position.z;
+    const dx = tip.x - ox;
+    const dy = tip.y - oy;
+    const dz = tip.z - oz;
+    if (Math.abs(dy) < 1e-9) return null;
+    const t = -oy / dy;
+    if (!(t > 0)) return null;
+    return [ox + dx * t, oz + dz * t];
+  }
+
+  /** 从相机反解出**契约状态**（与 `readView()` 同一份实现：手势那边也要用） */
+  function readViewNow(): WsRenderState | null {
+    const v = cameraToView();
+    const th = contractTheme.value;
+    if (!v) return curState;
+    return {
+      center: v.center,
+      radius: v.radius,
+      bearing: v.bearing,
+      pitch: v.pitch,
+      theme: curWorld?.themeId || th.theme,
+      timeOfDay: th.timeOfDay,
+      clock: th.clock,
+      actors: curActors.map((a) => ({ ...a })),
+      selection: curState?.selection ?? null,
+    };
+  }
+
+  /** 把"契约四量"落成相机（手势每步都走它），并叫一声 */
+  function applyGesture(next: Partial<WsRenderState>): void {
+    if (!curState) return;
+    const s: WsRenderState = { ...curState, ...next };
+    curState = s;
+    applyCameraToThree(s);
+    const out = readViewNow();
+    if (out && viewListener) viewListener(out);
+  }
+
+  function gestureRefOf(): { x: number; y: number; dist: number; ang: number; ground: [number, number] | null } {
+    const ps = Array.from(pointers.values());
+    if (ps.length >= 2) {
+      const dx = ps[1]!.x - ps[0]!.x;
+      const dy = ps[1]!.y - ps[0]!.y;
+      const cx = (ps[0]!.x + ps[1]!.x) / 2;
+      const cy = (ps[0]!.y + ps[1]!.y) / 2;
+      return { x: cx, y: cy, dist: Math.max(1, Math.hypot(dx, dy)), ang: Math.atan2(dy, dx), ground: groundAtPx(cx, cy) };
+    }
+    const p = ps[0] || { x: 0, y: 0 };
+    return { x: p.x, y: p.y, dist: 0, ang: 0, ground: groundAtPx(p.x, p.y) };
+  }
+
+  function beginGesture(mode: "pan" | "rotate"): void {
+    const v = readViewNow();
+    gestureBase = v ? { ...v, actors: v.actors.map((a) => ({ ...a })) } : null;
+    gestureRef = gestureRefOf();
+    gestureMode = mode;
+  }
+
+  function onPointerDown(e: PointerEvent): void {
+    if (state !== "running") return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try {
+      (e.currentTarget as Element | null)?.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* 抓不住也还能拖（只是快速划出画布时会丢） */
+    }
+    const rotate = e.button === 2 || e.ctrlKey || e.metaKey;
+    beginGesture(pointers.size >= 2 ? "rotate" : rotate ? "rotate" : "pan");
+    e.preventDefault?.();
+  }
+
+  function onPointerMove(e: PointerEvent): void {
+    if (state !== "running" || !pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!gestureBase || !gestureRef || !curState) return;
+    const now = gestureRefOf();
+    const base = gestureBase;
+    const two = pointers.size >= 2;
+    if (two) {
+      /* 双指：捏合 + 扭转 + 竖向拖（俯仰）+ 中点平移，一次算全 */
+      const k = gestureRef.dist / now.dist;
+      const dBearing = ((now.ang - gestureRef.ang) * 180) / Math.PI;
+      const dPitch = (gestureRef.y - now.y) * 0.4;
+      const radius = saneRadius(base.radius * k);
+      let center = base.center;
+      if (gestureRef.ground && now.ground) {
+        center = shiftCenter(base.center, gestureRef.ground[0] - now.ground[0], gestureRef.ground[1] - now.ground[1]);
+      }
+      applyGesture({ center, radius, bearing: normBearing(base.bearing + dBearing), pitch: clampPitch(base.pitch + dPitch) });
+      return;
+    }
+    if (gestureMode === "rotate") {
+      const dBearing = (now.x - gestureRef.x) * 0.4 * -1;
+      const dPitch = (gestureRef.y - now.y) * 0.4;
+      applyGesture({ bearing: normBearing(base.bearing + dBearing), pitch: clampPitch(base.pitch + dPitch) });
+      return;
+    }
+    /* 平移：按"手指按住的那块地"走 */
+    if (gestureRef.ground && now.ground) {
+      applyGesture({ center: shiftCenter(base.center, gestureRef.ground[0] - now.ground[0], gestureRef.ground[1] - now.ground[1]) });
+    }
+  }
+
+  function endPointer(e: PointerEvent): void {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pointers.size === 0) {
+      gestureBase = null;
+      gestureRef = null;
+      return;
+    }
+    /* 还剩手指 ⇒ 用剩下的重新起一手（不然会突然跳一下） */
+    beginGesture(pointers.size >= 2 ? "rotate" : "pan");
+  }
+
+  function onWheel(e: WheelEvent): void {
+    if (state !== "running" || !curState) return;
+    e.preventDefault?.();
+    const v = readViewNow();
+    if (!v) return;
+    /* 缩放锚在光标下的那块地：先记下它、缩完再把它挪回光标底下 */
+    const before = groundAtPx(e.clientX, e.clientY);
+    const k = Math.exp((e.deltaY || 0) * 0.0015);
+    const radius = saneRadius(v.radius * k);
+    const s: WsRenderState = { ...curState, radius, center: v.center };
+    curState = s;
+    applyCameraToThree(s);
+    if (before) {
+      const after = groundAtPx(e.clientX, e.clientY);
+      if (after) applyGesture({ center: shiftCenter(v.center, after[0] - before[0], after[1] - before[1]) });
+    } else {
+      applyGesture({});
+    }
+  }
+
+  /** 手挂在**自己那块画布**上（舞台里没有第二个人管输入：见文件头"这一版没有什么"） */
+  function attachGestures(canvas: HTMLCanvasElement): void {
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", endPointer);
+    canvas.addEventListener("pointercancel", endPointer);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    /* 右键拖 = 旋转/俯仰：把浏览器菜单按掉，不然一拖就弹菜单 */
+    canvas.addEventListener("contextmenu", onContextMenu);
+  }
+  function detachGestures(): void {
+    const c = renderer?.domElement as HTMLCanvasElement | undefined;
+    if (!c?.removeEventListener) return;
+    c.removeEventListener("pointerdown", onPointerDown);
+    c.removeEventListener("pointermove", onPointerMove);
+    c.removeEventListener("pointerup", endPointer);
+    c.removeEventListener("pointercancel", endPointer);
+    c.removeEventListener("wheel", onWheel);
+    c.removeEventListener("contextmenu", onContextMenu);
+    pointers.clear();
+    gestureBase = null;
+    gestureRef = null;
+  }
+  function onContextMenu(e: Event): void {
+    if (state === "running") e.preventDefault?.();
+  }
+
+  /** 局部米 → 经纬度：在**当前中心**上挪 (dx, dz) 米（东 / 南） */
+  function shiftCenter(c: { lat: number; lng: number }, dx: number, dz: number): { lat: number; lng: number } {
+    const f = frame || frameOf(c);
+    const [lng, lat] = toLatLng(f, ...(() => {
+      const [x0, z0] = toLocal(f, c.lng, c.lat);
+      return [x0 + dx, z0 + dz] as [number, number];
+    })());
+    return { lat, lng };
   }
 
   /**
@@ -776,8 +990,8 @@ export function createThreeBackend(): WsRenderBackend {
       if (t1 < Math.max(0, t0) || t1 < 0) continue;
       if (t0 > best) continue;                       // 已经在更近的命中后面了，别再算三角形
       /* 这个要素的三角形区间：`triFeature` 是逐三角形的要素下标（顶盖 3 个一组、墙 2 个一组） */
-      for (let tri = 0; tri * 3 + 2 < triFeature.length; tri++) {
-        if (triFeature[tri * 3] !== fi) continue;
+      for (let tri = 0; tri < triFeature.length; tri++) {
+        if (triFeature[tri] !== fi) continue;
         const i0 = tri * 9;
         if (i0 + 8 >= pa.length) break;
         const ax = pa[i0]!;
@@ -889,6 +1103,7 @@ export function createThreeBackend(): WsRenderBackend {
         throw new Error(msg);
       }
       window.addEventListener("resize", onResize);
+      attachGestures(canvas);
       renderer.setAnimationLoop(tick);
       state = "running";
       ledgerMark(instance, "running");
@@ -910,20 +1125,7 @@ export function createThreeBackend(): WsRenderBackend {
     },
 
     readView(): WsRenderState | null {
-      const v = cameraToView();
-      const th = contractTheme.value;
-      if (!v) return curState;
-      return {
-        center: v.center,
-        radius: v.radius,
-        bearing: v.bearing,
-        pitch: v.pitch,
-        theme: curWorld?.themeId || th.theme,
-        timeOfDay: th.timeOfDay,
-        clock: th.clock,
-        actors: curActors.map((a) => ({ ...a })),
-        selection: null,
-      };
+      return readViewNow();
     },
 
     setTheme(theme: string, timeOfDay: number): void {
@@ -1019,6 +1221,11 @@ export function createThreeBackend(): WsRenderBackend {
       }
       diag.colorPick = null;
       return null;
+    },
+
+    /** 舞台在切进来之后把它挂上：手势一改相机就叫一声（切回另一个后端时交接那一份视野） */
+    setViewListener(cb: ((s: WsRenderState) => void) | null): void {
+      viewListener = cb;
     },
 
     /** 给探针看的原始读数（**不进契约**：契约里不许有引擎的东西） */

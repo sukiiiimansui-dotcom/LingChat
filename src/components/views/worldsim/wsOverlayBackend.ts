@@ -633,6 +633,28 @@ export function createOverlayBackend(): WsRenderBackend {
     } catch {
       mppRatio = null;
     }
+    /* 藏楼之后**地图的命中查询还答不答得出来**（"点楼"会不会哑）。
+       本机量不到（叠加层起不来），所以让量具把这个答复带回真机 —— 判据在真机、账在这里。 */
+    let pick: Record<string, unknown> | null = null;
+    try {
+      const { w, h } = sizeOf();
+      const m = map as unknown as { queryRenderedFeatures?: (p: [number, number], o?: unknown) => Array<{ layer?: { id?: string } }> };
+      if (m?.queryRenderedFeatures) {
+        const feats = m.queryRenderedFeatures([w / 2, h / 2]) || [];
+        const byLayer: Record<string, number> = {};
+        let bld = 0;
+        for (const f of feats) {
+          const id = String(f?.layer?.id ?? "?");
+          byLayer[id] = (byLayer[id] || 0) + 1;
+          if (id.startsWith(BLD_LAYER_PREFIX)) bld++;
+        }
+        pick = { n: feats.length, bld, byLayer };
+      } else {
+        pick = { n: null, why: "no-query" };
+      }
+    } catch (e) {
+      pick = { n: null, err: String((e as Error)?.message || e) };
+    }
     const sorted = [...alignErrs].sort((x, y) => x - y);
     const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
     /* 🆕 **画布几何**（下一号嫌疑）：两套投影在纯数学上已经逐点 ≤0.005 px（见
@@ -693,6 +715,8 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 藏了地图哪几层楼（"两层楼叠着"那件事真机上到底成没成，看这一栏） */
       hidLayers: hidCount,
       hidIds: [...hiddenLayers.keys()],
+      /* 屏幕正中那一圈：地图还能不能答出要素（`bld` 计数 = 藏起来的楼还答不答） */
+      pick,
       /* ── 上下文与降级账（2026-10-14）：真机"划着划着掉回 2D 自绘路"要有账可查 ── */
       ctx: {
         ovlCreated: ovlCtxCreated,

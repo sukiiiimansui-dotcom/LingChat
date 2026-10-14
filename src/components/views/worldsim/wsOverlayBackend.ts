@@ -32,7 +32,9 @@ import {
   type WsRenderStats,
   type WsRenderWorld,
 } from "./wsRenderBackend";
-import { camFrameOf, farOf, nearOf } from "./wsThreeCam";
+import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
+import { matEq, projectPoint } from "./wsMatMul";
+import { wsDiag } from "./wsRenderBackend";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
 /** 每度多少米（与 `wsThreeCam.M_PER_DEG` 同口径；这里只用它做锚点漂移判断） */
@@ -75,8 +77,11 @@ const REFRESH_DEBOUNCE_MS = 400;
  *   1 = 初版（`corner` 不过滤屏外点，无 `offScreen`/`fit`/`geom`）
  *   2 = 过滤屏外点 + `offScreen`/`centerErr`/`fit`/`raw`/`geom`
  *   3 = 叠加层藏起地图那套楼（读数含义随之变：屏上只剩一套楼）+ 回传带 `ver`/`search`
+ *   4 = **矩阵口径修正**（"画出去那一帧"的投影原先按行主序读 = 转置口径，量出来的位置
+ *       整个是错的，真机那批 844~1210 px 就是这么来的）+ `centerErr` 改成**发车前现算**
+ *       + 回传带上下文/降级账（`ctx`/`engine`）。⚠️ **≤3 的读数与 ≥4 不可比。**
  */
-const ALIGN_VER = 3;
+const ALIGN_VER = 4;
 
 /** 自用开关：`?wsalign=1` 才装 */
 export function alignProbeWanted(): boolean {
@@ -133,6 +138,22 @@ export function createOverlayBackend(): WsRenderBackend {
   let refreshTimer = 0;
   const errors: string[] = [];
 
+  /* ── 上下文与降级计数（`?wsalign=1` 的回传要带着它们：真机"划着划着变成 2D 自绘路"要有账）── */
+  /** 叠加层自己的 WebGL 上下文：建了几次、我们自己丢了几次、收到几个 lost/restored 事件 */
+  let ovlCtxCreated = 0;
+  let ovlCtxLost = 0;
+  let ovlCtxLostEvents = 0;
+  let ovlCtxRestoredEvents = 0;
+
+  /** 页面上现在有几个画布（"越堆越多"是这台机器上出现过的故障形状） */
+  function canvasCountNow(): number {
+    try {
+      return document.querySelectorAll("canvas").length;
+    } catch {
+      return -1;
+    }
+  }
+
   const runtimeUrl = (path: string): string =>
     new URL(path, typeof location !== "undefined" ? location.href : "http://127.0.0.1/").href;
 
@@ -176,6 +197,29 @@ export function createOverlayBackend(): WsRenderBackend {
     }
   }
 
+  function fovYDeg(): number {
+    return (FOV_Y * 180) / Math.PI;
+  }
+
+  /** 把"当前视野"写进一台相机（`syncCamera` 与量具的模型相机**共用这一份公式**） */
+  function applyCamFrame(cam: Record<string, any>, v: { center: { lat: number; lng: number }; radius: number; bearing: number; pitch: number }, w: number, h: number): void {
+    const [cx, cz] = toLocal(v.center.lng, v.center.lat);
+    const f = camFrameOf(cx, cz, v.radius, v.bearing, v.pitch);
+    cam.position?.set?.(f.pos[0], f.pos[1], f.pos[2]);
+    const m = new THREE!.Matrix4();
+    m.makeBasis(
+      new THREE!.Vector3(f.xAxis[0], f.xAxis[1], f.xAxis[2]),
+      new THREE!.Vector3(f.yAxis[0], f.yAxis[1], f.yAxis[2]),
+      new THREE!.Vector3(f.zAxis[0], f.zAxis[1], f.zAxis[2])
+    );
+    cam.quaternion?.setFromRotationMatrix?.(m);
+    cam.near = nearOf(f.dist);
+    cam.far = farOf(f.dist, v.radius);
+    if (cam.aspect !== w / h) cam.aspect = w / h;
+    cam.updateProjectionMatrix?.();
+    cam.updateMatrixWorld?.(true);
+  }
+
   /** 每帧：把地图的相机搬进 three（正解走 `wsThreeCam`，与独立那条路同一个模型） */
   function syncCamera(): void {
     if (!camera) return;
@@ -183,24 +227,7 @@ export function createOverlayBackend(): WsRenderBackend {
     if (!v) return;
     lastSeen = v;
     const { w, h } = sizeOf();
-    const [cx, cz] = toLocal(v.center.lng, v.center.lat);
-    const f = camFrameOf(cx, cz, v.radius, v.bearing, v.pitch);
-    camera.position.set(f.pos[0], f.pos[1], f.pos[2]);
-    const m = new THREE!.Matrix4();
-    m.makeBasis(
-      new THREE!.Vector3(f.xAxis[0], f.xAxis[1], f.xAxis[2]),
-      new THREE!.Vector3(f.yAxis[0], f.yAxis[1], f.yAxis[2]),
-      new THREE!.Vector3(f.zAxis[0], f.zAxis[1], f.zAxis[2])
-    );
-    camera.quaternion.setFromRotationMatrix(m);
-    camera.near = nearOf(f.dist);
-    camera.far = farOf(f.dist, v.radius);
-    camera.updateProjectionMatrix();
-    camera.updateMatrixWorld(true);
-    if (camera.aspect !== w / h) {
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    }
+    applyCamFrame(camera as unknown as Record<string, any>, v, w, h);
   }
 
   /**
@@ -417,6 +444,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let alignMode: "render" | "raf" = "render";
   /** 上一次**真的画出去**那一帧的相机矩阵（逐帧对拍要看"屏幕上是什么"，不是"现在是什么"） */
   let lastDraw: { mwInv: number[]; proj: number[]; w: number; h: number } | null = null;
+  /** 上面那组快照是**哪一刻**取的（毫秒，`performance.now()`）—— 判"读数是不是旧帧"要用它 */
+  let lastDrawAt = 0;
   /** 这一帧那批楼**从哪儿来**（`world` = 舞台交进来的那份 / `source` = 从地图 source 现捞的） */
   let lastSource = "none";
 
@@ -424,6 +453,7 @@ export function createOverlayBackend(): WsRenderBackend {
   function drawOnce(): void {
     if (state !== "running" || !renderer || !scene || !camera) return;
     const { w, h } = sizeOf();
+    lastDrawAt = performance.now();
     try {
       lastDraw = {
         mwInv: Array.from(camera.matrixWorldInverse.elements as number[]) as number[],
@@ -566,6 +596,19 @@ export function createOverlayBackend(): WsRenderBackend {
   /** 回传一条（`moveend` 必发；其余按 2 秒节流） */
   function alignFlush(kind: string): void {
     if (!alignOn || !alignCorner) return;
+    /* 中心误差**在发车前现算一遍**：徽标上的 `中心` 是逐帧刷的，回传是每 2 秒/moveend 才发，
+       两个数差得远时无从判断"是不是同一个量"。这里钉死：回传里的 `centerErr` 就是**这一刻**的值。 */
+    try {
+      const mm = map as unknown as { project?: (c: [number, number]) => { x: number; y: number }; getCenter?: () => { lat: number; lng: number } } | null;
+      const c = mm?.getCenter?.();
+      if (c) {
+        const p0 = mm?.project?.([c.lng, c.lat]);
+        const p1 = this_projectFromLastDraw(c.lng, c.lat);
+        if (p0 && p1) alignCenterErr = Math.hypot(p0.x - p1[0], p0.y - p1[1]);
+      }
+    } catch {
+      /* 现算失败就沿用上一次的（如实：它仍是个数，只是不是这一刻的） */
+    }
     const m = map as unknown as {
       getCenter?: () => { lat: number; lng: number };
       getZoom?: () => number;
@@ -647,6 +690,27 @@ export function createOverlayBackend(): WsRenderBackend {
       mppRatio,
       bld: data?.stats.buildings ?? 0,
       tris: data?.triangles ?? 0,
+      /* 藏了地图哪几层楼（"两层楼叠着"那件事真机上到底成没成，看这一栏） */
+      hidLayers: hidCount,
+      hidIds: [...hiddenLayers.keys()],
+      /* ── 上下文与降级账（2026-10-14）：真机"划着划着掉回 2D 自绘路"要有账可查 ── */
+      ctx: {
+        ovlCreated: ovlCtxCreated,
+        ovlLostByUs: ovlCtxLost,
+        ovlLostEvents: ovlCtxLostEvents,
+        ovlRestoredEvents: ovlCtxRestoredEvents,
+        canvases: canvasCountNow(),
+      },
+      engine: {
+        renderKind: wsDiag.renderKind,
+        fallbackWhy: wsDiag.fallbackWhy,
+        watchdogFires: wsDiag.watchdogFires,
+        styleDeadFires: wsDiag.styleDeadFires,
+        mapCtxLost: wsDiag.mapCtxLost,
+        mapCtxRestored: wsDiag.mapCtxRestored,
+        draws: draws,
+        fps: Math.round(fps * 10) / 10,
+      },
     });
   }
 
@@ -684,17 +748,13 @@ export function createOverlayBackend(): WsRenderBackend {
     if (!lastDraw) return null;
     const xy = toLocal(Number(lng), Number(lat));
     const v = [xy[0], 0, xy[1], 1];
-    const mul = (m: number[], p: number[]): number[] => {
-      const o = [0, 0, 0, 0];
-      for (let i = 0; i < 4; i++) {
-        o[i] = m[i * 4]! * p[0]! + m[i * 4 + 1]! * p[1]! + m[i * 4 + 2]! * p[2]! + m[i * 4 + 3]! * p[3]!;
-      }
-      return o;
-    };
-    const cam = mul(lastDraw.mwInv, v);
-    const clip = mul(lastDraw.proj, cam);
-    if (!Number.isFinite(clip[3]!) || Math.abs(clip[3]!) < 1e-9) return null;
-    return [((clip[0]! / clip[3]! + 1) / 2) * lastDraw.w, ((1 - clip[1]! / clip[3]!) / 2) * lastDraw.h];
+    /* 🔴 矩阵必须按**列主序**读：three 的 `Matrix4.elements` 是列主序（`e[i*4+j]` = 第 j 行第 i 列），
+       `Vector3.applyMatrix4` 算的是 `e[0]x + e[4]y + e[8]z + e[12]w`。
+       这里原来按**行主序**读（`m[i*4+0..3]`）⇒ 实际乘的是 `Mᵀ·v`，量出来的位置整个是转置的
+       （本机实测：同一台相机同一个点，转置口径与原口径差 1071 px，形状就是"镜像 + 放大"）。
+       渲染不受影响（那是 three 自己算的），**错的是读数** —— 真机那批 `cur 261 / centerErr 1210`
+       就是这么来的。修好之后这个函数必须与 `camera.project()` 逐位一致（有闸盯着）。 */
+    return projectPoint(lastDraw.mwInv, lastDraw.proj, [xy[0], xy[1]], lastDraw.w, lastDraw.h);
   }
 
   /** 地图画完一帧 ⇒ 同一帧把叠加层也画了（`alignMode === 'render'` 时的唯一驱动） */
@@ -787,11 +847,19 @@ export function createOverlayBackend(): WsRenderBackend {
         cv.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none";
         h.appendChild(cv);
         renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: false, alpha: true, powerPreference: "high-performance" });
+        ovlCtxCreated++;
+        /* 自己这块画布的生死也记账：真机上"划着划着掉回 2D"必须能看出掉的是哪一个上下文 */
+        try {
+          cv.addEventListener("webglcontextlost", () => { ovlCtxLostEvents++; }, false);
+          cv.addEventListener("webglcontextrestored", () => { ovlCtxRestoredEvents++; }, false);
+        } catch {
+          /* 挂不上监听不影响渲染（计数少一个而已） */
+        }
         renderer.setClearAlpha(0);
         renderer.setPixelRatio(Math.min(3, window.devicePixelRatio || 1));
         renderer.setSize(w, hh, false);
         scene = new THREE.Scene();
-        camera = new THREE.PerspectiveCamera(36.87, w / hh, 0.6, 8000);
+        camera = new THREE.PerspectiveCamera(fovYDeg(), w / hh, NEAR_M, 8000);
         anchor = { lat: s.center.lat, lng: s.center.lng, cos: Math.cos((s.center.lat * Math.PI) / 180) };
         curThemeId = s.theme || contractTheme.value.theme || "anime";
         /* 楼：先用舞台交进来的那份世界数据（拿不到就去地图 source 里捞一次） */
@@ -924,7 +992,10 @@ export function createOverlayBackend(): WsRenderBackend {
         renderer?.dispose?.();
         const gl = (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null;
         const lose = gl?.getExtension?.("WEBGL_lose_context") as { loseContext?: () => void } | null;
-        if (lose?.loseContext) lose.loseContext();
+        if (lose?.loseContext) {
+          ovlCtxLost++;
+          lose.loseContext();
+        }
       } catch {
         /* ignore */
       }
@@ -1018,10 +1089,92 @@ export function createOverlayBackend(): WsRenderBackend {
       };
     },
 
-    /** 自用对齐探针的读数（没开开关就是 null） */
-    alignStats(): { on: boolean; cur: number; max: number; n: number; reports: number } | null {
+    /**
+     * **逐项 dump 三组矩阵 + 同一个测试点在四种口径下的像素**（2026-10-14）。
+     *
+     * 为什么要它：真机那批回传说"叠加层实际画出去那一帧 vs 地图"差 844~1210 px，而纯数学那张表
+     * 说两套投影逐点 ≤0.005 px ⇒ 两者不是同一条路。把三组摆出来两两比，就能分开：
+     *   · `drawn` = **上次真的画出去那一帧**的快照（`ageMs` 告诉你是多久以前的）；
+     *   · `live`  = 查的这一刻相机对象上的矩阵；
+     *   · `model` = 用**同一份相机公式**（`camFrameOf`）现建一台相机算出来的矩阵；
+     *   · `test`  = 同一个经纬度在 地图 / 画出去那帧 / 现读相机 / 模型相机 下的像素。
+     * 口径本身由 `wsMatMul` 与那条对拍闸看着（生产代码里不留"错误口径对照"）。
+     */
+    frameDump(lng: number, lat: number): Record<string, unknown> {
+      const { w, h } = sizeOf();
+      const els = (m: unknown): number[] | null => {
+        try {
+          const e = (m as { elements?: ArrayLike<number> })?.elements;
+          return e ? Array.from(e) : null;
+        } catch {
+          return null;
+        }
+      };
+      const local = toLocal(Number(lng), Number(lat));
+      const drawn = lastDraw ? { mwInv: lastDraw.mwInv, proj: lastDraw.proj, w: lastDraw.w, h: lastDraw.h } : null;
+      const live = camera ? { mwInv: els((camera as unknown as { matrixWorldInverse?: unknown }).matrixWorldInverse), proj: els((camera as unknown as { projectionMatrix?: unknown }).projectionMatrix) } : null;
+      /* 模型相机：与 `syncCamera` 同一份公式（`applyCamFrame`）现建一台，独立于当前相机对象 */
+      let model: { mwInv: number[] | null; proj: number[] | null } | null = null;
+      const v = lastSeen || readMapView();
+      try {
+        if (THREE && v) {
+          const mc = new THREE.PerspectiveCamera(fovYDeg(), w / h, NEAR_M, 8000);
+          applyCamFrame(mc as unknown as Record<string, any>, v, w, h);
+          model = { mwInv: els((mc as unknown as { matrixWorldInverse?: unknown }).matrixWorldInverse), proj: els((mc as unknown as { projectionMatrix?: unknown }).projectionMatrix) };
+        }
+      } catch {
+        model = null;
+      }
+      const mapP = (() => {
+        try {
+          const p = (map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null)?.project?.([Number(lng), Number(lat)]);
+          return p ? [Number(p.x.toFixed(3)), Number(p.y.toFixed(3))] : null;
+        } catch {
+          return null;
+        }
+      })();
+      return {
+        w,
+        h,
+        drawnAgeMs: lastDrawAt ? Number((performance.now() - lastDrawAt).toFixed(1)) : null,
+        drawnProj: drawn?.proj ?? null,
+        drawnMwInv: drawn?.mwInv ?? null,
+        liveProj: live?.proj ?? null,
+        liveMwInv: live?.mwInv ?? null,
+        modelProj: model?.proj ?? null,
+        modelMwInv: model?.mwInv ?? null,
+        drawnEqLive: matEq(drawn?.mwInv ?? null, live?.mwInv ?? null) === true && matEq(drawn?.proj ?? null, live?.proj ?? null) === true,
+        liveEqModel: matEq(live?.mwInv ?? null, model?.mwInv ?? null) === true && matEq(live?.proj ?? null, model?.proj ?? null) === true,
+        test: {
+          lng: Number(lng),
+          lat: Number(lat),
+          mapPx: mapP,
+          drawnPx: projectPoint(drawn?.mwInv ?? null, drawn?.proj ?? null, local, drawn?.w ?? w, drawn?.h ?? h),
+          livePx: projectPoint(live?.mwInv ?? null, live?.proj ?? null, local, w, h),
+          modelPx: projectPoint(model?.mwInv ?? null, model?.proj ?? null, local, w, h),
+        },
+      };
+    },
+
+    /**
+     * 自用对齐探针的读数（没开开关就是 null）。
+     *
+     * `centerErr` 与 HUD 徽标上那个"中心"**是同一个量**（同一处代码路径、同一个变量）——
+     * 真机那次两边差得远，是因为徽标逐帧刷、回传每 2 秒才发，读的不是同一刻。
+     * 现在 `alignFlush()` 发车前会**现算一遍**中心误差，这条读数就与回传里的 `centerErr` 对齐了。
+     */
+    alignStats(): { on: boolean; cur: number; max: number; n: number; reports: number; centerErr: number | null; offScreen: number; fit: { a: number; b: number; n: number } | null } | null {
       if (!alignOn) return null;
-      return { on: true, cur: Number(alignCur.toFixed(3)), max: Number(alignMax.toFixed(3)), n: alignErrs.length, reports: alignReports };
+      return {
+        on: true,
+        cur: Number(alignCur.toFixed(3)),
+        max: Number(alignMax.toFixed(3)),
+        n: alignErrs.length,
+        reports: alignReports,
+        centerErr: alignCenterErr === null ? null : Number(alignCenterErr.toFixed(3)),
+        offScreen: alignOffScreen,
+        fit: alignFit(),
+      };
     },
 
     /** 探针用：切换对齐模式（`render` = 同帧；`raf` = 各跑各的）——A/B 对比用 */

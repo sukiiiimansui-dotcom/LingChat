@@ -466,6 +466,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /* **累积式要素仓库 + 离线格数学**（`createFeatureStore` / `*BundleCellsForView`）：
      用户「之前的没了…必须保证视野内完整」那条。合并/淘汰/格键的规则只有那一份，这里只调用。 */
   import { createFeatureStore } from "./wsFeatureStore";
+  /* 跨模块诊断账本（叠加层那边的 `?wsalign=1` 回传要读它：走了哪条路 / 为什么降级 / 看门狗几次） */
+  import { wsDiag } from "./wsRenderBackend";
   /* **离线包取数管道**（App 侧承载；代拍页里那份是原型的内联写法，不进 PR）：
      串行取格 + 每格独立超时 + 并进仓库 + 一次 setData。判词/决策/半径仍从 `wsScene` 来。 */
   import {
@@ -770,6 +772,15 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   const renderKind = ref<"init" | "webgl" | "waiting" | "failed" | "fallback2d">("init");
 
   const fallbackWhy = ref("");
+  /* 这两个 ref 是"现在走哪条路"的真源 ⇒ 变化时**原样抄进**诊断账本（只抄，不做判定） */
+  watch(
+    [renderKind, fallbackWhy],
+    () => {
+      wsDiag.renderKind = String(renderKind.value);
+      wsDiag.fallbackWhy = String(fallbackWhy.value);
+    },
+    { immediate: true }
+  );
   /**
    * 降级的**类别**（P0：把"永久判决"改成"可恢复"）：
    * `none` 没降级 / `temp` 只是慢（实例还在后台跑，出帧自动切回）/ `perm` 报错或拿不到实例。
@@ -2391,6 +2402,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         watchdog = window.setTimeout(() => watchdogFire(m, fc, limitMs), limitMs);
         return;
       }
+      wsDiag.watchdogFires += 1;
       watchdogFire(m, fc, limitMs);
     }, WATCHDOG_MS.value);
 
@@ -2411,8 +2423,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       const cv = (() => { try { return m.getCanvas ? m.getCanvas() : null; } catch { return null; } })();
       const healWhy = (why: string) => { try { bldLanding.bldHeal(why); } catch { /* 兜底不许影响地图 */ } };
       if (cv && cv.addEventListener) {
-        cv.addEventListener("webglcontextlost", () => healWhy("ctxlost"), false);
-        cv.addEventListener("webglcontextrestored", () => healWhy("ctxrestored"), false);
+        cv.addEventListener("webglcontextlost", () => { wsDiag.mapCtxLost += 1; healWhy("ctxlost"); }, false);
+        cv.addEventListener("webglcontextrestored", () => { wsDiag.mapCtxRestored += 1; healWhy("ctxrestored"); }, false);
       }
       healTimer = window.setInterval(() => healWhy("watchdog"), HEAL_WATCHDOG_MS);
     }

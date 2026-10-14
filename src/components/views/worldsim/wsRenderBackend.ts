@@ -32,6 +32,29 @@ import { FOV_Y, M_PER_DEG, camFrameOf } from "./wsThreeCam";
 export type WsRenderBackendId = "map" | "three" | "overlay";
 
 /**
+ * **跨模块的只读诊断账本**（2026-10-14）。
+ *
+ * 为什么放在契约模块里：写它的有**两个地方**（叠加层自己的上下文计数；地图宿主那边的
+ * `renderKind` / `fallbackWhy` / 看门狗 / 画布上下文事件），读它的只有一个（`?wsalign=1`
+ * 的回传）。放一份共享的纯数据对象最省事，也**不引入任何引擎结构**（全是数字与字符串）。
+ *
+ * 口径：谁的那一格谁写；这里**只记事实**，不参与任何判定（判定在量具里读它）。
+ */
+export const wsDiag = {
+  /** 引擎现在走哪条路（`init` / `webgl` / `waiting` / `failed` / `fallback2d`） */
+  renderKind: "",
+  /** 降级原因（人话；没降级就是空串） */
+  fallbackWhy: "",
+  /** 看门狗到点降级的次数 */
+  watchdogFires: 0,
+  /** "样式死亡"看门狗动作次数 */
+  styleDeadFires: 0,
+  /** 地图那块画布的 `webglcontextlost` / `webglcontextrestored` 次数 */
+  mapCtxLost: 0,
+  mapCtxRestored: 0,
+};
+
+/**
  * 三种状态（2026-10-07 追加的口径：「maplibre 那个很丑的 C 的话值得一试」）：
  *   · `map`     —— 只有地图（**默认**，行为一个字都不许变）；
  *   · `three`   —— 只有 three（全渲染：用 App 的楼/路数据与同一套配色）；
@@ -723,6 +746,26 @@ if (typeof window !== "undefined") {
         return JSON.stringify({ err: String((e as Error)?.message || e) });
       }
     },
+    /** 自用对齐量具的读数（中心误差 / 屏外计数 / 拟合）—— 没开 `?wsalign=1` 时是 null */
+    overlayAlignJson: () => {
+      try {
+        const b = liveBackend as unknown as { alignStats?: () => unknown } | null;
+        return JSON.stringify(b?.alignStats ? b.alignStats() : null);
+      } catch (e) {
+        return JSON.stringify({ err: String((e as Error)?.message || e) });
+      }
+    },
+    /** 叠加层三组矩阵（画出去那一帧 / 现读相机 / 模型现算）+ 同一测试点的各口径像素 */
+    overlayFrameJson: (lng: number, lat: number) => {
+      try {
+        const b = liveBackend as unknown as { frameDump?: (a: number, c: number) => unknown } | null;
+        return JSON.stringify(b?.frameDump ? b.frameDump(Number(lng), Number(lat)) : null);
+      } catch (e) {
+        return JSON.stringify({ err: String((e as Error)?.message || e) });
+      }
+    },
+    /** 跨模块诊断账本（上下文 / 降级原因 / 看门狗次数） */
+    wsDiagJson: () => JSON.stringify({ ...wsDiag }),
     /** 叠加层藏了地图哪几层楼、还原了几层，外加**当场回读**的地图可见性（判据的地面真值） */
     overlayHiddenJson: () => {
       try {

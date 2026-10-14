@@ -714,6 +714,24 @@ if (typeof window !== "undefined") {
         return "null";
       }
     },
+    /** 问**地图后端**"屏幕正中那栋"（不论谁在台上）—— 判"地图那套楼藏起来之后，命中查询还答不答得出来" */
+    mapCenterPickJson: () => {
+      try {
+        const b = mapBackendNow() as unknown as { centerPick?: () => unknown } | null;
+        return JSON.stringify(b?.centerPick ? b.centerPick() : null);
+      } catch (e) {
+        return JSON.stringify({ err: String((e as Error)?.message || e) });
+      }
+    },
+    /** 叠加层藏了地图哪几层楼、还原了几层，外加**当场回读**的地图可见性（判据的地面真值） */
+    overlayHiddenJson: () => {
+      try {
+        const b = liveBackend as unknown as { hiddenInfo?: () => unknown } | null;
+        return JSON.stringify(b?.hiddenInfo ? b.hiddenInfo() : null);
+      } catch {
+        return "null";
+      }
+    },
     /** 地图 `bld*` 图层的 `visibility` 清单（"地图自己那套楼"显不显示） */
     mapLayersJson: () => {
       try {

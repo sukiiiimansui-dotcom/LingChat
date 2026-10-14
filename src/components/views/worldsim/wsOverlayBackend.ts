@@ -39,6 +39,12 @@ const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
 const M_PER_DEG = 111319.49079327358;
 /** 地图中心离锚点超过这个米数就重锚（局部平面框架的近似误差随距离平方涨） */
 const REANCHOR_M = 2000;
+/**
+ * 地图自己那套楼的图层前缀（`wsDistrictScene.ts` 里逐字是 `bld-foot` / `bld-ext` /
+ * `bld-roof` / `bld-equip` / `bld-line` 五个）。**只碰这一组**：底图/水面/绿地/路网/标签一律不碰。
+ */
+const BLD_LAYER_PREFIX = "bld";
+
 /** `sourcedata` 之后的补建防抖（毫秒） */
 const REFRESH_DEBOUNCE_MS = 400;
 
@@ -59,6 +65,18 @@ const REFRESH_DEBOUNCE_MS = 400;
  * 🔴 纪律：① **只读**（不碰渲染、不改地图状态）② 默认不装（没这个参数 ⇒ 这段代码一步都不跑）
  *   ③ 这一段属**自用层**：将来给上游提 PR 时要**整段剔除**（连 `?wsalign=` 的判定一起）。
  */
+
+/**
+ * **量具身份**：这把尺子自己改一次就 +1。
+ *
+ * 为什么非要它：真机回传是异步、跨版本混在一起看的 —— 没有版本号时，
+ * "这条读数是新尺子量的还是旧尺子量的"只能靠猜，而两者的字段含义并不一样
+ * （旧尺子的 `corner` 不过滤屏外点，读数不可比）。
+ *   1 = 初版（`corner` 不过滤屏外点，无 `offScreen`/`fit`/`geom`）
+ *   2 = 过滤屏外点 + `offScreen`/`centerErr`/`fit`/`raw`/`geom`
+ *   3 = 叠加层藏起地图那套楼（读数含义随之变：屏上只剩一套楼）+ 回传带 `ver`/`search`
+ */
+const ALIGN_VER = 3;
 
 /** 自用开关：`?wsalign=1` 才装 */
 export function alignProbeWanted(): boolean {
@@ -185,6 +203,100 @@ export function createOverlayBackend(): WsRenderBackend {
     }
   }
 
+  /**
+   * 地图自己那套楼的**图层 id 名单**（按样式里的真实顺序，只取 `bld` 打头的）。
+   * 先 `getLayer` 确认层真的在 —— 不在的**不记**，免得出场时对一个不存在的层发指令。
+   */
+  function mapBldLayerIds(): string[] {
+    const m = map as unknown as {
+      getStyle?: () => { layers?: Array<{ id?: unknown }> } | undefined;
+      getLayer?: (id: string) => unknown;
+    } | null;
+    if (!m?.getStyle || !m?.getLayer) return [];
+    let all: unknown[] = [];
+    try {
+      all = m.getStyle()?.layers || [];
+    } catch {
+      return [];
+    }
+    const out: string[] = [];
+    for (const l of all) {
+      const id = String((l as { id?: unknown })?.id ?? "");
+      if (!id || !id.startsWith(BLD_LAYER_PREFIX)) continue;
+      try {
+        if (!m.getLayer(id)) continue;
+      } catch {
+        continue;
+      }
+      out.push(id);
+    }
+    return out;
+  }
+
+  /** 只认可见性四种合法值；拿不到（自定义样式/假地图）就当 `visible` */
+  function normVisibility(v: unknown): string {
+    return v === "none" || v === "visible" || v === "inherit" ? String(v) : "visible";
+  }
+
+  /**
+   * 叠加层活着的时候把**地图自己那套楼**藏起来。
+   *
+   * 为什么：两套楼画的是同一批数据（同一份 `bld` 源、同一份高度口径），叠在一起就是
+   * **同一栋楼画两遍** —— 边缘描边加深、颜色偏暗，镜头一动两套的**刷新时机也不一致**
+   * （地图跟着瓦片走，叠加层要等 `sourcedata` + 防抖再重建），看上去就是"错位/走不一样远"。
+   * 楼只留一套，另一套（three 那套）才有意义。
+   *
+   * 边界：**只碰 `bld` 打头的层**。底图、水面、绿地、路网、标签一律不动 —— 那些是叠加层
+   * 不画的东西，藏了就是黑屏。每层进名单前先 `getLayer`，出场时逐项**照原值**还回去。
+   */
+  function hideMapBuildings(): void {
+    const m = map as unknown as {
+      getLayoutProperty?: (id: string, k: string) => unknown;
+      setLayoutProperty?: (id: string, k: string, v: unknown) => void;
+    } | null;
+    if (!m?.setLayoutProperty || state === "destroyed") return;
+    const now = new Set(mapBldLayerIds());
+    /* ① 已经不在样式里的条目退掉（层被移走了，还它没意义） */
+    for (const id of [...hiddenLayers.keys()]) if (!now.has(id)) hiddenLayers.delete(id);
+    for (const id of now) {
+      let prev = hiddenLayers.get(id);
+      const known = hiddenLayers.has(id);
+      try {
+        const cur = m.getLayoutProperty?.(id, "visibility");
+        const curS = cur === undefined || cur === null ? null : normVisibility(cur);
+        if (known && curS === "none") continue;   /* 已经藏好了：一次写都不做 */
+        if (!known) prev = curS;                  /* 头一次见：记下原值 */
+        m.setLayoutProperty(id, "visibility", "none");
+      } catch {
+        /* 单层失败不影响其它层（也不记进名单，免得还的时候报错） */
+        continue;
+      }
+      if (!known) hiddenLayers.set(id, prev === undefined ? null : prev);
+    }
+    hidCount = hiddenLayers.size;
+  }
+
+  /** 出场：**倒序**把藏起来的楼逐项还原（与藏的顺序相反，成对出现；失败路径也走它） */
+  function restoreMapBuildings(): void {
+    if (!hiddenLayers.size) return;
+    const m = map as unknown as {
+      setLayoutProperty?: (id: string, k: string, v: unknown) => void;
+    } | null;
+    const rows = [...hiddenLayers.entries()].reverse();
+    if (m?.setLayoutProperty) {
+      for (const [id, prev] of rows) {
+        try {
+          m.setLayoutProperty(id, "visibility", prev === null ? "visible" : prev);
+        } catch {
+          /* 单层失败不阻断其余还原 */
+        }
+      }
+      restoredCount = rows.length;
+    }
+    hiddenLayers.clear();
+    hidCount = 0;
+  }
+
   function disposeMesh(): void {
     if (!bldMesh) return;
     try {
@@ -252,7 +364,19 @@ export function createOverlayBackend(): WsRenderBackend {
   }
 
   const onSourceData = (e: { sourceId?: string }): void => {
-    if (e?.sourceId === "bld") scheduleRefresh();
+    if (e?.sourceId !== "bld") return;
+    /* 楼图层可能**刚刚才建出来**（冷启动直接进叠加层），也可能被"源在层缺"的看门狗补回来
+       ⇒ 每一次落图都补一次藏（幂等：已经藏好时一次写都不做）。 */
+    hideMapBuildings();
+    scheduleRefresh();
+  };
+
+  /**
+   * 样式变了（含**上下文丢失后的样式重建**、主题切换）：楼图层可能整批换新 ⇒ 补藏一次。
+   * 我们自己 `setLayoutProperty` 也会触发它 —— 那种情况下层已经是 `none`，补藏是空转，不会自激。
+   */
+  const onStyleData = (): void => {
+    hideMapBuildings();
   };
 
   let curThemeId = "anime";
@@ -273,6 +397,16 @@ export function createOverlayBackend(): WsRenderBackend {
   let alignLastReportAt = 0;
   let alignStaticTimer = 0;
   let alignBadge: HTMLElement | null = null;
+  /**
+   * 这一次 overlay 活着期间**藏起来的**地图楼图层：`id → 原值`（`null` = 原来没设过）。
+   * 用 `Map` 而不是数组：楼图层会**后到**（冷启动 `?renderer=overlay` 时样式里还没有它们，
+   * 上下文丢失后的看门狗还会把它们补回来）⇒ 需要"随时再查一遍、只补新出现的"这种幂等操作。
+   * 插入顺序 = 藏的顺序 ⇒ 还原时倒着走。
+   */
+  const hiddenLayers = new Map<string, string | null>();
+  /** 藏/还原各几层（进 `stats`：**不许静默**） */
+  let hidCount = 0;
+  let restoredCount = 0;
   /**
    * 怎么跟地图对齐（**这是"拖动时位移不一致"那条的头号嫌疑**）：
    *   · `render`（默认）：挂 `map.on('render')` —— 地图画完一帧就叫我们，**同一帧**用它的相机画叠加层；
@@ -484,6 +618,15 @@ export function createOverlayBackend(): WsRenderBackend {
     alignReports++;
     alignLastReportAt = performance.now();
     beacon({
+      /* 量具身份：`ver` = 尺子版本，`search` = 这份读数是在什么参数下取的 */
+      ver: ALIGN_VER,
+      search: (() => {
+        try {
+          return String(location.search || "");
+        } catch {
+          return "";
+        }
+      })(),
       kind,
       corner: alignCorner,
       cur: Number(alignCur.toFixed(3)),
@@ -657,6 +800,9 @@ export function createOverlayBackend(): WsRenderBackend {
         syncCamera();
         if (fc) rebuild(world?.themeId || curThemeId, fc);
         map?.on?.("sourcedata", onSourceData);
+        map?.on?.("styledata", onStyleData);
+        /* 楼只留一套：地图自己那套先藏起来（名单逐项记下，走的时候还回去） */
+        hideMapBuildings();
         state = "running";
         attachDrive();
         /* 自用对齐探针（`?wsalign=1`）：选一次固定角 + 画个徽标；没开开关时这两句都是空转 */
@@ -673,6 +819,8 @@ export function createOverlayBackend(): WsRenderBackend {
           /* 摘不掉不影响回退 */
         }
         stopLoop();
+        /* 起不来就把藏过的楼还回去：**失败路径也不许把地图的楼留在隐藏状态** */
+        restoreMapBuildings();
         renderer = null;
         scene = null;
         camera = null;
@@ -686,10 +834,14 @@ export function createOverlayBackend(): WsRenderBackend {
     bindMap(m: unknown): void {
       map = (m as OverlayMapLike) || null;
       map?.on?.("sourcedata", onSourceData);
+      map?.on?.("styledata", onStyleData);
+      /* 地图后到（先 init 后 bind）⇒ 补藏一次；已经藏过的话这一步是幂等的 */
+      if (state === "running") hideMapBuildings();
     },
     unbindMap(): void {
       try {
         map?.off?.("sourcedata", onSourceData);
+        map?.off?.("styledata", onStyleData);
       } catch {
         /* ignore */
       }
@@ -758,11 +910,16 @@ export function createOverlayBackend(): WsRenderBackend {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = 0;
       disposeMesh();
+      /* 先**摘掉事件**再还原：`setLayoutProperty` 会同步触发 `styledata`，
+         监听器还在的话就会把刚还原的楼又藏回去（自己跟自己打架）。 */
       try {
         map?.off?.("sourcedata", onSourceData);
+        map?.off?.("styledata", onStyleData);
       } catch {
         /* ignore */
       }
+      /* 出场：把地图自己那套楼**逐项还原**（顺序与藏的时候相反） */
+      restoreMapBuildings();
       try {
         renderer?.dispose?.();
         const gl = (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null;
@@ -829,6 +986,38 @@ export function createOverlayBackend(): WsRenderBackend {
       return this_projectFromLastDraw(lng, lat);
     },
 
+    /**
+     * 藏/还原的**账**（只读）：名单 + 计数，外加**现在**回地图上读一遍的真实可见性。
+     *
+     * 为什么带 `live`：只报自己记的数就是自说自话 —— 判据要读**地图那边**的实际状态。
+     */
+    hiddenInfo(): {
+      hid: number;
+      restored: number;
+      ids: string[];
+      prev: Array<string | null>;
+      live: Array<{ id: string; vis: string | null }>;
+    } {
+      const m = map as unknown as { getLayoutProperty?: (id: string, k: string) => unknown } | null;
+      const live = mapBldLayerIds().map((id) => {
+        let vis: string | null = null;
+        try {
+          const v = m?.getLayoutProperty?.(id, "visibility");
+          vis = v === undefined || v === null ? null : String(v);
+        } catch {
+          vis = null;
+        }
+        return { id, vis };
+      });
+      return {
+        hid: hidCount,
+        restored: restoredCount,
+        ids: [...hiddenLayers.keys()],
+        prev: [...hiddenLayers.values()],
+        live,
+      };
+    },
+
     /** 自用对齐探针的读数（没开开关就是 null） */
     alignStats(): { on: boolean; cur: number; max: number; n: number; reports: number } | null {
       if (!alignOn) return null;
@@ -853,7 +1042,10 @@ export function createOverlayBackend(): WsRenderBackend {
         dpr: renderer?.getPixelRatio?.() ?? 1,
         fps: Math.round(fps * 10) / 10,
         rendering: state === "running",
-        note: `${st?.buildings ?? 0} 栋（叠加在地图上） / ${data?.triangles ?? 0} 三角`
+        note:
+          `${st?.buildings ?? 0} 栋（叠加在地图上） / ${data?.triangles ?? 0} 三角` +
+          (hidCount ? ` / 藏起地图楼 ${hidCount} 层` : "") +
+          (restoredCount ? ` / 已还原 ${restoredCount} 层` : "")
           + ` / 相机跟地图：${lastSeen ? "在跟" : "还没读到"}`
           + (errors.length ? ` / ⚠️ ${errors[0]}` : "")
           + alignNote(),

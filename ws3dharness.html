@@ -420,8 +420,14 @@
           getPitch() { return this._p; },
           getCanvas() { return { clientWidth: 932, clientHeight: 557 }; },
           getSource(id) { return String(id) === "bld" ? { getData: async () => fx.world.buildings } : undefined; },
-          on() {},
-          off() {},
+          /* 🔴 叠加层默认是**地图驱动**的（`map.on('render')`）⇒ 假地图必须真的发这个事件，
+             否则它会（正确地）停在第一帧：相机那 4 个量改了也不会跟，判据就成了**假红**
+             （2026-10-16 这一节实测：meters 第二段 655.675 m、朝向/俯仰都还是旧值）。
+             这条与 `ws_overlay_probe.mjs` 里的假地图同一口径：`tick()` 就是"地图又画了一帧"。 */
+          _cbs: {},
+          on(ev, cb) { (this._cbs[String(ev)] = this._cbs[String(ev)] || []).push(cb); },
+          off(ev, cb) { const a = this._cbs[String(ev)] || []; const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); },
+          tick(n) { for (let i = 0; i < (n || 3); i++) (this._cbs.render || []).forEach((cb) => { try { cb(); } catch (e) {} }); },
         };
         const ob = createOverlayBackend();
         ob.bindMap(fakeMap);
@@ -440,6 +446,7 @@
         fakeMap._z = 15.4;
         fakeMap._b = 42;
         fakeMap._p = 12;
+        fakeMap.tick(3);      /* 地图"又画了一帧" ⇒ 叠加层才有机会读到新相机 */
         await sleep(700);
         const seen2 = ob.readView();
         const meters2 = seen2 ? metersBetweenCenters({ lat: fakeMap._c.lat, lng: fakeMap._c.lng }, seen2.center) : null;

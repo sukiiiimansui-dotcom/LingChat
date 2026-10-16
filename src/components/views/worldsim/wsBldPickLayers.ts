@@ -18,9 +18,15 @@ export const BLD_CLICK_LAYERS_BY_TIER: Readonly<Record<0 | 1 | 2, readonly strin
   2: ["bld-foot", "bld-ext", "bld-roof", "bld-equip"],
 };
 
-/** 只做"档位 → 层名"，不碰地图（纯查表） */
-export function bldClickLayerNames(tier: number): string[] {
-  const t = (tier === 1 || tier === 2 ? tier : 0) as 0 | 1 | 2;
+/**
+ * 只做"档位 → 层名"，不碰地图（纯查表）。
+ *
+ * ⚠️ **档位读不出来（`null`/`undefined`/非有限数）时必须给"全部层"**，不能退成 0：
+ * 原实现的语义是「宁可不命中也不能漏掉一栋明明画着的楼」（点选是用户明确点了一下）。
+ * 这一点由 `ws_mvt_picklayers_selftest` 的判据①钉住。
+ */
+export function bldClickLayerNames(tier: number | null | undefined): string[] {
+  const t: 0 | 1 | 2 = tier === 0 || tier === 1 || tier === 2 ? tier : 2;
   return [...BLD_CLICK_LAYERS_BY_TIER[t]];
 }
 

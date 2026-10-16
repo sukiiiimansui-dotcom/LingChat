@@ -97,6 +97,15 @@ jobs:
           python -c "from PIL import Image, ImageDraw; img=Image.new('RGB', (1024,1024), color='#4A90D9'); draw=ImageDraw.Draw(img); draw.ellipse((100,100,924,924), fill='#2C3E50'); img.save('./src-tauri/icons/icon.png')"
           pnpm tauri icon ./src-tauri/icons/icon.png
 
+      # Windows 侧必须先备好 `src-tauri/binaries/{onnxruntime,DirectML}.dll`：
+      # `src-tauri/tauri.windows.conf.json` 把这两个 dll 声明成 bundle resource，而 `tauri build`
+      # 的 build script 在资源缺失时会直接退出 1（`resource path binaries\DirectML.dll doesn't exist`）。
+      # `pnpm run init` 里带着这一步，但四平台工作流是手写步骤、漏了它 ⇒ Windows 那条一直红。
+      - name: 准备 Windows 的 onnxruntime.dll + DirectML.dll
+        if: runner.os == 'Windows'
+        shell: bash
+        run: node scripts/ensure-onnxruntime.mjs
+
       - name: 构建应用
         env:
           RUSTFLAGS: |

@@ -2429,10 +2429,11 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       healTimer = window.setInterval(() => healWhy("watchdog"), HEAL_WATCHDOG_MS);
     }
 
-    /* ══ **样式/上下文死亡看门狗**（2026-10-11）══════════════════════════════════════════
+    /* ══ **样式/上下文死亡看门狗**（2026-10-11；2026-10-16 改成**默认不降级**）══════════════
        与上面 `bldHeal` 的分工（写清楚，免得两套兜底打架）：
          · `bldHeal`：**样式活着**、`bld` 源或挤出层缺 ⇒ 先补缺层、再走既有落图通路；
-         · 本条：**样式本身死了**（`isStyleLoaded()===false` 或 `getStyle()` 空）且**连续** ≥5s ⇒ 交给既有降级路。
+         · 本条：**样式本身死了**（`isStyleLoaded()===false` 或 `getStyle()` 空）且**连续** ≥5s
+           ⇒ **默认只如实报原因 + 计数、保持现场**；只有显式开阀（`?wsfallback=1` 或自动化环境）才切 2D 自绘路。
        两者互斥（样式死了的时候 `bldHeal` 本来就早退）⇒ 不会同时动作。
        `?stylewatch=0` 时**整段不装**（那份代码路径逐字节不变）。 */
     if (!STYLE_WATCH_OFF) {
@@ -2448,10 +2449,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         },
         onDead: (why) => {
           try {
-            fallbackWhy.value = why;                                  /* 可见原因（面板/样式 JSON 共用那一格） */
-            fallback2d("style-dead", fc, why, "temp", m);             /* 既有降级通路：临时类，可恢复 */
             const f = sw.facts();
-            stats.styleWatch = "🕰 样式死亡恢复 " + f.fires + " 次（最后 " + (f.lastFireMs === null ? "?" : f.lastFireMs + "ms") + " · " + why + "）";
+            /* 🔴 2026-10-16：**默认不再自动降级**。本看门狗 2026-10-11 上线时是**无条件**调
+               `fallback2d` 的，等于绕开 `wsFallback2d` 里 2026-09-21 那条裁定
+               （「默认不自动降到 2D 自绘路；`?wsfallback=1` 与自动化环境是仅有的两个入口」）
+               ⇒ 真机上的表现是「**莫名其妙掉进旧版面**」（2D 自绘路：摇杆消失、头像回到旧样式）。
+               现在与那条裁定对齐：**没显式开阀就保持现场**，只如实报原因 + 计数；
+               要切 2D 自绘路得加 `?wsfallback=1`（验证面板里也可以手动重试地图）。 */
+            if (ALLOW_2D) {
+              fallbackWhy.value = why;                                  /* 可见原因（面板/样式 JSON 共用那一格） */
+              fallback2d("style-dead", fc, why, "temp", m);             /* 既有降级通路：临时类，可恢复 */
+            } else {
+              fallbackWhy.value = why
+                + "｜按「默认不降级」保持现场（加 ?wsfallback=1 才切 2D 自绘路；验证面板可手动重试）";
+            }
+            stats.styleWatch = "🕰 样式死亡 " + (ALLOW_2D ? "已降级" : "保持现场") + " "
+              + f.fires + " 次（最后 " + (f.lastFireMs === null ? "?" : f.lastFireMs + "ms") + "）";
             try { scheduleBundleHud(); } catch { /* HUD 失败不影响恢复 */ }
           } catch { /* 恢复动作失败不许把看门狗弄死 */ }
         },

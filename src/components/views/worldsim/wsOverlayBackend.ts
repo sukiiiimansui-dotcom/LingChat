@@ -83,6 +83,23 @@ const REFRESH_DEBOUNCE_MS = 400;
  */
 const ALIGN_VER = 4;
 
+/**
+ * 自用开关：`?ovlpix=0` **关掉"像素取证"那一道**（默认开）。
+ *
+ * 为什么需要它：本机无头没有可用的 GPU（SwiftShader 下 `MeshBasicMaterial` 编译失败），
+ * 叠加层**一像素都画不出来** ⇒ 像素取证永远不过 ⇒ 藏楼这套逻辑在**本机**就没法被闸驱动
+ * （真机上它是过的：2026-10-16 真机回传 `hidLayers: 5` 就是证据）。
+ * 关掉之后仍要求"几何建出来了 + 真的发过绘制调用 + 材质没有着色器诊断"三条，
+ * 只是少了最后那道像素兜底；**默认开**，也只在自用闸里用。
+ */
+function pixProbeOff(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("ovlpix") === "0";
+  } catch {
+    return false;
+  }
+}
+
 /** 自用开关：`?wsalign=1` 才装 */
 export function alignProbeWanted(): boolean {
   try {
@@ -282,6 +299,14 @@ export function createOverlayBackend(): WsRenderBackend {
       setLayoutProperty?: (id: string, k: string, v: unknown) => void;
     } | null;
     if (!m?.setLayoutProperty || state === "destroyed") return;
+    /* 🔴 硬要求：**只有叠加层真的在画楼才允许藏**；否则立刻把地图那套还原（不许把画面弄空）。 */
+    const gate = meshDrawingOk(false);
+    hideGateOk = gate.ok;
+    hideGateWhy = gate.why;
+    if (!gate.ok) {
+      restoreMapBuildings("guard:" + gate.why);
+      return;
+    }
     const now = new Set(mapBldLayerIds());
     /* ① 已经不在样式里的条目退掉（层被移走了，还它没意义） */
     for (const id of [...hiddenLayers.keys()]) if (!now.has(id)) hiddenLayers.delete(id);
@@ -301,11 +326,13 @@ export function createOverlayBackend(): WsRenderBackend {
       if (!known) hiddenLayers.set(id, prev === undefined ? null : prev);
     }
     hidCount = hiddenLayers.size;
+    hideSyncs += 1;
   }
 
   /** 出场：**倒序**把藏起来的楼逐项还原（与藏的顺序相反，成对出现；失败路径也走它） */
-  function restoreMapBuildings(): void {
+  function restoreMapBuildings(reason = "unspecified"): void {
     if (!hiddenLayers.size) return;
+    restoreReasons[reason] = (restoreReasons[reason] || 0) + 1;
     const m = map as unknown as {
       setLayoutProperty?: (id: string, k: string, v: unknown) => void;
     } | null;
@@ -339,30 +366,45 @@ export function createOverlayBackend(): WsRenderBackend {
 
   /** 用一份 `bld` 要素重建楼（几何走共用模块 ⇒ 与 three 那条路画的是同一批） */
   function rebuild(themeId: string, fc: WsRenderFc | null): void {
-    disposeMesh();
-    data = null;
-    if (!THREE || !scene || !fc) return;
-    data = buildBldMeshData({
-      features: fc.features,
-      toLocal: (lng: number, lat: number) => toLocal(lng, lat),
-      themeId,
-      cap: BLD_CAP,
-    });
-    if (!data.triangles) return;
+    /* 🔴 2026-10-16 真机"楼会变掉"那条：重建**必须是原子的** ——
+       旧网格一直画着，新网格**先在本地建好**再一次性换上；只有"新网格是空的/建不出来"
+       才允许把地图那套还原。原来先 `disposeMesh()`（屏幕上一瞬间没楼）+ 先 `restoreMapBuildings()`
+       （地图那套又冒出来）⇒ 每次数据落图都闪一下，看起来就是"楼会变掉"。 */
+    const next = fc
+      ? buildBldMeshData({
+          features: fc.features,
+          toLocal: (lng: number, lat: number) => toLocal(lng, lat),
+          themeId,
+          cap: BLD_CAP,
+        })
+      : null;
+    if (!THREE || !scene || !next || !next.triangles) {
+      /* 新网格建不出来 ⇒ 老实换掉旧网格，并把地图那套**还回去**（宁可两套里少一套，也不许整屏没楼） */
+      disposeMesh();
+      data = null;
+      hideGateOk = false;
+      hideGateWhy = "重建出来是空的";
+      restoreMapBuildings("rebuild-empty");
+      return;
+    }
+    /* 一次性换上：先建好 three 对象，再掐掉旧的（中间没有"两个都不在"的帧） */
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(data.positions), 3));
-    g.setAttribute("color", new THREE.BufferAttribute(Float32Array.from(data.colors), 3));
+    g.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(next.positions), 3));
+    g.setAttribute("color", new THREE.BufferAttribute(Float32Array.from(next.colors), 3));
     g.computeVertexNormals();
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    bldMesh = new THREE.Mesh(g, mat);
-    bldMesh.name = "ws-overlay-buildings";
-    scene.add(bldMesh);
-    /* 数据是**后到**的（`sourcedata` / 重锚）⇒ 重建完立刻画一帧：
-       渲染是"地图画完一帧"驱动的，地图静止时不会再来 render，等它就等于这一批楼不显示。 */
+    const newer = new THREE.Mesh(g, mat);
+    newer.name = "ws-overlay-buildings";
+    scene.add(newer);
+    disposeMesh();                  /* 旧的这时候才退场（同一帧里完成） */
+    bldMesh = newer;
+    data = next;
+    /* 数据是**后到**的 ⇒ 重建完立刻画一帧：渲染是"地图画完一帧"驱动的，地图静止时不会再来
+       render，等它就等于这一批楼不显示。 */
     drawOnce();
   }
 
-  /** 从地图 source 里捞一份 `bld`（与 `three` 那条路同一条数据通路） */
+  /** 从地图 source 里现捞一份 `bld`（拿不到就 null —— 不编数据） */
   async function grabBld(): Promise<WsRenderFc | null> {
     try {
       const src = map?.getSource?.("bld");
@@ -435,6 +477,124 @@ export function createOverlayBackend(): WsRenderBackend {
   let hidCount = 0;
   let restoredCount = 0;
   /**
+   * **藏楼闸**：只有"叠加层真的在画楼"才允许藏地图那套楼。
+   *
+   * 为什么（2026-10-16 真机事故）：藏楼原来只与"overlay 是当前后端"绑定 ⇒ 叠加层起不来 /
+   * 数据没到 / 网格建不出来 / 着色器编不过（本机靶场实测过 `MeshBasicMaterial`
+   * `VALIDATE_STATUS false`）/ 画了 0 栋 —— 任何一种都会让**屏幕上一栋楼都没有**
+   * （地图那套被藏了、叠加层这套又没画出来）。这条闸把它绑到"**有效绘制**"上。
+   */
+  let hideGateOk = false;
+  let hideGateWhy = "还没画过";
+  /** 上一次像素取证的时间（节流：别每帧都 readPixels） */
+  let pixProbeAt = 0;
+  /** 上一次像素读数（给报告/探针看：本机到底有没有画出像素） */
+  let pixAlive = -1;
+  /** 上一次"补藏/补还原"的时间（节流：别每帧走一遍 `getStyle()`） */
+  let hideSyncAt = 0;
+  /** 像素取证连续判空几次（**两振才出局**：单次读空可能只是抖动，立刻还原会造成"楼会变掉"的闪） */
+  let pixStrikes = 0;
+  /** 藏/还原各发生了多少次、**为什么**（真机上"楼会变掉"要能查账） */
+  let hideSyncs = 0;
+  const restoreReasons: Record<string, number> = {};
+
+  /**
+   * 叠加层"真的画出了东西"吗 —— 四个条件都过才算数（任一不过 ⇒ **不藏 / 立刻还原**）：
+   *   ① 几何建出来了（`buildings > 0 && triangles > 0`）；
+   *   ② 真的发出过绘制调用（`draws > 0`）；
+   *   ③ 材质**没有**着色器诊断（three 在编译/链接失败时会给 material 挂 `.diagnostics`）；
+   *   ④ 像素取证：抽两条横带 `readPixels`，看得见非透明像素（这是"屏幕上真有东西"的地面真值）。
+   * 读不出来的 API（老 three / 假地图）不当作通过 —— 宁可**不藏**，也不许把画面弄空。
+   */
+  let pixEverProbed = false;
+  function meshDrawingOk(probePixels: boolean): { ok: boolean; why: string } {
+    if (!data || !(data.stats.buildings > 0) || !(data.triangles > 0)) {
+      return { ok: false, why: "叠加层还没建出楼（0 栋）" };
+    }
+    if (!(draws > 0)) return { ok: false, why: "叠加层还没发出绘制调用" };
+    const mat = (bldMesh as unknown as { material?: { diagnostics?: unknown } } | null)?.material;
+    if (mat && (mat as { diagnostics?: unknown }).diagnostics) return { ok: false, why: "叠加层着色器报错（材料诊断有内容）" };
+    const gl = (() => { try { return (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null; } catch { return null; } })();
+    if (!gl?.readPixels) return { ok: true, why: "画了（像素取证不可用）" };
+    /* 🔴 像素只能在**刚画完那一刻**读：`preserveDrawingBuffer:false` 时，帧一旦被合成，
+       缓冲就没了 —— 在 `sourcedata`/`styledata` 那些时刻读会读出一片空，误判"画不出来"
+       （本机靶场实测就是这个形状）。⇒ 只有 `drawOnce` 里那次传 true，其余调用读缓存。 */
+    if (!probePixels) {
+      if (!pixEverProbed) return { ok: false, why: "还没在画完那一刻取过像素证据" };
+      return { ok: hideGateOk, why: hideGateWhy };
+    }
+    if (pixProbeOff()) {
+      pixEverProbed = true;
+      pixAlive = -2;                    /* -2 = 没量（开关关掉） */
+      pixStrikes = 0;
+      return { ok: true, why: "画了（像素取证=关 ?ovlpix=0）" };
+    }
+    pixEverProbed = true;
+    let alive = 0;
+    try {
+      const dpr = renderer?.getPixelRatio?.() ?? 1;
+      const bw = Math.max(1, Math.round(w0() * dpr));
+      const bh = Math.max(1, Math.round(h0() * dpr));
+      const readRect = (x: number, y: number, w2: number, h2: number): number => {
+        const buf = new Uint8Array(w2 * h2 * 4);
+        gl.readPixels(x, y, w2, h2, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        let n = 0;
+        for (let i = 3; i < buf.length; i += 4) if (buf[i]! > 8) n++;
+        return n;
+      };
+      /* ① **按我们自己的网格采样**：拿每栋楼的 XZ 包围盒中心，用"画出去那一帧"的矩阵投到屏幕，
+         在投出来的点周围读一小块。为什么这么采样：楼在屏幕上是稀疏的（地面透明），
+         横带很容易扫空 ⇒ 单看横带会**误判"画不出来"**（本机靶场实测就是这个形状）。
+         顺带它还是个自检：投出来的点读不到像素 ⇒ 要么没画、要么投影与渲染不是同一条路。 */
+      const step = Math.max(1, Math.ceil(((data?.boxes?.length ?? 0) / 4) / 1)) || 1;
+      const samplePts: Array<[number, number]> = [];
+      try {
+        const boxes = data?.boxes ?? [];
+        for (let i = 0; i + 3 < boxes.length && samplePts.length < 4; i += 4 * step) {
+          const cx2 = (boxes[i]! + boxes[i + 2]!) / 2;
+          const cz2 = (boxes[i + 1]! + boxes[i + 3]!) / 2;
+          const p = projectFromLastDrawLocal(cx2, cz2);
+          if (p && p[0] >= 12 && p[0] <= bw - 12 && p[1] >= 12 && p[1] <= bh - 12) samplePts.push(p);
+        }
+      } catch {
+        /* 采样点算不出来就退回横带 */
+      }
+      for (const [x, y] of samplePts) {
+        alive += readRect(Math.round(x) - 12, bh - Math.round(y) - 12, 24, 24);
+        if (alive > 0) break;
+      }
+      /* ② 兜底：**两条横带**（楼正好都不在采样点附近时还能看见"画面上有东西"） */
+      if (alive <= 0) {
+        const rows = Math.min(4, bh);
+        for (const fy of [0.5, 0.34]) {
+          const y = Math.max(0, Math.min(bh - rows, Math.round(bh * fy)));
+          alive += readRect(0, y, bw, rows);
+          if (alive > 0) break;
+        }
+      }
+    } catch {
+      return { ok: true, why: "画了（像素取证抛错）" };
+    }
+    if (alive <= 0) {
+      pixStrikes += 1;
+      return { ok: false, why: "叠加层这一帧画不出像素（采样点+横带全空 · 第 " + pixStrikes + " 次）" };
+    }
+    pixStrikes = 0;
+    pixAlive = alive;
+    return { ok: true, why: "画了（" + alive + " 个非空像素）" };
+  }
+
+  /** 局部米坐标 → 屏幕像素（用**画出去那一帧**的矩阵；只给上面的采样点算位置用） */
+  function projectFromLastDrawLocal(x: number, z: number): [number, number] | null {
+    if (!lastDraw) return null;
+    return projectPoint(lastDraw.mwInv, lastDraw.proj, [x, z], lastDraw.w, lastDraw.h);
+  }
+
+  /** 画布 CSS 尺寸（`sizeOf` 是函数声明，这里给闸用同一份） */
+  function w0(): number { return sizeOf().w; }
+  function h0(): number { return sizeOf().h; }
+
+  /**
    * 怎么跟地图对齐（**这是"拖动时位移不一致"那条的头号嫌疑**）：
    *   · `render`（默认）：挂 `map.on('render')` —— 地图画完一帧就叫我们，**同一帧**用它的相机画叠加层；
    *   · `raf`：自己的 `requestAnimationFrame`（老行为）。地图与叠加层各跑各的节奏，
@@ -466,6 +626,26 @@ export function createOverlayBackend(): WsRenderBackend {
     }
     renderer.render(scene, camera);
     draws = renderer.info?.render?.calls ?? 0;
+    /* 画完立刻过一遍藏楼闸：**首帧、重建后、以及"还一层都没藏"时**都要查（节流在闸里） */
+    try {
+      if (draws > 0) {
+        const gate = meshDrawingOk(true);
+        hideGateOk = gate.ok;
+        hideGateWhy = gate.why;
+        const now2 = performance.now();
+        /* ❗"立刻还原"这条**不受节流约束**（画面变空必须当帧处理）；补藏才节流 */
+        /* 像素那条"两振出局"：只有连续两次判空才真还原（其余条件仍是当帧立刻还原） */
+        const pixOnly = !gate.ok && gate.why.includes("画不出像素") && pixStrikes < 2;
+        if (!gate.ok && !pixOnly) {
+          if (hiddenLayers.size) restoreMapBuildings("guard-draw:" + gate.why);
+        } else if (gate.ok && now2 - hideSyncAt > 400) {
+          hideSyncAt = now2;
+          if (hiddenLayers.size !== mapBldLayerIds().length) hideMapBuildings();
+        }
+      }
+    } catch {
+      /* 闸自己抛错不许影响渲染；下一次再来 */
+    }
     /* 自用对齐探针：**画完**才采（采的就是"屏幕上这一帧"）—— 没开开关时 alignOn=false，一步不跑 */
     if (alignOn && alignCorner) {
       try {
@@ -633,27 +813,54 @@ export function createOverlayBackend(): WsRenderBackend {
     } catch {
       mppRatio = null;
     }
-    /* 藏楼之后**地图的命中查询还答不答得出来**（"点楼"会不会哑）。
-       本机量不到（叠加层起不来），所以让量具把这个答复带回真机 —— 判据在真机、账在这里。 */
+    /* 藏楼之后**地图的命中查询还答不答得出来**（"点楼"会不会哑）—— 成对读数：
+       ① `hid`：现在的状态（楼藏着）在屏幕正中查一次；
+       ② `shown`：**当场把藏起来的楼放回来**再查一次，然后立刻按原值藏回去
+          （三步都在同一个 JS 任务里 ⇒ 中间不会渲染出一帧 ⇒ 不会露楼）。
+       两个数一比就能分开："藏楼把命中弄哑了"（hid=0 而 shown>0）还是"地图自己就答不出来"
+       （两个都是 0 ⇒ 是样式/渲染那边的事，不是藏楼）。 */
     let pick: Record<string, unknown> | null = null;
     try {
       const { w, h } = sizeOf();
-      const m = map as unknown as { queryRenderedFeatures?: (p: [number, number], o?: unknown) => Array<{ layer?: { id?: string } }> };
+      const m = map as unknown as {
+        queryRenderedFeatures?: (p: [number, number], o?: unknown) => Array<{ layer?: { id?: string } }>;
+        setLayoutProperty?: (id: string, k: string, v: unknown) => void;
+      };
       if (m?.queryRenderedFeatures) {
-        const feats = m.queryRenderedFeatures([w / 2, h / 2]) || [];
-        const byLayer: Record<string, number> = {};
-        let bld = 0;
-        for (const f of feats) {
-          const id = String(f?.layer?.id ?? "?");
-          byLayer[id] = (byLayer[id] || 0) + 1;
-          if (id.startsWith(BLD_LAYER_PREFIX)) bld++;
+        const at: [number, number] = [w / 2, h / 2];
+        const count = (feats: Array<{ layer?: { id?: string } }>): { n: number; bld: number; byLayer: Record<string, number> } => {
+          const byLayer: Record<string, number> = {};
+          let bld = 0;
+          for (const f of feats) {
+            const id = String(f?.layer?.id ?? "?");
+            byLayer[id] = (byLayer[id] || 0) + 1;
+            if (id.startsWith(BLD_LAYER_PREFIX)) bld++;
+          }
+          return { n: feats.length, bld, byLayer };
+        };
+        const hid = count(m.queryRenderedFeatures(at) || []);
+        let shown: Record<string, unknown> | null = null;
+        const ids = [...hiddenLayers.keys()];
+        if (ids.length && m.setLayoutProperty) {
+          let err = "";
+          for (const id of ids) { try { m.setLayoutProperty(id, "visibility", "visible"); } catch (e) { err += String((e as Error)?.message || e) + ";"; } }
+          try {
+            shown = count(m.queryRenderedFeatures(at) || []);
+          } catch (e) {
+            shown = { n: null, err: String((e as Error)?.message || e) };
+          }
+          /* 立刻按**原值**藏回去（倒序，与出场同一套口径） */
+          for (const [id, prev] of [...hiddenLayers.entries()].reverse()) {
+            try { m.setLayoutProperty(id, "visibility", prev === null ? "visible" : prev); } catch { /* 单层失败不阻断 */ }
+          }
+          if (err) shown = { ...(shown || {}), err };
         }
-        pick = { n: feats.length, bld, byLayer };
+        pick = { hid, shown, at, hiddenIds: ids };
       } else {
-        pick = { n: null, why: "no-query" };
+        pick = { hid: null, why: "no-query" };
       }
     } catch (e) {
-      pick = { n: null, err: String((e as Error)?.message || e) };
+      pick = { hid: null, err: String((e as Error)?.message || e) };
     }
     const sorted = [...alignErrs].sort((x, y) => x - y);
     const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
@@ -715,6 +922,20 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 藏了地图哪几层楼（"两层楼叠着"那件事真机上到底成没成，看这一栏） */
       hidLayers: hidCount,
       hidIds: [...hiddenLayers.keys()],
+      /* 藏楼闸的现况（真机事故：藏了地图那套、叠加层又没画出来 ⇒ 整屏没楼） */
+      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws },
+      /* 藏/还原各发生几次、为什么（真机"楼会变掉"要能查账） */
+      pix: { alive: pixAlive, probed: pixEverProbed, strikes: pixStrikes },
+      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons },
+      /* **当场回读**地图那 5 层的真实可见性（判据读它，不读我自己的记账） */
+      hidLive: (() => {
+        const mm = map as unknown as { getLayoutProperty?: (id: string, k: string) => unknown } | null;
+        return mapBldLayerIds().map((id) => {
+          let v: string | null = null;
+          try { const x = mm?.getLayoutProperty?.(id, "visibility"); v = x === undefined || x === null ? null : String(x); } catch { v = "?"; }
+          return { id, vis: v };
+        });
+      })(),
       /* 屏幕正中那一圈：地图还能不能答出要素（`bld` 计数 = 藏起来的楼还答不答） */
       pick,
       /* ── 上下文与降级账（2026-10-14）：真机"划着划着掉回 2D 自绘路"要有账可查 ── */
@@ -912,7 +1133,7 @@ export function createOverlayBackend(): WsRenderBackend {
         }
         stopLoop();
         /* 起不来就把藏过的楼还回去：**失败路径也不许把地图的楼留在隐藏状态** */
-        restoreMapBuildings();
+        restoreMapBuildings("init-fail");
         renderer = null;
         scene = null;
         camera = null;
@@ -1011,7 +1232,7 @@ export function createOverlayBackend(): WsRenderBackend {
         /* ignore */
       }
       /* 出场：把地图自己那套楼**逐项还原**（顺序与藏的时候相反） */
-      restoreMapBuildings();
+      restoreMapBuildings("destroy");
       try {
         renderer?.dispose?.();
         const gl = (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null;
@@ -1221,7 +1442,7 @@ export function createOverlayBackend(): WsRenderBackend {
         rendering: state === "running",
         note:
           `${st?.buildings ?? 0} 栋（叠加在地图上） / ${data?.triangles ?? 0} 三角` +
-          (hidCount ? ` / 藏起地图楼 ${hidCount} 层` : "") +
+          (hidCount ? ` / 藏起地图楼 ${hidCount} 层` : ` / 没藏地图楼（${hideGateWhy}）`) +
           (restoredCount ? ` / 已还原 ${restoredCount} 层` : "")
           + ` / 相机跟地图：${lastSeen ? "在跟" : "还没读到"}`
           + (errors.length ? ` / ⚠️ ${errors[0]}` : "")

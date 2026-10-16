@@ -52,6 +52,12 @@ export const wsDiag = {
   /** 地图那块画布的 `webglcontextlost` / `webglcontextrestored` 次数 */
   mapCtxLost: 0,
   mapCtxRestored: 0,
+  /**
+   * 样式现况（2026-10-16 真机定位加）：`loaded` = `isStyleLoaded()`（**源没下完也是 false**），
+   * `hasStyle`/`layers` = 样式对象在不在、有几条层（**这才是"真死"的判据**），
+   * `notLoaded` = "样式在、层也在、但 loaded=false"被观测到的次数（老判据的误报次数）。
+   */
+  style: { loaded: null as boolean | null, hasStyle: false, layers: 0, err: "", notLoaded: 0 },
 };
 
 /**

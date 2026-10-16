@@ -2437,17 +2437,44 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        两者互斥（样式死了的时候 `bldHeal` 本来就早退）⇒ 不会同时动作。
        `?stylewatch=0` 时**整段不装**（那份代码路径逐字节不变）。 */
     if (!STYLE_WATCH_OFF) {
+      /* 样式观测（进诊断账本 ⇒ 真机上能分清"源没下完"与"样式真死"） */
+      const styleFacts: { loaded: boolean | null; hasStyle: boolean; layers: number; err: string; notLoadedChecks: number } =
+        { loaded: null, hasStyle: false, layers: 0, err: "", notLoadedChecks: 0 };
+      let styleDeadFiresLocal = 0;
       const sw = createStyleWatch({
         deadMs: STYLE_DEAD_MS,
+        /* 🔴 2026-10-16 真机定位（23:15 那批读数）：原来这里是 `!isStyleLoaded() || !getStyle()`。
+           MapLibre 的 `Style.loaded()` 是"**所有 source 的瓦片都加载完** 且没有待处理更新
+           且 sprite 就绪"（vendor 源码：`loaded(){if(!this._loaded||Object.keys(this._updatedSources).length)return!1;
+           for(let e in this.tileManagers)if(!this.tileManagers[e].loaded())return!1;return this.imageManager.isLoaded()}`）
+           ⇒ **源还在下瓦片**时它就是 false。手机上大包瓦片下几秒太正常了 ⇒ 地图明明画得好好的
+           （底图/路网/标签都在、`mapCtxLost: 0`），看门狗却报"样式/上下文死亡（连续 5198ms）"。
+           ⇒ 判据改成"**样式对象没了 / 一条层都没有**才算死"；"源没下完"只记账、不作死。 */
         isDead: () => {
           if (renderKind.value !== "webgl" || !m) return false;   /* 只盯活着的 WebGL 路 */
           try {
-            const loaded = typeof m.isStyleLoaded === "function" ? m.isStyleLoaded() : true;
+            const loaded = typeof m.isStyleLoaded === "function" ? m.isStyleLoaded() : null;
             const st = typeof m.getStyle === "function" ? m.getStyle() : null;
-            return !loaded || !st;
-          } catch { return false; }   /* 判据读不出来 ⇒ 不当作死（宁可漏，不误判） */
+            const layers = st && Array.isArray(st.layers) ? st.layers.length : 0;
+            styleFacts.loaded = loaded === null ? null : !!loaded;
+            styleFacts.hasStyle = !!st;
+            styleFacts.layers = layers;
+            if (st && layers > 0 && loaded === false) styleFacts.notLoadedChecks += 1;   /* 会被老判据误报的那些次 */
+            try { wsDiag.style = { loaded: styleFacts.loaded, hasStyle: styleFacts.hasStyle, layers, err: styleFacts.err, notLoaded: styleFacts.notLoadedChecks }; } catch { /* 记账失败不影响判据 */ }
+            return !st || layers === 0;
+          } catch (e) {
+            styleFacts.err = String((e as Error)?.message || e);
+            try { wsDiag.style = { loaded: styleFacts.loaded, hasStyle: false, layers: 0, err: styleFacts.err, notLoaded: styleFacts.notLoadedChecks }; } catch { /* noop */ }
+            /* `getStyle()` 抛错 = 样式已被销毁 ⇒ 算死（连续 5s 才算数，不会一抖就报） */
+            return true;
+          }
         },
         onDead: (why) => {
+          /* 🔴 计数不许静默（真机 23:15：看门狗响了、`styleDeadFires` 还是 0）——
+             原因是原来读的 `f.fires` 是**本次之前**的次数（`tick()` 在 `onDead` 返回后才 +1），
+             而且它在 `fallback2d` 之后、一旦抛错就整段跳过。现在**先记账、再动作**。 */
+          styleDeadFiresLocal += 1;
+          try { wsDiag.styleDeadFires = styleDeadFiresLocal; } catch { /* 记账失败不影响恢复 */ }
           try {
             const f = sw.facts();
             /* 🔴 2026-10-16：**默认不再自动降级**。本看门狗 2026-10-11 上线时是**无条件**调

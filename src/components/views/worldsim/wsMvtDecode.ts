@@ -16,7 +16,7 @@
 /** 一块瓦片里的一条要素（登记进 id 表所需的最小信息） */
 export interface MvtDecodedFeature {
   id: number;
-  properties: { h?: unknown; lv?: unknown; k?: unknown; b?: unknown; [k: string]: unknown };
+  properties: { h?: unknown; lv?: unknown; k?: unknown; b?: unknown; p?: unknown; hb?: unknown; [k: string]: unknown };
 }
 
 interface Reader {
@@ -103,7 +103,9 @@ export function decodeMvtFeatures(bytes: Uint8Array): MvtDecodedFeature[] {
       if (!(f.id > 0)) continue;
       const properties: Record<string, unknown> = {};
       for (let i = 0; i + 1 < f.tags.length; i += 2) properties[keys[f.tags[i]]] = values[f.tags[i + 1]];
-      out.push({ id: f.id, properties: { h: properties.h, lv: properties.lv, k: properties.k, b: properties.b } });
+      /* `p` = 部件码（0 主体 / 1 裙楼 / 2 塔楼 / 3 退台 / 4 女儿墙 / 5 屋顶 / 6 设备箱 / 7 天线），
+         `hb` = 该件的挤出基座。**拆件后同一个 id 会有多件** ⇒ 登记侧必须只取主体（见 wsMvtCoverage）。 */
+      out.push({ id: f.id, properties: { h: properties.h, lv: properties.lv, k: properties.k, b: properties.b, p: properties.p, hb: properties.hb } });
     }
   }
   return out;

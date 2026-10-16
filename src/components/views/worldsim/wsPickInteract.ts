@@ -59,6 +59,7 @@ import { aiFeatureCollection } from "./wsAiLayers";
 import type { WsDistrictPin } from "./wsActors";
 import { snapToRoad } from "./wsSnap";
 import { buildingCardData, type CardData } from "./wsBuildingCard";
+import { bldClickLayerNames, pickableBldLayers } from "./wsBldPickLayers";
 import { bldTierOfZoom } from "./wsBldBudget";
 import { ROAM_PIN_ID, roamStore } from "./wsJoystick";
 import type { NameRenderNode } from "./wsNameLayer";
@@ -547,11 +548,16 @@ export function createPickInteract(ctx: PickInteractCtx) {
    *  · `z ≥ 14` ⇒ 三条挤出层（主体 / 女儿墙 / 设备箱+天线）。
    *  zoom 读不出来（`null`）⇒ 按**两条都查**（点选是"用户明确点了一下"，宁可不命中也不能漏掉
    *     一栋明明画着的楼；层不存在时 `queryRenderedFeatures` 会抛 ⇒ 由调用处照旧降级到屏幕距离）。 */
-  function bldClickLayersNow(m: { getZoom?: () => number } | null): string[] {
+  function bldClickLayersNow(m: { getZoom?: () => number; getLayer?: (id: string) => unknown } | null): string[] {
     const tier = bldTierOfZoom(m && typeof m.getZoom === "function" ? m.getZoom() : null);
-    if (tier === 0) return ["bld-foot"];
-    if (tier === 1) return ["bld-ext", "bld-roof", "bld-equip"];
-    return ["bld-foot", "bld-ext", "bld-roof", "bld-equip"];
+    /* 档位 → 层名（纯函数）→ **再按层真实存在过滤**。
+       `?mvt=1` 那条路没有 `bld-roof`/`bld-equip`，写死层名会让 `queryRenderedFeatures` 抛 ⇒
+       一律掉到兜底（在原路 store 那 15 栋里按屏幕距离找），于是"看到的不是点到的"。
+       取不到 `getLayer`（老桩/降级）⇒ 不过滤，保持原行为。 */
+    const wanted = bldClickLayerNames(tier);
+    if (!m || typeof m.getLayer !== "function") return wanted;
+    const filtered = pickableBldLayers(wanted, (id) => !!m.getLayer!(id));
+    return filtered;
   }
 
   /** 点**楼体**（地图上的挤出层 / 足迹层）—— 与点标签弹**同一张卡** */

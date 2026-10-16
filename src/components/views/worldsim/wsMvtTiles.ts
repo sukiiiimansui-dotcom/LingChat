@@ -145,7 +145,10 @@ export function createMvtTiles(opts: MvtTilesOptions = {}): MvtTiles {
        解码失败/属性缺失**如实计数**，绝不让它变成"表里悄悄少几栋"。 */
     if (opts.idTable) {
       try {
-        const feats = (opts.decode || decodeMvtFeaturesAsync)(u8);
+        const all = (opts.decode || decodeMvtFeaturesAsync)(u8);
+        /* 拆件后**同 id 多件**（主体 p=0 / 女儿墙 4 / 设备箱 6 / 天线 7）⇒ id 表**只登记主体**，
+           否则女儿墙顶高与主体高度会被判成"同 id 元数据冲突"（实测 1064 条假冲突）。 */
+        const feats = all.filter((f) => Number(((f.properties || {}) as { p?: unknown }).p || 0) === 0);
         const tileKey = url.replace(/^\//, "").replace(/\.pbf.*$/, "");
         const r = opts.idTable.registerTileFromFeatures(tileKey, feats);
         facts.registeredTiles += 1;

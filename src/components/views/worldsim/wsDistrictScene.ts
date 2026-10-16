@@ -497,25 +497,60 @@ export function mvtHeightColorExpression(): unknown[] {
   return [base[0], base[1], ["coalesce", ["get", "h"], 8], ...base.slice(3)];
 }
 
-/** `?mvt=1` 的楼房图层规格：与 GeoJSON 路**同一批 id / 同一套 fill-extrusion 语义**，
- *  但只读瓦片带的属性（`h` / `b`）。瓦片里没有 `color3d`/`h3d`/`part` ⇒ 只出足迹与主体两层。 */
+/** `?mvt=1` 的楼房图层规格：与 GeoJSON 路**同一批 id、同一套档位语义**，但只读瓦片带的属性。
+ *
+ *  瓦片里每栋有 `h`（真高/层数×3/按类型估，与运行时同源）· `lv/k/b` · 拆件后另有
+ *  `p`（部件码 0 主体 / 1 裙楼 / 2 塔楼 / 3 退台 / 4 女儿墙 / 5 屋顶 / 6 设备箱 / 7 天线）·
+ *  `hb`（该件的挤出基座）· `zt`（档位 0/1/2）。
+ *  **五层与原路一一对应**：`bld-foot` / `bld-ext` / `bld-roof` / `bld-equip` / `bld-line`；
+ *  档位门控与原路同一份常量（女儿墙 z≥14、设备箱 z≥16、描边 z≥14）。
+ *
+ *  ⚠️ 已知差异（本条**只做结构对齐**，没有主题取参）：原路的屋顶/设备箱颜色取自要素自带的
+ *  `color3d`（同一张色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深），瓦片里不带 `color3d`
+ *  ⇒ 这里三条挤出层共用同一份高度色阶 ⇒ **屋顶件与主体同色、层次弱一些**。要补齐需要把主题
+ *  取参（`bldArtParamsOf` 那一份）传进本函数，属下一片的事，不在这里偷偷改色。 */
 export function mvtBldLayerSpecs(): Array<Record<string, unknown>> {
   const color = mvtHeightColorExpression();
+  /* 档位过滤：**与原路同一个表达式形状**（`zt` 是瓦片里带的整数） */
+  const tierFilter = (t: 0 | 1 | 2): unknown[] =>
+    t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+  const detailPaint = {
+    "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
+    "fill-extrusion-base": ["coalesce", ["get", "hb"], 0],
+    "fill-extrusion-opacity": 0.95,
+    "fill-extrusion-color": color,
+  };
+  const src = { source: "bld", "source-layer": "bld" };
   return [
     {
-      id: "bld-foot", type: "fill", source: "bld", "source-layer": "bld",
+      id: "bld-foot", type: "fill", ...src,
       minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+      filter: tierFilter(0),
       paint: { "fill-color": color, "fill-opacity": WS_BLD_FOOTPRINT_OPACITY },
     },
     {
-      id: "bld-ext", type: "fill-extrusion", source: "bld", "source-layer": "bld",
+      id: "bld-ext", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-      paint: {
-        "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
-        "fill-extrusion-base": 0,
-        "fill-extrusion-opacity": 0.95,
-        "fill-extrusion-color": color,
-      },
+      filter: tierFilter(0),
+      paint: { ...detailPaint },
+    },
+    {
+      id: "bld-roof", type: "fill-extrusion", ...src,
+      minzoom: WS_BLD_DETAIL_ROOF_ZOOM,
+      filter: tierFilter(1),
+      paint: { ...detailPaint },
+    },
+    {
+      id: "bld-equip", type: "fill-extrusion", ...src,
+      minzoom: WS_BLD_DETAIL_EQUIP_ZOOM,
+      filter: tierFilter(2),
+      paint: { ...detailPaint },
+    },
+    {
+      id: "bld-line", type: "line", ...src,
+      minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
+      filter: tierFilter(0),
+      paint: { "line-color": color, "line-width": 0.6 },
     },
   ];
 }

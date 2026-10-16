@@ -39,6 +39,8 @@ export interface CoverageFacts {
   totalMs: number;
   /** 因为 `maxTiles` 被跳过的块数（覆盖集合大于本轮上限时） */
   skippedOverCap: number;
+  /** 拆件后**同一个 id 会有多件**（主体/女儿墙/设备箱/天线）⇒ id 表只登记主体，这里记被跳过的部件数（不静默） */
+  skippedParts: number;
   lastError: string | null;
 }
 
@@ -106,7 +108,8 @@ export function createCoverageRegistrar(deps: CoverageDeps) {
   });
   const seen = new Set<string>();
   const facts: CoverageFacts = { rounds: 0, requested: 0, registeredTiles: 0, registeredFeatures: 0,
-    missing: 0, decodeFailures: 0, metaConflicts: 0, lastRoundMs: 0, totalMs: 0, skippedOverCap: 0, lastError: null };
+    missing: 0, decodeFailures: 0, metaConflicts: 0, lastRoundMs: 0, totalMs: 0, skippedOverCap: 0,
+    skippedParts: 0, lastError: null };
   let inFlight = false;
 
   /** 瓦片键 → 站点路径（`mvt://mvt/{z}/{x}/{y}.pbf` 与 `/mvt/{z}/{x}/{y}.pbf` 都收） */
@@ -140,8 +143,12 @@ export function createCoverageRegistrar(deps: CoverageDeps) {
     }
     let feats: Array<{ id: number; properties: Record<string, unknown> }>;
     try { feats = decode(bytes); } catch (e) { facts.decodeFailures += 1; facts.lastError = String((e as Error)?.message || e).slice(0, 120); return false; }
+    /* 拆件后**同 id 多件**：主体（`p` 缺省/0）之外的部件**不进 id 表** ——
+       否则女儿墙（顶高 17.8）与主体（17.2）会被登记成"同 id 元数据冲突"（实测 1064 条假冲突）。 */
+    const bodies = feats.filter((f) => Number((f.properties || {}).p || 0) === 0);
+    facts.skippedParts += feats.length - bodies.length;
     let added = 0;
-    try { added = deps.idTable.registerTileFromFeatures(key, feats).added; }
+    try { added = deps.idTable.registerTileFromFeatures(key, bodies).added; }
     catch (e) { facts.lastError = String((e as Error)?.message || e).slice(0, 120); return false; }
     facts.registeredTiles += 1;
     facts.registeredFeatures += added;

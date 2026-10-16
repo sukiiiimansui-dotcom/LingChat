@@ -13,24 +13,24 @@
 <!-- LOC-BADGE:BEGIN（这段由 .github/workflows/loc-badge.yml 每天重写，别手改） -->
 | 代码量（不含空行与整行注释） | 本仓 | 官方 `dev` | 净增 |
 |---|---:|---:|---:|
-| Rust | 77,822 | 59,606 | +18,216 |
-| TypeScript | 57,547 | 31,355 | +26,192 |
-| Vue | 55,904 | 42,488 | +13,416 |
-| JavaScript | 11,104 | 924 | +10,180 |
-| HTML | 10,491 | 247 | +10,244 |
-| CSS | 4,769 | 3,002 | +1,767 |
+| Rust | 77,822 | 65,244 | +12,578 |
+| TypeScript | 59,688 | 32,623 | +27,065 |
+| Vue | 56,059 | 44,997 | +11,062 |
+| JavaScript | 11,134 | 1,057 | +10,077 |
+| HTML | 10,608 | 247 | +10,361 |
+| CSS | 4,769 | 454 | +4,315 |
 | Python | 694 | 461 | +233 |
 | Shell | 107 | 98 | +9 |
-| **合计** | **218,438**（21.8 万行） | **138,181**（13.8 万行） | **+80,257** |
+| **合计** | **220,881**（22.1 万行） | **145,181**（14.5 万行） | **+75,700** |
 <!-- LOC-BADGE:END -->
 
 ---
 ## 当前阶段
 
-正在尝试将maplibre几何挤出楼房替换为three.js
+- **正在尝试将maplibre几何挤出楼房替换为three.js**
 
 
-地图正在尝试自写 MVT 瓦片 用数字id取楼房数据
+- **地图正在尝试自写 MVT 瓦片 用数字id取楼房数据**
 
 
 ## 这是什么
@@ -38,10 +38,10 @@
 LingChat 的个人实验分支：想给聊天加一层「世界」，让角色不只在聊天框里，还能在一张**真实的地图**上活动喵。
 
 - 官方项目：**[SlimeBoyOwO/LingChat](https://github.com/SlimeBoyOwO/LingChat)**（想玩官方的去这里）
-- 本仓库在改的分支：[`feat/worldsim`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
+- 本仓库在改的分支：[`dev`](https://github.com/sukiiiimansui-dotcom/LingChat/tree/dev)
 - 进度都记在：**[issue #858](https://github.com/SlimeBoyOwO/LingChat/issues/858)**
 
-## 改了什么
+## 当前进行方案与过去方案对比
 
 |  | 原来方案 | 现在方案 |
 |---|---|---|

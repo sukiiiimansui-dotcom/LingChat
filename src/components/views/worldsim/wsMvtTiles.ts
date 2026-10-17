@@ -1,5 +1,5 @@
 /**
- * MVT 瓦片取数层（`?mvt=1` 先导）——`addProtocol("mvt", …)` 的 loader 与计数。
+ * MVT 瓦片取数层（**默认开**，`?mvt=0` 显式关）——`addProtocol("mvt", …)` 的 loader 与计数。
  *
  * 与工具仓那份同源（`world_map/mvt-spike/tools/wsMvtTiles.mjs` + `mvt-worker-protocol.js`），
  * 本文件是**宿主侧**那一半：主线程注册 + worker 注入 + 计数。三条实测约束（都来自 2026-10-10 的读数）：
@@ -16,10 +16,41 @@
  * 空瓦片 / 降级（fallback）/ 错误。**降级不许静默**。
  */
 
-/** `?mvt=1` 的**唯一**判定处（宿主与取数层共用同一个正则，别写第二份） */
+/**
+ * MVT 那条路的**唯一**判定处（宿主与取数层共用，别写第二份）。
+ *
+ * **2026-10-17 起默认开**（主人拍板「mvt 改成默认」）；`?mvt=0` / `?mvt=false` 显式关，
+ * 关掉即**逐字节回到 GeoJSON 那条路**（`ws_bldlanding_move_selftest` 的影子对拍 diff 0 为证）。
+ * `?mvt=1` 仍照旧表示"强制开"，供真机对拍用。
+ *
+ * 没有 `location`（Node 自检 / 非浏览器）时**按默认开**处理，除非显式传 `search`。
+ */
 export function mvtEnabled(search?: string): boolean {
   const q = search !== undefined ? search : (typeof location !== "undefined" ? location.search : "");
-  try { return /[?&]mvt=1\b/.test(q); } catch { return false; }
+  try {
+    if (/[?&]mvt=(0|false|off)\b/i.test(q)) return false;   // 显式关（回退口）
+    return true;                                            // 默认开；`?mvt=1` 也走这里
+  } catch { return true; }
+}
+
+/**
+ * **overlay 后端与 MVT 互斥的护栏**（2026-10-17 默认翻转时加）。
+ *
+ * `wsOverlayBackend.grabBld()` 是从 `map.getSource("bld").getData()` 取 **FeatureCollection** 的；
+ * **vector 源没有 `getData`** ⇒ 两者同开时 overlay **静默拿不到楼**（屏幕上少一片楼，且不报错）。
+ * 在 M1 那条线把 overlay 改成读 vector 源（`querySourceFeatures`）之前：**overlay 开着就不启用 MVT**，
+ * 宁可少一条新路，也不让默认路径上少一片楼。`three` 后端不依赖地图源（实测无引用）⇒ 不在护栏内。
+ *
+ * `?renderer=` 的解析真源在 `WsCityEntry.vue`（boot 参数）；这里只读同一个参数名做护栏，
+ * 若那边改名，这里要一起改。持久化偏好走共享的 `readRendererPref()`（不写第二份）。
+ */
+function overlayNeedsGeo(): boolean {
+  try {
+    const q = typeof location !== "undefined" ? location.search : "";
+    const m = /[?&]renderer=([a-z]+)/i.exec(q);
+    if (m) return String(m[1]).toLowerCase() === "overlay";
+  } catch { /* 取不到 URL 就只看偏好 */ }
+  try { return readRendererPref() === "overlay"; } catch { return false; }
 }
 
 /** 瓦片模板（`mvt://` 由协议 loader 转成站点路径；见 `protocolHandler`） */
@@ -34,6 +65,7 @@ export const MVT_WORKER_PROBE = "/mvt-worker-probe.js";
 export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
 
 import { decodeMvtFeatures } from "./wsMvtDecode";
+import { readRendererPref } from "./wsRenderBackend";
 import { createCoverageRegistrar, type CoverageBounds, type CoverageResult } from "./wsMvtCoverage";
 
 /** gzip 魔数 */
@@ -245,6 +277,27 @@ export async function setupMvtProtocol(
   /* **运行期自适应**：先问 worker 有没有解压器 —— 没有就不注册协议、直接走普通 URL 源，并计数。
      拿不到答案（探针超时/无 Worker）⇒ 也按"没有"处理（选更保守、在两个发货口径下都能落地的那条）。 */
   const cap = await probeWorkerCapabilities();
+  /* **安全降级（2026-10-17 默认开之后新增）**：默认开着，但这条路的磁盘瓦片是 gzip 的，
+     而 worker 侧的解压器是"能不能解"的唯一支点。解压器缺失时**不再**退到"普通 URL 源"
+     （那条路 MapLibre 直接取字节、没有 Content-Encoding ⇒ 拿 gzip 当 protobuf 解 ⇒ 图上什么都没有，
+     而且**一声不响**）⇒ 这里**把整条 MVT 路关掉**，逐字节回到 GeoJSON 那条老路，并如实记账。
+     `?mvt=1` 是强制口（真机排障用）：强制时仍按老逻辑退到普通 URL 源。 */
+  const forced = (() => { try { return /[?&]mvt=1\b/.test(typeof location !== "undefined" ? location.search : ""); } catch { return false; } })();
+  /* overlay 与 MVT 互斥（见 `overlayNeedsGeo` 的说明）：不强开时直接不启用，并记账。 */
+  if (!forced && overlayNeedsGeo()) {
+    (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = {
+      enabled: false, reason: "overlay-needs-geojson",
+      note: "overlay 后端从 bld 源取 FeatureCollection（vector 源没有 getData）⇒ 两者互斥，MVT 本次不启用",
+    };
+    return null;
+  }
+  if (!cap.hasDecompressionStream && !forced) {
+    (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = {
+      enabled: false, reason: "no-decompression-stream", probe: cap,
+      note: "默认开但 worker 里没有 DecompressionStream ⇒ 整条 MVT 关掉，回到 GeoJSON 路（不静默变差）",
+    };
+    return null;
+  }
   const mode: MvtMode = cap.hasDecompressionStream ? "protocol" : "plain";
   if (mode === "protocol") {
     try { await tiles.register(ml as { addProtocol?: unknown; importScriptInWorkers?: unknown }); }
@@ -269,7 +322,7 @@ export async function setupMvtProtocol(
   return RUNTIME;
 }
 
-/** 给宿主用：`?mvt=1` 时返回**本次运行期选出来**的瓦片模板，否则 `null`（关掉那条路**一字节都不碰**） */
+/** 给宿主用：开关开着时返回**本次运行期选出来**的瓦片模板，否则 `null`（关掉那条路**一字节都不碰**） */
 export function mvtTemplateForHost(): string | null {
   return mvtEnabled() && RUNTIME && RUNTIME.enabled ? RUNTIME.template : null;
 }

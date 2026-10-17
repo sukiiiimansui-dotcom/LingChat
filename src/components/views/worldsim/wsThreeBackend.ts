@@ -311,6 +311,8 @@ export function createThreeBackend(): WsRenderBackend {
       toLocal: (lng, lat) => toLocal(frame as Frame, lng, lat),
       themeId,
       cap: BLD_CAP,
+      /* S5：three 这条路的相机帧已经算出真实 mpp（512px 瓦片口径），直接喂 LOD */
+      lod: lastMpp > 0 ? { mpp: lastMpp } : undefined,
     });
     diag.buildings = data.stats.buildings;
     diag.capped = data.stats.capped;

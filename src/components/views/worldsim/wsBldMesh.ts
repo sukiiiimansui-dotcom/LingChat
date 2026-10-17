@@ -29,7 +29,7 @@ import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
 import { bandRingsOf, massingOf, modelPartsOf, type BldPartLike } from "./wsBldModel";
-import { DEFAULT_LOD_MPP, DETAIL_VERTS_MAX, mppAtZoom, sharedBldLodState, type BldLodState, type LodTier } from "./wsBldLod";
+import { DEFAULT_LOD_MPP, DETAIL_VERTS_MAX, lodMppNow, mppAtZoom, sharedBldLodState, type BldLodState, type LodTier } from "./wsBldLod";
 import { ROOF_VERTS_MAX, roofKindEligible, roofPlanOf, type RoofPlan } from "./wsBldRoof";
 
 type Pt2 = readonly [number, number];
@@ -325,7 +325,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const lodMpp = (() => {
     const v = Number(input.lod?.mpp);
     if (Number.isFinite(v) && v > 0) return v;
-    return urlLodMpp() ?? DEFAULT_LOD_MPP;
+    /* 排查口优先：?mpp= / ?z= > 真机 MapLibre 实时 mpp > 默认 z16.4 */
+    return urlLodMpp() ?? lodMppNow() ?? DEFAULT_LOD_MPP;
   })();
   const pitchCos = (() => {
     const v = Number(input.lod?.pitchCos);

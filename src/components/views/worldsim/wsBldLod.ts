@@ -15,9 +15,9 @@ export const LOD_DETAIL_PX = 32;
 export const LOD_FULL_PX = 72;
 export const LOD_HYSTERESIS = 0.15;
 /** 细节顶点预算（只算女儿墙/设备/天线；体块不算） */
-export const DETAIL_VERTS_MAX = 36_000;
-/** 默认 mpp：z16.4 · 纬度 29.56°（米/CSS 像素）。真机接线前 `?model=1` 用这个。 */
-export const DEFAULT_LOD_MPP = 1.574;
+export const DETAIL_VERTS_MAX = 22_000;
+/** 默认 mpp：z16.4 · 纬度 29.56°（米/CSS 像素，512px 瓦片口径）。真机接线前 `?model=1` 用这个。 */
+export const DEFAULT_LOD_MPP = 0.787;
 
 export type LodTier = 0 | 1 | 2;
 
@@ -60,9 +60,40 @@ export function createBldLodState(): BldLodState {
 /** 进程内共享状态（App/页面各自一份；自检可自己 create 一份，避免互相污染） */
 export const sharedBldLodState = createBldLodState();
 
-/** zoom + 纬度 → 米/CSS 像素（Web Mercator；与 `bldMetersPerCssPixel` 同式） */
+/* ── S5：真机 zoom → mpp 的**只读实时上下文**（由 MVT 覆层/three 相机写入） ──
+   只在重建时读；稳态每帧不读、不判。`?z=`/`?mpp=` 仍优先于它（排查口）。 */
+let liveMpp: number | null = null;
+
+/** MapLibre 视野变化时写一次（`mvtCoverageRun` 调；lat 用 bounds 中心） */
+export function noteView(zoom: number, lat = 29.56): void {
+  const z = Number(zoom);
+  if (!Number.isFinite(z)) return;
+  const m = mppAtZoom(z, lat);
+  if (m > 0) liveMpp = m;
+}
+
+/** 直接写 mpp（three 相机帧用；给不到 zoom 时） */
+export function noteMpp(mpp: number): void {
+  const m = Number(mpp);
+  if (Number.isFinite(m) && m > 0) liveMpp = m;
+}
+
+/** 最近一次真机视野的 mpp；没写过 ⇒ null（`wsBldMesh` 再退默认） */
+export function lodMppNow(): number | null {
+  return liveMpp;
+}
+
+/** 自检/换图时清空（不影响共享 LOD 档状态） */
+export function resetLiveView(): void {
+  liveMpp = null;
+}
+
+/** zoom + 纬度 → 米/CSS 像素（Web Mercator）。
+ *  ⚠️ 必须用 MapLibre 的 **512px 瓦片**口径：`40075016.686 / 512 ≈ 78271.517`；
+ *  `156543.03392` 是 **256px 瓦片**的旧口径，会让 Hpx 大一倍、细节晚一档出现。
+ *  与 `wsBldBudget.bldMetersPerCssPixel` 同式（那边是唯一真源，自检对拍）。 */
 export function mppAtZoom(zoom: number, lat = 29.56): number {
   const z = Number.isFinite(zoom) ? zoom : 16.4;
   const la = Number.isFinite(lat) ? lat : 29.56;
-  return (156543.03392 * Math.cos((la * Math.PI) / 180)) / Math.pow(2, z);
+  return ((40075016.686 / 512) * Math.cos((la * Math.PI) / 180)) / Math.pow(2, z);
 }

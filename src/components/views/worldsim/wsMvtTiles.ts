@@ -74,6 +74,7 @@ export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
 
 import { decodeMvtFeatures } from "./wsMvtDecode";
 import { createCoverageRegistrar, type CoverageBounds, type CoverageResult } from "./wsMvtCoverage";
+import { noteView } from "./wsBldLod";
 /* **profile 的纯逻辑**（无 vue）：目录映射只有 `bldMvtDirOf` 一处；本文件只拼模板。 */
 import { bldMvtDirOf, effectiveBldProfile, type WsBldProfile } from "./wsBldProfile";
 
@@ -352,6 +353,22 @@ export function mvtTemplateForHost(): string | null {
  * 关闭 / 未注册 ⇒ 立刻 return（那条路一字节都不碰）。**不 await**：登记不该拖住落图。
  */
 export function mvtCoverageRun(bounds: CoverageBounds | null | undefined, zoom: number | null | undefined): Promise<CoverageResult | null> {
+  /* S5：真机 MapLibre 的 zoom 在这里进 LOD 上下文；只在视野变化时写一次，稳态每帧不调。
+     `?z=`/`?mpp=` 在 `wsBldMesh` 里优先于它，作为排查口。 */
+  const z = Number(zoom);
+  if (Number.isFinite(z)) {
+    let lat = 29.56;
+    try {
+      if (bounds) {
+        const south = Number(bounds.getSouth());
+        const north = Number(bounds.getNorth());
+        if (Number.isFinite(south) && Number.isFinite(north)) lat = (south + north) / 2;
+      }
+    } catch {
+      /* bounds 读不到就用默认纬度；不阻断覆盖登记 */
+    }
+    noteView(z, lat);
+  }
   if (!RUNTIME || !RUNTIME.coverage) return Promise.resolve(null);
   return RUNTIME.coverage.run(bounds, zoom).catch(() => null);
 }

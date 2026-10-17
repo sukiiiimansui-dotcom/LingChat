@@ -22,7 +22,7 @@
  */
 
 import { atlasUvOf, cellOf, repeatOf, ROOF_CELL_INDEX } from "./wsBldFacade";
-import { ROOF_MUL, toonMulOf, toonBandOf } from "./wsToon";
+import { ROOF_MUL, bandsForBase, toonBandOf, toonMulOf } from "./wsToon";
 import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
@@ -253,6 +253,21 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const featBox: number[] = [];
   const featureIds: string[] = [];
   const featureMeta: Array<{ color: string; h3d: number; hBase: number }> = [];
+  /* 每栋基色 → 三档系数（缓存；同一基色只算一次） */
+  const bandsCache = new Map<string, { k: [number, number, number]; mix: [number, number, number] }>();
+  const bandsOf = (hex: string): { k: [number, number, number]; mix: [number, number, number] } => {
+    const hit = bandsCache.get(hex);
+    if (hit) return hit;
+    const v = bandsForBase(hex);
+    bandsCache.set(hex, v);
+    return v;
+  };
+  /** 档位最终乘性系数（白混在调用处用 mix 处理；这里只给乘性部分） */
+  const toonK = (hex: string, k: number, bands: { k: [number, number, number] }): { band: number; idx: 0 | 1 | 2 } => {
+    const bandK = toonBandOf(k, bands.k as unknown as [number, number, number]);
+    const idx: 0 | 1 | 2 = bandK <= bands.k[0] ? 0 : bandK <= bands.k[1] ? 1 : 2;
+    return { band: bandK, idx };
+  };
   let list = input.features;
   /* 超过上限时**先画离锚点最近的**（近处的楼才是用户真正在看的那一批）。
      排序用要素自己的第一个坐标当代表点 —— 精确到米没必要，这只是"先画谁"的取舍。 */
@@ -351,11 +366,15 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           const el = Math.hypot(ex, ez) || 1;
           /* **卡通三级明暗 + 暖冷分色**（2026-10-17）：连续 k 先分档，再乘该档的暖冷系数。
              判据（L* 阶差、色相差）在 `world_map/ws_toon_selftest.mjs` 里离线算。 */
-          const band = toonBandOf(shadeOf(-ez / el, 0, ex / el));
-          const tm = toonMulOf(band);
-          const wr = rgb[0] * tm[0];
-          const wg = rgb[1] * tm[1];
-          const wb = rgb[2] * tm[2];
+          /* 档位系数**按该栋基色反推**（保证暗侧 L\* ≥64，任何主题都不发黑） */
+          const bs = bandsOf(hex);
+          const tk = toonK(hex, shadeOf(-ez / el, 0, ex / el), bs);
+          const tm = toonMulOf(tk.band, tk.idx);
+          const mixW = bs.mix[tk.idx]!;
+          /* 白混：乘性系数到顶后的"亮面提亮"（防止深色基色被夹在上限下） */
+          const wr = rgb[0] * tm[0] * (1 - mixW) + mixW;
+          const wg = rgb[1] * tm[1] * (1 - mixW) + mixW;
+          const wb = rgb[2] * tm[2] * (1 - mixW) + mixW;
           /* 立面：这面墙的重复次数（横向按边长、竖向按层数/楼高）与图集格 */
           const cellRect = atlasUvOf(cellOf(fId));
           const rep = repeatOf(el, top - base, (props as { lv?: unknown }).lv);

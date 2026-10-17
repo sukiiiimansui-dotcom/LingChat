@@ -825,6 +825,78 @@ export function createJoystickStage(ctx: JoystickStageCtx) {
     void refreshBundles("joyhalt").then(() => (aliveNow() ? refreshNames("joyhalt") : undefined));
   }
 
+  /* ── 桌面端键盘驱动（WASD / 方向键）────────────────────────────────────────────
+     走的**还是 `onJoyDrive` 这一条驱动**：键盘每帧合成一个屏幕向量（≈ 摇杆满推的 0.8），
+     与触屏摇杆同一条相机/名字层通路 ⇒ 不用第二套移动实现。
+     只在该页挂载期间生效；输入框获得焦点时**不抢键**（否则在聊天框里打 w 会推地图）。
+     返回解绑函数，宿主卸载时调用。 */
+  function keyDriveBind(): () => void {
+    const KEY_VEC: Record<string, [number, number]> = {
+      w: [0, -1], a: [-1, 0], s: [0, 1], d: [1, 0],
+      arrowup: [0, -1], arrowleft: [-1, 0], arrowdown: [0, 1], arrowright: [1, 0],
+    };
+    const held = new Set<string>();
+    let raf = 0;
+    let last = 0;
+    const isEditable = (t: EventTarget | null): boolean => {
+      const el = t as HTMLElement | null;
+      if (!el) return false;
+      const tag = (el.tagName || "").toLowerCase();
+      return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable === true;
+    };
+    const step = (): void => {
+      raf = 0;
+      if (!held.size) return;
+      let dx = 0;
+      let dy = 0;
+      for (const k of held) {
+        const v = KEY_VEC[k];
+        if (v) { dx += v[0]; dy += v[1]; }
+      }
+      const len = Math.hypot(dx, dy) || 1;
+      /* 6 px/帧 ≈ 摇杆推满时的中速；斜向归一化，避免"斜着走更快" */
+      const px = 6;
+      onJoyDrive({ dx: (dx / len) * px, dy: (dy / len) * px }, undefined, undefined, "push", 16);
+      const now = performance.now();
+      last = now;
+      raf = window.requestAnimationFrame(step);
+    };
+    const down = (e: KeyboardEvent): void => {
+      const k = e.key.toLowerCase();
+      if (!(k in KEY_VEC)) return;
+      if (isEditable(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      held.add(k);
+      e.preventDefault();
+      if (!raf) { last = performance.now(); raf = window.requestAnimationFrame(step); }
+    };
+    const up = (e: KeyboardEvent): void => {
+      const k = e.key.toLowerCase();
+      if (!(k in KEY_VEC)) return;
+      if (!held.has(k)) return;
+      held.delete(k);
+      if (!held.size) {
+        if (raf) { window.cancelAnimationFrame(raf); raf = 0; }
+        onJoyHalt();
+      }
+    };
+    const blur = (): void => {
+      if (!held.size) return;
+      held.clear();
+      if (raf) { window.cancelAnimationFrame(raf); raf = 0; }
+      onJoyHalt();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+      if (raf) { window.cancelAnimationFrame(raf); raf = 0; }
+    };
+  }
+
   return {
     joyCalibrate,
     joyApplyRoam,
@@ -846,5 +918,7 @@ export function createJoystickStage(ctx: JoystickStageCtx) {
     scaleNow: () => joyScale,
     moveNow: () => joyMove,
     resetAcc: (): void => { joyAccX = 0; joyAccY = 0; },
+    /* 桌面端 WASD/方向键：与摇杆同一条驱动；宿主挂载时 bind、卸载时解绑 */
+    keyDriveBind,
   };
 }

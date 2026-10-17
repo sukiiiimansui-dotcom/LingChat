@@ -1831,9 +1831,12 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   });
   const {
     joyCalibrate, joyApplyRoam, joyReadCam, joyEnter, joyExit,
-    onJoyDrive, onJoyHalt,
+    onJoyDrive, onJoyHalt, keyDriveBind,
     prevCamNow, setPrevCam, originNow, moveNow, scaleNow, resetAcc,
   } = joyStage;
+  /* 桌面端 WASD / 方向键：与触屏摇杆**同一条驱动**（`onJoyDrive`），挂载即绑、卸载解绑。
+     输入框有焦点时不抢键（由 `keyDriveBind` 内部判 `isEditable`）。 */
+  const unbindKeyDrive = keyDriveBind();
 
   /* 面板里的开关（`WsCharPanel` → `WsCityEntry` → `:joy`）在运行时会变 ⇒ 这两件事跟着它走：
      打开 = 进近景（记快照 + 抬头），关闭 = **逐字还原**（相机回快照、DOM 卸载、位置真源清空）。
@@ -2617,6 +2620,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   });
 
   onBeforeUnmount(() => {
+    try { unbindKeyDrive(); } catch { /* 解绑失败不影响卸载 */ }
     alive = false;
     /* 摇杆会话**就地作废**（不重算 —— 这一屏马上就没了）：`alive=false` 之后 `onJoyHalt`
        本来也会早退，但这里显式清一次，免得"标志留在 true 上"这种事再被后来的人踩。 */

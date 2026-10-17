@@ -140,11 +140,24 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
      *    但**如实记下各自几条**（`counts`），让下游能说清"是没有数据，还是没画"。 */
     let buildings = await grab("bld");
     let roads = await grab("roads");
+    /* **只等"有可能靠 getData 拿到"的源**：MVT 默认开时 `bld` 是 vector 源（没有 `getData`），
+       等它 3 秒是纯空转（叠加层那边走 `querySourceFeatures` 自己读）。以前这里会无条件等满
+       3 秒 —— 切到叠加层的启动切换因此实测慢了 ~3 秒。 */
+    const geoOf = (id: string): boolean => {
+      try {
+        const s = map?.getSource?.(id) as { getData?: unknown } | null | undefined;
+        return !!s?.getData;
+      } catch {
+        return false;
+      }
+    };
+    const waitB = geoOf("bld");
+    const waitR = geoOf("roads");
     const deadline = Date.now() + CAPTURE_WAIT_MS;
-    while ((!buildings || !roads) && Date.now() < deadline) {
+    while (((waitB && !buildings) || (waitR && !roads)) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 150));
-      if (!buildings) buildings = await grab("bld");
-      if (!roads) roads = await grab("roads");
+      if (waitB && !buildings) buildings = await grab("bld");
+      if (waitR && !roads) roads = await grab("roads");
     }
     if (!buildings && !roads) return null;
     return {

@@ -453,11 +453,16 @@ export const rendererPref: Ref<WsRenderBackendId> = ref(readRendererPref());
 /**
  * **真的挂在台上**的那个后端（与 `rendererPref` 可能短暂不同：初始化失败时会退回 map）。
  *
- * 初值**永远**是 `map`（哪怕上次存的是 three）：地图那条路**必须先跑到就绪**，
- * 才有 center/zoom 可交接、也才有 `bld` 那份世界数据可捞。存了 three 的偏好会在
+ * 初值**永远**是 `map`（哪怕上次存的是 three / overlay）：地图那条路**必须先跑到就绪**，
+ * 才有 center/zoom 可交接、也才有 `bld` 那份世界数据可捞。存了别的偏好会在
  * 地图 ready 之后由舞台自动切过去（一次切换，用户看到的是"进来就是 3D"）。
+ *
+ * ⚠️ 这里**不能**写 `WS_RENDER_DEFAULT`：默认值在 2026-10-17 改成了 `overlay`，而本 ref 是
+ * "台上真正在跑的那个"。若初值跟着默认值变成 `overlay`，`rendererPref === rendererLive`
+ * 从一开始就成立 ⇒ 舞台的启动切换判据（`pref !== live`）永远为假 ⇒ **叠加层一次都不会被创建**，
+ * 而 HUD/探针读到的 `live` 却是 `overlay`（假读数），台账里只剩 `map:running`。
  */
-export const rendererLive: Ref<WsRenderBackendId> = ref(WS_RENDER_DEFAULT);
+export const rendererLive: Ref<WsRenderBackendId> = ref<WsRenderBackendId>("map");
 /** 角色名单（宿主每轮把钉子换算成经纬度推进来；两个后端读同一份） */
 export const contractActors: Ref<WsRenderActor[]> = ref([]);
 /** 主题与昼夜（宿主推进来；两个后端读同一份） */

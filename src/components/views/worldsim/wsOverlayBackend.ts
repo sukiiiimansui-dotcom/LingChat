@@ -21,6 +21,8 @@
 import { BLD_CAP, buildBldMeshData, outerRingsOf, type BldMeshData } from "./wsBldMesh";
 import {
   contractTheme,
+  ledgerMark,
+  ledgerPush,
   saneRadius,
   viewRadiusOf,
   type WsRenderActor,
@@ -121,7 +123,11 @@ export function createOverlayBackend(): WsRenderBackend {
   /** 局部平面框架的锚点（地图中心漂太远就重锚） */
   let anchor: { lat: number; lng: number; cos: number } | null = null;
   let state: "created" | "running" | "paused" | "destroyed" | "failed" = "created";
+  /** 生命周期台账的那一行（与 map / three 两个后端同一口径；探针读 `ledger` 判"谁在跑"） */
+  let instance = 0;
   let raf = 0;
+  /** 重建后补画的那串 RAF（把"连续非空帧"稳定窗口跑满；见 `kickStableDraws`） */
+  let stableRaf = 0;
   let frames = 0;
   /** **累计画出去多少帧**（`drawOnce` 每次 +1；地图驱动的 `frames` 只数 map render，别混） */
   let drawsTotal = 0;
@@ -549,6 +555,10 @@ export function createOverlayBackend(): WsRenderBackend {
       return;
     }
     rebuildCount += 1;
+    /* 落图数据确实到过（启动时间线 / 拆层稳定窗口的判据）：`sourcedata` 只在**新瓦片**落地时来，
+       冷启动时瓦片很可能在本后端订阅之前就下完了 ⇒ 只靠事件会让 `tlLandingAt` 永远为 0、
+       拆层判据永远不放行（地图那套 `bld-*` 一直留在屏上）。这里在"真建出非空网格"时补记。 */
+    if (!tlLandingAt) tlLandingAt = Math.round(performance.now() - T0);
     /* 一次性换上：先建好 three 对象，再掐掉旧的（中间没有"两个都不在"的帧） */
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(next.positions), 3));
@@ -655,6 +665,8 @@ export function createOverlayBackend(): WsRenderBackend {
        render，等它就等于这一批楼不显示。这一帧是**必要**的（新网格），要单独计数。 */
     drawsFromRebuild += 1;
     drawOnce();
+    /* 地图静止时不会再来 `render` ⇒ 拆层稳定窗口靠这里自己补满（见 `kickStableDraws`） */
+    kickStableDraws();
   }
 
   /** 最近一次从瓦片查询取到的：原始条数（含部件）/ 唯一 id 数 / 被丢掉的部件条数 */
@@ -696,8 +708,11 @@ export function createOverlayBackend(): WsRenderBackend {
     let feats: ReturnType<NonNullable<typeof m.querySourceFeatures>> = [];
     const tq = performance.now();
     try {
-      /* **所有源图层**都查（不传 sourceLayer ⇒ 全部）：瓦片里楼/部件可能分在不同 layer */
-      feats = m.querySourceFeatures("bld") || [];
+      /* **必须给 `sourceLayer`**：MapLibre 的 `querySourceFeatures(sourceId, {sourceLayer})` 在
+         矢量源上按**源图层名**取要素，不给就是查空串那一层（实测返回 0 条，静默）。
+         瓦片产物只有一个源图层 `bld`（`mvt-spike/tools/gen_mvt.mjs` 的 `LAYER`），
+         楼与拆件都在这一层里（用属性 `p` 区分）。 */
+      feats = m.querySourceFeatures("bld", { sourceLayer: "bld" }) || [];
     } catch {
       return null;
     }
@@ -713,16 +728,31 @@ export function createOverlayBackend(): WsRenderBackend {
     mvtPartsDropped = mapped.partsDropped;
     if (!mapped.features.length) return null;
     bldQueryFeatures = mapped.features.length;
-    return { type: "FeatureCollection", buildings: { type: "FeatureCollection", features: mapped.features } } as unknown as WsRenderFc;
+    /* 形状必须与 `grabBld` 的 GeoJSON 那条**同一份**（`WsRenderFc` = `{type, features}`）：
+       `rebuild()` 读的是 `fc.features`，包成 `{buildings:{…}}` 会被当成空网格。 */
+    return { type: "FeatureCollection", features: mapped.features } as unknown as WsRenderFc;
   }
 
   async function grabBld(): Promise<WsRenderFc | null> {
+    /* ① 矢量源（MVT 默认开）：`vector` 源**没有 `getData`**，官方入口是 `querySourceFeatures`
+       （见 `grabMvt`）。不先走这条，叠加层拿到的是 `null` ⇒ 0 栋楼 ⇒ 藏楼闸不放行 ⇒
+       屏幕上只剩地图那套平板。`?mvt=0` 时源是 GeoJSON，`grabMvt` 直接返回 null，走 ②。 */
+    const mvtFc = grabMvt();
+    if (mvtFc) {
+      lastSource = "mvt";
+      return mvtFc;
+    }
+    /* ② GeoJSON 源：原来那条 `getData` 路（行为不变）
+       ⚠️ 拿不到**不改** `lastSource`：它是"屏幕上这批楼从哪儿来"，不是"上一次取数成没成"。
+       拆层之后源没有图层消费者 ⇒ 后续 refresh 会取空，把来源改成 `none` 就成了假读数
+       （实测：137 栋在画，`diag.source` 却是 `none`）。 */
     try {
       const src = map?.getSource?.("bld");
       if (!src?.getData) return null;
       getDataCalls += 1;
       const d = (await src.getData()) as WsRenderFc | null;
       if (!d || !Array.isArray(d.features)) return null;
+      lastSource = "source";
       return { type: "FeatureCollection", features: d.features };
     } catch {
       return null;
@@ -738,7 +768,6 @@ export function createOverlayBackend(): WsRenderBackend {
       void (async () => {
         const fc = await grabBld();
         if (fc) {
-          lastSource = "source";
           rebuild(curThemeId, fc);
           refreshDone += 1;
           lastRefreshMs = performance.now();
@@ -1186,6 +1215,32 @@ export function createOverlayBackend(): WsRenderBackend {
     }
   }
 
+  /**
+   * 重建后**自己补画几帧**，把拆层那条"连续 ≥ `REMOVE_STABLE_FRAMES` 帧非空绘制"的稳定窗口跑满。
+   *
+   * 为什么需要（2026-10-18 实测）：默认驱动是地图的 `render` 事件；地图**静止时不重绘**
+   * ⇒ 重建后只画了 1 帧，`nonEmptyFrames` 永远到不了 10 ⇒ `ensureBldLayers(…, "overlay")`
+   * 那条**结构性拆层**永远不放行（地图那套 `bld-*` 只被藏成 `visibility:none`、一直留在样式里）。
+   * 这里用真实 RAF 补画（不是伪造计数器）：每帧仍是 `syncCamera()` + `drawOnce()`，
+   * 计数、像素闸、`hideMapBuildings()` 全都照常走。有上限（40 帧）防"画不出非空帧"时自锁。
+   */
+  function kickStableDraws(): void {
+    if (stableRaf) return;
+    let tries = 0;
+    const step = (): void => {
+      stableRaf = 0;
+      if (state !== "running" || !data || !data.triangles) return;
+      if (nonEmptyFrames >= REMOVE_STABLE_FRAMES) return;
+      if (++tries > 40) return;
+      syncCamera();
+      drawOnce();
+      if (state === "running" && nonEmptyFrames < REMOVE_STABLE_FRAMES) {
+        stableRaf = requestAnimationFrame(step);
+      }
+    };
+    stableRaf = requestAnimationFrame(step);
+  }
+
   /* 自用对齐探针（`?wsalign=1`）已整段搬到 `wsOvProbe.ts`：选角 / 逐帧采样 / 拟合 / 回传 / 徽标。 */
 
   /* 回传拼装 / 发送在 `wsOvProbe.beaconJson()` / `alignFlush()`；这里不再拼行。 */
@@ -1263,7 +1318,6 @@ export function createOverlayBackend(): WsRenderBackend {
       try {
         const fc = await grabBld();
         if (fc) {
-          lastSource = "source";
           rebuild(curThemeId, fc, nextAnchor);
         } else {
           reanchorFails += 1;
@@ -1301,6 +1355,14 @@ export function createOverlayBackend(): WsRenderBackend {
       }
       raf = 0;
     }
+    if (stableRaf) {
+      try {
+        cancelAnimationFrame(stableRaf);
+      } catch {
+        /* ignore */
+      }
+      stableRaf = 0;
+    }
   }
 
   return {
@@ -1309,6 +1371,7 @@ export function createOverlayBackend(): WsRenderBackend {
     async init(h: HTMLElement, s: WsRenderState, world: WsRenderWorld | null): Promise<void> {
       host = h;
       state = "created";
+      instance = ledgerPush("overlay", "created");
       let cv: HTMLCanvasElement | null = null;
       try {
         THREE = (await import(/* @vite-ignore */ runtimeUrl(THREE_PATH))) as Record<string, any>;
@@ -1359,7 +1422,9 @@ export function createOverlayBackend(): WsRenderBackend {
         curThemeId = s.theme || contractTheme.value.theme || "anime";
         /* 楼：先用舞台交进来的那份世界数据（拿不到就去地图 source 里捞一次） */
         const fc = world?.buildings ?? (await grabBld());
-        lastSource = world?.buildings ? "world" : fc ? "source" : "none";
+        /* `grabBld` 自己记这次的来路（`world` / `mvt` / `source` / `none`）；只有舞台真的交了
+           世界数据时才盖成 `world`。原写法 `fc ? "source"` 会把矢量源标成 `source`（假读数）。 */
+        if (world?.buildings) lastSource = "world";
         syncCamera();
         if (fc) rebuild(world?.themeId || curThemeId, fc);
         map?.on?.("sourcedata", onSourceData);
@@ -1367,6 +1432,7 @@ export function createOverlayBackend(): WsRenderBackend {
         /* 楼只留一套：地图自己那套先藏起来（名单逐项记下，走的时候还回去） */
         hideMapBuildings();
         state = "running";
+        ledgerMark(instance, "running");
         tlRunningAt = Math.round(performance.now() - T0);
         attachDrive();
         /* 自用对齐探针（`?wsalign=1`）：选一次固定角 + 画个徽标；没开开关时这两句都是空转 */
@@ -1390,6 +1456,7 @@ export function createOverlayBackend(): WsRenderBackend {
         camera = null;
         host = null;
         state = "failed";
+        ledgerMark(instance, "failed", msg);
         throw new Error(msg);
       }
     },
@@ -1453,11 +1520,13 @@ export function createOverlayBackend(): WsRenderBackend {
     pause(): void {
       detachDrive();
       state = "paused";
+      ledgerMark(instance, "paused");
     },
 
     resume(): void {
       if (!renderer) return;
       state = "running";
+      ledgerMark(instance, "running");
       attachDrive();
     },
 
@@ -1502,6 +1571,7 @@ export function createOverlayBackend(): WsRenderBackend {
       host = null;
       map = null;
       state = "destroyed";
+      ledgerMark(instance, "destroyed");
     },
 
     /**

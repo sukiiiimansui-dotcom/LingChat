@@ -631,6 +631,7 @@ export function createOverlayBackend(): WsRenderBackend {
   const onSourceData = (e: { sourceId?: string }): void => {
     if (e?.sourceId !== "bld") return;
     srcDataEvents += 1;
+    if (!tlLandingAt) tlLandingAt = Math.round(performance.now() - T0);
     /* 楼图层可能**刚刚才建出来**（冷启动直接进叠加层），也可能被"源在层缺"的看门狗补回来
        ⇒ 每一次落图都补一次藏（幂等：已经藏好时一次写都不做）。 */
     hideMapBuildings();
@@ -733,6 +734,22 @@ export function createOverlayBackend(): WsRenderBackend {
   let lastRemoveAt = 0;
   /** `gate.ok` 连续失败次数（**只用来触发失败恢复**，不再用来阻止拆除） */
   let gateFailStreak = 0;
+  /* ── 启动时间线（自用，随第一次回传带上；单位 = 相对 `performance.now()` 的毫秒）──
+     用途：真机"刷新后有时没楼"要看**是不是拆层早于首绘 / 落图没回来就拆了**。 */
+  const T0 = performance.now();
+  let tlPrefAt = 0;          /* 渲染者偏好决定（本后端 init 开始） */
+  let tlLandingAt = 0;       /* 落图第一次把数据交进来（sourcedata / 首次 rebuild 拿到数据） */
+  let tlRunningAt = 0;       /* 叠加层 state=running */
+  let tlFirstDrawAt = 0;     /* 第一次**非空**绘制 */
+  let tlFirstRemoveAt = 0;   /* 第一次拆层 */
+  let tlFirstRecoverAt = 0;  /* 第一次失败恢复 */
+  /** **连续**非空绘制帧数（拆层稳定窗口用：≥ `REMOVE_STABLE_FRAMES` 才允许拆） */
+  let nonEmptyFrames = 0;
+  const REMOVE_STABLE_FRAMES = 10;
+  /** 最近一次非空绘制的时刻（空屏兜底用） */
+  let lastNonEmptyAt = 0;
+  /** 空屏兜底的上一次动作时刻（冷却，别每帧 flush） */
+  let lastEmptyGuardAt = 0;
   /** 上一次的楼房渲染模式（`map` / `overlay`）—— 只在**切换**时动作，避免拉锯 */
   let bldMode: "map" | "overlay" = "map";
   /** 重绑次数（地图实例/画布被换过 ⇒ 重新绑到屏幕当前那张上） */
@@ -943,6 +960,18 @@ export function createOverlayBackend(): WsRenderBackend {
     renderer.render(scene, camera);
     drawsTotal += 1;
     draws = renderer.info?.render?.calls ?? 0;
+    /* 启动时间线：**非空**绘制才算数（空网格/0 栋不算"画出来了"） */
+    try {
+      const nonEmpty = !!data && data.triangles > 0 && draws > 0;
+      if (nonEmpty) {
+        nonEmptyFrames += 1;
+        const t1 = performance.now();
+        lastNonEmptyAt = t1;
+        if (!tlFirstDrawAt) tlFirstDrawAt = Math.round(t1 - T0);
+      } else {
+        nonEmptyFrames = 0;
+      }
+    } catch { /* 时间线出错不影响渲染 */ }
     /* 画完立刻过一遍藏楼闸：**首帧、重建后、以及"还一层都没藏"时**都要查（节流在闸里） */
     try {
       if (draws > 0) {
@@ -961,7 +990,14 @@ export function createOverlayBackend(): WsRenderBackend {
            · 拆除还做**变化驱动**：只有"还发现 bld 层存在"时才动手，并计 `removePasses`
              （修好拉锯后它应停在 1~2，而不是每 1.2 秒都涨）。 */
         try {
-          const canRenderBuildings = state === "running" && drawsTotal > 0 && !!data && data.triangles > 0;
+          /* 稳定窗口：**连续 ≥ REMOVE_STABLE_FRAMES 帧非空绘制**、且**落图数据已经回来过**
+             （`tlLandingAt > 0`）才允许拆 —— 页面刚起/落图还没回来时拆，就是"刷新后没楼"。 */
+          const canRenderBuildings =
+            state === "running" &&
+            nonEmptyFrames >= REMOVE_STABLE_FRAMES &&
+            tlLandingAt > 0 &&
+            !!data &&
+            data.triangles > 0;
           if (!gate.ok) gateFailStreak += 1;
           else gateFailStreak = 0;
           if (canRenderBuildings) {
@@ -972,11 +1008,30 @@ export function createOverlayBackend(): WsRenderBackend {
               if (f.removed.length) {
                 layersRemovedTotal += f.removed.length;
                 removePasses += 1;
+                if (!tlFirstRemoveAt) tlFirstRemoveAt = Math.round(performance.now() - T0);
               }
+            }
+          } else if (
+            bldMode === "overlay" &&
+            lastNonEmptyAt > 0 &&
+            performance.now() - lastNonEmptyAt >= 2000 &&
+            performance.now() - lastEmptyGuardAt >= 2000
+          ) {
+            /* **空屏兜底**（真机 2026-10-17「刷新后要么没楼」）：叠加层负责画楼、却已经 ≥2 秒
+               没有非空绘制，而地图那套 `bld*` 又不存在 ⇒ 屏幕是空的 ⇒ 立刻走落图线既有入口
+               把地图那套建回来（冷却 2 秒，不反复）。 */
+            lastEmptyGuardAt = performance.now();
+            if (wsBuildingsHost.flush("overlay-empty")) {
+              layersRecovered += 1;
+              if (!tlFirstRecoverAt) tlFirstRecoverAt = Math.round(performance.now() - T0);
+              bldMode = "map";
             }
           } else if (gateFailStreak >= 2 && bldMode === "overlay") {
             /* 叠层画不出楼（连续两次）⇒ 回到地图那套（走落图线既有入口） */
-            if (wsBuildingsHost.flush("overlay-failed")) layersRecovered += 1;
+            if (wsBuildingsHost.flush("overlay-failed")) {
+              layersRecovered += 1;
+              if (!tlFirstRecoverAt) tlFirstRecoverAt = Math.round(performance.now() - T0);
+            }
             bldMode = "map";
             gateFailStreak = 0;
           }
@@ -1299,6 +1354,19 @@ export function createOverlayBackend(): WsRenderBackend {
       /* **每帧分解**（拖动期间"谁在花时间"）：`mapFrames` = 地图 render 回调次数，
          `overlayFrames` = 我们真画了几帧，`labelWrites` = 名字层 DOM 写入次数，
          `labelNodes` = 这个名字层现有多少节点（10 个 vs 500 个代价差一个量级）。 */
+      /* 启动时间线（自用）：拆层是否早于首绘、落图是否还没回来就拆了，一眼可判 */
+      timeline: {
+        pref: tlPrefAt,
+        landing: tlLandingAt,
+        running: tlRunningAt,
+        firstDraw: tlFirstDrawAt,
+        firstRemove: tlFirstRemoveAt,
+        firstRecover: tlFirstRecoverAt,
+        nonEmptyFrames,
+        stableFrames: REMOVE_STABLE_FRAMES,
+        mode: bldMode,
+        now: Math.round(performance.now() - T0),
+      },
       perFrame: {
         mapFrames: frames,
         overlayFrames: drawsTotal,
@@ -1601,6 +1669,7 @@ export function createOverlayBackend(): WsRenderBackend {
         /* 楼只留一套：地图自己那套先藏起来（名单逐项记下，走的时候还回去） */
         hideMapBuildings();
         state = "running";
+        tlRunningAt = Math.round(performance.now() - T0);
         attachDrive();
         /* 自用对齐探针（`?wsalign=1`）：选一次固定角 + 画个徽标；没开开关时这两句都是空转 */
         if (alignOn) {

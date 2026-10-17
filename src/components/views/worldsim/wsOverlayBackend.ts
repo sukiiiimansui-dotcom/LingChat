@@ -34,7 +34,7 @@ import {
 } from "./wsRenderBackend";
 import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
 import { matEq, projectPoint } from "./wsMatMul";
-import { alignProbeOn, wsDiag } from "./wsRenderBackend";
+import { alignProbeOn, wsDiag, wsLiveMap } from "./wsRenderBackend";
 import { fpsMark } from "./wsFpsProbe";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
@@ -152,6 +152,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let state: "created" | "running" | "paused" | "destroyed" | "failed" = "created";
   let raf = 0;
   let frames = 0;
+  /** **累计画出去多少帧**（`drawOnce` 每次 +1；地图驱动的 `frames` 只数 map render，别混） */
+  let drawsTotal = 0;
   let draws = 0;
   let fps = 0;
   let fpsAt = 0;
@@ -161,6 +163,10 @@ export function createOverlayBackend(): WsRenderBackend {
   let refreshTimer = 0;
   /** 重锚正在异步重建（别叠加第二次；也保证"锚点与网格同一刻切"） */
   let reanchorInFlight = false;
+  /** 上一次重锚尝试的时刻（失败也别每帧重试：getData 是整份源，每帧拉一次会拖垮帧率） */
+  let lastReanchorAt = 0;
+  let reanchors = 0;
+  let reanchorFails = 0;
   const errors: string[] = [];
 
   /* ── 上下文与降级计数（`?wsalign=1` 的回传要带着它们：真机"划着划着变成 2D 自绘路"要有账）── */
@@ -301,7 +307,30 @@ export function createOverlayBackend(): WsRenderBackend {
    * 边界：**只碰 `bld` 打头的层**。底图、水面、绿地、路网、标签一律不动 —— 那些是叠加层
    * 不画的东西，藏了就是黑屏。每层进名单前先 `getLayer`，出场时逐项**照原值**还回去。
    */
+  /**
+   * **确认手里是屏幕当前那张地图**（真机 2026-10-17：`mapAlive.sameCanvas:false` ⇒
+   * 我们的补藏全打在**旧实例**上，屏幕上那张图的楼一直没藏 ⇒ 用户看到"怪楼"）。
+   * 判定：`wsLiveMap.get()` 给出的实例（宿主每次拿到/重建实例都登记）若与我们手里这个不同、
+   * 且它有 `setLayoutProperty` ⇒ **重绑**：旧实例上尽力还原 → 换引用 → 订阅改挂 → 计数。
+   */
+  function ensureLiveMap(): boolean {
+    let live: unknown = null;
+    try { live = wsLiveMap.get(); } catch { live = null; }
+    const cand = live as { setLayoutProperty?: unknown; on?: unknown; off?: unknown } | null;
+    if (!cand || cand === (map as unknown) || typeof cand.setLayoutProperty !== "function") return true;
+    /* 先摘旧实例的订阅 + 尽力还原（旧实例可能已经死了，失败不抛） */
+    try { map?.off?.("sourcedata", onSourceData); map?.off?.("styledata", onStyleData); } catch { /* 旧实例可能已死 */ }
+    try { restoreMapBuildings("rebind"); } catch { /* 旧实例可能已死 */ }
+    hiddenLayers.clear();
+    hidCount = 0;
+    map = cand as unknown as OverlayMapLike;
+    try { map.on?.("sourcedata", onSourceData); map.on?.("styledata", onStyleData); } catch { /* 新实例挂不上就下帧再试 */ }
+    mapRebinds += 1;
+    return true;
+  }
+
   function hideMapBuildings(): void {
+    ensureLiveMap();
     const m = map as unknown as {
       getLayoutProperty?: (id: string, k: string) => unknown;
       setLayoutProperty?: (id: string, k: string, v: unknown) => void;
@@ -633,6 +662,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let hideSyncs = 0;
   /** 藏楼自校验的账：重试几次 / 写完读回仍不是 none 的层数 / 写入抛错次数（都不许静默） */
   let hideRetries = 0;
+  /** 重绑次数（地图实例/画布被换过 ⇒ 重新绑到屏幕当前那张上） */
+  let mapRebinds = 0;
   let hideVerifyFailed = 0;
   let hideErrors = 0;
   const restoreReasons: Record<string, number> = {};
@@ -666,6 +697,14 @@ export function createOverlayBackend(): WsRenderBackend {
       return { ok: false, why: "叠加层还没建出楼（0 栋）", kind: "geom" };
     }
     if (!(draws > 0)) return { ok: false, why: "叠加层还没发出绘制调用", kind: "draws" };
+    /* ④' **实例校验**：手里不是屏幕当前那张地图 ⇒ 不许继续藏（藏的可能是旧画布）。
+       先尝试重绑；重绑后由下一次补藏在新实例上重做。 */
+    try {
+      const live = wsLiveMap.get();
+      if (live && live !== (map as unknown) && typeof (live as { setLayoutProperty?: unknown }).setLayoutProperty === "function") {
+        return { ok: false, why: "地图实例已换（手里是旧的，先重绑）", kind: "pix" };
+      }
+    } catch { /* 登记处读不到就不判 */ }
     const mat = (bldMesh as unknown as { material?: { diagnostics?: unknown } } | null)?.material;
     if (mat && (mat as { diagnostics?: unknown }).diagnostics) {
       return { ok: false, why: "叠加层着色器报错（材料诊断有内容）", kind: "shader" };
@@ -813,10 +852,14 @@ export function createOverlayBackend(): WsRenderBackend {
       lastDraw = null;
     }
     renderer.render(scene, camera);
+    drawsTotal += 1;
     draws = renderer.info?.render?.calls ?? 0;
     /* 画完立刻过一遍藏楼闸：**首帧、重建后、以及"还一层都没藏"时**都要查（节流在闸里） */
     try {
       if (draws > 0) {
+        /* 每帧先确认"手里是屏幕当前那张地图"（比较一次，开销可忽略；不同才重绑）。
+           否则闸会判"实例已换" ⇒ 软失败 ⇒ 永远走不到补藏 ⇒ 也就永远不重绑（自锁）。 */
+        ensureLiveMap();
         const gate = meshDrawingOk(true);
         hideGateOk = gate.ok;
         hideGateWhy = gate.why;
@@ -1123,7 +1166,11 @@ export function createOverlayBackend(): WsRenderBackend {
       /* ⚠️ `draws` 是**上一帧的绘制调用数**（three 的 `info.render.calls` 每帧重置），
          **不是累计值** —— 真机那 23 条"draws 恒为 1"就是这么来的（一帧画 1 次）。
          要知道"到底在不在出帧"看 `frames`（累计）与 `drawGapMs`（距上次画多久）。 */
-      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws, frames, drawGapMs: lastDrawAt ? Math.round(performance.now() - lastDrawAt) : null },
+      /* `frames` = **地图驱动的帧**（map render 回调）；`drawsTotal` = **累计真画了几帧**
+         （含重建后补画的那一帧）—— 两者别混。 */
+      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws, frames, drawsTotal, drawGapMs: lastDrawAt ? Math.round(performance.now() - lastDrawAt) : null },
+      /* 重锚账（默认模式下重锚是新接上的路：跑了几次、失败几次） */
+      reanchor: { count: reanchors, fails: reanchorFails, inFlight: reanchorInFlight, lastAgoMs: lastReanchorAt ? Math.round(performance.now() - lastReanchorAt) : null },
       /* 藏/还原各发生几次、为什么（真机"楼会变掉"要能查账） */
       pix: { alive: pixAlive, probed: pixEverProbed, strikes: pixStrikes },
       /* 覆盖面（"整屏只有一栋楼"那条：源里有几个 vs 我们画了几个） */
@@ -1131,12 +1178,37 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
       feed: { refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
+      /* **叠加层那块画布到底在不在屏幕最上层**（像素取证读的是自己的缓冲，
+         证明不了"它有没有被地图画布盖住"——"楼没了"还可能是这层被盖） */
+      layer: (() => {
+        try {
+          const ovl = renderer?.domElement as HTMLCanvasElement | undefined;
+          if (!ovl) return null;
+          const mapCv = document.querySelector(".maplibregl-canvas") as HTMLCanvasElement | null;
+          const idx = (el: Element | null): number => {
+            if (!el) return -1;
+            const all = Array.from(document.querySelectorAll("canvas"));
+            return all.indexOf(el as HTMLCanvasElement);
+          };
+          const cs = getComputedStyle(ovl);
+          const ms = mapCv ? getComputedStyle(mapCv) : null;
+          return {
+            ovlIndex: idx(ovl),
+            mapIndex: idx(mapCv),
+            ovlZ: cs.zIndex, mapZ: ms ? ms.zIndex : null,
+            ovlOpacity: cs.opacity, ovlVisibility: cs.visibility, ovlDisplay: cs.display,
+            ovlInDom: document.contains(ovl),
+            parentCls: String((ovl.parentElement?.className as string) || "").slice(0, 40),
+          };
+        } catch { return null; }
+      })(),
       meshHeights,
       pixProbesRun,
-      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors },
+      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors, mapRebinds },
       /* 地图那套楼到底藏上没藏上：**写进去的**与**读回来的**并排（真机那两个数打架时要能一眼分开） */
       hidWrote: [...hiddenLayers.keys()],
       /* 手里这台地图还活着吗（"读回全 visible"还有一个可能是**我们握的是旧实例**） */
+      /* `sameCanvas` = 我们手里那张的 canvas 与屏幕上的 `.maplibregl-canvas` 是不是同一块 */
       mapAlive: (() => {
         try {
           const cv = (map as unknown as { getCanvas?: () => Element | null })?.getCanvas?.() ?? null;
@@ -1265,11 +1337,15 @@ export function createOverlayBackend(): WsRenderBackend {
    */
   function maybeReanchor(): void {
     if (reanchorInFlight) return;
+    /* 冷却 1500ms：`getData()` 是整份源，失败时若每帧重试会把帧率打下去 */
+    if (lastReanchorAt && performance.now() - lastReanchorAt < 1500) return;
     const v = readMapView();
     if (!v || !anchor || anchorDriftM(v.center) <= REANCHOR_M) return;
     /* 先记下目标锚点；异步取数据、用目标锚点建网格，**建好那一刻**由 `rebuild` 与网格一起切
        （提前切 = 旧实现：旧网格配新相机，整体瞬移）。 */
     reanchorInFlight = true;
+    lastReanchorAt = performance.now();
+    reanchors += 1;
     const nextAnchor = { lat: v.center.lat, lng: v.center.lng, cos: Math.cos((v.center.lat * Math.PI) / 180) };
     void (async () => {
       try {
@@ -1277,6 +1353,8 @@ export function createOverlayBackend(): WsRenderBackend {
         if (fc) {
           lastSource = "source";
           rebuild(curThemeId, fc, nextAnchor);
+        } else {
+          reanchorFails += 1;
         }
       } finally {
         reanchorInFlight = false;
@@ -1547,6 +1625,7 @@ export function createOverlayBackend(): WsRenderBackend {
     hiddenInfo(): {
       hid: number;
       restored: number;
+      rebinds: number;
       ids: string[];
       prev: Array<string | null>;
       live: Array<{ id: string; vis: string | null }>;
@@ -1565,6 +1644,7 @@ export function createOverlayBackend(): WsRenderBackend {
       return {
         hid: hidCount,
         restored: restoredCount,
+        rebinds: mapRebinds,
         ids: [...hiddenLayers.keys()],
         prev: [...hiddenLayers.values()],
         live,

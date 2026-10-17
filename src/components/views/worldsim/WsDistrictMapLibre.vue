@@ -470,7 +470,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      用户「之前的没了…必须保证视野内完整」那条。合并/淘汰/格键的规则只有那一份，这里只调用。 */
   import { createFeatureStore } from "./wsFeatureStore";
   /* 跨模块诊断账本（叠加层那边的 `?wsalign=1` 回传要读它：走了哪条路 / 为什么降级 / 看门狗几次） */
-  import { wsDiag } from "./wsRenderBackend";
+  import { wsDiag, wsLiveMap } from "./wsRenderBackend";
   /* **离线包取数管道**（App 侧承载；代拍页里那份是原型的内联写法，不进 PR）：
      串行取格 + 每格独立超时 + 并进仓库 + 一次 setData。判词/决策/半径仍从 `wsScene` 来。 */
   import {
@@ -1693,7 +1693,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     isAutomation,
     aliveNow: () => alive,
     mapNow: () => map,
-    setMap: (v) => { map = v; },
+    setMap: (v) => { map = v; try { if (v) wsLiveMap.set(v); } catch { /* ignore */ } },
     /* 这个写入器**返回**写进去的那个引用：`kickResize` 里绑成块内 `const` 才能保住窄化
        （宿主那面是 `let`，只给取值器的话下面 `resizeRo.observe(...)` 会被判"可能为 null"）。 */
     setResizeRo: (v: ResizeObserver) => { resizeRo = v; return v; },
@@ -2251,6 +2251,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       ...(perf.low.value ? { pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5) } : {}),
     });
     map = m;
+    /* 屏幕当前那张地图登记给叠加层：它补藏/校验前要确认"手里是不是当前实例"
+       （真机 mapAlive.sameCanvas:false ⇒ 藏楼打在旧实例上，屏幕上那张一直没藏） */
+    try { wsLiveMap.set(m); } catch { /* 登记失败不影响建图 */ }
     /* ══ 重构：**地图事件接线**的装配 ═════════════════════════════════════════
        13 处 `m.on(...)` 与回调体整块在 `wsStageEvents.ts`（按 8 组注册，事件名与顺序在那边列着）。
        装配点在这儿（不是 setup 作用域）的原因：ctx 要**按值**收上面那几个已经定稿的

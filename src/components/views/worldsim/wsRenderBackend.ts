@@ -93,6 +93,25 @@ export interface WsNameBindProbe {
   dyMax: number | null;
 }
 
+/**
+ * **屏幕当前那张地图实例的登记处**（2026-10-17 真机定位）。
+ *
+ * 为什么需要它：真机读数里 `mapAlive.sameCanvas: false` —— 地图实例/画布被换过
+ * （上下文丢失后重建那类），叠加层闭包还握着**旧实例**，于是"藏楼"全打在旧地图上、
+ * 屏幕上那张图的楼一直没藏（用户看到的就是地图自己那套）。
+ * ⇒ 地图宿主每次拿到（或重建出）实例就 `wsLiveMap.set(m)`；叠加层每次补藏前 `get()` 一下，
+ * 发现不是自己手里那个就**重新绑定**。
+ */
+export const wsLiveMap: { set: (m: unknown) => void; get: () => unknown } = (() => {
+  let cur: unknown = null;
+  return {
+    set: (m: unknown) => {
+      if (m) cur = m;
+    },
+    get: () => cur,
+  };
+})();
+
 export const wsDiag = {
   /** 引擎现在走哪条路（`init` / `webgl` / `waiting` / `failed` / `fallback2d`） */
   renderKind: "",

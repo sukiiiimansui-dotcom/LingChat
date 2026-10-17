@@ -82,6 +82,8 @@ export interface WsNameBindProbe {
   areaCandidates: number;
   /** 这一轮耗时：`layer` = 名字层内部各段；`dom` = 宿主把计划落到 DOM 的耗时（ms） */
   ms: { layer: { fetch: number; items: number; grid: number; bindDrawn: number; bindPool: number; poolGrid: number; poolQuery: number; zones: number; pick: number; nodes: number; total: number }; dom: number };
+  /** 名字层容器实况（计划有节点但屏上没字时，用它分开"计划空"与"容器被藏"） */
+  root: { cls: string; opacity: string; visibility: string; labs: number } | null;
   /** 只回传屏上的（最多 12 条）——不刷屏 */
   nodes: WsNameBindRow[];
   /** 锚点相对地面投影的像素差（只统计绑了楼的节点） */

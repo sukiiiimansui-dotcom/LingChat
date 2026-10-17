@@ -101,8 +101,22 @@ export function createNameHost(ctx: NameHostCtx) {
       return Math.round(s[Math.floor(s.length / 2)]! * 10) / 10;
     };
     const maxAbs = (a: number[]): number | null => (a.length ? Math.round(Math.max(...a.map((v) => Math.abs(v))) * 10) / 10 : null);
+    let root: { cls: string; opacity: string; visibility: string; labs: number } | null = null;
+    try {
+      const el = labRootEl.value;
+      if (el) {
+        const cs = typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
+        root = {
+          cls: String(el.className || ""),
+          opacity: cs ? String(cs.opacity) : "?",
+          visibility: cs ? String(cs.visibility) : "?",
+          labs: el.querySelectorAll(".ws-lab").length,
+        };
+      }
+    } catch { root = null; }
     wsDiag.nameBind = {
       ver: 1,
+      root,
       state: facts.bindState,
       why: facts.bindWhy,
       classState: facts.bindClass,

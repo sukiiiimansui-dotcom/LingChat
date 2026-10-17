@@ -8,8 +8,6 @@
 [![开发分支](https://img.shields.io/badge/开发分支-dev-green?style=flat-square)](https://github.com/sukiiiimansui-dotcom/LingChat/tree/feat/worldsim)
 [![状态](https://img.shields.io/badge/状态-实验性%20·%20仍在完善-orange?style=flat-square)](https://github.com/SlimeBoyOwO/LingChat/issues/858)
 
-**简体中文** · [English](README.en.md) · [日本語](README.ja.md)
-
 </div>
 
 <!-- LOC-BADGE:BEGIN（这段由 .github/workflows/loc-badge.yml 每天重写，别手改） -->
@@ -29,13 +27,11 @@
 ---
 ## 当前阶段
 
-- **正在尝试将maplibre几何挤出楼房替换为three.js**
 
 
-- **地图正在尝试自写 MVT 瓦片 用数字id取楼房数据**
+- **重构前端**
 
 
-- **名字id正在与楼房绑定**
 
 ## 这是什么
 

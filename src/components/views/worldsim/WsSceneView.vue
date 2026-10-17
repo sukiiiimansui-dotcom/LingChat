@@ -543,12 +543,18 @@
     await ensureMapBackend();
     mapInstance = m;
     mapBackend?.bind?.(m);
-    /* 叠加层可能已经先起来了（它不等地图 ready）⇒ 实例一到就交给它 */
+    /* 叠加层可能已经先起来了（它不等地图 ready）⇒ 实例一到就交给它，并且**它仍是台上那个**。
+       🔴 这里不许把 active / liveBackend 改回 map：2026-10-18 实测 `?renderer=overlay`
+       （持久化偏好是 map 时）会先换台、地图 ready 后再被这里改回 map ⇒ HUD/探针读到
+       `stats.backend` = map、`overlayFrameJson()` / `diagJson()` 全 null，
+       而屏幕上叠加层已经在画了。 */
     if (active && active.id === "overlay") {
       (active as WsRenderBackend & { bindMap?: (x: unknown) => void }).bindMap?.(m);
+      setLiveBackend(active);
+    } else {
+      active = mapBackend;
+      setLiveBackend(active);
     }
-    active = mapBackend;
-    setLiveBackend(active);
     if (pendingView && mapBackend) {
       mapBackend.applyView(pendingView);
       pendingView = null;

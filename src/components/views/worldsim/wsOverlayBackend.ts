@@ -38,6 +38,7 @@ import { alignProbeOn, wsBuildingsHost, wsDiag, wsLiveMap } from "./wsRenderBack
 import { ensureBldLayers, hasBldLayers } from "./wsBldLayerSwitch";
 import { bldLayerSpecsFor, mvtBldLayerSpecs } from "./wsDistrictScene";
 import { mvtEnabled } from "./wsMvtTiles";
+import { mapMvtBldFeatures } from "./wsMvtBldMap";
 import { fpsMark } from "./wsFpsProbe";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
@@ -600,7 +601,12 @@ export function createOverlayBackend(): WsRenderBackend {
     drawOnce();
   }
 
-  /** 从地图 source 里现捞一份 `bld`（拿不到就 null —— 不编数据） */
+  /** 最近一次从瓦片查询取到的：原始条数（含部件）/ 唯一 id 数 / 被丢掉的部件条数 */
+  let bldQueryFeatures = 0;
+  let mvtRawFeatures = 0;
+  let mvtUniqueIds = 0;
+  let mvtPartsDropped = 0;
+
   /**
    * 从**瓦片（矢量源）**取当前视野的楼。
    *
@@ -631,39 +637,16 @@ export function createOverlayBackend(): WsRenderBackend {
     } catch {
       return null;
     }
-    const out: unknown[] = [];
-    const seen = new Set<string>();
-    for (const f of feats) {
-      const id = String(f.id ?? (f.properties || {}).id ?? "");
-      if (id && seen.has(id)) continue;      /* 去重（query 会跨 tile 边界重复） */
-      const g = f.geometry;
-      if (!g || (g.type !== "Polygon" && g.type !== "MultiPolygon") || !g.coordinates) continue;
-      const pr = f.properties || {};
-      /* 统一成网格那套命名（`buildBldMeshData` 只认 h3d/h_base/color3d/part），
-         瓦片用 h/hb/c/p 的短名 —— 两套都能吃。 */
-      const top = Number(pr.h3d ?? pr.h ?? 0);
-      const base = Number(pr.h_base ?? pr.hb ?? 0);
-      out.push({
-        type: "Feature",
-        id: id || undefined,
-        properties: {
-          ...pr,
-          h3d: Number.isFinite(top) ? top : 0,
-          h_base: Number.isFinite(base) ? base : 0,
-          color3d: pr.color3d ?? pr.c ?? "#c9d4e0",
-          zt: pr.zt ?? pr.p ?? 0,
-        },
-        geometry: g,
-      });
-      if (id) seen.add(id);
-    }
-    if (!out.length) return null;
-    bldQueryFeatures = out.length;
-    return { type: "FeatureCollection", buildings: { type: "FeatureCollection", features: out } } as unknown as WsRenderFc;
+    /* 映射规则（主体优先 / zt 只来自 zt / 一栋一条）在 `wsMvtBldMap.ts`，**唯一实现**，
+       闸直接测那个纯函数（真机"带凸起的小楼"就是这里早先按 id 先到先得造成的）。 */
+    const mapped = mapMvtBldFeatures(feats as never);
+    mvtRawFeatures = mapped.raw;
+    mvtUniqueIds = mapped.unique;
+    mvtPartsDropped = mapped.partsDropped;
+    if (!mapped.features.length) return null;
+    bldQueryFeatures = mapped.features.length;
+    return { type: "FeatureCollection", buildings: { type: "FeatureCollection", features: mapped.features } } as unknown as WsRenderFc;
   }
-
-  /** 最近一次从瓦片查询取到多少条要素（回传用；0 = 走的不是瓦片路） */
-  let bldQueryFeatures = 0;
 
   async function grabBld(): Promise<WsRenderFc | null> {
     try {
@@ -1427,7 +1410,9 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
       feed: {
         source: lastSource,
-        mvtFeatures: bldQueryFeatures, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
+        mvtFeatures: mvtRawFeatures,
+        mvtUniqueIds,
+        mvtPartsDropped, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
       /* **每帧分解**（拖动期间"谁在花时间"）：`mapFrames` = 地图 render 回调次数，
          `overlayFrames` = 我们真画了几帧，`labelWrites` = 名字层 DOM 写入次数，

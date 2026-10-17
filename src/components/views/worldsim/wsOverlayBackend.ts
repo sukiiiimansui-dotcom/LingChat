@@ -35,6 +35,7 @@ import {
 import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
 import { matEq, projectPoint } from "./wsMatMul";
 import { alignProbeOn, wsDiag } from "./wsRenderBackend";
+import { fpsMark } from "./wsFpsProbe";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
 /** 每度多少米（与 `wsThreeCam.M_PER_DEG` 同口径；这里只用它做锚点漂移判断） */
@@ -386,6 +387,8 @@ export function createOverlayBackend(): WsRenderBackend {
 
   /** 用一份 `bld` 要素重建楼（几何走共用模块 ⇒ 与 three 那条路画的是同一批） */
   function rebuild(themeId: string, fcIn: WsRenderFc | null): void {
+    /* 帧率采集的行为打点：几何重建是本模块最贵的一段（覆盖层低帧率窗口要能归因到这里） */
+    fpsMark("overlay-rebuild");
     const fc = fcIn;
     /* 🔴 2026-10-16 真机"楼会变掉"那条：重建**必须是原子的** ——
        旧网格一直画着，新网格**先在本地建好**再一次性换上；只有"新网格是空的/建不出来"
@@ -418,6 +421,7 @@ export function createOverlayBackend(): WsRenderBackend {
     newer.name = "ws-overlay-buildings";
     scene.add(newer);
     disposeMesh();                  /* 旧的这时候才退场（同一帧里完成） */
+    fpsMark("mesh-swap");
     bldMesh = newer;
     data = next;
     /* 覆盖面：**同一份 fc、同一个视野**两边各数一遍（楼少的根因要能一眼看出来） */
@@ -449,6 +453,11 @@ export function createOverlayBackend(): WsRenderBackend {
       cover.thinDropped = next.stats.thinDropped;
       cover.shapeDropped = next.stats.shapeDropped;
       cover.judgedAt = performance.now();
+      try {
+        const hs = next.featureMeta.map((m) => Number(m.h3d)).filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+        const q = (pp: number): number => (hs.length ? hs[Math.min(hs.length - 1, Math.max(0, Math.floor(hs.length * pp)))]! : 0);
+        meshHeights = { n: hs.length, p10: Number(q(0.1).toFixed(2)), p50: Number(q(0.5).toFixed(2)), p90: Number(q(0.9).toFixed(2)), flat: Number((hs.filter((h) => h < 3).length / Math.max(1, hs.length)).toFixed(3)) };
+      } catch { meshHeights = null; }
     } catch {
       /* 数不出来就不判（宁可漏，不误判） */
       cover.expected = 0;
@@ -559,6 +568,8 @@ export function createOverlayBackend(): WsRenderBackend {
    * `expected` 是地图源里**落在视野内**的要素数（同一份数据、同一个视野）。
    * 楼少到 `actual*2 < expected` 就当作"没画够" ⇒ 还原地图那套（不许静默：数进 note 与回传）。
    */
+  /** 网格里每栋楼的高度分布（给名字层"楼顶投影 vs 楼本来就是平的"那条判据） */
+  let meshHeights: { n: number; p10: number; p50: number; p90: number; flat: number } | null = null;
   const cover: { expected: number; actual: number; srcAll: number; meshAll: number; thinDropped: number; shapeDropped: number; judgedAt: number } =
     { expected: 0, actual: 0, srcAll: 0, meshAll: 0, thinDropped: 0, shapeDropped: 0, judgedAt: 0 };
   /** 覆盖面连续判短几次（**两振才出局**：源刚长出来、网格还没跟上时会短暂偏短） */
@@ -585,46 +596,71 @@ export function createOverlayBackend(): WsRenderBackend {
    * 读不出来的 API（老 three / 假地图）不当作通过 —— 宁可**不藏**，也不许把画面弄空。
    */
   let pixEverProbed = false;
-  function meshDrawingOk(probePixels: boolean): { ok: boolean; why: string } {
+  /** 像素取证**真跑了几次**（帧预算闸用它证"没有每帧 readPixels"） */
+  let pixProbesRun = 0;
+  /** 像素取证的 **last good result**（节流期间复用；`ok=false` 时 why 用于还原原因） */
+  let pixOk = false;
+  let pixWhy = "还没量";
+  /**
+   * 探针**节流**（2026-10-17 真机 fps 从 7~16 掉到 1.4~3 的头号原因）：
+   * `readPixels` 是**同步 GPU 读回**，每帧一次就能把手机打到个位数 fps。
+   * 现在：还没藏楼时 500ms 最多一次（要能尽快建立"在画"的证据）；
+   * 已经藏稳了 5s 一次（守卫的活是**发现状态变化**，不是每帧验像素）。
+   * 几何/覆盖/材质诊断那三条是**纯 JS**，仍然每帧判（很便宜）。
+   */
+  const PIX_PROBE_START_MS = 500;
+  const PIX_PROBE_STEADY_MS = 5000;
+  function meshDrawingOk(probePixels: boolean): { ok: boolean; why: string; kind: "ok" | "geom" | "draws" | "shader" | "pix" | "cover" } {
+    /* ①②③ 纯 JS、每帧都可以判（很便宜） */
     if (!data || !(data.stats.buildings > 0) || !(data.triangles > 0)) {
-      return { ok: false, why: "叠加层还没建出楼（0 栋）" };
+      return { ok: false, why: "叠加层还没建出楼（0 栋）", kind: "geom" };
     }
-    if (!(draws > 0)) return { ok: false, why: "叠加层还没发出绘制调用" };
+    if (!(draws > 0)) return { ok: false, why: "叠加层还没发出绘制调用", kind: "draws" };
     const mat = (bldMesh as unknown as { material?: { diagnostics?: unknown } } | null)?.material;
-    if (mat && (mat as { diagnostics?: unknown }).diagnostics) return { ok: false, why: "叠加层着色器报错（材料诊断有内容）" };
-    /* ⑤ **画得够不够**：真机 2026-10-17「整屏只有一栋楼」—— 当时的闸只问"有没有画"，
-       一栋楼就能满足。现在与**地图源在同一个视野内的要素数**成对比：
-       少于一半（且源至少 4 个）就算没画够 ⇒ 先**往前修**（补一次数据重建），
-       连续两次仍短 ⇒ 还原地图那套。
-       阈值为什么是一半：两套读的是**同一份源**，我们能合法丢掉的只有"建不出体块"的那些
-       （扁到 `top-base<0.4` / 轮廓退化成不了三角），正常情况下这个比例很低（夹具 135 栋实测 0 栋）；
-       掉到一半以下说明**结构性地少**（1 对 40 这种），不是正常损耗。 */
+    if (mat && (mat as { diagnostics?: unknown }).diagnostics) {
+      return { ok: false, why: "叠加层着色器报错（材料诊断有内容）", kind: "shader" };
+    }
+    /* ⑤ **画得够不够**（比例判据）：同一份源、同一个视野，源内要素数 vs 网格内楼数。
+       实画×2 < 源（且源≥4）⇒ 先"往前修"（补一次数据重建），连续两次仍短 ⇒ 才真还原。
+       阈值取一半的理由：两套读同一份源，我们只能合法丢掉"建不出体块"的（扁到 top-base<0.4 /
+       轮廓退化），正常比例很低（夹具 135 栋实测 0 栋）；掉到一半以下就是结构性少（1 对 40）。 */
     if (cover.expected >= 4 && cover.actual * 2 < cover.expected) {
       coverStrikes += 1;
       if (coverStrikes === 1) {
-        scheduleRefresh();          /* 先往前修一次：源可能刚长出来、网格还没跟上 */
-        return { ok: false, why: "画得太少（源 " + cover.expected + " / 实画 " + cover.actual + "）· 已补一次数据" };
+        scheduleRefresh();
+        return { ok: false, why: "画得太少（源 " + cover.expected + " / 实画 " + cover.actual + "）· 已补一次数据", kind: "cover" };
       }
-      return { ok: false, why: "画得太少（源 " + cover.expected + " / 实画 " + cover.actual + " · 第 " + coverStrikes + " 次）" };
+      return { ok: false, why: "画得太少（源 " + cover.expected + " / 实画 " + cover.actual + " · 第 " + coverStrikes + " 次）", kind: "cover" };
     }
     coverStrikes = 0;
-    const gl = (() => { try { return (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null; } catch { return null; } })();
-    if (!gl?.readPixels) return { ok: true, why: "画了（像素取证不可用）" };
-    /* 🔴 像素只能在**刚画完那一刻**读：`preserveDrawingBuffer:false` 时，帧一旦被合成，
-       缓冲就没了 —— 在 `sourcedata`/`styledata` 那些时刻读会读出一片空，误判"画不出来"
-       （本机靶场实测就是这个形状）。⇒ 只有 `drawOnce` 里那次传 true，其余调用读缓存。 */
+    /* ④ 像素取证（**最贵**的一条）：只在 `drawOnce` 刚画完那一刻读，并且**节流**。
+       `readPixels` 是同步 GPU 读回 —— 每帧一次就能把手机打到个位数 fps（真机 2026-10-17 实测）。 */
     if (!probePixels) {
-      if (!pixEverProbed) return { ok: false, why: "还没在画完那一刻取过像素证据" };
-      return { ok: hideGateOk, why: hideGateWhy };
+      if (!pixEverProbed) return { ok: false, why: "还没在画完那一刻取过像素证据", kind: "pix" };
+      return { ok: pixOk, why: pixWhy, kind: pixOk ? "ok" : "pix" };
     }
-    if (pixProbeOff()) {
-      pixEverProbed = true;
-      pixAlive = -2;                    /* -2 = 没量（开关关掉） */
-      pixStrikes = 0;
-      return { ok: true, why: "画了（像素取证=关 ?ovlpix=0）" };
-    }
+    const nowMs = performance.now();
+    const due = nowMs - pixProbeAt >= (hideGateOk ? PIX_PROBE_STEADY_MS : PIX_PROBE_START_MS);
+    if (pixEverProbed && !due) return { ok: pixOk, why: pixWhy, kind: pixOk ? "ok" : "pix" };
+    pixProbeAt = nowMs;
     pixEverProbed = true;
+    pixProbesRun += 1;
+    if (pixProbeOff()) {
+      pixAlive = -2;                     /* -2 = 没量（自用开关关掉） */
+      pixStrikes = 0;
+      pixOk = true;
+      pixWhy = "画了（像素取证=关 ?ovlpix=0）";
+      return { ok: true, why: pixWhy, kind: "ok" };
+    }
+    const gl = (() => { try { return (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null; } catch { return null; } })();
+    if (!gl?.readPixels) {
+      pixOk = true;
+      pixWhy = "画了（像素取证不可用）";
+      return { ok: true, why: pixWhy, kind: "ok" };
+    }
     let alive = 0;
+    /* 帧率采集的行为打点：同步 GPU 读回是整帧里最贵的一步，单独打一个标签 */
+    fpsMark("pixel-probe");
     try {
       const dpr = renderer?.getPixelRatio?.() ?? 1;
       const bw = Math.max(1, Math.round(w0() * dpr));
@@ -636,10 +672,10 @@ export function createOverlayBackend(): WsRenderBackend {
         for (let i = 3; i < buf.length; i += 4) if (buf[i]! > 8) n++;
         return n;
       };
-      /* ① **按我们自己的网格采样**：拿每栋楼的 XZ 包围盒中心，用"画出去那一帧"的矩阵投到屏幕，
-         在投出来的点周围读一小块。为什么这么采样：楼在屏幕上是稀疏的（地面透明），
-         横带很容易扫空 ⇒ 单看横带会**误判"画不出来"**（本机靶场实测就是这个形状）。
-         顺带它还是个自检：投出来的点读不到像素 ⇒ 要么没画、要么投影与渲染不是同一条路。 */
+      /* 按**我们自己的网格**采样：楼在屏幕上稀疏（地面透明），横带容易扫空 ⇒
+         拿每栋楼的 XZ 包围盒中心，用"画出去那一帧"的矩阵投到屏幕，在投出来的点周围读一小块。
+         🔴 采样点是 **CSS 像素**、`readPixels` 要**缓冲像素** ⇒ 必须乘 dpr（真机 dpr=3 时
+         不乘就偏到 1/3 处，常年只读到 1 个像素——真机序列 1,1,1,1100,1,… 就是这个形状）。 */
       const step = Math.max(1, Math.ceil(((data?.boxes?.length ?? 0) / 4) / 1)) || 1;
       const samplePts: Array<[number, number]> = [];
       try {
@@ -651,44 +687,42 @@ export function createOverlayBackend(): WsRenderBackend {
           if (p && p[0] >= 12 && p[0] <= bw - 12 && p[1] >= 12 && p[1] <= bh - 12) samplePts.push(p);
         }
       } catch {
-        /* 采样点算不出来就退回横带 */
+        /* 采样点算不出来就走兜底横带 */
       }
-      /* 🔴 真机 2026-10-17 定位的**量具 bug**：采样点来自 `projectPoint`（**CSS 像素**），
-         而 `readPixels` 要的是**缓冲像素**。dpr=3 的真机上我原来直接把 CSS 坐标喂进去
-         ⇒ 读的位置偏到 1/3 处 ⇒ 常年只读到 1 个像素（真机序列就是 `1,1,1,1100,1,...`）。
-         ⇒ 这里乘 dpr 换算到缓冲像素；采样框也用缓冲像素（20×20）。 */
+      /* **最多 2 个** 20×20 的框（400 px/框）；不读整条横带（dpr=3 时一条 61 KB）。 */
+      let probes = 0;
       for (const [x, y] of samplePts) {
         const bxp = Math.round(x * dpr);
         const byp = bh - Math.round(y * dpr);
         alive += readRect(bxp - 10, byp - 10, 20, 20);
-        if (alive >= 40) break;
+        probes += 1;
+        if (alive >= PIX_MIN_ALIVE || probes >= 2) break;
       }
-      /* ② 兜底：**两条横带**（楼正好都不在采样点附近时还能看见"画面上有东西"） */
-      if (alive <= 0) {
-        const rows = Math.min(4, bh);
-        for (const fy of [0.5, 0.34]) {
-          const y = Math.max(0, Math.min(bh - rows, Math.round(bh * fy)));
-          alive += readRect(0, y, bw, rows);
-          if (alive > 0) break;
-        }
+      /* 兜底：采样点一个都没投出来时，读**一条**窄横带（1~2 行） */
+      if (alive <= 0 && !samplePts.length) {
+        const rows = Math.max(1, Math.min(2, Math.floor(bh / 200)));
+        const y = Math.max(0, Math.min(bh - rows, Math.round(bh * 0.5)));
+        alive += readRect(0, y, bw, rows);
       }
     } catch {
-      return { ok: true, why: "画了（像素取证抛错）" };
+      pixOk = true;
+      pixWhy = "画了（像素取证抛错）";
+      return { ok: true, why: pixWhy, kind: "ok" };
     }
-    /* 阈值两条都要（真机 2026-10-17：`pix.alive = 1` 也放行过 —— 一栋楼/一个像素就够，闸太弱）：
-       ① **绝对值** ≥ `PIX_MIN_ALIVE`(40)：采样框 20×20（最多 4 个点 + 兜底横带），
-          真画出楼时这个数在几百到几千；1~2 个像素只是噪点/边角。
-       ② **比例**（与"该看到的量"成比例）：见闸的第 ⑤ 条 `cover`（源里 N 个、我们只画 M 个 ⇒ 不放行）。 */
     if (alive < PIX_MIN_ALIVE) {
       pixStrikes += 1;
-      return { ok: false, why: "叠加层画出来的像素太少（" + alive + " < " + PIX_MIN_ALIVE + " · 第 " + pixStrikes + " 次）" };
+      pixOk = false;
+      pixWhy = "像素太少（" + alive + " < " + PIX_MIN_ALIVE + " · 第 " + pixStrikes + " 次）";
+      return { ok: false, why: pixWhy, kind: "pix" };
     }
     pixStrikes = 0;
     pixAlive = alive;
-    return { ok: true, why: "画了（" + alive + " 个非空像素）" };
+    pixOk = true;
+    pixWhy = "画了（" + alive + " 个非空像素）";
+    return { ok: true, why: pixWhy, kind: "ok" };
   }
 
-  /** 局部米坐标 → 屏幕像素（用**画出去那一帧**的矩阵；只给上面的采样点算位置用） */
+  /** 局部米坐标 → 屏幕像素（用**画出去那一帧**的矩阵；只给像素取证的采样点算位置） */
   function projectFromLastDrawLocal(x: number, z: number): [number, number] | null {
     if (!lastDraw) return null;
     return projectPoint(lastDraw.mwInv, lastDraw.proj, [x, z], lastDraw.w, lastDraw.h);
@@ -738,9 +772,12 @@ export function createOverlayBackend(): WsRenderBackend {
         hideGateWhy = gate.why;
         const now2 = performance.now();
         /* ❗"立刻还原"这条**不受节流约束**（画面变空必须当帧处理）；补藏才节流 */
-        /* 像素那条"两振出局"：只有连续两次判空才真还原（其余条件仍是当帧立刻还原） */
-        const pixOnly = !gate.ok && gate.why.includes("画不出像素") && pixStrikes < 2;
-        if (!gate.ok && !pixOnly) {
+        /* 两类"可先往前修"的判据（**两振出局**），其余条件仍是当帧立刻还原：
+           · `pix`：单次读空/偏少可能只是采样点没落上（我原来靠字符串子串判，消息一改就失效，
+             真机上因此**单次 0 就读成"立刻还原"**，7 次还原 = 楼闪 7 次）；
+           · `cover`：源刚长出来、网格还没跟上时也会短暂偏少。 */
+        const soft = !gate.ok && ((gate.kind === "pix" && pixStrikes < 2) || (gate.kind === "cover" && coverStrikes < 2));
+        if (!gate.ok && !soft) {
           if (hiddenLayers.size) restoreMapBuildings("guard-draw:" + gate.why);
         } else if (gate.ok && now2 - hideSyncAt > 400) {
           hideSyncAt = now2;
@@ -1044,6 +1081,8 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
       feed: { refreshScheduled, refreshDone, getDataCalls, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
+      meshHeights,
+      pixProbesRun,
       hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors },
       /* 地图那套楼到底藏上没藏上：**写进去的**与**读回来的**并排（真机那两个数打架时要能一眼分开） */
       hidWrote: [...hiddenLayers.keys()],

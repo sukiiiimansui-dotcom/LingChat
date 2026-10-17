@@ -257,3 +257,7 @@ ci-reports/
 
 # 精简楼群包（生成物，与 bldbundle-002 一样不进仓库）
 public/bldbundle-002-slim/
+
+# 瓦片以压缩包归档进仓，构建时解包（一次切换只动一两个二进制文件）
+public/mvt-slim/
+public/mvt-full/

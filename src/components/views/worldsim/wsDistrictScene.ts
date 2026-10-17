@@ -55,7 +55,7 @@ import type { BldBudgetStats } from "./wsBldBudget"
 /* **足迹档的分界线**（2026-10-03「按 zoom 分层」）：`z < WS_BLD_FOOTPRINT_MAXZOOM` 画足迹
    （`bld-foot`，平面）、`z ≥ 14` 画立体（`bld-ext`，挤出）—— 与上面的屋顶系阈值**同一条分界线**
    （那个 14 全项目只有一份，在 `wsBldBudget` 里引用 `wsBldDetailTiers`）。 */
-import { bldMaxDrawnOf, WS_BLD_FOOTPRINT_MAXZOOM } from "./wsBldBudget";
+import { bldKPinOf, bldMaxDrawnOf, WS_BLD_FOOTPRINT_MAXZOOM } from "./wsBldBudget";
 /* **芯片档位的唯一存储**（模块级单例 ref）：MVT 路的 K 与 GeoJSON 路的挑楼读**同一份**；
    本文件不写死 6/4000，只调 `bldMaxDrawnOf(mode)`（见 `mvtKNow`）。 */
 import { useWsBldMode } from "./wsBldMode";
@@ -528,6 +528,10 @@ function mvtTierFilter(t: 0 | 1 | 2): unknown[] {
  * `applyMvtTo()` → `applyMvtBldKFilter()` ⇒ `setFilter` 当场生效（不是只在建层时读一次）。
  */
 function mvtKNow(): number {
+  /* `?k=` 逃生口与宿主挑楼读**同一个参数名**（解析真源 `bldKPinOf`）：两条路同一个 K。 */
+  let pin: number | null = null;
+  try { pin = typeof location !== "undefined" ? bldKPinOf(location.search) : null; } catch { pin = null; }
+  if (pin !== null) return pin;
   return bldMaxDrawnOf(useWsBldMode().mode.value);
 }
 

@@ -362,6 +362,24 @@ export function bldMaxDrawnOf(mode: unknown): number {
 }
 
 /**
+ * **`?k=` 逃生口的唯一解析**：真机 A/B 用，显式钉住**每格取前几栋**（N）。
+ *
+ * 与宿主挑楼那一侧读的**同一个参数名、同一套语义**：没有 / 不是非负整数 ⇒ `null`
+ * （= 按芯片档位，**不编一个数顶上**）；合法值 ⇒ `max(0, floor(N))`。
+ *
+ * 为什么放在这里：瓦片路的过滤（`wsDistrictScene.mvtKNow`）与旧路挑楼必须读同一个 K，
+ * 不能一边认 `?k=`、一边只认档位 —— 否则同一个 URL 在两条路上画出的栋数不同。
+ *
+ * @param search 形如 `location.search`（`"?k=20&mvt=1"`）
+ */
+export function bldKPinOf(search: string): number | null {
+  const m = /[?&]k=(\d+)\b/.exec(String(search || ""));
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+/**
  * **离线包格边长的唯一解析处**：坏值 / 没给 ⇒ 退回老包那一个（`BLD_BUNDLE_CELL_DEG` = 0.05）。
  *
  * 为什么要导出：2026-10-04 第七条起**锚点也按同一张格网落格**（"相机进过的格"= 离线包格），

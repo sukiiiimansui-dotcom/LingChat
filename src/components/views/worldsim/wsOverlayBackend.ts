@@ -726,10 +726,15 @@ export function createOverlayBackend(): WsRenderBackend {
   let hideSyncs = 0;
   /** 藏楼自校验的账：重试几次 / 写完读回仍不是 none 的层数 / 写入抛错次数（都不许静默） */
   let hideRetries = 0;
-  /** 结构性拆层：累计删了几条、恢复（调落图线 flush）几次 */
+  /** 结构性拆层：累计删了几条、实际"发现还有层并删掉"的轮数、恢复（调落图线 flush）几次 */
   let layersRemovedTotal = 0;
   let layersRecovered = 0;
+  let removePasses = 0;
   let lastRemoveAt = 0;
+  /** `gate.ok` 连续失败次数（**只用来触发失败恢复**，不再用来阻止拆除） */
+  let gateFailStreak = 0;
+  /** 上一次的楼房渲染模式（`map` / `overlay`）—— 只在**切换**时动作，避免拉锯 */
+  let bldMode: "map" | "overlay" = "map";
   /** 重绑次数（地图实例/画布被换过 ⇒ 重新绑到屏幕当前那张上） */
   let mapRebinds = 0;
   /** 名字层 DOM 写入次数（MutationObserver，只读）；名字节点现数在回传时取 */
@@ -947,17 +952,33 @@ export function createOverlayBackend(): WsRenderBackend {
         const gate = meshDrawingOk(true);
         hideGateOk = gate.ok;
         hideGateWhy = gate.why;
-        /* 结构性拆层（节流 1.2s）：闸放行 ⇒ 楼房图层必须**一条都不存在**；
-           闸不放行（叠层画不出来）⇒ **调落图线既有入口重建**，屏幕回到地图那套。 */
+        /* 🔴 2026-10-17（拉锯 + 语义修正）：
+           · **拆除**只看稳态判据：叠加层是当前楼房渲染者、且**已经画出过非空的一帧**
+             （`drawsTotal>0 && 网格有三角`）—— **不再看 `gate.ok`**。
+             真机 `gate.ok` 命中率 96%，但它会瞬时抖动；用它决定拆/建就是"建一下拆一下"。
+           · 像素太少/比例不足（`gate.ok=false`）**只用于失败恢复**：**连续 2 次**才回调
+             落图线既有入口 `bldFlush` 把地图那套建回来（一次性，不反复）。
+           · 拆除还做**变化驱动**：只有"还发现 bld 层存在"时才动手，并计 `removePasses`
+             （修好拉锯后它应停在 1~2，而不是每 1.2 秒都涨）。 */
         try {
-          if (gate.ok) {
+          const canRenderBuildings = state === "running" && drawsTotal > 0 && !!data && data.triangles > 0;
+          if (!gate.ok) gateFailStreak += 1;
+          else gateFailStreak = 0;
+          if (canRenderBuildings) {
+            bldMode = "overlay";
             if (performance.now() - lastRemoveAt > 1200) {
               lastRemoveAt = performance.now();
               const f = ensureBldLayers(map, "overlay");
-              layersRemovedTotal += f.removed.length;
+              if (f.removed.length) {
+                layersRemovedTotal += f.removed.length;
+                removePasses += 1;
+              }
             }
-          } else if (wsBuildingsHost.flush("overlay-failed")) {
-            layersRecovered += 1;
+          } else if (gateFailStreak >= 2 && bldMode === "overlay") {
+            /* 叠层画不出楼（连续两次）⇒ 回到地图那套（走落图线既有入口） */
+            if (wsBuildingsHost.flush("overlay-failed")) layersRecovered += 1;
+            bldMode = "map";
+            gateFailStreak = 0;
           }
         } catch { /* 拆/恢复失败下一帧再来 */ }
         const now2 = performance.now();
@@ -1265,7 +1286,7 @@ export function createOverlayBackend(): WsRenderBackend {
          要知道"到底在不在出帧"看 `frames`（累计）与 `drawGapMs`（距上次画多久）。 */
       /* `frames` = **地图驱动的帧**（map render 回调）；`drawsTotal` = **累计真画了几帧**
          （含重建后补画的那一帧）—— 两者别混。 */
-      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws, frames, drawsTotal, drawGapMs: lastDrawAt ? Math.round(performance.now() - lastDrawAt) : null },
+      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws, frames, drawsTotal, failStreak: gateFailStreak, drawGapMs: lastDrawAt ? Math.round(performance.now() - lastDrawAt) : null },
       /* 重锚账（默认模式下重锚是新接上的路：跑了几次、失败几次） */
       reanchor: { count: reanchors, fails: reanchorFails, inFlight: reanchorInFlight, lastAgoMs: lastReanchorAt ? Math.round(performance.now() - lastReanchorAt) : null },
       /* 藏/还原各发生几次、为什么（真机"楼会变掉"要能查账） */
@@ -1313,7 +1334,20 @@ export function createOverlayBackend(): WsRenderBackend {
       meshHeights,
       pixProbesRun,
       /* 结构性拆层读数：present = 现在还剩几条 bld*（0 = 目标达成），removedTotal / recovered */
-      bldLayers: { present: (() => { try { const all = (map as unknown as { getStyle?: () => { layers?: Array<{ id?: unknown }> } })?.getStyle?.()?.layers || []; return all.filter((l) => String((l as { id?: unknown })?.id ?? "").startsWith(BLD_LAYER_PREFIX)).length; } catch { return -1; } })(), removedTotal: layersRemovedTotal, recovered: layersRecovered },
+      bldLayers: {
+        mode: bldMode,
+        removePasses,
+        present: (() => {
+          try {
+            const all = (map as unknown as { getStyle?: () => { layers?: Array<{ id?: unknown }> } })?.getStyle?.()?.layers || [];
+            return all.filter((l) => String((l as { id?: unknown })?.id ?? "").startsWith(BLD_LAYER_PREFIX)).length;
+          } catch {
+            return -1;
+          }
+        })(),
+        removedTotal: layersRemovedTotal,
+        recovered: layersRecovered,
+      },
       hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors, mapRebinds, hideDrift, hideDriftIds, hideRounds },
       /* **事件序列位置**（判"补藏到底在 styledata 之后还是之前"）：
          lastStyleAgoMs = 最近一次 styledata 距今；lastHideAgoMs = 最近一次补藏距今；

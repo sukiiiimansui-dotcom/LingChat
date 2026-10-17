@@ -22,6 +22,7 @@
  */
 
 import { atlasUvOf, cellOf, repeatOf, ROOF_CELL_INDEX } from "./wsBldFacade";
+import { ROOF_MUL, toonMulOf, toonBandOf } from "./wsToon";
 import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
@@ -322,7 +323,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           const q = up >= 0 ? [a, b, c] : [a, c, b];
           for (const p of q) {
             pos.push(p[0], top, p[1]);
-            col.push(rgb[0], rgb[1], rgb[2]);
+            /* 屋顶与墙面区分：略暗略冷（系数来自 `wsToon.ROOF_MUL`，判据可离线算） */
+            col.push(rgb[0] * ROOF_MUL[0], rgb[1] * ROOF_MUL[1], rgb[2] * ROOF_MUL[2]);
             /* 顶面：UV 常量 + 屋面格（窗格不会贴到屋顶上） */
             uvs.push(0.5, 0.5);
             facadeRect.push(roofRect.u0, roofRect.v0, roofRect.u1 - roofRect.u0, roofRect.v1 - roofRect.v0);
@@ -347,10 +349,13 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           const ex = b[0] - a[0];
           const ez = b[1] - a[1];
           const el = Math.hypot(ex, ez) || 1;
-          const k = shadeOf(-ez / el, 0, ex / el);
-          const wr = rgb[0] * k;
-          const wg = rgb[1] * k;
-          const wb = rgb[2] * k;
+          /* **卡通三级明暗 + 暖冷分色**（2026-10-17）：连续 k 先分档，再乘该档的暖冷系数。
+             判据（L* 阶差、色相差）在 `world_map/ws_toon_selftest.mjs` 里离线算。 */
+          const band = toonBandOf(shadeOf(-ez / el, 0, ex / el));
+          const tm = toonMulOf(band);
+          const wr = rgb[0] * tm[0];
+          const wg = rgb[1] * tm[1];
+          const wb = rgb[2] * tm[2];
           /* 立面：这面墙的重复次数（横向按边长、竖向按层数/楼高）与图集格 */
           const cellRect = atlasUvOf(cellOf(fId));
           const rep = repeatOf(el, top - base, (props as { lv?: unknown }).lv);

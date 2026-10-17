@@ -1744,6 +1744,9 @@ export function createOverlayBackend(): WsRenderBackend {
       ids: string[];
       prev: Array<string | null>;
       live: Array<{ id: string; vis: string | null }>;
+      drift: number;
+      rounds: number;
+      timerArmed: boolean;
     } {
       const m = map as unknown as { getLayoutProperty?: (id: string, k: string) => unknown } | null;
       const live = mapBldLayerIds().map((id) => {
@@ -1762,6 +1765,9 @@ export function createOverlayBackend(): WsRenderBackend {
         rebinds: mapRebinds,
         ids: [...hiddenLayers.keys()],
         prev: [...hiddenLayers.values()],
+        drift: hideDrift,
+        rounds: hideRounds,
+        timerArmed: hideVerifyTimer !== 0,
         live,
       };
     },

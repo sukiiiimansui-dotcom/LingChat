@@ -133,13 +133,16 @@ export function atlasSizePx(): { w: number; h: number } {
 }
 
 /** 每格的基色（住宅暖灰/米色、办公冷灰/蓝灰、商业浅褐/灰白）与窗色 */
+/* **中性灰**（明度 ≈ 0.55–0.7）：贴图是**乘在顶点色上**的 —— 顶点色来自瓦片 `c`，
+   若将来换成 LingChat 品牌浅色（#79d9ff 那一族），中性图集只会变亮、不会脏；
+   深色图集则会把浅色顶点压成脏灰。**色调由顶点色决定，图集只给结构与明暗层次**。 */
 const CELL_STYLE: Array<{ wall: string; band: string; win: string; lit: string }> = [
-  { wall: "#cfc6bb", band: "#b3a99c", win: "#5d6b78", lit: "#ffe9b8" },   /* 0 住宅暖灰 */
-  { wall: "#d8cdbd", band: "#bfae98", win: "#61707c", lit: "#fff0c8" },   /* 1 住宅米色 */
-  { wall: "#c3cbd2", band: "#a7b2bb", win: "#4f6270", lit: "#e8f2ff" },   /* 2 办公冷灰 */
-  { wall: "#b9c2cc", band: "#9aa6b3", win: "#465866", lit: "#e2eeff" },   /* 3 办公蓝灰 */
-  { wall: "#d2c2ab", band: "#b8a68c", win: "#6a6152", lit: "#ffe7bd" },   /* 4 商业浅褐 */
-  { wall: "#dcd8d1", band: "#c2bcb2", win: "#5f6a70", lit: "#f6f6f2" },   /* 5 商业灰白 */
+  { wall: "#b8b8b8", band: "#a2a2a2", win: "#6e747a", lit: "#e6e6df" },   /* 0 住宅：竖长窗 */
+  { wall: "#c2c0bc", band: "#aaa8a3", win: "#717880", lit: "#efe9df" },   /* 1 住宅：带窗台 */
+  { wall: "#b4b8bd", band: "#9ea3a9", win: "#646d75", lit: "#e2e8ee" },   /* 2 办公：横条窗 */
+  { wall: "#bcc0c6", band: "#a4a9b0", win: "#5f6870", lit: "#e8eef4" },   /* 3 办公：竖框 */
+  { wall: "#bfbcb5", band: "#a7a49d", win: "#6b6a63", lit: "#f0e9dc" },   /* 4 商业：大玻璃 */
+  { wall: "#c6c6c3", band: "#aeaeab", win: "#696f72", lit: "#f2f2ef" },   /* 5 商业：素净 */
 ];
 
 /**

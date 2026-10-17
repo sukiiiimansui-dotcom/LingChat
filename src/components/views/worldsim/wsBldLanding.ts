@@ -106,6 +106,9 @@ import { visibleRoadCount } from "./wsRoads";
 import { roadSegments } from "./wsSnap";
 import type { PlacePoint } from "./wsDaily";
 import type { BldLandingCtx, BldMapLike } from "./wsStageTypes";
+/* **谁负责画楼**的真源（2026-10-17）：`overlay` = three.js 叠加层负责 ⇒ 地图这套 `bld*` 一条都不建。
+   只读，**不改渲染线的文件**（偏好/失败回退都写在这个 ref 上）。 */
+import { rendererLive } from "./wsRenderBackend";
 
 /**
  * **源裁剪环**（2026-10-17）：每次落图前，把写进地图 `bld` 源的那一批裁到
@@ -361,6 +364,21 @@ export function createBldLanding(ctx: BldLandingCtx) {
     const ring = bldRingNow(m);
     return ring ? feats.filter((f) => bldInRingOf(f as never, ring)) : feats;
   }
+
+  /** 地图那套楼层的规格（与 `flushBldStore` 的 `specs` 同一份取参；**只此一处**） */
+  function bldSpecsNow(): Array<Record<string, unknown>> {
+    return bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" });
+  }
+
+  /**
+   * **现在谁负责画楼**（只读渲染线真源 `rendererLive`，**不自造开关**）：
+   *   · `overlay` ⇒ three.js 叠加层负责：地图这套 `bld*` 一条都不许建
+   *     （叠加层自己会结构性拆掉，建一次就是"建/拆拉锯"：两套楼叠在一起 + 样式每 1.2s 变）；
+   *   · 其它（`map` / `three` / 未就绪）⇒ 地图建（`three` 时地图可能不在台上，建了也无害，切回即有）。
+   */
+  function overlayDrawsBuildingsNow(): boolean {
+    try { return rendererLive.value === "overlay"; } catch { return false; }
+  }
   /* ┄┄┄ 有意增量 END ┄┄┄ */
 
 
@@ -374,6 +392,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
     const map = mapNow();
     if (!aliveNow()) return;
     bldFlushedOnce = true;
+    /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+    /* 叠加层画不出楼时，渲染线会调登记的既有入口（`wsBuildingsHost.flush("overlay-failed")`）；
+       那一次**允许**把地图那套建回来。平时（叠加层正常）一条都不建，见 `overlayDrawsBuildingsNow`。 */
+    const forceMapBuild = typeof why === "string" && why.indexOf("overlay-failed") >= 0;
+    /* ┄┄┄ 有意增量 END ┄┄┄ */
     /* **这一轮按哪一档落图**（0 = 足迹 z<14 / 1 = 立体 z≥14 / null = zoom 读不出来）。
        prev = **上一次落图**的档（`bldFlushedTier`）⇒ 判据带 0.25 滞回（共享真源 `bldTierOfZoom`）：
           13.9↔14.1 来回缩放**不会**反复重挑（改造前是每跨一次就重挑一次）。
@@ -397,7 +420,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
         /* **美术取参**：与代拍页同一份（`bldLayerSpecsFor` 内部调 `bldArtParamsOf`）——
            `?art=2` 把色阶高段推近白；`art=1` 时 `ramp` 是**主题那个引用**（恒等）⇒ 默认零改动。
            形体档 `mode:"base"` = 不拆件（用户 (a′) ⇒ 两页默认档同一条规格）。 */
-        specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" }),
+        /* ┄┄┄ 有意增量 BEGIN（原行:        specs: () => bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" }),）┄┄┄ */
+        /* **谁负责画楼**（2026-10-17）：叠加层负责时**不建** `bld*`（源照常 `setData`，three 从源取数）；
+           叠加层明确失败 / 切回地图 ⇒ 用同一份规格建。判据/规格都只有上面那一处。 */
+        specs: () => ((overlayDrawsBuildingsNow() && !forceMapBuild) ? [] : bldSpecsNow()),
+        /* ┄┄┄ 有意增量 END ┄┄┄ */
         /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
         /* `?mvt=1`（先导）：注册成功才给模板 ⇒ 走矢量瓦片源、**不 setData**；
            开关关掉 / 注册失败 ⇒ 返回 null ⇒ 原来那条 GeoJSON 路**逐字节不变**（可逆开关的关那一侧）。 */
@@ -542,6 +569,17 @@ export function createBldLanding(ctx: BldLandingCtx) {
       },
       why
     );
+    /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+    /* **落图后补层**（2026-10-17）：地图负责画楼（或叠加层刚失败）且层缺 ⇒ 立刻补回 5 条，
+       不等 2s 看门狗 —— 这就是"切回地图模式 ⇒ 下一次落图把 bld* 建回来"。
+       叠加层正常时一条都不建（`specs` 也已返回空），避免建/拆拉锯。 */
+    try {
+      if ((forceMapBuild || !overlayDrawsBuildingsNow()) && renderKind.value !== "fallback2d") {
+        const mm = map as unknown as BldMapLike | null;
+        if (mm && !bldLayersPresent(mm)) ensureBldLayers(mm, bldSpecsNow());
+      }
+    } catch { /* 补层失败不阻断落图（下一次事件/看门狗再来） */ }
+    /* ┄┄┄ 有意增量 END ┄┄┄ */
     /* **落图之后**才把"这一轮是哪一档"记成下一次的 prev（滞回的写回点，全局只有这一处）——
        顺序反过来（先写后落图）等于把滞回关掉，见上面那段注释。 */
     bldFlushedTier = bldTierNow;
@@ -567,6 +605,12 @@ export function createBldLanding(ctx: BldLandingCtx) {
       if (!loaded) return false;
     } catch { return false; }
     if (bldLayersPresent(map as unknown as BldMapLike)) return false;   /* 健康 ⇒ 纯读，零写 */
+    /* **拉锯的另一半**（2026-10-17）：叠加层是当前楼房渲染者时，它自己会结构性**拆掉** `bld*`
+       （源 `bld` 保留，three 从源里取数）。看门狗若在这里建，就是"每 2s 建、每 1.2s 拆"——
+       用户看到地图那套 + three 那套**叠在一起**，样式每 1.2s 变一次还伤帧率。
+       叠加层真的画不出楼时会自己调 `wsBuildingsHost.flush("overlay-failed")`，
+       那一条由 `bldFlush` 的 `forceMapBuild` 支路把 5 条建回来（恢复不靠这条看门狗）。 */
+    if (overlayDrawsBuildingsNow()) return false;
     const t0 = Date.now();
     let addedLayers = 0;
     try {

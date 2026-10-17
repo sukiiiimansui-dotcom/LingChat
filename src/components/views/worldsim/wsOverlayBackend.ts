@@ -601,6 +601,70 @@ export function createOverlayBackend(): WsRenderBackend {
   }
 
   /** 从地图 source 里现捞一份 `bld`（拿不到就 null —— 不编数据） */
+  /**
+   * 从**瓦片（矢量源）**取当前视野的楼。
+   *
+   * 为什么不是 `getData()`：矢量源**没有 `getData`**（那正是旧护栏 `overlay-needs-geojson` 的由来）。
+   * 矢量源的官方读取入口是 `querySourceFeatures`：它返回**当前已加载瓦片里**的要素，
+   * 带 `geometry` 与 `properties`（`h/hb/c/zt/p` 或 GeoJSON 的 `h3d/h_base/color3d`）。
+   * 注意：`wsMvtDecode.decodeMvtFeatures` 只解出 `id + properties`（**没有几何**），
+   * 所以几何只能从源里拿 —— 这不是第二条数据路，而是读同一份 MVT 瓦片的入口。
+   */
+  function grabMvt(): WsRenderFc | null {
+    const m = map as unknown as {
+      getSource?: (id: string) => { type?: string; setData?: unknown } | undefined;
+      querySourceFeatures?: (id: string, opts?: { sourceLayer?: string }) => Array<{
+        id?: unknown;
+        type?: string;
+        geometry?: { type?: string; coordinates?: unknown };
+        properties?: Record<string, unknown>;
+      }>;
+    } | null;
+    if (!m?.querySourceFeatures) return null;
+    const src = m.getSource?.("bld") as { type?: string } | undefined;
+    /* 矢量源才走这条（GeoJSON 源继续用 getData，行为不变） */
+    if (!src || src.type === "geojson") return null;
+    let feats: ReturnType<NonNullable<typeof m.querySourceFeatures>> = [];
+    try {
+      /* **所有源图层**都查（不传 sourceLayer ⇒ 全部）：瓦片里楼/部件可能分在不同 layer */
+      feats = m.querySourceFeatures("bld") || [];
+    } catch {
+      return null;
+    }
+    const out: unknown[] = [];
+    const seen = new Set<string>();
+    for (const f of feats) {
+      const id = String(f.id ?? (f.properties || {}).id ?? "");
+      if (id && seen.has(id)) continue;      /* 去重（query 会跨 tile 边界重复） */
+      const g = f.geometry;
+      if (!g || (g.type !== "Polygon" && g.type !== "MultiPolygon") || !g.coordinates) continue;
+      const pr = f.properties || {};
+      /* 统一成网格那套命名（`buildBldMeshData` 只认 h3d/h_base/color3d/part），
+         瓦片用 h/hb/c/p 的短名 —— 两套都能吃。 */
+      const top = Number(pr.h3d ?? pr.h ?? 0);
+      const base = Number(pr.h_base ?? pr.hb ?? 0);
+      out.push({
+        type: "Feature",
+        id: id || undefined,
+        properties: {
+          ...pr,
+          h3d: Number.isFinite(top) ? top : 0,
+          h_base: Number.isFinite(base) ? base : 0,
+          color3d: pr.color3d ?? pr.c ?? "#c9d4e0",
+          zt: pr.zt ?? pr.p ?? 0,
+        },
+        geometry: g,
+      });
+      if (id) seen.add(id);
+    }
+    if (!out.length) return null;
+    bldQueryFeatures = out.length;
+    return { type: "FeatureCollection", buildings: { type: "FeatureCollection", features: out } } as unknown as WsRenderFc;
+  }
+
+  /** 最近一次从瓦片查询取到多少条要素（回传用；0 = 走的不是瓦片路） */
+  let bldQueryFeatures = 0;
+
   async function grabBld(): Promise<WsRenderFc | null> {
     try {
       const src = map?.getSource?.("bld");
@@ -1361,7 +1425,9 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 覆盖面（"整屏只有一栋楼"那条：源里有几个 vs 我们画了几个） */
       cover: { expected: cover.expected, actual: cover.actual, srcAll: cover.srcAll, meshAll: cover.meshAll, thinDropped: cover.thinDropped, shapeDropped: cover.shapeDropped, meshOut: cover.meshOut, srcOut: cover.srcOut, strikes: coverStrikes },
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
-      feed: { refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
+      feed: {
+        source: lastSource,
+        mvtFeatures: bldQueryFeatures, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
       /* **每帧分解**（拖动期间"谁在花时间"）：`mapFrames` = 地图 render 回调次数，
          `overlayFrames` = 我们真画了几帧，`labelWrites` = 名字层 DOM 写入次数，

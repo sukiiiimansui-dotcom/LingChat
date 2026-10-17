@@ -306,14 +306,6 @@ export async function setupMvtProtocol(
      而且**一声不响**）⇒ 这里**把整条 MVT 路关掉**，逐字节回到 GeoJSON 那条老路，并如实记账。
      `?mvt=1` 是强制口（真机排障用）：强制时仍按老逻辑退到普通 URL 源。 */
   const forced = (() => { try { return /[?&]mvt=1\b/.test(typeof location !== "undefined" ? location.search : ""); } catch { return false; } })();
-  /* overlay 与 MVT 互斥（见 `overlayNeedsGeo` 的说明）：不强开时直接不启用，并记账。 */
-  if (!forced && overlayNeedsGeo()) {
-    (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = {
-      enabled: false, reason: "overlay-needs-geojson",
-      note: "overlay 后端从 bld 源取 FeatureCollection（vector 源没有 getData）⇒ 两者互斥，MVT 本次不启用",
-    };
-    return null;
-  }
   if (!cap.hasDecompressionStream && !forced) {
     (globalThis as { __WS_MVT__?: unknown }).__WS_MVT__ = {
       enabled: false, reason: "no-decompression-stream", probe: cap,

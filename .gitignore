@@ -254,3 +254,6 @@ dist-namesverify/
 
 # 质量报告的落盘目录（工作流产物，不进仓）
 ci-reports/
+
+# 精简楼群包（生成物，与 bldbundle-002 一样不进仓库）
+public/bldbundle-002-slim/

@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-10-17T06:49:51.756Z",
+  "profile": "slim",
+  "hasRk": false,
+  "hasColorC": true,
+  "cellDeg": 0.01,
+  "bands": [
+    {
+      "z0": 11,
+      "z1": 13,
+      "k": 6
+    },
+    {
+      "z0": 14,
+      "z1": 15,
+      "k": 24
+    },
+    {
+      "z0": 16,
+      "z1": 16,
+      "k": 64
+    }
+  ],
+  "zoom": [
+    11,
+    16
+  ],
+  "totalTiles": 309,
+  "totalBytes": 1000307
+}

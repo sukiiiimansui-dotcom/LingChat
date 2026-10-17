@@ -186,8 +186,10 @@ export function createOverlayBackend(): WsRenderBackend {
   let facadeTextureFailed = 0;
   let facadeApplied = 0;
   let facadeTex: unknown = null;
+  /* **默认关**（2026-10-17 真机"帧率下降"止血）：`?facade=1` 才开。
+     贴图是"观感换帧率"的开关，先保帧率；等真机 A/B 有了结论再决定默认值。 */
   const facadeOn = (() => {
-    try { return !/[?&]facade=0\b/.test(location.search); } catch { return true; }
+    try { return /[?&]facade=1\b/.test(location.search); } catch { return false; }
   })();
 
   /** 懒加载：首次重建后生成图集（别拖慢首屏）；失败记 `facadeTextureFailed` 并退回纯色 */
@@ -582,6 +584,7 @@ export function createOverlayBackend(): WsRenderBackend {
       restoreMapBuildings("rebuild-empty");
       return;
     }
+    rebuildCount += 1;
     /* 一次性换上：先建好 three 对象，再掐掉旧的（中间没有"两个都不在"的帧） */
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(next.positions), 3));
@@ -684,6 +687,11 @@ export function createOverlayBackend(): WsRenderBackend {
   let mvtRawFeatures = 0;
   let mvtUniqueIds = 0;
   let mvtPartsDropped = 0;
+  let mvtQueryMs = 0;
+  let mvtQueryMaxMs = 0;
+  let mvtQueries = 0;
+  /** 叠加层自己的重建次数（与落图线的 refreshDone 不是一回事） */
+  let rebuildCount = 0;
 
   /**
    * 从**瓦片（矢量源）**取当前视野的楼。
@@ -709,12 +717,17 @@ export function createOverlayBackend(): WsRenderBackend {
     /* 矢量源才走这条（GeoJSON 源继续用 getData，行为不变） */
     if (!src || src.type === "geojson") return null;
     let feats: ReturnType<NonNullable<typeof m.querySourceFeatures>> = [];
+    const tq = performance.now();
     try {
       /* **所有源图层**都查（不传 sourceLayer ⇒ 全部）：瓦片里楼/部件可能分在不同 layer */
       feats = m.querySourceFeatures("bld") || [];
     } catch {
       return null;
     }
+    /* 帧率排查用：这一次全量扫花了多少毫秒（真机 1158 栋 + 部件时它可能很贵） */
+    mvtQueryMs = Math.round((performance.now() - tq) * 10) / 10;
+    mvtQueryMaxMs = Math.max(mvtQueryMaxMs, mvtQueryMs);
+    mvtQueries += 1;
     /* 映射规则（主体优先 / zt 只来自 zt / 一栋一条）在 `wsMvtBldMap.ts`，**唯一实现**，
        闸直接测那个纯函数（真机"带凸起的小楼"就是这里早先按 id 先到先得造成的）。 */
     const mapped = mapMvtBldFeatures(feats as never);
@@ -1490,7 +1503,11 @@ export function createOverlayBackend(): WsRenderBackend {
         source: lastSource,
         mvtFeatures: mvtRawFeatures,
         mvtUniqueIds,
-        mvtPartsDropped, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
+        mvtPartsDropped,
+        mvtQueryMs,
+        mvtQueryMaxMs,
+        mvtQueries,
+        rebuilds: rebuildCount, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
       /* 立面图集：on = 开关；applied = 补丁真的挂上了；patchFailed = 着色器锚点对不上（退回纯色） */
       facade: { on: facadeOn, applied: facadeApplied, patchFailed: facadePatchFailed, textureFailed: facadeTextureFailed },

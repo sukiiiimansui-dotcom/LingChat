@@ -342,7 +342,7 @@ export function createBldLanding(ctx: BldLandingCtx) {
    * 当前视野的**源裁剪环**（`BLD_SRC_RING_PAD`）。读不出视野 ⇒ `null` = **不裁剪** ——
    * 宁可这一轮多画，也不许把"数不出来"当成"视野外 0 栋"去清空源。
    */
-  function bldRingNow(m: BldLandingMapLike | null): BldRingRect | null {
+  function bldRingNow(m: BldMapLike | null): BldRingRect | null {
     try {
       const b = m && typeof m.getBounds === "function" ? m.getBounds() : null;
       return bldRingOf(b as never, BLD_SRC_RING_PAD);
@@ -356,7 +356,7 @@ export function createBldLanding(ctx: BldLandingCtx) {
    * 见 `wsBldPickStore.pickBudget` 的 `ringPad`）。`z < 13.5`（没有近景挑楼）时这个 getter
    * 就是**唯一**的裁剪点 —— 所以它必须在这里，而不是只写在 pick 里。
    */
-  function bldSourceOf(m: BldLandingMapLike | null): readonly BundleBuildingFeature[] {
+  function bldSourceOf(m: BldMapLike | null): readonly BundleBuildingFeature[] {
     const feats = bldStore.features();
     const ring = bldRingNow(m);
     return ring ? feats.filter((f) => bldInRingOf(f as never, ring)) : feats;

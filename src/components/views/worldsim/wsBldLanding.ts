@@ -89,8 +89,11 @@ import {
 import {
   WS_BLD_CELL_CAP_REF_DEG,
   bldCapForCellDeg,
+  bldInRingOf,
+  bldRingOf,
   createBldPickStore,
   type BldPickStats,
+  type BldRingRect,
 } from "./wsBldPickStore";
 import { bldMaxDrawnOf, bldMetersPerCssPixel, bldPxPerMeter, bldTierOfZoom, WS_BLD_WALK_K, type BldBudgetBounds } from "./wsBldBudget";
 import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
@@ -103,6 +106,28 @@ import { visibleRoadCount } from "./wsRoads";
 import { roadSegments } from "./wsSnap";
 import type { PlacePoint } from "./wsDaily";
 import type { BldLandingCtx, BldMapLike } from "./wsStageTypes";
+
+/**
+ * **源裁剪环**（2026-10-17）：每次落图前，把写进地图 `bld` 源的那一批裁到
+ * 「当前视野 + 四边各 `ringPad × 半幅`」。
+ *
+ * 为什么要有它：`bld` 源原来是"仓库全量按格取前 K"，而仓库的淘汰半径是
+ * `max(2000, 视野半对角 × 2.2)`（见下面 `bldFeed.retainRadiusM`）⇒ 环带面积 `2.2² − 1 = 3.84`
+ * ⇒ **源里约 79% 的楼在视野外**。真机 `?wsalign=1` 的 `srcOut/srcAll = 165/208` 正是这个形状：
+ * 不是渲染画错，是**源里留着旧视野那一圈**。叠加层（mesh）照源画，于是越拖越多"屏幕外的楼"
+ * 占着内存/顶点，而真正新视野的楼反而没进源（拖动路径没有落图，见 `wsOfflineFeed` 的 `+0` 那一支）。
+ *
+ * **为什么取 10%**：
+ *   · 落图时点 = `moveend` 去抖 600 ms / 摇杆停下各一次 ⇒ 缓冲只需要盖住"两次落图之间还会挪多远"；
+ *   · 街区块面（z16.4，1280×578 画布）半幅约 1.1 km × 0.43 km ⇒ 10% ≈ 110 m × 43 m，
+ *     约一个街区；环里还能留住"就近补齐"的 10 栋与行走缓冲的 80 栋（它们本来就在视野内）；
+ *   · 面积账：外扩 10% ⇒ 源矩形面积 ×1.21，**均匀密度下环外最多 1 − 1/1.21 ≈ 17.4%**；
+ *     实测真包（见 `ws_bld_src_ring_selftest.mjs`）约 8%；
+ *   · 与旧半径对比：旧 2.2× 半对角 ⇒ 79% 环外；10% 环把"源里的视野外"压掉约五倍（按面积）。
+ *
+ * 不用圆而是矩形：视野本来就是矩形，圆会切掉屏幕左右两边的楼（那正是"只有角色周围有楼"的观感）。
+ */
+export const BLD_SRC_RING_PAD = 0.10;
 
 /**
  * 装配 M3（挑楼流水线 / 落地）。
@@ -275,6 +300,18 @@ export function createBldLanding(ctx: BldLandingCtx) {
     if (bldPickTier === 1) return "🏙 楼房 严格档（z≥14 · 立体）";
     return "🏙 楼房 严格档";
   }
+  /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+  /** 只读三个**可选**读数（`BldPickBudgetStats` 在给了 `ringPad` 时才有；不扩 `BldPickAnyStats`
+   *  的联合类型——那是渲染线正在动的文件，本线不碰）。 */
+  type BldRingStatsLike = { ringPad?: number; ringPoolDropped?: number; ringFrozenDropped?: number };
+  /** **源裁剪的账**（可查：裁了几栋、按什么口径）—— 没裁时**一个字都不加**（逐字节回到改动前） */
+  function bldRingLineOf(s: BldRingStatsLike): string {
+    const pad = Number(s.ringPad);
+    if (!(pad > 0)) return "";
+    return " · 源裁剪 环外扩 " + Math.round(pad * 100) + "%（候选裁 " + (Number(s.ringPoolDropped) || 0)
+      + " 栋 · 冻结裁 " + (Number(s.ringFrozenDropped) || 0) + " 栋）";
+  }
+  /* ┄┄┄ 有意增量 END ┄┄┄ */
   function bldPickLine(s: BldPickAnyStats): string {
     /* `?bldn=` 那条 A/B 老路（按固定经纬格挑）**没有档位这回事**：原样转交它自己的判词
        （那个口径的"画几栋"由每块上限决定，写"严格档 ≤K 栋/格"就是撒谎）。 */
@@ -298,8 +335,35 @@ export function createBldLanding(ctx: BldLandingCtx) {
     return WS_BLD_CELL_CAP_REF_DEG;
   }
 
+  /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
   /**
-   * **落图（楼）**：仓库并集 →（宿主上妆 `dressBld`）→ **一次 `setData`**。
+   * 当前视野的**源裁剪环**（`BLD_SRC_RING_PAD`）。读不出视野 ⇒ `null` = **不裁剪** ——
+   * 宁可这一轮多画，也不许把"数不出来"当成"视野外 0 栋"去清空源。
+   */
+  function bldRingNow(m: BldLandingMapLike | null): BldRingRect | null {
+    try {
+      const b = m && typeof m.getBounds === "function" ? m.getBounds() : null;
+      return bldRingOf(b as never, BLD_SRC_RING_PAD);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 进源的**那一份**楼：仓库并集先按裁剪环筛一遍（`pick` 存在时，编排层还会把冻结集也裁一刀，
+   * 见 `wsBldPickStore.pickBudget` 的 `ringPad`）。`z < 13.5`（没有近景挑楼）时这个 getter
+   * 就是**唯一**的裁剪点 —— 所以它必须在这里，而不是只写在 pick 里。
+   */
+  function bldSourceOf(m: BldLandingMapLike | null): readonly BundleBuildingFeature[] {
+    const feats = bldStore.features();
+    const ring = bldRingNow(m);
+    return ring ? feats.filter((f) => bldInRingOf(f as never, ring)) : feats;
+  }
+  /* ┄┄┄ 有意增量 END ┄┄┄ */
+
+
+  /**
+   * **落图（楼）**：仓库并集 →（按裁剪环筛源 + 宿主上妆 `dressBld`）→ **一次 `setData`**。
    * 落图通路本身在共享真源 `wsDistrictScene.flushBldStore()`（PR 标准门禁 C1 要求"宿主只接线"）；
    * 这里只提供三件**宿主自己的**东西：**仓库**、**上妆口径**、**没有地图时怎么办**（2D 降级路交给自绘）。
    * 回退：`git revert <本 commit>`。
@@ -319,7 +383,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
     bldPickTier = bldTierNow;   /* HUD 那一行读它（与这一批同一档，见 `bldShapeTierName`） */
     flushBldStore<BundleBuildingFeature>(
       {
-        features: () => bldStore.features(),
+        /* ┄┄┄ 有意增量 BEGIN（原行:        features: () => bldStore.features(),）┄┄┄ */
+        /* **进源的那一份**：仓库并集先按裁剪环筛（旧视野的楼留在仓库里，但不进 `setData`）。
+           `z < 13.5` 没有近景挑楼时，这个 getter 就是唯一的裁剪点。 */
+        features: () => bldSourceOf(map),
+        /* ┄┄┄ 有意增量 END ┄┄┄ */
         /* 上妆（高度/颜色/拆件）在这里做**一次** ⇒ HUD 的计数与画出去的是同一批要素 */
         dress: (feats) => dressBld({ features: feats as unknown as BldFeature[] }, map),
         /* 2D 降级路没有可落的图（临时降级时 map 其实还在，但那时画的是自绘那块） */
@@ -383,6 +451,10 @@ export function createBldLanding(ctx: BldLandingCtx) {
                   cellDeg,
                   bounds: bounds as unknown as PickBounds,
                   minInView: WS_BLD_INVIEW,
+                  /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+                  /* 冻结集也要同一刀裁（`?bldn=` 的 A/B 老路同样不许把旧视野的楼补回来） */
+                  ringPad: BLD_SRC_RING_PAD,
+                  /* ┄┄┄ 有意增量 END ┄┄┄ */
                 }) as unknown as { features: readonly BundleBuildingFeature[]; stats: BldPickStats };
               }
               /* 2026-10-04 第六条「**就近补齐**」的参照点 = **锚点的种子**（第七条改成锚点冻结）。
@@ -428,6 +500,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
                    包自报优先、读不到才退回 0.05（老包）。写死 0.01 会让换包时"格"与包对不上。 */
                 cellDeg: bldCellDegNow(),
                 minInView: WS_BLD_INVIEW,
+                /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
+                /* **源裁剪环**（2026-10-17）：候选池 + 两套冻结集同一刀裁到「视野 + 10% 半幅」。
+                   理由/阈值见文件顶部 `BLD_SRC_RING_PAD`；裁掉多少由 `stats.ring*` 如实回证。 */
+                ringPad: BLD_SRC_RING_PAD,
+                /* ┄┄┄ 有意增量 END ┄┄┄ */
                 /* **就近补齐**（2026-10-04 第六条引入；**第七条起这是"锚点的种子"**）：
                     把"离**本格锚点**最近、又还没入选"的那几栋追加到这批的**尾部**（栋数默认
                     `wsBldBudget.WS_BLD_NEAR_K` = 10，不在这里写死）。锚点表与补齐件冻结集都在
@@ -449,7 +526,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
           } catch { return null; }
         })(),
         onPicked: (s) => {
-          const line = bldPickLine(s);
+          /* ┄┄┄ 有意增量 BEGIN（原行:          const line = bldPickLine(s);）┄┄┄ */
+          const line = bldPickLine(s) + bldRingLineOf(s as unknown as BldRingStatsLike);
+          /* ┄┄┄ 有意增量 END ┄┄┄ */
           bldPickWhy = line;
           stats.bldPick = line;
           scheduleBundleHud();

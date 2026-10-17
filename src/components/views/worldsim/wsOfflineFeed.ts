@@ -1005,6 +1005,31 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     return { keys: p.cells.map((c) => c.key), wanted: p.wanted, capped: p.capped };
   }
 
+  /**
+   * **淘汰 + 落图**（2026-10-17 抽成一处，两条路共用：取到新格 / **一格都没取**）。
+   *
+   * 以前只在"这一轮真取到格"之后做这两件事 ⇒ 视野一旦落在**已经取过的格**里
+   * （`todo` 空、`batch` 空），`runOnce` 在下面 `if (!batch.length) return` 整轮早退：
+   * **既不做 `retainNear`、也不 `requestFlush`**。拖动手势的补刷新只走 `refreshBundles("move")`，
+   * 于是源一直停在上一次落图那一批楼（真机：平移约 2 km，`srcAll` 一字不变、视野内 164→45）。
+   * 摇杆那条线在 `wsJoystickStage.joyFlushNow` 里手工补了 `bldFlush`，所以只有拖动画面的症状最明显。
+   *
+   * 现在**没有新格也要走这一遍**：淘汰按当前视野中心收仓库，落图让挑楼/上妆/`setData` 按当前视野重跑
+   * （`applyBuildingsTo` 对"同一批 id"会跳过 `setData`，所以同机位重复刷新不会白传数据）。
+   */
+  function pruneAroundView(): void {
+    try {
+      const c = opts.view().center;
+      if (c && Number.isFinite(c.lng) && Number.isFinite(c.lat)) {
+        const ev = opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
+        const ds = (ev as { droppedSources?: number } | null)?.droppedSources;
+        if (ds) evictedSources += Number(ds) || 0;
+      }
+    } catch {
+      /* 淘汰失败不影响显示（下一轮再试） */
+    }
+  }
+
   async function runOnce(why: string): Promise<BundleRefreshReport> {
     /* **先读索引**（一次；失败就退回试格子）—— 两件事都靠它：
        ① 索引里没有的格 = **包外**，零请求；② **格尺寸以包自报为准** ⇒ 必须先读它再算格键
@@ -1044,7 +1069,14 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
       bytesPicked += by;
     }
     bytesThisRound = bytesPicked;
-    if (!batch.length) return { planned: true, batch: 0, got: 0, capped: p.capped };
+    if (!batch.length) {
+      /* **一格都没取也要落图**（2026-10-17）：视野落在已取过的格上时，`todo` 为空 ⇒ 以前整轮早退，
+         源就停在上一次落图那一批楼（真机平移约 2 km，`srcAll` 一字不变）。见 `pruneAroundView` 上面那段。
+         同机位重复刷新不会白传数据：`applyBuildingsTo` 对"同一批 id"直接跳过 `setData`。 */
+      pruneAroundView();
+      requestFlush(`${why}+0`);
+      return { planned: true, batch: 0, got: 0, capped: p.capped };
+    }
 
     pending += batch.length;
     let n = 0;
@@ -1136,17 +1168,9 @@ export function createBundleFeed<T>(opts: BundleFeedOptions<T>): BundleFeed<T> {
     }
     /* 淘汰只在**超出保留半径/上限**时动手（保留"视野外一圈" ⇒ 来回挪不该重取）。
        2026-09-26：仓库现在会**连被淘汰波及的来源键一起作废**（`wsFeatureStore.retainNear`）⇒
-       下一轮 `todo` 会把那一格重新排进来（有解析缓存就直接从内存并回去）。 */
-    try {
-      const c = opts.view().center;
-      if (c && Number.isFinite(c.lng) && Number.isFinite(c.lat)) {
-        const ev = opts.store.retainNear([c.lng, c.lat], opts.retainRadiusM());
-        const ds = (ev as { droppedSources?: number } | null)?.droppedSources;
-        if (ds) evictedSources += Number(ds) || 0;
-      }
-    } catch {
-      /* 淘汰失败不影响显示（下一轮再试） */
-    }
+       下一轮 `todo` 会把那一格重新排进来（有解析缓存就直接从内存并回去）。
+       2026-10-17：这一句抽成 `pruneAroundView()` —— **没有新格的那一轮也要做**（见 `runOnce` 的 `+0` 支）。 */
+    pruneAroundView();
     /* ⏱ `flush` 是这条管道最贵的一段嫌疑（页面在里面挑楼 + 上妆 + setData）⇒ 单独记。
        合并窗口开时，这一段会**挪到定时器里**（`requestFlush`），延迟但只做一次。 */
     requestFlush(`${why}+${batch.length}`);

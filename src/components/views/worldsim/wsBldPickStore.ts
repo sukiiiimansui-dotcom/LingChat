@@ -65,9 +65,20 @@ export interface BldPickInput<T extends PickFeature> {
   bounds?: PickBounds | null;
   /** 视野内**至少**几栋（默认 0 = 不启用下限） */
   minInView?: number;
+  /**
+   * **源裁剪环**（2026-10-17）：视野四边各外扩 `ringPad × 半幅`。
+   * **不给 / 坏值 / 负值 ⇒ 不裁剪**（老接线逐字节不变）。
+   *
+   * 为什么放在编排层而不是规则层：规则层的口径是"挑选与相机无关"，
+   * 一句"按视野筛候选"写进去就把那条口径弄脏了；这里裁的是**读显示的那一份**（源），
+   * 只动"哪些已加载的楼进源"，不动"每格取前 K"的排序/预算/冻结语义。
+   * 候选池与两套冻结集（按格冻结 / 行走缓冲）**同一刀**裁，否则"只增不删"的冻结集
+   * 会把旧视野的楼一直补回源里（真机 `srcOut` 长期约 79% 的一大来源）。
+   */
+  ringPad?: number | null;
 }
 
-/** 规则模块的统计 + **编排**这一层自己产出的三个数（键序也与页面旧实现一致） */
+/** 规则模块的统计 + **编排**这一层自己产出的几个数（键序也与页面旧实现一致） */
 export interface BldPickStats extends CapCellStats {
   /** 本轮**命中冻结集**的格数（用冻结那批、没重挑） */
   frozenCells: number;
@@ -75,6 +86,14 @@ export interface BldPickStats extends CapCellStats {
   newCells: number;
   /** 冻结集贡献的栋数（= `chosen − floorAdded`，与 `baseChosen` 同值；页面 HUD 用它独立核对） */
   frozenBase: number;
+  /** 源裁剪环的**外扩比例**（0 = 这一轮没裁；读数用）。
+   *  **可选**：`ringPad` 没给时不写这三个键 ⇒ `Object.keys(stats)` 与改动前逐字节相同
+   *  （两页一致闸就是拿整个 stats 对拍的）。 */
+  ringPad?: number;
+  /** 这一轮**从候选池**裁掉几栋（在「视野 + 缓冲环」之外） */
+  ringPoolDropped?: number;
+  /** 这一轮**从冻结集**裁掉几栋（按格冻结的那批 + 行走缓冲；引用被剪掉 ⇒ 之后不再画） */
+  ringFrozenDropped?: number;
 }
 
 export interface BldPickOutcome<T extends PickFeature> {
@@ -146,6 +165,16 @@ export interface BldBudgetInputLite<T> {
    * 不给（`undefined`/`null`）⇒ 每轮都按"没有增量信息"处理（= 扫全池，老行为逐字节不变）。
    */
   poolRev?: string | number | null;
+  /**
+   * **源裁剪环**（2026-10-17）—— 与 `BldPickInput.ringPad` 同一个口径：
+   * 视野四边各外扩 `ringPad × 半幅`；不给/坏值 ⇒ 不裁剪。
+   *
+   * 这一条只在**宿主显式给**时生效（页面那条老路不传 ⇒ 逐字节不变）；
+   * 宿主（`wsBldLanding.bldFlush`）每轮落图都给 `BLD_SRC_RING_PAD`：
+   * 坐标在环外的**候选**不进池、**冻结集引用**被剪掉，于是 `setData` 的那份源只含
+   * 「当前视野 + 一圈缓冲」—— 这就是"楼数据停在旧视野"的落图侧修法。
+   */
+  ringPad?: number | null;
 }
 
 /**
@@ -164,6 +193,12 @@ export interface BldPickBudgetStats extends BldBudgetStats {
   walkBufN: number;
   /** 这一轮因为**超上限**被丢掉的行走缓冲条数（**全功能里唯一允许"楼消失"的一支**，必须可数） */
   walkDropped: number;
+  /** 源裁剪环的**外扩比例**（0 = 这一轮没裁；读数用；**可选**，见 `BldPickStats` 同名字段） */
+  ringPad?: number;
+  /** 这一轮**从候选池**裁掉几栋（在「视野 + 缓冲环」之外） */
+  ringPoolDropped?: number;
+  /** 这一轮**从冻结集**裁掉几栋（按格冻结的锚点补齐 + 行走缓冲；引用被剪掉 ⇒ 之后不再画） */
+  ringFrozenDropped?: number;
 }
 
 /* ══ 「每块画几栋」「视野内至少几栋」—— **取参也在这一份里** ══════════════════════════════
@@ -279,6 +314,54 @@ function pointOfFeature(f: PickFeature): [number, number] | null {
   return p as [number, number] | null;
 }
 
+/** 「当前视野 + 一圈缓冲」的矩形（经纬度）。`null` = 不裁剪 / 视野数不出来。 */
+export interface BldRingRect {
+  w: number;
+  s: number;
+  e: number;
+  n: number;
+}
+
+/**
+ * **源裁剪环**（2026-10-17）：把视野四边各外扩 `pad × 半幅`。
+ *
+ * 为什么要裁（真机读数）：`bld` 源不是"视野内的一批"，而是"**仓库全量**按格取前 K"——
+ * 仓库的淘汰半径是 `max(2000, 视野半对角 × 2.2)` ⇒ 源里约 `1 − 1/2.2² ≈ 79%` 的楼在视野外
+ * （真机 `srcOut/srcAll = 165/208` 正是这个形状）。更要命的是拖动只走 `refreshBundles`，
+ * 新视野落在"已取过的格"里时 feed 整轮早退 ⇒ 源停在旧视野（"滑动两下楼就没了"）。
+ * 落图侧的对策就是这一刀：**只把「视野 + 一圈」写进源**，旧视野的楼留在仓库里（挪回去还能用），
+ * 但不再进 `setData`。
+ *
+ * 视野读不出来（四个数不齐 / 反向）⇒ 返回 `null` = **不裁剪** ——
+ * 宁可这一轮多画，也不许把"数不出来"当成"视野外 0 栋"去清空源。
+ */
+export function bldRingOf(
+  bounds: { getWest(): number; getSouth(): number; getEast(): number; getNorth(): number } | null | undefined,
+  pad: unknown,
+): BldRingRect | null {
+  const p = Number(pad);
+  if (!bounds || !Number.isFinite(p) || p < 0) return null;
+  try {
+    const w = Number(bounds.getWest()), s = Number(bounds.getSouth());
+    const e = Number(bounds.getEast()), n = Number(bounds.getNorth());
+    if (![w, s, e, n].every((v) => Number.isFinite(v)) || !(e > w) || !(n > s)) return null;
+    const dx = ((e - w) / 2) * p, dy = ((n - s) / 2) * p;
+    return { w: w - dx, s: s - dy, e: e + dx, n: n + dy };
+  } catch {
+    return null;
+  }
+}
+
+/** 要素代表点是否在裁剪环内（**取不到代表点 ⇒ 不裁掉**：宁可多留一栋，也不丢一份数据） */
+export function bldInRingOf(f: PickFeature, ring: BldRingRect | null): boolean {
+  if (!ring) return true;
+  const pt = pointOfFeature(f);
+  if (!pt) return true;
+  const x = Number(pt[0]), y = Number(pt[1]);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return true;
+  return x >= ring.w && x <= ring.e && y >= ring.s && y <= ring.n;
+}
+
 /**
  * 造一个挑选/冻结编排器。**每个宿主一份**（页面一份、App 宿主一份），
  * 冻结集就是这份实例的状态 —— 页面以前把它挂在 `window.__BLD_FROZEN__` 上。
@@ -325,8 +408,31 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
 
   return {
     pick<T extends PickFeature>(input: BldPickInput<T>): BldPickOutcome<T> {
+      /* ⓪ **源裁剪**（2026-10-17）：候选池与已有冻结集都裁到「视野 + 缓冲环」。
+         `ringPad` 不给 ⇒ `ring = null` ⇒ 计数恒 0、行为逐字节回到改动前。
+         冻结集**必须同一刀裁**：它是"只增不删"的（按格冻结），只裁池不裁冻结集
+         ⇒ 老格那批楼每轮又被原样并回输出，源里照样留着旧视野。 */
+      const ring = bldRingOf(input.bounds as never, input.ringPad);
+      let ringPoolDropped = 0, ringFrozenDropped = 0;
+      const poolIn = ring
+        ? input.features.filter((f) => {
+            const keep = bldInRingOf(f as unknown as PickFeature, ring);
+            if (!keep) ringPoolDropped += 1;
+            return keep;
+          })
+        : input.features;
+      if (ring) {
+        for (const k of Object.keys(frozen)) {
+          const arr = frozen[k];
+          const keep = arr.filter((f) => bldInRingOf(f, ring));
+          if (keep.length === arr.length) continue;
+          ringFrozenDropped += arr.length - keep.length;
+          if (keep.length) frozen[k] = keep;
+          else delete frozen[k];
+        }
+      }
       /* ① 规则在共享纯函数里（本模块**不重写**挑选/排序/下限逻辑） */
-      const r = capBuildingsPerCell(input.features, {
+      const r = capBuildingsPerCell(poolIn, {
         cap: input.cap,
         cellDeg: input.cellDeg,
         bounds: input.bounds ?? null,
@@ -376,6 +482,8 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         frozenCells,
         newCells,
         frozenBase: stableFeats.length,
+        /* 只有**真给了 ringPad**才写这三个键：关掉时 `stats` 的形状与改动前逐字节相同。 */
+        ...(ring ? { ringPad: Number(input.ringPad), ringPoolDropped, ringFrozenDropped } : {}),
       };
       return { features: stableFeats.concat(addedNow), stats };
     },
@@ -414,6 +522,38 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
            —— 只有当前锚点还要全量重算（冷加载时那一格的数据可能还在陆续到位）。 */
         nearCurrentKey = key;
       }
+      /* ①b **源裁剪环**（2026-10-17）：候选池 + 两套冻结集**同一刀**裁到「视野 + 缓冲环」。
+          冻结集是"只增不删"的（锚点补齐 / 行走缓冲），只裁池不裁冻结集 ⇒ 旧视野那批楼
+          每轮又被原样并回结果尾部 —— 真机 `srcOut/srcAll` 长期约 79% 的一大来源。
+          `ringPad` 不给 ⇒ `ring = null` ⇒ 计数恒 0、行为逐字节回到改动前。
+          口径：锚点表本身**不删**（"只增不删"不变），只剪它那批**环外引用**；
+          行走缓冲的**超上限淘汰**是另一支（`walkDropped`），两者分开计数，不许互相冒充。 */
+      const ring = bldRingOf(input.bounds, input.ringPad);
+      let ringPoolDropped = 0, ringFrozenDropped = 0;
+      let poolIn: readonly T[] = input.features;
+      if (ring) {
+        poolIn = input.features.filter((f) => {
+          const keep = bldInRingOf(f as unknown as PickFeature, ring);
+          if (!keep) ringPoolDropped += 1;
+          return keep;
+        });
+        for (const a of nearAnchors) {
+          const arr = nearFeat.get(a.key);
+          if (!arr) continue;
+          const keep = arr.filter((f) => bldInRingOf(f as unknown as PickFeature, ring));
+          if (keep.length === arr.length) continue;
+          ringFrozenDropped += arr.length - keep.length;
+          nearFeat.set(a.key, keep);
+        }
+        if (walkFrozen.length) {
+          const keepW = walkFrozen.filter((f) => bldInRingOf(f as unknown as PickFeature, ring));
+          if (keepW.length !== walkFrozen.length) {
+            ringFrozenDropped += walkFrozen.length - keepW.length;
+            walkFrozen.length = 0;
+            for (const f of keepW) walkFrozen.push(f);
+          }
+        }
+      }
       /* ② **所有锚点**交给规则模块（只增不删；顺序 = 首次出现序 ⇒ "按锚点顺序追加"这条可复现）。
             坏种子**不参与**（这一轮不新增锚点）—— 规则模块那边的"数不出来"只留给**直接调它**的人
             （旧 vendor/页面），本模块不替它编一个坏锚点出来（那会把已有锚点整条打成"数不出来"）。
@@ -426,7 +566,8 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
       }));
       const frozenOut = nearAnchors.map((a) => (nearFeat.get(a.key) || []) as unknown as T[]);
       const out = pickBuildingsByBudget<T>({
-        features: input.features,
+        /* 候选池 = 环内那一份（`ringPad` 没给时就是原样全量） */
+        features: poolIn,
         bounds: input.bounds,
         screen: input.screen,
         budgetPx2: input.budgetPx2,
@@ -453,7 +594,7 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         /* **近带增量**：行走补只扫「这一轮新到的要素 + 继承集」（`walkScanned` 可数）。
            池没变（`poolRev` 同值）⇒ `freshFeats` 沿用上一轮算好的那批，**不重算**。 */
         walkCandidates: (() => {
-          const cur = input.features as readonly unknown[];
+          const cur = poolIn as readonly unknown[];
           if (input.poolRev !== undefined && input.poolRev !== null && input.poolRev === lastPoolRev) {
             return (freshFeats.length ? freshFeats : walkFrozen) as unknown as T[];
           }
@@ -474,6 +615,8 @@ export function createBldPickStore(opts?: { frozen?: BldFrozenCellsObj }): BldPi
         nearFrozenBatches: 0,
         walkBufN: 0,
         walkDropped: 0,
+        /* 只有**真给了 ringPad**才写这三个键（关掉时 `stats` 形状逐字节不变）。 */
+        ...(ring ? { ringPad: Number(input.ringPad), ringPoolDropped, ringFrozenDropped } : {}),
       };
       const per = Array.isArray(out.stats.nearAddedPerAnchor) ? out.stats.nearAddedPerAnchor : [];
       const addedN = Math.max(0, Number(out.stats.nearAdded) || 0);

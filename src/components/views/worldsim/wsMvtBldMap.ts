@@ -41,6 +41,20 @@ export interface MvtBldMapped {
   invalidDropped: number;
 }
 
+/**
+ * 是否把瓦片里的 `c` 当楼色（默认**不用**）。
+ *
+ * 为什么默认关：瓦片的 `c` 是旧主题的深蓝灰（`#283a4b` 一族），直接当顶点色会让楼发黑；
+ * 默认走 `wsBldMesh` 的主题色阶（浅蓝系）。需要时 `?usec=1` 打开。
+ */
+function useTileColor(): boolean {
+  try {
+    return /[?&]usec=1\b/.test(typeof location !== "undefined" ? location.search : "");
+  } catch {
+    return false;
+  }
+}
+
 const num = (v: unknown): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -81,7 +95,9 @@ export function mapMvtBldFeatures(list: readonly MvtBldFeatureLike[]): MvtBldMap
         ...pr,
         h3d: h,
         h_base: hb,
-        color3d: pr.color3d ?? pr.c ?? "#c9d4e0",
+        /* 楼色默认**不取瓦片 `c`**（深蓝灰会让楼发黑）：留给 `wsBldMesh` 用主题色阶；
+           `?usec=1` 时才把 `c` 当楼色（备用/对拍）。 */
+        ...(useTileColor() ? { color3d: pr.color3d ?? pr.c ?? "#c9d4e0" } : {}),
         /* `zt` **只来自 `pr.zt`**：`p` 是部件码，绝不并进来 */
         zt: num(pr.zt),
         /* `p` 单独保留（建模优化要用），缺失记 0 */

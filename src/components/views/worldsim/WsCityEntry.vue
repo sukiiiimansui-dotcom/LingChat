@@ -168,18 +168,8 @@
       >
         {{ bldChipText }}
       </button>
-      <!-- 2026-10-06 · **天际线**入口（顶栏第四件；3D 城市 = App 里一个独立页 + 一个入口按钮）。
-           它**不是**第二个地图实现：点一下整页打开 `public/ws3d/index.html`（three 版 3D 城市，
-           路网用 App 自己的 `public/roadsbundle/`、不再需要 8790 —— 口径与验证见 `world_map/WS3D-IN-APP.md`）。
-           取中心的规矩、fallback、返回方式全在 script 里 `openSkyline()` 那一段（一行都不在模板里）。 -->
-      <button
-        class="wsce__btn wsce__btn--sky"
-        type="button"
-        :title="skyChipTitle"
-        @click="openSkyline"
-      >
-        🏙 天际线
-      </button>
+      <!-- 2026-10-17 · **天际线入口已去掉**：楼只在本页由 three 画，那个独立 3D 页与本页职责重叠。
+           `openSkyline` / `skyChipTitle` 保留在脚本里（真要用仍可从别处调）。 -->
       <!-- 2026-10-07 · **渲染方式**（顶栏第五件；双引擎并列 。
            需求：three.js 的建筑风格尽量贴近 maplibre…**用户可以选择渲染方式**…
            现在就 C，**除了渲染不一样，其他全一样**。

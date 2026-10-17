@@ -438,6 +438,26 @@ export function createOverlayBackend(): WsRenderBackend {
     data = next;
     /* 网格换好了 ⇒ 这一刻才切锚点（相机与网格从此又是同一个局部框架） */
     if (nextAnchor) anchor = nextAnchor;
+    /* 网格帧采样点（最多 6 条）：楼心局部坐标（网格帧）+ 真实经纬度 */
+    if (fc) {
+    try {
+      meshPts = [];
+      const ids = next.featureIds.slice(0, 6);
+      const byId = new Map<string, { lng: number; lat: number }>();
+      for (const f3 of fc.features) {
+        const g3 = (f3 as { geometry?: unknown }).geometry;
+        const { rings } = outerRingsOf(g3);
+        const p3 = rings[0]?.[0];
+        if (p3) byId.set(String((f3 as { id?: unknown }).id ?? ""), { lng: p3[0], lat: p3[1] });
+      }
+      for (let i = 0; i < ids.length; i++) {
+        const ll = byId.get(ids[i]!);
+        const bx0 = next.boxes[i * 4]!, bz0 = next.boxes[i * 4 + 1]!, bx1 = next.boxes[i * 4 + 2]!, bz1 = next.boxes[i * 4 + 3]!;
+        if (!ll || !(bx0 <= bx1) || !(bz0 <= bz1)) continue;
+        meshPts.push({ id: ids[i]!, lng: ll.lng, lat: ll.lat, local: [(bx0 + bx1) / 2, (bz0 + bz1) / 2] });
+      }
+    } catch { meshPts = []; }
+    }
     /* 覆盖面：**同一份 fc、同一个视野**两边各数一遍（楼少的根因要能一眼看出来） */
     if (fc) {
     try {
@@ -591,6 +611,12 @@ export function createOverlayBackend(): WsRenderBackend {
    */
   /** 网格里每栋楼的高度分布（给名字层"楼顶投影 vs 楼本来就是平的"那条判据） */
   let meshHeights: { n: number; p10: number; p50: number; p90: number; flat: number } | null = null;
+  /**
+   * "网格帧采样点"：建网格时记下**几条**楼心的局部坐标（网格自己的帧）与它们的真实经纬度。
+   * 用途（重锚窗口闸）：同一时刻用**画出去那一帧**的矩阵分别投这两个坐标 ——
+   * 网格帧与相机帧一致时两者重合；锚点被提前切了就会差出锚点位移（最多 2 km）。
+   */
+  let meshPts: Array<{ id: string; lng: number; lat: number; local: [number, number] }> = [];
   const cover: { expected: number; actual: number; srcAll: number; meshAll: number; thinDropped: number; shapeDropped: number; judgedAt: number; meshOut: number; srcOut: number } =
     { expected: 0, actual: 0, srcAll: 0, meshAll: 0, thinDropped: 0, shapeDropped: 0, judgedAt: 0, meshOut: 0, srcOut: 0 };
   /** 覆盖面连续判短几次（**两振才出局**：源刚长出来、网格还没跟上时会短暂偏短） */
@@ -1199,6 +1225,7 @@ export function createOverlayBackend(): WsRenderBackend {
   function onMapRender(): void {
     if (state !== "running") return;
     const now = performance.now();
+    maybeReanchor();          /* render 模式（默认）也要重锚 */
     syncCamera();
     drawOnce();
     frames++;
@@ -1223,28 +1250,38 @@ export function createOverlayBackend(): WsRenderBackend {
       fpsAt = now;
       fpsFrames = 0;
     }
-    /* 地图中心漂太远 ⇒ 重锚 + 重建（局部框架的近似误差随距离平方涨） */
-    const v = readMapView();
-    if (v && anchor && anchorDriftM(v.center) > REANCHOR_M && !reanchorInFlight) {
-      /* 🔴 **不要在这里动 `anchor`**（真机"楼会变掉"就是它）：先记下目标锚点，
-         异步取数据、用目标锚点建网格，**建好那一刻**由 `rebuild` 与网格一起切。 */
-      reanchorInFlight = true;
-      const nextAnchor = { lat: v.center.lat, lng: v.center.lng, cos: Math.cos((v.center.lat * Math.PI) / 180) };
-      void (async () => {
-        try {
-          const fc = await grabBld();
-          if (fc) {
-            lastSource = "source";
-            rebuild(curThemeId, fc, nextAnchor);
-          }
-        } finally {
-          reanchorInFlight = false;
-        }
-      })();
-    }
+    maybeReanchor();
     syncCamera();
     drawOnce();
     raf = requestAnimationFrame(tick);
+  }
+
+  /**
+   * 地图中心漂太远 ⇒ **重锚 + 重建**（局部平面框架的近似误差随距离平方涨）。
+   * 🔴 2026-10-17：这段原来只写在 `tick()`（`raf` 模式）里 —— 而**默认是 `render` 模式**
+   * （挂地图的 `render` 事件、RAF 循环根本不跑）⇒ **默认模式下永远不重锚**：
+   * 网格一直用最初那个锚点，长距离拖动后局部坐标越漂越大、墨卡托畸变累积
+   * （"移动时楼的位移与地图不一致"就有它的一份）⇒ 现在两个驱动**都调**这一个函数。
+   */
+  function maybeReanchor(): void {
+    if (reanchorInFlight) return;
+    const v = readMapView();
+    if (!v || !anchor || anchorDriftM(v.center) <= REANCHOR_M) return;
+    /* 先记下目标锚点；异步取数据、用目标锚点建网格，**建好那一刻**由 `rebuild` 与网格一起切
+       （提前切 = 旧实现：旧网格配新相机，整体瞬移）。 */
+    reanchorInFlight = true;
+    const nextAnchor = { lat: v.center.lat, lng: v.center.lng, cos: Math.cos((v.center.lat * Math.PI) / 180) };
+    void (async () => {
+      try {
+        const fc = await grabBld();
+        if (fc) {
+          lastSource = "source";
+          rebuild(curThemeId, fc, nextAnchor);
+        }
+      } finally {
+        reanchorInFlight = false;
+      }
+    })();
   }
 
   /** 挂驱动：`render` 模式挂地图的帧回调，`raf` 模式自己数帧 */

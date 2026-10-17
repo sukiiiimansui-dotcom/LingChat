@@ -40,6 +40,7 @@ import { bldLayerSpecsFor, mvtBldLayerSpecs } from "./wsDistrictScene";
 import { mvtEnabled } from "./wsMvtTiles";
 import { mapMvtBldFeatures } from "./wsMvtBldMap";
 import { drawFacadeAtlas } from "./wsBldFacade";
+import { OUTLINE_FRAG, OUTLINE_VERT, outlineRtBytes, outlineTexel } from "./wsOutline";
 import { fpsMark } from "./wsFpsProbe";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
@@ -185,6 +186,22 @@ export function createOverlayBackend(): WsRenderBackend {
   let facadePatchFailed = 0;
   let facadeTextureFailed = 0;
   let facadeApplied = 0;
+  /* ── 屏幕空间描边（2026-10-17）──
+     手写全屏 pass（不引 EffectComposer），默认关、`?outline=1` 才开。
+     失败一律**退回无描边**并记账，不许白屏。 */
+  const outlineOn = (() => {
+    try { return /[?&]outline=1\b/.test(location.search); } catch { return false; }
+  })();
+  let outlineApplied = 0;
+  let outlineFailed = 0;
+  /** 运行期开关（pass 抛错后关掉它，别每帧都试） */
+  let outlineOnRef = outlineOn;
+  let outlineFrameMs = 0;
+  let outlineRt: { setSize?: (w: number, h: number) => void; dispose?: () => void; depthTexture?: unknown } | null = null;
+  let outlineQuad: { material?: { uniforms?: Record<string, { value: unknown }> }; geometry?: unknown } | null = null;
+  let outlineScene: unknown = null;
+  let outlineCam: unknown = null;
+  let outlineDirty = false;
   let facadeTex: unknown = null;
   /* **默认关**（2026-10-17 真机"帧率下降"止血）：`?facade=1` 才开。
      贴图是"观感换帧率"的开关，先保帧率；等真机 A/B 有了结论再决定默认值。 */
@@ -1106,6 +1123,56 @@ export function createOverlayBackend(): WsRenderBackend {
   let lastSource = "none";
 
   /** 真的画一帧（并把"画的时候"的相机矩阵快照下来 —— 逐帧对拍读的就是它） */
+  /** 懒建描边的 RT 与全屏 quad（失败就记 failed，退回无描边） */
+  function ensureOutline(w: number, h: number): boolean {
+    if (!outlineOn) return false;
+    try {
+      const T = THREE as unknown as {
+        WebGLRenderTarget?: new (w: number, h: number, o?: unknown) => { setSize?: (w: number, h: number) => void; dispose?: () => void; depthTexture?: unknown; texture?: unknown };
+        DepthTexture?: new (w: number, h: number) => unknown;
+        Scene?: new () => unknown;
+        OrthographicCamera?: new (l: number, r: number, t: number, b: number, n: number, f: number) => unknown;
+        PlaneGeometry?: new (w: number, h: number) => unknown;
+        ShaderMaterial?: new (o: unknown) => { uniforms?: Record<string, { value: unknown }> };
+        Mesh?: new (g: unknown, m: unknown) => unknown;
+      } | null;
+      if (!T?.WebGLRenderTarget || !T.Scene || !T.ShaderMaterial || !T.Mesh || !T.PlaneGeometry || !T.OrthographicCamera) {
+        outlineFailed = 1;
+        return false;
+      }
+      if (!outlineRt) {
+        const rt = new T.WebGLRenderTarget(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)), { depthBuffer: true, stencilBuffer: false });
+        try {
+          if (T.DepthTexture) (rt as { depthTexture?: unknown }).depthTexture = new T.DepthTexture(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)));
+        } catch { /* 没有深度纹理就退回亮度 Sobel */ }
+        outlineRt = rt;
+        const quad: { material?: { uniforms?: Record<string, { value: unknown }> }; geometry?: unknown } = {};
+        const uniforms: Record<string, { value: unknown }> = {
+          uColor: { value: rt.texture },
+          uDepth: { value: (rt as { depthTexture?: unknown }).depthTexture ?? rt.texture },
+          uTexel: { value: [0.001, 0.001] },
+          uUseDepth: { value: (rt as { depthTexture?: unknown }).depthTexture ? 1 : 0 },
+          uLineColor: { value: [0.16, 0.18, 0.22] },
+        };
+        const mat = new T.ShaderMaterial({ uniforms, vertexShader: OUTLINE_VERT, fragmentShader: OUTLINE_FRAG, transparent: true, depthTest: false });
+        quad.material = mat;
+        quad.geometry = new T.PlaneGeometry(2, 2);
+        outlineScene = new T.Scene();
+        outlineCam = new T.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const mesh = new T.Mesh(quad.geometry, mat);
+        (outlineScene as { add?: (m: unknown) => void }).add?.(mesh);
+        outlineQuad = quad;
+        outlineApplied = 1;
+      } else {
+        outlineRt.setSize?.(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)));
+      }
+      return true;
+    } catch {
+      outlineFailed = 1;
+      return false;
+    }
+  }
+
   function drawOnce(): void {
     if (state !== "running" || !renderer || !scene || !camera) return;
     const { w, h } = sizeOf();
@@ -1120,7 +1187,27 @@ export function createOverlayBackend(): WsRenderBackend {
     } catch {
       lastDraw = null;
     }
-    renderer.render(scene, camera);
+    if (outlineOn && ensureOutline(w, h) && outlineRt && outlineScene && outlineCam) {
+      const t0 = performance.now();
+      try {
+        const R = renderer as unknown as { setRenderTarget?: (t: unknown) => void; render: (s: unknown, c: unknown) => void };
+        R.setRenderTarget?.(outlineRt);
+        renderer.render(scene, camera);
+        R.setRenderTarget?.(null);
+        /* 线宽随缓冲尺寸走（dpr 只改缓冲，不改线宽） */
+        const texel = outlineTexel(w, h);
+        const uni = (outlineQuad as { material?: { uniforms?: Record<string, { value: unknown }> } })?.material?.uniforms;
+        if (uni?.uTexel) uni.uTexel.value = [texel.x, texel.y];
+        renderer.render(outlineScene as never, outlineCam as never);
+        outlineFrameMs = Math.round((performance.now() - t0) * 100) / 100;
+      } catch {
+        outlineFailed = 1;
+        outlineOnRef = false;
+        try { renderer.render(scene, camera); } catch { /* 退回这一帧没有描边 */ }
+      }
+    } else {
+      renderer.render(scene, camera);
+    }
     drawsTotal += 1;
     draws = renderer.info?.render?.calls ?? 0;
     /* 启动时间线：**非空**绘制才算数（空网格/0 栋不算"画出来了"） */
@@ -1527,6 +1614,13 @@ export function createOverlayBackend(): WsRenderBackend {
       meshStats: data?.stats ?? null,
       /* 立面图集：on = 开关；applied = 补丁真的挂上了；patchFailed = 着色器锚点对不上（退回纯色） */
       facade: { on: facadeOn, applied: facadeApplied, patchFailed: facadePatchFailed, textureFailed: facadeTextureFailed },
+      /* 描边（默认关）：on/applied/failed + 每帧 pass 耗时 + RT 字节（代价两数） */
+      outline: (() => {
+        const dpr = renderer?.getPixelRatio?.() ?? 1;
+        const sz = (() => { try { return sizeOf(); } catch { return { w: 1, h: 1 }; } })();
+        const bw = Math.round(sz.w * dpr), bh = Math.round(sz.h * dpr);
+        return { on: outlineOn && outlineOnRef, applied: outlineApplied, failed: outlineFailed, frameMs: outlineFrameMs, rtBytes: outlineRtBytes(bw, bh), texel: outlineTexel(bw, bh) };
+      })(),
       /* **每帧分解**（拖动期间"谁在花时间"）：`mapFrames` = 地图 render 回调次数，
          `overlayFrames` = 我们真画了几帧，`labelWrites` = 名字层 DOM 写入次数，
          `labelNodes` = 这个名字层现有多少节点（10 个 vs 500 个代价差一个量级）。 */

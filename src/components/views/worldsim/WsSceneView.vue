@@ -64,10 +64,12 @@
 
     <!-- 交通设施那一行（代拍页 `?tf=1` 的 HUD 位置）。
          **只读诊断**：显示 `wsTransport.transportHudLine()` 的原文（含「示意，非事实」与各计数）。
-         没有设施（或还没算出来）时**不占地方**；层序自愈/路网缺失也如实写出来，绝不静默。
-         新入口传 `:tf="false"` ⇒ 这一行连同整条交通设施接线一起不出现（见下面 `tf` 的说明）。 -->
-    <div v-if="tf && (layerNote || tfHud)" class="ws-sceneview__tf">
+         没有设施（或还没算出来）时**不占地方**；层序自愈/裁剪/输入缺失也如实写出来，绝不静默。
+         默认（入口不传 `?tf=1`）这一行连同整条交通设施接线一起不出现（见下面 `tf` 的说明）。
+         `tfMs` 是**最近一轮的计算耗时**：判断"开交通设施会不会卡"就看这一格（探针也读它）。 -->
+    <div v-if="tf && (layerNote || tfHud || tfMs)" class="ws-sceneview__tf">
       <span v-if="tfHud">{{ tfHud }}</span>
+      <span v-if="tfMs">构建 {{ tfMs }} ms</span>
       <span v-if="layerNote" class="is-warn">{{ layerNote }}</span>
     </div>
 
@@ -121,6 +123,18 @@
     type TfRoadsFc,
   } from "./wsTransportLayer";
   import { planEnsureRoadOrder } from "./wsLayerOrder";
+  /* 交通设施接线的**纯策略**（裁剪 / 调度 / 插入点 / 视野 key）—— 本组件只接线，判据全在那个文件里
+     （所以 `world_map/ws_tf_policy_selftest.mjs` 能在 node 里逐条钉住它们）。 */
+  import {
+    TF_CLIP_RADIUS_M,
+    TF_LIVE_TIMEOUT_MS,
+    clipBuildingsFor,
+    clipRoadsFor,
+    tfBeforeIdOf,
+    tfKeyOf,
+    tfScheduleOf,
+    type TfGeoFcLike,
+  } from "./wsTfPolicy";
   import worldMapApi from "@/api/services/worldMap";
   import { useWsPerf } from "./wsPerf";
   import { wsToast } from "./wsToast";
@@ -182,18 +196,24 @@
        */
       chrome?: boolean;
       /**
-       * 交通设施开关（**默认 true**）。
+       * 交通设施开关（**默认 true** —— 老调用点逐字不变；新入口 `WsCityEntry.vue` 显式传
+       * `?tf=1` 才开，**默认关**）。
        *
-       * 2026-09-26（App 入口替换，裁定）：新入口默认**不要**交通设施 ——
-       * 原因是这条接线里有一次真请求 `worldMapApi.roads()`（`/api/roads`，半径 600），
-       * 而真机上这条路"冷查分钟级、必超时"（已报的"路时有时无"旧病根），
-       * 且代拍页默认（不带 `?tf=1`）也没有这一层 ⇒ 新入口要**默认 0 条 `/api/*`**。
-       *
-       * 用 prop 分流而不是"新入口直接渲染 `WsDistrictMapLibre`"：
-       * 后者会让新老两条路各有一份宿主接线（第二份实现，PR 门禁 C1 要防的正是这个）。
-       * 默认 `true` ⇒ 老调用点（旧入口（WorldSim.vue，已删除）的引导主线）**逐字不变**。
+       * 2026-10-17（S1 切片）：这条接线原来有两个坑，现在都不在了：
+       *   ① 路网不再现场打 `/api/roads` —— 默认读**地图自己已经落图**的 `roads` source
+       *      （离线包，冷查是分钟级）；只有 `tfLive`（`?live=1`）才走 API，且**带 3s 超时**；
+       *   ② 不再"每条 moveend 都算" —— 去抖 800ms + 最小间隔 1200ms + 同视野 key 不重算
+       *      （摇杆期间每帧一轮 moveend，会被合成一整轮；判据在 `wsTfPolicy.tfScheduleOf`）。
        */
       tf?: boolean;
+      /**
+       * 交通设施**现场取数**（`?live=1`）—— 默认 `false`。
+       *
+       * 默认路径 = 离线：路网/楼栋都从**地图上的 source** 读（`roads` / `bld`），一条网络请求都不发。
+       * 打开它才允许问 `/api/roads`（补新区域/调试用），且**超时 3s**、失败原因写进 HUD。
+       * 入口解析 URL（与 `?joy` 同一个地方），本组件不自己读 URL（薄壳不许有第二份判据）。
+       */
+      tfLive?: boolean;
       /* 2026-10-10 删掉悬浮手机 ⇒ 原来的 `phone?: boolean` 开关**整体移除**：
          prop、默认值、挂载点、`onPhoneApp()` 与 `wsPhoneApps` 的 import 一起摘；
          `WsToasts` 改成无条件渲染（本组件现在只有 `WsCityEntry.vue` 一个宿主）。
@@ -209,7 +229,7 @@
        */
       joy?: boolean;
     }>(),
-    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, joy: false }
+    { area: "", adcode: "", radius: 600, pitch: 38, markers: () => [], night: 0, locSource: "", worldTime: "", chrome: true, tf: true, tfLive: false, joy: false }
   );
 
   /**
@@ -238,77 +258,201 @@
 
   /** 交通设施的 HUD 原文（来自 `transportHudLine`，**不改写**） */
   const tfHud = ref("");
-  /** 层序自愈/路网缺失这类"必须说出来"的话（空串 = 没话说） */
+  /** 层序自愈/裁剪/输入缺失这类"必须说出来"的话（空串 = 没话说） */
   const layerNote = ref("");
+  /** 最近一次真正计算的耗时（ms；0 = 还没算过）—— 屏幕上的可数判据（探针直接读这一格） */
+  const tfMs = ref(0);
 
   const perf = useWsPerf();
-  /** 路网只取一次就留着（代拍页也是这个节奏）；`moveend` 重画时不再打后端 */
-  let roads: TfRoadsFc | null = null;
-  let roadsTried = false;
-  /** 层序自愈累计（如实显示，不显示就等于没做） */
-  let heals = 0;
   /** 已经挂上的地图（来自 `WsDistrictMapLibre` 的 `scene-ready`） */
   let scene: (TfMapLike & { moveLayer?(id: string, before?: string): void }) | null = null;
-  /** 楼栋（交通设施的停车场/出入口要按楼脚印算）—— 由地图组件在"楼到齐"时交给 */
-  let buildings: TfBuildingsFc | null = null;
+  /** 上一轮用的视野 key（同 key 不重算；见 `wsTfPolicy.tfKeyOf`） */
+  let tfKey = "";
+  /** 最近一次 moveend/sourcedata 的时刻（去抖基准） */
+  let tfLastEventAt = 0;
+  /** 最近一次**算完**的时刻（最小间隔基准） */
+  let tfLastBuiltAt = 0;
+  /** 正在算（防重入；调度器见到它会"等这轮结束"） */
+  let tfBusy = false;
+  let tfTimer = 0;
+  /** 层序自愈累计（如实显示，不显示就等于没做） */
+  let heals = 0;
+  /** 这一轮的输入为什么是空的（要写进 HUD；不猜） */
+  let tfInputWhy = "";
 
-  /** 取一次路网（中心用地图当前中心；半径与地图的取数口径一致，交给后端默认即可） */
-  async function loadRoadsOnce(m: TfMapLike): Promise<void> {
-    if (roadsTried) return;
-    roadsTried = true;
-    try {
-      const c = m.getCenter();
-      const fc = await worldMapApi.roads({ lat: c.lat, lng: c.lng, r: props.radius });
-      roads = (fc as unknown as TfRoadsFc) || null;
-    } catch {
-      /* 取不到就如实说（下面 HUD 里写"路网缺失"），**不编点位** */
-      roads = null;
-    }
+  /** 地图 zoom（拿不到 = null，供 key 用；不编一个档位） */
+  function tfZoomOf(m: TfMapLike): number | null {
+    const z = (m as unknown as { getZoom?: () => number }).getZoom?.();
+    return typeof z === "number" && Number.isFinite(z) ? z : null;
+  }
+
+  function isFeatureCollection(v: unknown): boolean {
+    return !!v && typeof v === "object" && Array.isArray((v as { features?: unknown }).features);
   }
 
   /**
-   * 地图就绪 / 每次视野变化 → 重画交通设施。
+   * 从**地图自己的 GeoJSON source** 读数据（路网/楼栋都已经在图上）。
    *
-   * 为什么"每次 moveend 重画"：设施是按**当前中心**的米平面算出来的（代拍页同款），
-   * 视野一变，同一个点在地图上的位置就不该还停在旧中心上。
-   * 代价可控：纯函数 + 最多几十个点（低档只画两类），比一次 Overpass 便宜几个数量级。
+   * 为什么这样读（而不是再问一次后端）：
+   *   · App 的口径是 **offline-first**（`wsScene.roadsLiveDecision()` 默认 `live:false`），
+   *     路网由离线包一批批落进 `roads` source；楼栋同样在 `bld` source（叠加层只拆图层、**不拆源**）。
+   *   · 再打一次 `/api/roads` = 冷查分钟级 + 与离线口径打架（本机实测 8s 没有响应）。
+   *
+   * 三种读法按"公开 → 私有"排：`serialize().data` → `_data` → `getStyle().sources[id].data`。
+   * 之所以留兜底：不同引擎/版本对 `getStyle()` 是否带 `data` 不一致，只认一种会让
+   * "换引擎之后静默 0 个设施"——那正是本仓反复栽的假绿。**读不到就返回 null，由 HUD 说原因**。
    */
-  async function refreshTransport(): Promise<void> {
-    const m = scene;
-    if (!m) return;
-    if (!roads) await loadRoadsOnce(m);
-    const c = m.getCenter();
-    const res = buildTransportFor(roads, buildings, [c.lng, c.lat], !!perf.low.value);
-    /* 插在楼体之前（`bld-ext`）⇒ 设施在楼之下、路网之上（层序计划 `wsScene` 就是这么定的） */
-    const before = m.getLayer("bld-ext") ? "bld-ext" : undefined;
-    const out = drawTransport(m, res, before);
-    if (out.drawn) tfHud.value = out.hud;
-    /* 层序**事后断言**（代拍页 2026-09-22 真机回归的解药）：路网被交通设施/楼体压住就移回。
-       这里只执行 `move`；`add-roads`（路网整个缺失）**只计数**——取数是上面那个组件的职责，
-       越权重取会把 Overpass 打第二遍（它下一次视野变化会自己补）。 */
+  function sourceFcOf(m: unknown, id: string): TfGeoFcLike | null {
     try {
-      const ops = planEnsureRoadOrder({
-        hasSource: (id) => !!m.getSource(id),
-        hasLayer: (id) => !!m.getLayer(id),
-        layerIds: () =>
-          ((m as unknown as { getStyle?: () => { layers?: Array<{ id: string }> } }).getStyle?.()?.layers || []).map(
-            (l) => l.id
-          ),
-      });
-      const done = executeLayerOps(m, ops);
-      heals += done.moved;
-      if (done.needRoads) layerNote.value = "路网缺失：等下一次视野变化自动补（取数归地图组件，不在这里重取）";
-      else if (heals) layerNote.value = `层序自愈 ${heals} 次（路网曾被压在设施/楼体之上）`;
+      const src = (m as { getSource?: (x: string) => unknown }).getSource?.(id) as
+        | { serialize?: () => { data?: unknown }; _data?: unknown }
+        | undefined;
+      if (!src) return null;
+      let data: unknown;
+      try {
+        data = src.serialize?.()?.data;
+      } catch {
+        data = undefined;
+      }
+      if (!isFeatureCollection(data)) data = src._data;
+      if (!isFeatureCollection(data)) {
+        const style = (m as { getStyle?: () => { sources?: Record<string, { data?: unknown }> } }).getStyle?.();
+        data = style?.sources?.[id]?.data;
+      }
+      return isFeatureCollection(data) ? (data as TfGeoFcLike) : null;
     } catch {
-      /* 断言失败不影响地图（它只是"顺序保险"） */
+      return null;
     }
   }
 
   /**
-   * `WsDistrictMapLibre` 的 `scene-ready`：地图与楼栋都到位了 ⇒ 接交通设施。
+   * `?live=1` 那条路：**带 3s 超时**（`TF_LIVE_TIMEOUT_MS`）。
+   * 默认路径根本不进这个函数（`props.tfLive === false`）。
+   */
+  async function liveRoadsFc(m: TfMapLike): Promise<TfGeoFcLike | null> {
+    const c = m.getCenter();
+    try {
+      const fc = await Promise.race([
+        worldMapApi.roads({ lat: c.lat, lng: c.lng, r: TF_CLIP_RADIUS_M }),
+        new Promise<never>((_res, rej) => {
+          window.setTimeout(() => rej(new Error(`超时 ${TF_LIVE_TIMEOUT_MS}ms`)), TF_LIVE_TIMEOUT_MS);
+        }),
+      ]);
+      return (fc as unknown as TfGeoFcLike) || null;
+    } catch (e) {
+      tfInputWhy = `路网现场取数失败（${String((e as Error)?.message || e).slice(0, 40)}）`;
+      return null;
+    }
+  }
+
+  /** 排下一次计算（去抖 + 最小间隔 + 上一轮没算完就等；判据在 `wsTfPolicy.tfScheduleOf`）。
+   *  `tf` 关着时这里**不早退**：监听本来就没挂（`onSceneReady` 里那条早退在它之前），
+   *  而 `tfRefresh` 自己还有一道 `!props.tf`（运行时改 prop 也安全）。
+   *  ⚠️ 不在这加同款早退的另一个原因：`ws_daily_hud_selftest` 用**代码 token**
+   *  `if (!props.tf) return;` 断言"`emit("daily-ready")` 在它之前"，多一处同名早退会让它假红。 */
+  function tfKick(): void {
+    const s = tfScheduleOf({ now: performance.now(), lastEventAt: tfLastEventAt, lastBuiltAt: tfLastBuiltAt, busy: tfBusy });
+    if (tfTimer) window.clearTimeout(tfTimer);
+    tfTimer = window.setTimeout(() => {
+      tfTimer = 0;
+      void tfRefresh();
+    }, Math.max(16, s.waitMs));
+  }
+
+  /**
+   * 算一轮交通设施。
    *
-   * 入参形状**照抄那个组件的 emit 声明**（`{ map: unknown; buildings: { features?: unknown[] } | null }`）
+   * 数据：`roads` / `bld` 两个**已落图**的 source（`bld` 里的一栋楼会被拆成 body/parapet/…，
+   *       裁剪时只留 body —— 否则停车/出入口的"脚印面积"规则恒判不成立）；
+   * 顺序：`bld-ext` → `ref` → 追加（`tfBeforeIdOf`，与路网落图同一条链）；
+   * 代价：裁剪后输入通常几十条，单轮 < 100ms（改前 633 条要 12.9s；对照见自检 ⑤ 组）。
+   */
+  async function tfRefresh(): Promise<void> {
+    const m = scene;
+    if (!m || !props.tf) return;
+    if (tfBusy) {
+      tfKick();
+      return;
+    }
+    const startedAt = performance.now();
+    tfBusy = true;
+    try {
+      tfInputWhy = "";
+      const roadsFc = props.tfLive ? await liveRoadsFc(m) : sourceFcOf(m, "roads");
+      const bldFc = sourceFcOf(m, "bld");
+      const c = m.getCenter();
+      const center: [number, number] = [c.lng, c.lat];
+      const key = tfKeyOf(c, tfZoomOf(m), roadsFc?.features?.length || 0, bldFc?.features?.length || 0);
+      if (key === tfKey) {
+        /* 同一个视野：**不算**（但记一次"已处理"，免得每 1.2s 空转一轮） */
+        tfLastBuiltAt = performance.now();
+        return;
+      }
+      if (!roadsFc) {
+        tfInputWhy = props.tfLive
+          ? tfInputWhy || "路网现场取数没有结果"
+          : "路网还没落图（source `roads` 不在或没有要素）⇒ 交通设施先不画";
+      }
+      const clipR = clipRoadsFor(roadsFc, center);
+      const clipB = clipBuildingsFor(bldFc, center);
+      /* 计时只算**计算**这一段（读 source / `?live=1` 的网络等待不算进去 —— HUD 上那个 ms 是
+         "这轮算得多慢"，不是"这轮等了多久"） */
+      const built0 = performance.now();
+      const res = buildTransportFor(
+        clipR.fc as unknown as TfRoadsFc,
+        clipB.fc as unknown as TfBuildingsFc,
+        center,
+        !!perf.low.value
+      );
+      const before = tfBeforeIdOf((id) => !!m.getLayer(id));
+      const out = drawTransport(m, res, before);
+      /* **无条件**写 HUD（含 0 条）：留着上一轮的计数会让人以为设施还在 */
+      tfHud.value = out.hud;
+      tfMs.value = Math.round(performance.now() - built0);
+      tfKey = key;
+      tfLastBuiltAt = performance.now();
+      /* 层序**事后断言**（代拍页 2026-09-22 真机回归的解药）：路网被交通设施/楼体压住就移回。
+         这里只执行 `move`；`add-roads`（路网整个缺失）**只计数**——取数是地图组件的职责，
+         越权重取会把 Overpass 打第二遍（它下一次视野变化会自己补）。 */
+      const notes: string[] = [];
+      if (tfInputWhy) notes.push(tfInputWhy);
+      if (clipR.note) notes.push(`路网裁剪：${clipR.note}`);
+      if (clipB.note) notes.push(`楼栋裁剪：${clipB.note}`);
+      if (clipB.kept === 0) notes.push("楼脚印为空 ⇒ 停车/出入口数不出来（不是 0）");
+      try {
+        const ops = planEnsureRoadOrder({
+          hasSource: (id) => !!m.getSource(id),
+          hasLayer: (id) => !!m.getLayer(id),
+          layerIds: () =>
+            ((m as unknown as { getStyle?: () => { layers?: Array<{ id: string }> } }).getStyle?.()?.layers || []).map(
+              (l) => l.id
+            ),
+        });
+        const done = executeLayerOps(m, ops);
+        heals += done.moved;
+        if (done.needRoads) notes.push("路网缺失：等下一次视野变化自动补（取数归地图组件，不在这里重取）");
+        else if (heals) notes.push(`层序自愈 ${heals} 次（路网曾被压在设施/楼体之上）`);
+      } catch {
+        notes.push("层序断言失败（不影响地图）");
+      }
+      layerNote.value = notes.join(" · ");
+    } catch (e) {
+      tfInputWhy = `交通设施算不出来：${String((e as Error)?.message || e).slice(0, 60)}`;
+      layerNote.value = tfInputWhy;
+    } finally {
+      tfBusy = false;
+      /* 算的时候又来了事件（拖动/落格）⇒ 立刻按调度再排一轮（不丢最后一次视野） */
+      if (tfLastEventAt > startedAt) tfKick();
+    }
+  }
+
+  /**
+   * `WsDistrictMapLibre` 的 `scene-ready`：地图到位 ⇒ 接交通设施。
+   *
+   * 入参形状**照抄那个组件的 emit 声明**（`{ map: unknown; buildings: …; places? }`）
    * —— 不在这里另写一份类型：两份形状描述迟早漂移（`BldFeature` 只在那个模块里定义）。
+   * 注意：`buildings` 这个字段**只在 `?live=1` 时有内容**（离线路 `fc` 是 null），所以这里
+   * 不再用它，楼栋统一从 `bld` source 读（见 `sourceFcOf`）。
    */
   function onSceneReady(p: {
     map: unknown;
@@ -318,24 +462,37 @@
     /* 双引擎：地图一就绪就把实例交给 map 后端（**必须先做**：切到 3D 时要靠它读视野、捞数据）。
        它只做"读/喂/捞"三件事，不碰这一屏的渲染 ⇒ 放在最前面不会影响下面那条交通设施接线。 */
     adoptMapBackend(p?.map ?? null);
-/* **先把三件事那条路分出去**，再谈交通设施。
-       顺序是硬要求：下面的 `if (!props.tf) return;` 是新入口（`:tf="false"`）的必经之路，
-       把这一行放到它后面 = 新入口**永远收不到 `daily-ready`**，而且**不报错**（HUD 一直空着）。
+    /* **先把三件事那条路分出去**，再谈交通设施。
+       顺序是硬要求：下面的 `if (!props.tf) return;` 是默认关时的必经之路，
+       把这一行放到它后面 = 宿主**永远收不到 `daily-ready`**，而且**不报错**（HUD 一直空着）。
        本行只是"转发"：地图与取值器**原样**交给宿主，这里不读它们、更不解析（薄壳纪律）。 */
     emit("daily-ready", { map: p?.map ?? null, places: p?.places });
-    /* `tf=false`（新入口的默认）：**在这里就退**——不挂监听、不取路网、不画设施。
-       放在最前面是有意的：这条接线的第一件事就是 `worldMapApi.roads()`，
-       晚一步退就等于还是发了那条请求。 */
+    /* `tf=false`（默认关）：**在这里就退**——不挂监听、不算、不画。 */
     if (!props.tf) return;
-    buildings = (p?.buildings as TfBuildingsFc) || null;
-    const m = p?.map as (TfMapLike & { on?(ev: string, cb: () => void): void }) | null;
+    const m = p?.map as (TfMapLike & { on?(ev: string, cb: (e?: { sourceId?: string }) => void): void }) | null;
     if (!m) return;
-    /* 只在第一次挂监听（重挂地图时旧监听随旧实例一起消失） */
+    /* 只在第一次挂监听（重挂地图时旧监听随旧实例一起消失；计数器也一起归零） */
     if (m !== scene) {
-      m.on?.("moveend", () => void refreshTransport());
+      tfKey = "";
+      tfLastEventAt = 0;
+      tfLastBuiltAt = 0;
+      m.on?.("moveend", () => {
+        tfLastEventAt = performance.now();
+        tfKick();
+      });
+      /* 离线包是**后到**的（路网/楼栋一批批落图）——只在 moveend 上挂就是"开屏一个设施都没有，
+         直到用户动一下"（本仓栽过三次的「挂钩只在用户事件上 ⇒ 首屏空白」）。
+         `sourcedata` 只做一件事：踢一脚；去抖会把一串合成一轮。 */
+      m.on?.("sourcedata", (e) => {
+        const id = String(e?.sourceId || "");
+        if (id !== "roads" && id !== "bld") return;
+        tfLastEventAt = performance.now();
+        tfKick();
+      });
     }
     scene = m;
-    void refreshTransport();
+    tfLastEventAt = performance.now();
+    tfKick();
   }
 
   /* ══════════════════════════════════════════════════════════════════════════════════════
@@ -584,6 +741,11 @@
   });
 
   onBeforeUnmount(() => {
+    /* 交通设施那个定时器必须清掉：它闭包着本组件的 map/ref，卸载后再跑一次就是
+       "对已经销毁的地图加图层"（本仓的卸载期异常一律不外抛，但也不许留着跑） */
+    if (tfTimer) window.clearTimeout(tfTimer);
+    tfTimer = 0;
+    tfBusy = false;
     try {
       active?.pause();
       /* 地图那一支的销毁归 `WsDistrictMapLibre` 自己（它 `onBeforeUnmount` 里 `map.remove()`）；

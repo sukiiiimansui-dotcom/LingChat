@@ -83,16 +83,17 @@
   <div class="wsce ws-root theme-lingchat" :class="{ 'wsce--panel': panelOpen }">
     <!-- 地图常驻（新入口 = 直接进 3D 地图）。
          `chrome=false` 只关掉底栏那三个按钮（「← 回到区县」在没有区县这一级时是死按钮）；
-         `tf=false` 关掉交通设施那条接线 —— 它会发一条 `/api/roads`（真机冷查分钟级、必超时），
-         而新入口要**默认 0 条 `/api/*`**（与代拍页默认口径一致）。两个开关都只改"显示/接线"，
-         地图本体、层序、取数一行不动（那些仍是同一份共享真源）。
+         **交通设施（2026-10-17 S1）**：默认**关**，`?tf=1` 才开。开的那条路**不再打网络** ——
+         路网/楼栋都从已落图的地图 source 读（`roads` / `bld`），只有再加 `?live=1` 才问
+         `/api/roads`（且带 3s 超时）。这两个开关只改"显示/接线"，地图本体、层序、取数一行不动。
          悬浮手机 2026-10-10 已删（见上面那一段）⇒ 这里不再传 `phone`。 -->
     <WsSceneView
       :key="sceneKey"
       :area="areaLabel"
       adcode=""
       :chrome="false"
-      :tf="false"
+      :tf="tfOn"
+      :tf-live="tfLiveOn"
       :joy="joyOn"
       :markers="mapPins"
       @pick-actor="onPickActor"
@@ -379,6 +380,32 @@
      而且判定**只许有一处** —— `joyInitialOn()` / `joyResolveOf()` 就是那一处。
      App 是 hash 路由（`#/worldsim?joy=1`）⇒ 解析器 search 与 hash 两处都读。 */
   const joyOn = ref(joyInitialOn());
+
+  /* ── 交通设施（2026-10-17 · S1）：**默认关**，`?tf=1` 才开 ───────────────────────
+     为什么开关放在入口这一层（与 `?joy` 同一条理由）：它是"这一屏怎么进"的事，
+     而且 URL 解析只许有一处 —— 本页是唯一读 URL 的地方，`WsSceneView` 不读（薄壳纪律）。
+     · `?tf=1`    ⇒ 开（`tfOn`）；不传 ⇒ **关**（屏幕/请求与改动前逐字节一致）
+     · `?live=1`  ⇒ 仅当同时开了 tf 才有效：交通设施的路网改问 `/api/roads`（带 3s 超时）。
+                    默认路径读**已落图**的地图 source，一条网络都不发。 */
+  function urlFlagOf(name: string): boolean {
+    const params: URLSearchParams[] = [];
+    try {
+      params.push(new URLSearchParams(location.search));
+    } catch {
+      /* 读不出来就当没有：默认关 */
+    }
+    try {
+      const h = String(location.hash || "");
+      const i = h.indexOf("?");
+      params.push(new URLSearchParams(i >= 0 ? h.slice(i + 1) : ""));
+    } catch {
+      /* 同上 */
+    }
+    return params.some((p) => p.get(name) === "1");
+  }
+  const tfOn = ref(urlFlagOf("tf"));
+  /** `?live=1` 只是"允许现场取数"，没开 tf 时它什么都不做（省得两处各判一次） */
+  const tfLiveOn = ref(tfOn.value && urlFlagOf("live"));
 
   /** 面板里点了开关：**先落盘再改状态**（写不进去也照常生效，只是下次开页回到默认） */
   function onToggleJoy(on: boolean): void {

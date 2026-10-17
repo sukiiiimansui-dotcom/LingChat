@@ -129,27 +129,154 @@ function segIntersect(
 
 export function junctions(roads: TfRoad[], withinM = 18): Array<{ at: [number, number]; arms: TfRoad[] }> {
   const out: Array<{ at: [number, number]; arms: TfRoad[] }> = [];
+  /* 每条路的**包围盒**（米平面：调用点 `buildTransport` 已经用 `toMeters` 换算过）。
+     为什么要有它：路口检测是"两两路对 × 两两线段"的 O(n²)，实测 633 条路要 12.9 s（本机 Node）。
+     预筛**只跳过"两条路的包围盒相距都超过 withinM"的路对** —— 这种路对既不可能有线段交点，
+     也不可能有 withinM 以内的顶点对 ⇒ 结果与暴力法**逐字相同**（对拍见
+     `world_map/ws_tf_policy_selftest.mjs` 的 ④ 组（对拍）。
+     包围盒算不出来（点不是有限数）⇒ 该路**不参与预筛**，照原样走完整比较（行为与改动前一致）。 */
+  const box = roads.map((r) => {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of r.pts) {
+      if (!Array.isArray(p)) continue;
+      const x = Number(p[0]);
+      const y = Number(p[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    return {
+      minX,
+      maxX,
+      minY,
+      maxY,
+      ok: Number.isFinite(minX) && Number.isFinite(maxX) && Number.isFinite(minY) && Number.isFinite(maxY),
+    };
+  });
+  /* 每条路的顶点**按 x 排序**（元素记住原序 `i`）：只服务"顶点足够近"那条退路，
+     命中判据（`dist <= withinM`）与"取原序第一个"的语义都不变 —— 见下面那段。 */
+  const xsorted = roads.map((r) => {
+    const arr = r.pts.map((p, i) => ({ x: Number(p?.[0]), y: Number(p?.[1]), i }));
+    arr.sort((a, b) => a.x - b.x);
+    return arr;
+  });
+  /* 每条路的**分段包围盒**（同样在米平面）：只服务"先试线段相交"那一步 ——
+     两路包围盒交叠的区域往往只有几十米，真正可能相交的段每边也就一两条；
+     原来那一趟是 `A 段数 × B 段数`（20×20=400 次）**全跑**，绝大多数白算。
+     这里先按"段的包围盒是否碰交叠矩形"筛出候选段（**升序**保留原索引 ⇒ `ai/bi` 的遍历顺序
+     与原来完全一致，命中的交点坐标也就逐字节相同）。 */
+  const segboxes = roads.map((r) => {
+    const out: Array<{ idx: number; minX: number; maxX: number; minY: number; maxY: number; ok: boolean }> = [];
+    for (let k = 1; k < r.pts.length; k++) {
+      const a = r.pts[k - 1]!;
+      const b = r.pts[k]!;
+      const ax = Number(a?.[0]);
+      const ay = Number(a?.[1]);
+      const bx = Number(b?.[0]);
+      const by = Number(b?.[1]);
+      const ok = [ax, ay, bx, by].every((v) => Number.isFinite(v));
+      out.push({
+        idx: k,
+        minX: Math.min(ax, bx),
+        maxX: Math.max(ax, bx),
+        minY: Math.min(ay, by),
+        maxY: Math.max(ay, by),
+        ok,
+      });
+    }
+    return out;
+  });
   for (let i = 0; i < roads.length; i++) {
     for (let j = i + 1; j < roads.length; j++) {
       const A = roads[i]!;
       const B = roads[j]!;
+      /* ── 包围盒预筛（**只排除"一定不可能相交"的路对**，不改任何判定口径）── */
+      const ba = box[i]!;
+      const bb = box[j]!;
+      if (
+        ba.ok &&
+        bb.ok &&
+        (ba.maxX + withinM < bb.minX ||
+          bb.maxX + withinM < ba.minX ||
+          ba.maxY + withinM < bb.minY ||
+          bb.maxY + withinM < ba.minY)
+      ) {
+        continue;
+      }
       let hit: [number, number] | null = null;
-      /* 先试线段相交（覆盖"两条直路十字交叉"这种最常见的情形） */
-      for (let ai = 1; ai < A.pts.length && !hit; ai++) {
-        for (let bi = 1; bi < B.pts.length && !hit; bi++) {
-          hit = segIntersect(A.pts[ai - 1]!, A.pts[ai]!, B.pts[bi - 1]!, B.pts[bi]!);
+      /* 先试线段相交（覆盖"两条直路十字交叉"这种最常见的情形）。
+         **只有两路包围盒真的有交叠时才可能**有线段交点（线段是路的子集）⇒ 拿无余量的包围盒
+         先挡一道：挡掉的路对原本也只会把 400 次 `segIntersect` 全跑完再返回 null。 */
+      const boxesOverlap =
+        !(ba.ok && bb.ok) ||
+        !(ba.maxX < bb.minX || bb.maxX < ba.minX || ba.maxY < bb.minY || bb.maxY < ba.minY);
+      if (boxesOverlap) {
+        /* 交叠矩形（两路包围盒的交集）：只有落进它的段才可能真的相交 */
+        const ovMinX = Math.max(ba.minX, bb.minX);
+        const ovMaxX = Math.min(ba.maxX, bb.maxX);
+        const ovMinY = Math.max(ba.minY, bb.minY);
+        const ovMaxY = Math.min(ba.maxY, bb.maxY);
+        const sa = segboxes[i]!;
+        const sb = segboxes[j]!;
+        const candA: number[] = [];
+        for (const s of sa) {
+          /* 坏坐标的段**不参与预筛**（原来会照样喂给 `segIntersect` ⇒ 这里也必须喂） */
+          if (!s.ok) {
+            candA.push(s.idx);
+            continue;
+          }
+          if (s.maxX < ovMinX || s.minX > ovMaxX || s.maxY < ovMinY || s.minY > ovMaxY) continue;
+          candA.push(s.idx);
+        }
+        const candB: number[] = [];
+        for (const s of sb) {
+          if (!s.ok) {
+            candB.push(s.idx);
+            continue;
+          }
+          if (s.maxX < ovMinX || s.minX > ovMaxX || s.maxY < ovMinY || s.minY > ovMaxY) continue;
+          candB.push(s.idx);
+        }
+        for (const ai of candA) {
+          if (hit) break;
+          for (const bi of candB) {
+            hit = segIntersect(A.pts[ai - 1]!, A.pts[ai]!, B.pts[bi - 1]!, B.pts[bi]!);
+            if (hit) break;
+          }
         }
       }
-      /* 再退回"顶点足够近"（Y 字路口/端点相接那种，没有真正的交点） */
+      /* 再退回"顶点足够近"（Y 字路口/端点相接那种，没有真正的交点）。
+         优化：`dist(a2,b2) <= withinM` 必然要求 `|dx| <= withinM` ⇒ 先把 B 的顶点按 x 排好，
+         只扫 x 落在 [ax-withinM, ax+withinM] 的那几个；命中里取**原序最靠前**的那个 ——
+         与原来的"按 A 序 × B 序取第一个"**逐字等价**（被跳过的点一定不满足距离）。 */
       if (!hit) {
+        const bx = xsorted[j]!;
         for (const a2 of A.pts) {
-          for (const b2 of B.pts) {
-            if (dist(a2, b2) <= withinM) {
-              hit = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
-              break;
-            }
+          const ax = Number(a2[0]);
+          let lo = 0;
+          let hi = bx.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (bx[mid]!.x < ax - withinM) lo = mid + 1;
+            else hi = mid;
           }
-          if (hit) break;
+          let best = -1;
+          for (let k = lo; k < bx.length && bx[k]!.x <= ax + withinM; k++) {
+            const b2 = B.pts[bx[k]!.i]!;
+            /* `|dy| > withinM` 的点必不满足距离 ⇒ 先挡掉，省一次 hypot（判据完全等价） */
+            if (Math.abs(Number(a2[1]) - Number(b2[1])) > withinM) continue;
+            if (dist(a2, b2) <= withinM && (best < 0 || bx[k]!.i < best)) best = bx[k]!.i;
+          }
+          if (best >= 0) {
+            const b2 = B.pts[best]!;
+            hit = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+            break;
+          }
         }
       }
       if (!hit) continue;

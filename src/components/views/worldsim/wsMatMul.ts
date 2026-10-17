@@ -62,6 +62,33 @@ export function projectPoint(
   }
 }
 
+/**
+ * 带高度的局部坐标 → 画布像素（`y` 是米）。
+ *
+ * 为什么需要：楼在屏幕上是"有高度"的，**地面点**（y=0）在俯角下常常落在楼体**下方**的
+ * 空地/天空上 —— 用地面点做像素取证会读到一片空（实测：两个 20×20 采样框只命中 118 px）。
+ * 采样点应该取**楼顶**（`y = top`）。
+ */
+export function projectPointY(
+  mwInv: number[] | null | undefined,
+  proj: number[] | null | undefined,
+  local: [number, number],
+  y: number,
+  w: number,
+  h: number
+): [number, number] | null {
+  if (!mwInv || !proj) return null;
+  try {
+    const cam = mulMat(mwInv, [local[0], Number(y) || 0, local[1], 1]);
+    const clip = mulMat(proj, cam);
+    const wClip = clip[3]!;
+    if (!Number.isFinite(wClip) || !(wClip > 1e-9)) return null;
+    return [((clip[0]! / wClip + 1) / 2) * w, ((1 - clip[1]! / wClip) / 2) * h];
+  } catch {
+    return null;
+  }
+}
+
 /** 两组矩阵是否逐元素相同（拿不到就 `null` = 不知道，不是 false） */
 export function matEq(a: number[] | null | undefined, b: number[] | null | undefined, eps = 1e-9): boolean | null {
   if (!a || !b || a.length !== b.length) return null;

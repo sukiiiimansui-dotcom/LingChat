@@ -33,7 +33,7 @@ import {
   type WsRenderWorld,
 } from "./wsRenderBackend";
 import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
-import { matEq, projectPoint } from "./wsMatMul";
+import { matEq, projectPoint, projectPointY } from "./wsMatMul";
 import { alignProbeOn, wsBuildingsHost, wsDiag, wsLiveMap } from "./wsRenderBackend";
 import { ensureBldLayers, hasBldLayers } from "./wsBldLayerSwitch";
 import { bldLayerSpecsFor, mvtBldLayerSpecs } from "./wsDistrictScene";
@@ -175,6 +175,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let frames = 0;
   /** **累计画出去多少帧**（`drawOnce` 每次 +1；地图驱动的 `frames` 只数 map render，别混） */
   let drawsTotal = 0;
+  /** 其中多少帧是**重建后补画**的（不是地图 render 驱动）——`overlayFrames>mapFrames` 的来源 */
+  let drawsFromRebuild = 0;
   let draws = 0;
   let fps = 0;
   let fpsAt = 0;
@@ -593,7 +595,8 @@ export function createOverlayBackend(): WsRenderBackend {
     }
     }
     /* 数据是**后到**的 ⇒ 重建完立刻画一帧：渲染是"地图画完一帧"驱动的，地图静止时不会再来
-       render，等它就等于这一批楼不显示。 */
+       render，等它就等于这一批楼不显示。这一帧是**必要**的（新网格），要单独计数。 */
+    drawsFromRebuild += 1;
     drawOnce();
   }
 
@@ -876,10 +879,15 @@ export function createOverlayBackend(): WsRenderBackend {
       const samplePts: Array<[number, number]> = [];
       try {
         const boxes = data?.boxes ?? [];
+        const metas = data?.featureMeta ?? [];
         for (let i = 0; i + 3 < boxes.length && samplePts.length < 4; i += 4 * step) {
+          const fi = i / 4;
           const cx2 = (boxes[i]! + boxes[i + 2]!) / 2;
           const cz2 = (boxes[i + 1]! + boxes[i + 3]!) / 2;
-          const p = projectFromLastDrawLocal(cx2, cz2);
+          /* 🔴 采样点取**楼顶**（`y = h3d`），不是地面：俯角下地面点常落在楼体下方的空地/天空，
+             实测两个 20×20 框只命中 118px ⇒ 会被误判"画不出来"（真机 pix.strikes=2 就是这个形状）。 */
+          const topY = Number(metas[fi]?.h3d ?? 0);
+          const p = projectFromLastDrawLocalAt(cx2, cz2, Math.max(0, topY * 0.5));
           if (p && p[0] >= 12 && p[0] <= bw - 12 && p[1] >= 12 && p[1] <= bh - 12) samplePts.push(p);
         }
       } catch {
@@ -918,10 +926,10 @@ export function createOverlayBackend(): WsRenderBackend {
     return { ok: true, why: pixWhy, kind: "ok" };
   }
 
-  /** 局部米坐标 → 屏幕像素（用**画出去那一帧**的矩阵；只给像素取证的采样点算位置） */
-  function projectFromLastDrawLocal(x: number, z: number): [number, number] | null {
+  /** 局部米坐标（可带高度）→ 屏幕像素（用**画出去那一帧**的矩阵；只给像素取证的采样点算位置） */
+  function projectFromLastDrawLocalAt(x: number, z: number, y: number = 0): [number, number] | null {
     if (!lastDraw) return null;
-    return projectPoint(lastDraw.mwInv, lastDraw.proj, [x, z], lastDraw.w, lastDraw.h);
+    return projectPointY(lastDraw.mwInv, lastDraw.proj, [x, z], y, lastDraw.w, lastDraw.h);
   }
 
   /** 画布 CSS 尺寸（`sizeOf` 是函数声明，这里给闸用同一份） */
@@ -1371,6 +1379,7 @@ export function createOverlayBackend(): WsRenderBackend {
       perFrame: {
         mapFrames: frames,
         overlayFrames: drawsTotal,
+        rebuildFrames: drawsFromRebuild,
         labelWrites,
         labelNodes: (() => { try { return document.querySelectorAll(".ws-labs *").length; } catch { return -1; } })(),
         dpr: renderer?.getPixelRatio?.() ?? null,

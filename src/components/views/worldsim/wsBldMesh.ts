@@ -21,11 +21,18 @@
  *    调用方自己包成它那套引擎认识的缓冲。
  */
 
-import { atlasUvOf, cellOf, repeatOf, ROOF_CELL_INDEX } from "./wsBldFacade";
+import { atlasUvOf, cellOf, repeatOf, PLAIN_CELL_INDEX, ROOF_CELL_INDEX } from "./wsBldFacade";
 import { ROOF_MUL, bandsForBase, toonBandOf, toonMulOf } from "./wsToon";
 import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
+import { bandRingsOf, modelPartsOf, type BldPartLike } from "./wsBldModel";
+
+type Pt2 = readonly [number, number];
+type Rgb3 = [number, number, number];
+type UvRect = { u0: number; v0: number; u1: number; v1: number };
+type UvRep = { uRep: number; vRep: number };
+type Bands = { k: [number, number, number]; mix: [number, number, number] };
 
 /** 一次最多画几栋楼（**离锚点最近的先画**）；超出部分如实报出来，不静默丢 */
 export const BLD_CAP = 3500;
@@ -190,6 +197,9 @@ export interface BldMeshInput {
   themeId: string;
   /** 一次最多画几栋（离锚点最近的先画） */
   cap: number;
+  /** S2 建模开关：true = 用 `__parts` 的体块/女儿墙；
+   *  缺省 false = 影子路（输出与旧版逐字节相同，`model=0` 回证用）。 */
+  model?: boolean;
 }
 
 /** 与 `WsThreeDiag` 里那几个计数逐字对应（**搬迁不改行为**：数字含义一字不变） */
@@ -207,6 +217,13 @@ export interface BldMeshStats {
   thinDropped: number;
   /** 因为轮廓画不出三角形被丢掉的（环退化/自交/点太少） */
   shapeDropped: number;
+  /** S2：真的用了拆件建模的栋数 / 体块数 / 女儿墙环带数 / 环带丢弃数 / 体块失败回退主体数 */
+  modeledBuildings: number;
+  massingBuildings: number;
+  massingParts: number;
+  parapetBands: number;
+  parapetDropped: number;
+  massFallback: number;
 }
 
 export interface BldMeshData {
@@ -239,9 +256,11 @@ export interface BldMeshData {
  */
 export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const { toLocal, themeId, cap } = input;
+  const modelOn = input.model === true;
   const stats: BldMeshStats = {
     buildings: 0, capped: 0, holesDropped: 0, withColor3d: 0, withH3d: 0,
     fromReal: 0, fromLevels: 0, fromKind: 0, thinDropped: 0, shapeDropped: 0,
+    modeledBuildings: 0, massingBuildings: 0, massingParts: 0, parapetBands: 0, parapetDropped: 0, massFallback: 0,
   };
   const pos: number[] = [];
   const col: number[] = [];
@@ -295,23 +314,52 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const top = Number.isFinite(h3dRaw) && h3dRaw > 0 ? h3dRaw : rh.h;
       const baseRaw = Number(props.h_base ?? props.min_height ?? 0);
       const base = Number.isFinite(baseRaw) && baseRaw > 0 ? Math.min(baseRaw, top - 0.4) : 0;
-      if (!(top - base >= 0.4)) {
+      const c3d = typeof props.color3d === "string" && props.color3d ? String(props.color3d) : "";
+      /* S2：先把这栋该画的体块/女儿墙算出来。model=0 时 massing/parapets 都是空，
+         后面完全走旧路（影子哈希要求逐字节相同）。 */
+      const primaryPart: BldPartLike = { p: props.p, h: top, hb: base, c: c3d || undefined, geometry: f.geometry };
+      const modelParts = modelOn ? modelPartsOf(props, primaryPart) : null;
+      const massing = modelParts?.massing ?? [];
+      const parapets = modelParts?.parapet ?? [];
+      let metaTop = top;
+      let metaBase = base;
+      if (modelOn && massing.length) {
+        let mt = -Infinity;
+        let mb = Infinity;
+        for (const part of massing) {
+          const ph = Number(part.h);
+          const pb = Number(part.hb);
+          if (Number.isFinite(ph)) mt = Math.max(mt, ph);
+          if (Number.isFinite(pb)) mb = Math.min(mb, pb);
+        }
+        if (Number.isFinite(mt) && Number.isFinite(mb) && mt - mb >= 0.4) {
+          metaTop = mt;
+          metaBase = mb;
+        }
+      }
+      if (!(metaTop - metaBase >= 0.4)) {
         stats.thinDropped += 1;
         continue;
       }
       if (Number.isFinite(h3dRaw) && h3dRaw > 0) stats.withH3d++;
-      const c3d = typeof props.color3d === "string" && props.color3d ? String(props.color3d) : "";
       if (c3d) stats.withColor3d++;
       if (rh.from === "real") stats.fromReal++;
       else if (rh.from === "levels") stats.fromLevels++;
       else stats.fromKind++;
-      /* `c`/`color3d` 只当明度档；最终颜色按当前主题色阶走（见 `themedBuildingHex`） */
-      const hex = themedBuildingHex(c3d, top, themeId);
+      /* `c`/`color3d` 只当明度档；最终颜色按当前主题色阶走（见 `themedBuildingHex`）。
+         建模时按最高体块取色，保证同一栋的体块/女儿墙落在同一色阶档。 */
+      const hex = themedBuildingHex(c3d, metaTop, themeId);
       const rgb = hexToRgb(hex);
       const fi = featureIds.length;
       featureIds.push(String(f.id ?? ""));
-      featureMeta.push({ color: hex, h3d: top, hBase: base });
+      featureMeta.push({ color: hex, h3d: metaTop, hBase: metaBase });
+      const fId = String((f as { id?: unknown }).id ?? (props as { id?: unknown }).id ?? "");
+      const massCellRect = atlasUvOf(cellOf(fId));
+      const roofRect = atlasUvOf(ROOF_CELL_INDEX);
+      const plainRect = atlasUvOf(PLAIN_CELL_INDEX);
+      const oneRep: UvRep = { uRep: 1, vRep: 1 };
       let added = false;
+      let modeled = false;
       const box = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
       const grow = (x: number, z: number): void => {
         if (x < box[0]) box[0] = x;
@@ -319,7 +367,125 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         if (x > box[2]) box[2] = x;
         if (z > box[3]) box[3] = z;
       };
-      for (const ring of rings) {
+      /* ── S2 建模用的推顶点/推面（只在 model=1 调用；旧路仍是下面那段内联代码） ── */
+      const pushV = (x: number, y: number, z: number, r: number, g: number, b: number, u: number, v: number, rect: UvRect, rep: UvRep): void => {
+        pos.push(x, y, z);
+        col.push(r, g, b);
+        uvs.push(u, v);
+        facadeRect.push(rect.u0, rect.v0, rect.u1 - rect.u0, rect.v1 - rect.v0);
+        facadeRep.push(rep.uRep, rep.vRep);
+      };
+      const pushCapTri = (a: Pt2, b: Pt2, c: Pt2, y: number, color: Rgb3, rect: UvRect): void => {
+        const up = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        const q = up >= 0 ? [a, b, c] : [a, c, b];
+        for (const p of q) pushV(p[0], y, p[1], color[0], color[1], color[2], 0.5, 0.5, rect, oneRep);
+        triTo.push(fi);
+      };
+      const pushWall = (a: Pt2, b: Pt2, y0: number, y1: number, baseHex: string, baseRgb: Rgb3, bands: Bands, rect: UvRect, rep: UvRep, sign: 1 | -1): void => {
+        if (a[0] === b[0] && a[1] === b[1]) return;
+        const ex = b[0] - a[0];
+        const ez = b[1] - a[1];
+        const el = Math.hypot(ex, ez) || 1;
+        const tk = toonK(baseHex, shadeOf((sign * -ez) / el, 0, (sign * ex) / el), bands);
+        const tm = toonMulOf(tk.band, tk.idx);
+        const mixW = bands.mix[tk.idx]!;
+        const wr = baseRgb[0] * tm[0] * (1 - mixW) + mixW;
+        const wg = baseRgb[1] * tm[1] * (1 - mixW) + mixW;
+        const wb = baseRgb[2] * tm[2] * (1 - mixW) + mixW;
+        const quad = [
+          [a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]],
+          [a[0], y0, a[1]], [b[0], y1, b[1]], [a[0], y1, a[1]],
+        ];
+        const quadUv: Array<[number, number]> = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+        for (let qi = 0; qi < quad.length; qi++) {
+          const p = quad[qi]!;
+          const uv2 = quadUv[qi]!;
+          pushV(p[0]!, p[1]!, p[2]!, wr, wg, wb, uv2[0], uv2[1], rect, rep);
+        }
+        triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
+      };
+      const drawSolid = (part: BldPartLike): boolean => {
+        const t = Number(part.h);
+        const b = Number(part.hb);
+        if (!Number.isFinite(t) || !Number.isFinite(b)) return false;
+        const pTop = t;
+        const pBase = Math.max(0, Math.min(b, pTop - 0.4));
+        if (!(pTop - pBase >= 0.4)) return false;
+        const { rings: prings } = outerRingsOf(part.geometry);
+        if (!prings.length) return false;
+        const phex = typeof part.c === "string" && part.c ? themedBuildingHex(part.c, pTop, themeId) : hex;
+        const prgb = hexToRgb(phex);
+        const pbands = bandsOf(phex);
+        let any = false;
+        for (const ring of prings) {
+          if (ring.length < 3) continue;
+          const pts = ring.map(([lng, lat]) => toLocal(lng, lat));
+          for (const p of pts) grow(p[0], p[1]);
+          const tris = triangulateRing(pts);
+          if (!tris.length) continue;
+          any = true;
+          const capRgb: Rgb3 = [prgb[0] * ROOF_MUL[0], prgb[1] * ROOF_MUL[1], prgb[2] * ROOF_MUL[2]];
+          for (let i = 0; i < tris.length; i += 3) {
+            pushCapTri(pts[tris[i]!]!, pts[tris[i + 1]!]!, pts[tris[i + 2]!]!, pTop, capRgb, roofRect);
+          }
+          for (let i = 0; i < pts.length; i++) {
+            const a = pts[i]!;
+            const b2 = pts[(i + 1) % pts.length]!;
+            if (a[0] === b2[0] && a[1] === b2[1]) continue;
+            const el = Math.hypot(b2[0] - a[0], b2[1] - a[1]) || 1;
+            const rep = repeatOf(el, pTop - pBase, undefined);
+            pushWall(a, b2, pBase, pTop, phex, prgb, pbands, massCellRect, rep, 1);
+          }
+        }
+        return any;
+      };
+      const drawBand = (part: BldPartLike): boolean => {
+        const t = Number(part.h);
+        const b = Number(part.hb);
+        if (!Number.isFinite(t) || !Number.isFinite(b)) return false;
+        const pTop = t;
+        const pBase = Math.max(0, Math.min(b, pTop - 0.2));
+        if (!(pTop - pBase >= 0.2)) return false;
+        const br = bandRingsOf(part);
+        if (!br) return false;
+        const outer = br.outer.map(([lng, lat]) => toLocal(lng, lat));
+        const inner = br.inner.map(([lng, lat]) => toLocal(lng, lat));
+        const n = Math.min(outer.length, inner.length);
+        if (n < 3) return false;
+        for (const p of outer) grow(p[0], p[1]);
+        for (const p of inner) grow(p[0], p[1]);
+        const phex = typeof part.c === "string" && part.c ? themedBuildingHex(part.c, pTop, themeId) : hex;
+        const prgb = hexToRgb(phex);
+        const pbands = bandsOf(phex);
+        const capRgb: Rgb3 = [prgb[0] * ROOF_MUL[0], prgb[1] * ROOF_MUL[1], prgb[2] * ROOF_MUL[2]];
+        for (let i = 0; i < n; i++) {
+          const j = (i + 1) % n;
+          pushWall(outer[i]!, outer[j]!, pBase, pTop, phex, prgb, pbands, plainRect, oneRep, 1);
+          pushWall(inner[i]!, inner[j]!, pBase, pTop, phex, prgb, pbands, plainRect, oneRep, -1);
+          pushCapTri(outer[i]!, outer[j]!, inner[j]!, pTop, capRgb, roofRect);
+          pushCapTri(outer[i]!, inner[j]!, inner[i]!, pTop, capRgb, roofRect);
+        }
+        return true;
+      };
+      /* S2：有体块就画体块（替代单块主体）；一个体块都画不出来才回退主体并计数 */
+      let massDrawn = false;
+      if (modelOn && massing.length) {
+        for (const part of massing) {
+          if (drawSolid(part)) {
+            massDrawn = true;
+            stats.massingParts += 1;
+          }
+        }
+        if (massDrawn) {
+          added = true;
+          stats.massingBuildings += 1;
+          modeled = true;
+        } else {
+          stats.massFallback += 1;
+        }
+      }
+      if (!massDrawn) {
+        for (const ring of rings) {
         if (ring.length < 3) continue;
         const pts = ring.map(([lng, lat]) => toLocal(lng, lat));
         for (const p of pts) grow(p[0], p[1]);
@@ -327,8 +493,6 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         if (!tris.length) continue;
         added = true;
         /* 立面图集：**每栋取一次**（id → 格；不在这里算抖动，抖动走顶点色） */
-        const fId = String((f as { id?: unknown }).id ?? (props as { id?: unknown }).id ?? "");
-        const roofRect = atlasUvOf(ROOF_CELL_INDEX);
         /* 顶盖（法线朝上：算一下叉积，朝下就换序，绝不靠"输入一定是逆时针"） */
         for (let i = 0; i < tris.length; i += 3) {
           const a = pts[tris[i]!]!;
@@ -391,6 +555,20 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
         }
       }
+      }
+      /* S2：有 p=4 就画环带（体块/主体之上）；环带按中点拆外圈 + 0.7m 内圈 */
+      if (modelOn) {
+        for (const part of parapets) {
+          if (drawBand(part)) {
+            added = true;
+            stats.parapetBands += 1;
+            modeled = true;
+          } else {
+            stats.parapetDropped += 1;
+          }
+        }
+      }
+      if (modeled) stats.modeledBuildings += 1;
       if (added) {
         stats.buildings++;
         featBox.push(box[0], box[1], box[2], box[3]);

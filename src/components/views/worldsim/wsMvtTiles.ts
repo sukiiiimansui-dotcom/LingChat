@@ -50,7 +50,13 @@ function overlayNeedsGeo(): boolean {
     const m = /[?&]renderer=([a-z]+)/i.exec(q);
     if (m) return String(m[1]).toLowerCase() === "overlay";
   } catch { /* 取不到 URL 就只看偏好 */ }
-  try { return readRendererPref() === "overlay"; } catch { return false; }
+  /* 持久化偏好：**直接读同一个键**（真源 = `wsRenderBackend.ts` 的 `WS_RENDER_KEY = "wsm:v1:renderer"`）。
+     不 import 那个模块：它拖 `vue` 与另外两个模块，会让本文件的 Node 自检 staging 变重/变脆；
+     键名只此一处复制，那边改名这里要一起改（注释即契约）。 */
+  try {
+    const raw = localStorage.getItem("wsm:v1:renderer");
+    return String(raw || "") === "overlay";
+  } catch { return false; }
 }
 
 /** 瓦片模板（`mvt://` 由协议 loader 转成站点路径；见 `protocolHandler`） */
@@ -65,7 +71,6 @@ export const MVT_WORKER_PROBE = "/mvt-worker-probe.js";
 export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
 
 import { decodeMvtFeatures } from "./wsMvtDecode";
-import { readRendererPref } from "./wsRenderBackend";
 import { createCoverageRegistrar, type CoverageBounds, type CoverageResult } from "./wsMvtCoverage";
 
 /** gzip 魔数 */

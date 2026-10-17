@@ -61,7 +61,7 @@ function overlayNeedsGeo(): boolean {
   } catch { return false; }
 }
 
-/** 瓦片模板（`mvt://` 由协议 loader 转成站点路径；见 `protocolHandler`） */
+/** 旧 `/mvt/` 路径的模板（兼容旧页面/旧书签；新代码按 profile 选 `mvt-slim` / `mvt-full`） */
 export const MVT_TILE_TEMPLATE = "mvt://mvt/{z}/{x}/{y}.pbf";
 /** 运行期选出来的路：`protocol` = R1（协议 + worker 注册）· `plain` = 普通 URL 源（R3/R4） */
 export type MvtMode = "protocol" | "plain";
@@ -69,11 +69,22 @@ export type MvtMode = "protocol" | "plain";
 export const MVT_WORKER_SCRIPT = "/mvt-worker-protocol.js";
 /** worker 能力探针（只问一件事：worker 里有没有 `DecompressionStream`） */
 export const MVT_WORKER_PROBE = "/mvt-worker-probe.js";
-/** 普通 URL 源用的模板（不注册协议那条路；HTTP 侧靠 `Content-Encoding`，真机用不压缩落盘） */
+/** 普通 URL 源用的模板（旧 `/mvt/`；不注册协议那条路） */
 export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
 
 import { decodeMvtFeatures } from "./wsMvtDecode";
 import { createCoverageRegistrar, type CoverageBounds, type CoverageResult } from "./wsMvtCoverage";
+/* **profile 的纯逻辑**（无 vue）：目录映射只有 `bldMvtDirOf` 一处；本文件只拼模板。 */
+import { bldMvtDirOf, effectiveBldProfile, type WsBldProfile } from "./wsBldProfile";
+
+/** profile → 协议路模板（`mvt://mvt-slim|mvt-full/{z}/{x}/{y}.pbf`） */
+export function mvtTemplateForProfile(profile: WsBldProfile): string {
+  return `mvt://${bldMvtDirOf(profile)}/{z}/{x}/{y}.pbf`;
+}
+/** profile → 普通 URL 源模板（`/mvt-slim|mvt-full/{z}/{x}/{y}.pbf`） */
+export function mvtPlainTemplateForProfile(profile: WsBldProfile): string {
+  return `/${bldMvtDirOf(profile)}/{z}/{x}/{y}.pbf`;
+}
 
 /** gzip 魔数 */
 export const MVT_GZIP_MAGIC: readonly number[] = [0x1f, 0x8b];
@@ -320,7 +331,12 @@ export async function setupMvtProtocol(
   } else {
     (tiles as { noteFallbackPlain?: () => void }).noteFallbackPlain?.();
   }
-  const template = mode === "protocol" ? (opts.template || MVT_TILE_TEMPLATE) : MVT_PLAIN_TEMPLATE;
+  /* 模板按 **profile** 选目录（slim/full），一个 profile 同时管瓦片与离线包；
+     `opts.template` 仍可显式覆盖（自检/对拍）。切换 profile 需要刷新（见 `wsBldProfile`）。 */
+  const profile = effectiveBldProfile();
+  const template = mode === "protocol"
+    ? (opts.template || mvtTemplateForProfile(profile))
+    : mvtPlainTemplateForProfile(profile);
   /* 主线程登记器：**R1 主路上 id 表的唯一来源**（worker 那条路不经过我们的 loader） */
   const coverage = createCoverageRegistrar({ idTable, template, maxTiles: 24, concurrency: 4 });
   RUNTIME = { tiles, idTable, enabled: true, registeredAt: Date.now(), mode, template, coverage };

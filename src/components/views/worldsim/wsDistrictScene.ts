@@ -520,12 +520,11 @@ function mvtTierFilter(t: 0 | 1 | 2): unknown[] {
 }
 
 /**
- * **每格 K 的唯一取参口**（与顶栏那颗「每格 N 栋」芯片、与 GeoJSON 路的挑楼**同一条链**）：
- * `useWsBldMode().mode`（`localStorage["wsm:v1:bldmode"]`，模块级单例）→ `bldMaxDrawnOf()` →
- * `WS_BLD_MAX_DRAWN` / `WS_BLD_MAX_DRAWN_MANY`。本模块**不写任何数字**，也不另立第二个开关。
+ * **已失效（排障口保留）**：每格 K 现在由**产物**决定（`tiles-v6-slim` 每档只写 `rk<K` 的那批），
+ * 运行时不再按 K 过滤。本函数仍保留 `?k=` 的解析，只给**手动排障**用；`applyMvtTo` 不调它。
  *
- * 芯片点一下 → 宿主 `watch(bldDrawMode)` 立刻走一次既有落图通路 → `flushBldStore()` →
- * `applyMvtTo()` → `applyMvtBldKFilter()` ⇒ `setFilter` 当场生效（不是只在建层时读一次）。
+ * 历史（别再照抄）：曾用 芯片档位 → `bldMaxDrawnOf()` → `setFilter(rk<K)` 在运行时挑楼；
+ * 那条路会随 K 改写可见集合，且瓦片与挑楼是两套选择 ⇒ 已废弃。
  */
 function mvtKNow(): number {
   /* `?k=` 逃生口与宿主挑楼读**同一个参数名**（解析真源 `bldKPinOf`）：两条路同一个 K。 */
@@ -559,65 +558,18 @@ export function mvtBldLayerFilter(t: 0 | 1 | 2, k: number): unknown[] {
 /** 每张地图**上一次写进去的 K**（`WeakMap` ⇒ 换图/样式重建不留残渣） */
 const mvtKApplied = new WeakMap<object, number>();
 
-/**
- * **这份瓦片带不带 `rk`**（三态：`null` = 还没问过 / `true` / `false`）。
- *
- * 为什么需要它：过滤 `["<", ["get","rk"], K]` 对"属性不存在"求值为假 ⇒ 若瓦片还是旧版
- * （没有 `rk`），五条楼图层会**一栋都不画**（空城）。所以**没有 `rk` 就不许 setFilter**，
- * 保持今天"全量画"的行为。判定来源是**瓦片目录里的 `manifest.json`**（生成器写 `hasRk`），
- * 不是"拿一栋试试看"——试错的代价是用户眼前空一屏。
- *
- * 读不到 manifest（404 / 非 JSON / 网络错）也按 `false`：**宁可多画，不可空城**。
- * 切换瓦片后需要刷新一次页面（本模块每个页面实例只问一次）。
- */
-let mvtRkCap: boolean | null = null;
-let mvtRkProbe: Promise<boolean> | null = null;
-
-/** 从瓦片模板推出 manifest 地址：`mvt://mvt/{z}/{x}/{y}.pbf` → `/mvt/manifest.json` */
-export function mvtManifestUrlOf(template: string): string | null {
-  const t = String(template || "").replace(/^mvt:\/\//, "/");
-  const i = t.indexOf("{z}");
-  if (i < 0) return null;
-  const dir = t.slice(0, i).replace(/\/+$/, "");
-  return dir + "/manifest.json";
-}
+/* 运行时 rk 过滤已退场：密度由产物保证（slim 瓦片每档只写 `rk<K` 的那批），
+   所以"瓦片带不带 rk / 要不要 setFilter"这套能力探测也一并删除；旧路径的 `/mvt/` 不再被引用。 */
 
 /**
- * 问一次「这份瓦片带不带 `rk`」；同一个页面实例只问一次（成功/失败都缓存）。
- * `false` 是**安全值**：旧瓦片、manifest 读不到、字段缺失、值不是布尔 `true` —— 都保持全量。
- */
-export function ensureMvtRkReady(template: string): Promise<boolean> {
-  if (mvtRkCap !== null) return Promise.resolve(mvtRkCap);
-  if (mvtRkProbe) return mvtRkProbe;
-  mvtRkProbe = (async () => {
-    const url = mvtManifestUrlOf(template);
-    if (!url) return false;
-    try {
-      const res = await fetch(url, { cache: "no-cache" });
-      if (!res || !res.ok) return false;
-      const j = (await res.json()) as { hasRk?: unknown } | null;
-      return !!(j && j.hasRk === true);
-    } catch {
-      return false;
-    }
-  })().then((v) => { mvtRkCap = v; return v; });
-  return mvtRkProbe;
-}
-
-/** 当前能力（只读；`null` = 还没问出来） */
-export function mvtRkCapability(): boolean | null { return mvtRkCap; }
-
-/**
- * 把当前 K 写进**已存在**的那五条楼图层的 `filter`（`setFilter`；`K` 没变则一次都不写）。
+ * **已失效（排障口保留，不接线）**：运行时按 `rk<K` 的 `setFilter`。
+ * 密度已由产物保证（slim 瓦片每档只写 `rk<K` 的那批）；`applyMvtTo` **不调**本函数。
+ * 只有手动排障（例如临时对 full 瓦片做实验）时才调用。
  *
- * 🔴 前置：**瓦片必须已被确认带 `rk`**（`mvtRkCap === true`）。否则直接返回 0 ——
- * 这一行就是"旧瓦片不许被 `rk < K` 筛成空城"的那道防御。
- *
- * @returns 真正改了几条层（0 = 没地图 / 没有 `setFilter` / 层不在 / K 没变 / 瓦片没有 rk）
+ * @returns 真正改了几条层（0 = 没地图 / 没有 `setFilter` / 层不在 / K 没变）
  */
 export function applyMvtBldKFilter(m: DistrictMapLike | null | undefined, k: number): number {
   if (!m || typeof m.setFilter !== "function") return 0;
-  if (mvtRkCap !== true) return 0;
   const n = Number.isFinite(Number(k)) ? Math.max(0, Math.floor(Number(k))) : 0;
   if (mvtKApplied.has(m) && mvtKApplied.get(m) === n) return 0;
   let wrote = 0;
@@ -644,21 +596,24 @@ export function applyMvtBldKFilter(m: DistrictMapLike | null | undefined, k: num
  *  **五层与原路一一对应**：`bld-foot` / `bld-ext` / `bld-roof` / `bld-equip` / `bld-line`；
  *  档位门控与原路同一份常量（女儿墙 z≥14、设备箱 z≥16、描边 z≥14）。
  *
- *  五条层的过滤都是 `["all", 档位, ["<", ["get","rk"], K]]`（`K` 见 `mvtKNow`）⇒
- *  "画多少栋"这件事在瓦片路与 GeoJSON 路是**同一个数**。
+ *  五条层的过滤默认**只有档位**（`mvtTierFilter`）——"画多少栋"已由产物决定
+ *  （slim 瓦片每档只写 `rk<K` 的那批）。`rk` 那支只给 `useRk === true` 的手动排障用，
+ *  默认不启用；`?k=` / `mvtKNow` 对地图**已失效**。
  *
  *  ⚠️ 已知差异（本条**只做结构对齐**，没有主题取参）：原路的屋顶/设备箱颜色取自要素自带的
  *  `color3d`（同一张色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深），瓦片里不带 `color3d`
  *  ⇒ 这里三条挤出层共用同一份高度色阶 ⇒ **屋顶件与主体同色、层次弱一些**。要补齐需要把主题
  *  取参（`bldArtParamsOf` 那一份）传进本函数，属下一片的事，不在这里偷偷改色。
  *
- *  @param k 每格上限（不传 = 现读芯片档位；自检/对拍可显式钉住）
+ *  @param k 每格上限（**只在 `useRk === true` 的排障路径里用**；默认过滤不读它）
+ *  @param useRk 默认 false；true = 临时加回 `rk<K`（排障/对拍）
  */
 export function mvtBldLayerSpecs(k?: number, useRk?: boolean): Array<Record<string, unknown>> {
   const color = mvtHeightColorExpression();
-  const kk = k === undefined ? mvtKNow() : Math.max(0, Math.floor(Number(k)) || 0);
-  /* 三态：显式给 `useRk` 就听它（自检/对拍）；否则**只有确认瓦片带 rk 才加这一支**。 */
-  const withRk = useRk === undefined ? mvtRkCap === true : !!useRk;
+  /* 只有排障路径（useRk=true）才需要 K；默认过滤是纯档位，不读档位/`?k=`。 */
+  const kk = k !== undefined ? Math.max(0, Math.floor(Number(k)) || 0) : (useRk === true ? mvtKNow() : 0);
+  /* 默认**不加 rk**（产物已保证密度）；只有手动排障显式 useRk=true 才加。 */
+  const withRk = useRk === true;
   const filterOf = (t: 0 | 1 | 2): unknown[] => (withRk ? mvtBldLayerFilter(t, kk) : mvtTierFilter(t));
   const detailPaint = {
     "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
@@ -701,23 +656,19 @@ export function mvtBldLayerSpecs(k?: number, useRk?: boolean): Array<Record<stri
   ];
 }
 
-/** 建 `vector` 源 + 五条层（幂等：已存在就不重复加），并把**当前 K** 落到过滤上。**只在这一条路上用**。 */
+/**
+ * 建 `vector` 源 + 五条层（幂等：已存在就不重复加）。**只在这一条路上用**。
+ *
+ * 过滤**只有档位**：画哪些楼已经由产物决定（slim 瓦片每档只写 `rk<K` 的那批），
+ * 所以这里**不调** `applyMvtBldKFilter`、不读 `?k=`、不探测 manifest ⇒ 同一个 zoom 下
+ * 换相机/平移/旋转，画出来的集合天然不变（结构上不可能"换楼"）。
+ */
 export function applyMvtTo(m: DistrictMapLike, template: string): void {
   if (!m.getSource("bld")) {
     m.addSource("bld", { type: "vector", tiles: [template], minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: 16 });
   }
-  const kNow = mvtKNow();
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);
-  const withRk = mvtRkCap === true;
-  for (const l of mvtBldLayerSpecs(kNow, withRk)) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
-  /* K 变化（芯片点一下 → 宿主 watch → 既有落图通路 → 这里）与"层刚补上"两件事都靠这一行收口；
-     `applyMvtBldKFilter` 自己按地图实例记住上次写进去的 K ⇒ 每轮落图不会白写 `setFilter`。
-     能力未知/为 false ⇒ 这一行是空操作（保持全量），等下面的 manifest 探针回来再补。 */
-  applyMvtBldKFilter(m, kNow);
-  /* 第一次落图时先按"旧瓦片"处理（不加 rk 过滤）⇒ **绝不会空城**；manifest 说 `hasRk:true` 才补过滤。 */
-  void ensureMvtRkReady(template).then((ready) => {
-    if (ready) applyMvtBldKFilter(m, mvtKNow());
-  });
+  for (const l of mvtBldLayerSpecs()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
 }
 
 /**
@@ -820,8 +771,23 @@ export interface BldFlushOpts<T> {
  * 数据来自仓库并集而不是"这一批" ⇒ 换视野/换来源都不会把已画上的楼抹掉。
  */
 export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
-  /* 近景挑选：**只影响"画哪些"**，仓库不动（HUD 的"仓库 N 栋"仍是全量）。
-     编排（按格挑 + 按格冻结 + 视野补齐）在 `wsBldPickStore` 里 —— 这里只转交。 */
+  const mvt = opts.mvt ? opts.mvt() : null;
+  /* **瓦片路：产物决定画哪些楼 ⇒ 不 pick、不 dress、不 setData。**
+     近景挑选（`opts.pick`）每帧重挑会换楼（这条已被"密度焊进产物"取代）；
+     `dress` 只服务 GeoJSON 源的属性，瓦片路的属性在生成时已写好。
+     交给 `beforeDraw/afterDraw` 的是仓库原样（名字/点选只读 id/名字/几何）。 */
+  if (mvt) {
+    const raw = opts.features();
+    const data: FeatureCollectionLike = { type: "FeatureCollection", features: raw as unknown[] };
+    opts.beforeDraw?.(why, data);
+    const mm = opts.map();
+    if (!mm) { opts.onNoMap?.(data); return; }
+    applyMvtTo(mm, mvt.template);
+    opts.afterDraw?.(why, data);
+    opts.afterMvtRegister?.();
+    return;
+  }
+  /* GeoJSON 兜底路（`?mvt=0`）：保留原有的近景挑选 + 上妆。 */
   let drawn = opts.features();
   if (opts.pick) {
     const r = opts.pick(drawn);
@@ -833,15 +799,6 @@ export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
   const m = opts.map();
   if (!m) {
     opts.onNoMap?.(data);
-    return;
-  }
-  const mvt = opts.mvt ? opts.mvt() : null;
-  if (mvt) {
-    /* 矢量瓦片那条路：**只建源建层，不 setData**（"同批不重传"的语义交给 MapLibre 自己的瓦片缓存）。
-       HUD 的计数仍走 `afterDraw` —— 上层"画了多少栋"的口径不变。 */
-    applyMvtTo(m, mvt.template);
-    opts.afterDraw?.(why, data);
-    opts.afterMvtRegister?.();
     return;
   }
   applyBuildingsTo(m, data, opts.specs());

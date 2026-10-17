@@ -36,6 +36,8 @@ import {
 /* ⏱ 计时尺子（唯一一份，见 `wsPerfMeter`）：管道里"每格取多久 / 解析多久 / 并仓多久"必须可数，
    否则用户那句「加载慢」只能靠感觉 —— 有了它，首屏能拆成"网络 vs 解析 vs 计算"三段。 */
 import { pmMark, pmNow, pmSetContext, pmSpan, pmTimeAsync } from "./wsPerfMeter";
+/* **profile 的纯逻辑**（无 vue）：精简/完整 → 离线包目录。与瓦片目录同一个 profile（`wsBldProfile`）。 */
+import { bldBundleDirOf, effectiveBldProfile } from "./wsBldProfile";
 
 /**
  * 这条 URL 的**真实字节数**（从 Resource Timing 读；同源 ⇒ `decodedBodySize` 可用）。
@@ -184,7 +186,16 @@ export function bundleIndexUrl(kind: BundleKind, dir?: string): string {
  * 老包还在就继续能跑。真要指定目录：`?bdir=<名字>`（排查/A-B 用）。
  */
 function dirsOf(spec: { dir: string; dirs?: string[] }): string[] {
-  const list = (spec.dirs && spec.dirs.length ? spec.dirs : [spec.dir]).slice();
+  let list = (spec.dirs && spec.dirs.length ? spec.dirs : [spec.dir]).slice();
+  /* **profile 决定楼包目录**（与瓦片目录同一个 profile）：slim 把精简包提到最前，full 只用全量包。
+     只对楼包生效；路/片区/水绿不受 profile 影响。 */
+  if (spec.dir === "bldbundle") {
+    const slim = bldBundleDirOf("slim");      // "bldbundle-002-slim"（映射只有一处）
+    const full = bldBundleDirOf("full");      // "bldbundle-002"
+    const prof = effectiveBldProfile();
+    if (prof === "slim" && list.indexOf(slim) >= 0) list = [slim, ...list.filter((d) => d !== slim)];
+    else if (prof === "full") list = list.filter((d) => d !== slim || d === full);
+  }
   /* `?bdir=` 覆盖（只认列在候选里的，避免拼错目录名去猜） */
   try {
     if (typeof location !== "undefined" && location.search) {
@@ -582,7 +593,7 @@ const SPECS = {
     dir: "bldbundle",
     /* **分片包优先**：`bldbundle-002`（细子格，格尺寸以它自己的 `index.cellSize` 为准）在就在前面，
        不在就退回老包 `bldbundle`（0.05°，**唯一被端到端验过的一版**，先别删）。 */
-    dirs: ["bldbundle-002", "bldbundle"],
+    dirs: ["bldbundle-002", "bldbundle-002-slim", "bldbundle"],
     cellDeg: BLD_BUNDLE_CELL_DEG,
     plan: (b: BundleBoundsLike | null, c: { lng: number; lat: number } | null, maxCells: number, size: number) => bldBundleCellsForView(b, c, maxCells, size),
     parse: bundleBuildingsOf,

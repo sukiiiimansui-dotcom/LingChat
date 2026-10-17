@@ -55,7 +55,10 @@ import type { BldBudgetStats } from "./wsBldBudget"
 /* **足迹档的分界线**（2026-10-03「按 zoom 分层」）：`z < WS_BLD_FOOTPRINT_MAXZOOM` 画足迹
    （`bld-foot`，平面）、`z ≥ 14` 画立体（`bld-ext`，挤出）—— 与上面的屋顶系阈值**同一条分界线**
    （那个 14 全项目只有一份，在 `wsBldBudget` 里引用 `wsBldDetailTiers`）。 */
-import { WS_BLD_FOOTPRINT_MAXZOOM } from "./wsBldBudget";
+import { bldMaxDrawnOf, WS_BLD_FOOTPRINT_MAXZOOM } from "./wsBldBudget";
+/* **芯片档位的唯一存储**（模块级单例 ref）：MVT 路的 K 与 GeoJSON 路的挑楼读**同一份**；
+   本文件不写死 6/4000，只调 `bldMaxDrawnOf(mode)`（见 `mvtKNow`）。 */
+import { useWsBldMode } from "./wsBldMode";
 
 /** 两种挑楼口径的统计（按格 / 双预算）—— 落图通路只转交，不解读 */
 export type BldPickAnyStats = BldPickStats | BldBudgetStats;
@@ -69,6 +72,8 @@ export interface DistrictMapLike {
   getSource(id: string): { setData(d: unknown): void } | undefined;
   addSource(id: string, spec: Record<string, unknown>): void;
   addLayer(spec: Record<string, unknown>, beforeId?: string): void;
+  /** 可选：矢量图层改过滤（MapLibre 真实例有；自检的假地图可以不给 ⇒ 按"只读"处理） */
+  setFilter?(id: string, filter: unknown): void;
 }
 
 export interface FeatureCollectionLike {
@@ -497,23 +502,160 @@ export function mvtHeightColorExpression(): unknown[] {
   return [base[0], base[1], ["coalesce", ["get", "h"], 8], ...base.slice(3)];
 }
 
+/** MVT 楼房那五条图层的 id（`setFilter` 的遍历口径只此一处） */
+const MVT_BLD_LAYER_IDS = ["bld-foot", "bld-ext", "bld-roof", "bld-equip", "bld-line"] as const;
+
+/** 图层 → 形体档（与下面 `mvtBldLayerSpecs` 里那张表同一份） */
+const MVT_BLD_LAYER_TIER: Record<string, 0 | 1 | 2> = {
+  "bld-foot": 0,
+  "bld-ext": 0,
+  "bld-roof": 1,
+  "bld-equip": 2,
+  "bld-line": 0,
+};
+
+/** 档位过滤：**与原路同一个表达式形状**（`zt` 是瓦片里带的整数）。 */
+function mvtTierFilter(t: 0 | 1 | 2): unknown[] {
+  return t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+}
+
+/**
+ * **每格 K 的唯一取参口**（与顶栏那颗「每格 N 栋」芯片、与 GeoJSON 路的挑楼**同一条链**）：
+ * `useWsBldMode().mode`（`localStorage["wsm:v1:bldmode"]`，模块级单例）→ `bldMaxDrawnOf()` →
+ * `WS_BLD_MAX_DRAWN` / `WS_BLD_MAX_DRAWN_MANY`。本模块**不写任何数字**，也不另立第二个开关。
+ *
+ * 芯片点一下 → 宿主 `watch(bldDrawMode)` 立刻走一次既有落图通路 → `flushBldStore()` →
+ * `applyMvtTo()` → `applyMvtBldKFilter()` ⇒ `setFilter` 当场生效（不是只在建层时读一次）。
+ */
+function mvtKNow(): number {
+  return bldMaxDrawnOf(useWsBldMode().mode.value);
+}
+
+/**
+ * 楼房图层的 **`rk` 预算**：`["<", ["get","rk"], K]`。
+ *
+ * `rk` 是瓦片生成器按**运行时同一套静态排序**写进每栋的「每格名次」
+ * （`wsBldBudget.bldStaticOrderCompare`：分↓ → id↑；0 = 该格最该画）。
+ * `rk < K` 即「每格取前 K 栋」——与 GeoJSON 路的 `pickBuildingsByBudget` 是同一件事实，
+ * 只是在这里落成了渲染侧的过滤（瓦片里已经排好，运行时不必再挑一遍）。
+ *
+ * 100 米以上的楼在生成侧固定为 `rk = 0`（见 `mvt-spike/tools/lib/bld.mjs` 的 `assignBldRanks`），
+ * 所以它们**永远不会被 K 筛掉**。
+ */
+export function mvtBldRkFilter(k: number): unknown[] {
+  const n = Number.isFinite(Number(k)) ? Math.max(0, Math.floor(Number(k))) : 0;
+  return ["<", ["get", "rk"], n];
+}
+
+/** 一条楼图层的完整过滤：档位 ∧ `rk < K`（建层与 `setFilter` 共用，保证两处不漂）。 */
+export function mvtBldLayerFilter(t: 0 | 1 | 2, k: number): unknown[] {
+  return ["all", mvtTierFilter(t), mvtBldRkFilter(k)];
+}
+
+/** 每张地图**上一次写进去的 K**（`WeakMap` ⇒ 换图/样式重建不留残渣） */
+const mvtKApplied = new WeakMap<object, number>();
+
+/**
+ * **这份瓦片带不带 `rk`**（三态：`null` = 还没问过 / `true` / `false`）。
+ *
+ * 为什么需要它：过滤 `["<", ["get","rk"], K]` 对"属性不存在"求值为假 ⇒ 若瓦片还是旧版
+ * （没有 `rk`），五条楼图层会**一栋都不画**（空城）。所以**没有 `rk` 就不许 setFilter**，
+ * 保持今天"全量画"的行为。判定来源是**瓦片目录里的 `manifest.json`**（生成器写 `hasRk`），
+ * 不是"拿一栋试试看"——试错的代价是用户眼前空一屏。
+ *
+ * 读不到 manifest（404 / 非 JSON / 网络错）也按 `false`：**宁可多画，不可空城**。
+ * 切换瓦片后需要刷新一次页面（本模块每个页面实例只问一次）。
+ */
+let mvtRkCap: boolean | null = null;
+let mvtRkProbe: Promise<boolean> | null = null;
+
+/** 从瓦片模板推出 manifest 地址：`mvt://mvt/{z}/{x}/{y}.pbf` → `/mvt/manifest.json` */
+export function mvtManifestUrlOf(template: string): string | null {
+  const t = String(template || "").replace(/^mvt:\/\//, "/");
+  const i = t.indexOf("{z}");
+  if (i < 0) return null;
+  const dir = t.slice(0, i).replace(/\/+$/, "");
+  return dir + "/manifest.json";
+}
+
+/**
+ * 问一次「这份瓦片带不带 `rk`」；同一个页面实例只问一次（成功/失败都缓存）。
+ * `false` 是**安全值**：旧瓦片、manifest 读不到、字段缺失、值不是布尔 `true` —— 都保持全量。
+ */
+export function ensureMvtRkReady(template: string): Promise<boolean> {
+  if (mvtRkCap !== null) return Promise.resolve(mvtRkCap);
+  if (mvtRkProbe) return mvtRkProbe;
+  mvtRkProbe = (async () => {
+    const url = mvtManifestUrlOf(template);
+    if (!url) return false;
+    try {
+      const res = await fetch(url, { cache: "no-cache" });
+      if (!res || !res.ok) return false;
+      const j = (await res.json()) as { hasRk?: unknown } | null;
+      return !!(j && j.hasRk === true);
+    } catch {
+      return false;
+    }
+  })().then((v) => { mvtRkCap = v; return v; });
+  return mvtRkProbe;
+}
+
+/** 当前能力（只读；`null` = 还没问出来） */
+export function mvtRkCapability(): boolean | null { return mvtRkCap; }
+
+/**
+ * 把当前 K 写进**已存在**的那五条楼图层的 `filter`（`setFilter`；`K` 没变则一次都不写）。
+ *
+ * 🔴 前置：**瓦片必须已被确认带 `rk`**（`mvtRkCap === true`）。否则直接返回 0 ——
+ * 这一行就是"旧瓦片不许被 `rk < K` 筛成空城"的那道防御。
+ *
+ * @returns 真正改了几条层（0 = 没地图 / 没有 `setFilter` / 层不在 / K 没变 / 瓦片没有 rk）
+ */
+export function applyMvtBldKFilter(m: DistrictMapLike | null | undefined, k: number): number {
+  if (!m || typeof m.setFilter !== "function") return 0;
+  if (mvtRkCap !== true) return 0;
+  const n = Number.isFinite(Number(k)) ? Math.max(0, Math.floor(Number(k))) : 0;
+  if (mvtKApplied.has(m) && mvtKApplied.get(m) === n) return 0;
+  let wrote = 0;
+  for (const id of MVT_BLD_LAYER_IDS) {
+    if (!m.getLayer(id)) continue;
+    const t = MVT_BLD_LAYER_TIER[id] ?? 0;
+    try {
+      m.setFilter(id, mvtBldLayerFilter(t, n));
+      wrote += 1;
+    } catch {
+      /* 单条层写失败不拖垮其它层；下一次落图会再试（不静默改 K 的值） */
+    }
+  }
+  if (wrote > 0) mvtKApplied.set(m, n);
+  return wrote;
+}
+
 /** `?mvt=1` 的楼房图层规格：与 GeoJSON 路**同一批 id、同一套档位语义**，但只读瓦片带的属性。
  *
- *  瓦片里每栋有 `h`（真高/层数×3/按类型估，与运行时同源）· `lv/k/b` · 拆件后另有
+ *  瓦片里每栋有 `h`（真高/层数×3/按类型估，与运行时同源）· `lv/k/b` · `rk`（每格名次，见
+ *  `mvtBldRkFilter`）· 拆件后另有
  *  `p`（部件码 0 主体 / 1 裙楼 / 2 塔楼 / 3 退台 / 4 女儿墙 / 5 屋顶 / 6 设备箱 / 7 天线）·
  *  `hb`（该件的挤出基座）· `zt`（档位 0/1/2）。
  *  **五层与原路一一对应**：`bld-foot` / `bld-ext` / `bld-roof` / `bld-equip` / `bld-line`；
  *  档位门控与原路同一份常量（女儿墙 z≥14、设备箱 z≥16、描边 z≥14）。
  *
+ *  五条层的过滤都是 `["all", 档位, ["<", ["get","rk"], K]]`（`K` 见 `mvtKNow`）⇒
+ *  "画多少栋"这件事在瓦片路与 GeoJSON 路是**同一个数**。
+ *
  *  ⚠️ 已知差异（本条**只做结构对齐**，没有主题取参）：原路的屋顶/设备箱颜色取自要素自带的
  *  `color3d`（同一张色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深），瓦片里不带 `color3d`
  *  ⇒ 这里三条挤出层共用同一份高度色阶 ⇒ **屋顶件与主体同色、层次弱一些**。要补齐需要把主题
- *  取参（`bldArtParamsOf` 那一份）传进本函数，属下一片的事，不在这里偷偷改色。 */
-export function mvtBldLayerSpecs(): Array<Record<string, unknown>> {
+ *  取参（`bldArtParamsOf` 那一份）传进本函数，属下一片的事，不在这里偷偷改色。
+ *
+ *  @param k 每格上限（不传 = 现读芯片档位；自检/对拍可显式钉住）
+ */
+export function mvtBldLayerSpecs(k?: number, useRk?: boolean): Array<Record<string, unknown>> {
   const color = mvtHeightColorExpression();
-  /* 档位过滤：**与原路同一个表达式形状**（`zt` 是瓦片里带的整数） */
-  const tierFilter = (t: 0 | 1 | 2): unknown[] =>
-    t === 0 ? ["==", ["coalesce", ["get", "zt"], 0], 0] : ["==", ["get", "zt"], t];
+  const kk = k === undefined ? mvtKNow() : Math.max(0, Math.floor(Number(k)) || 0);
+  /* 三态：显式给 `useRk` 就听它（自检/对拍）；否则**只有确认瓦片带 rk 才加这一支**。 */
+  const withRk = useRk === undefined ? mvtRkCap === true : !!useRk;
+  const filterOf = (t: 0 | 1 | 2): unknown[] => (withRk ? mvtBldLayerFilter(t, kk) : mvtTierFilter(t));
   const detailPaint = {
     "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
     "fill-extrusion-base": ["coalesce", ["get", "hb"], 0],
@@ -525,43 +667,53 @@ export function mvtBldLayerSpecs(): Array<Record<string, unknown>> {
     {
       id: "bld-foot", type: "fill", ...src,
       minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-      filter: tierFilter(0),
+      filter: filterOf(0),
       paint: { "fill-color": color, "fill-opacity": WS_BLD_FOOTPRINT_OPACITY },
     },
     {
       id: "bld-ext", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-      filter: tierFilter(0),
+      filter: filterOf(0),
       paint: { ...detailPaint },
     },
     {
       id: "bld-roof", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_DETAIL_ROOF_ZOOM,
-      filter: tierFilter(1),
+      filter: filterOf(1),
       paint: { ...detailPaint },
     },
     {
       id: "bld-equip", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_DETAIL_EQUIP_ZOOM,
-      filter: tierFilter(2),
+      filter: filterOf(2),
       paint: { ...detailPaint },
     },
     {
       id: "bld-line", type: "line", ...src,
       minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-      filter: tierFilter(0),
       paint: { "line-color": color, "line-width": 0.6 },
+      filter: filterOf(0),
     },
   ];
 }
 
-/** 建 `vector` 源 + 两条层（幂等：已存在就不重复加）。**只在这一条路上用**。 */
+/** 建 `vector` 源 + 五条层（幂等：已存在就不重复加），并把**当前 K** 落到过滤上。**只在这一条路上用**。 */
 export function applyMvtTo(m: DistrictMapLike, template: string): void {
   if (!m.getSource("bld")) {
     m.addSource("bld", { type: "vector", tiles: [template], minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: 16 });
   }
+  const kNow = mvtKNow();
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);
-  for (const l of mvtBldLayerSpecs()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
+  const withRk = mvtRkCap === true;
+  for (const l of mvtBldLayerSpecs(kNow, withRk)) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
+  /* K 变化（芯片点一下 → 宿主 watch → 既有落图通路 → 这里）与"层刚补上"两件事都靠这一行收口；
+     `applyMvtBldKFilter` 自己按地图实例记住上次写进去的 K ⇒ 每轮落图不会白写 `setFilter`。
+     能力未知/为 false ⇒ 这一行是空操作（保持全量），等下面的 manifest 探针回来再补。 */
+  applyMvtBldKFilter(m, kNow);
+  /* 第一次落图时先按"旧瓦片"处理（不加 rk 过滤）⇒ **绝不会空城**；manifest 说 `hasRk:true` 才补过滤。 */
+  void ensureMvtRkReady(template).then((ready) => {
+    if (ready) applyMvtBldKFilter(m, mvtKNow());
+  });
 }
 
 /**

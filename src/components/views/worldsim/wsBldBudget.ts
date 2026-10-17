@@ -650,6 +650,25 @@ export function bldStaticScoreOf(f: unknown): number | null {
 }
 
 /**
+ * **每格静态排序的唯一比较器**（分↓ → id↑）。
+ *
+ * 运行时挑选（本文件 `pickBuildingsByBudget` 的"每格前 K"）与瓦片预计算（离线生成器写进
+ * 瓦片的 `rk`）必须是**同一条全序**，否则"芯片设的 K"和"瓦片里排好的名次"会各算一套。
+ * 所以比较器只放在这里：生成器用 staging 方式 import 本文件这一份，不另写实现。
+ *
+ * 参数拆成四个标量（而不是两个对象）是为了让挑选热路径（z13 视野近 3 万候选）不做临时分配。
+ *
+ * @param aScore 第一栋的静态分（`bldStaticMeasureOf(...).score`）
+ * @param aId    第一栋的 id（字符串；与运行时 `String(f.id)` 同一口径）
+ * @param bScore 第二栋的静态分
+ * @param bId    第二栋的 id
+ * @returns 负数 = A 排在前面（更该画）
+ */
+export function bldStaticOrderCompare(aScore: number, aId: string, bScore: number, bId: string): number {
+  return bScore !== aScore ? bScore - aScore : aId < bId ? -1 : aId > bId ? 1 : 0;
+}
+
+/**
  * **静态路的代价**（**不投影**）：把记忆下来的米数，按 `metersPerPixel` 换成屏幕像素。
  *
  * 公式与 `bldScreenCost` **逐字同式**（屋顶 = w×h、墙 = (w+h)×墙高像素），
@@ -1062,7 +1081,8 @@ export function pickBuildingsByBudget<T extends { id?: unknown }>(
   const inK: boolean[] = [];
   for (const k of cellKeys) {
     const arr = byCell.get(k)!;
-    arr.sort((A, B) => (B.score !== A.score ? B.score - A.score : A.c.id < B.c.id ? -1 : A.c.id > B.c.id ? 1 : 0));
+    /* 唯一比较器在 `bldStaticOrderCompare`（瓦片生成器的 `rk` 也调同一份）。 */
+    arr.sort((A, B) => bldStaticOrderCompare(A.score, A.c.id, B.score, B.c.id));
     if (arr.length > maxDrawn) { stats.countBound = true; stats.cellsCapped += 1; }
     for (let i = 0; i < arr.length; i++) { pool.push(arr[i]!); inK.push(i < maxDrawn); }
   }

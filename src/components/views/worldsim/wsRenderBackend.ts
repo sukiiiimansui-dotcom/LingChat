@@ -62,6 +62,8 @@ export interface WsNameBindProbe {
   /** 名字层这一轮的三态（`counted` / `uncounted`）与原因 */
   state: string;
   why: string | null;
+  /** 未绑分类是否真跑了（`counted` / `skipped`） */
+  classState: string;
   labels: number;
   bound: number;
   unboundPoi: number;
@@ -74,6 +76,12 @@ export interface WsNameBindProbe {
   roof3d: number;
   roofGround: number;
   roofNull: number;
+  /** 分档计数（"为什么没字"）：POI 候选 / 被 z 闸挡掉的 POI / 片区行政名候选 */
+  poiCandidates: number;
+  poiGated: number;
+  areaCandidates: number;
+  /** 这一轮耗时：`layer` = 名字层内部各段；`dom` = 宿主把计划落到 DOM 的耗时（ms） */
+  ms: { layer: { fetch: number; items: number; grid: number; bindDrawn: number; bindPool: number; poolGrid: number; poolQuery: number; zones: number; pick: number; nodes: number; total: number }; dom: number };
   /** 只回传屏上的（最多 12 条）——不刷屏 */
   nodes: WsNameBindRow[];
   /** 锚点相对地面投影的像素差（只统计绑了楼的节点） */

@@ -170,6 +170,16 @@ export type NameRoofProjection =
  */
 export const NAME_BIND_MIN_ZOOM = 14;
 
+/**
+ * "收起未绑 POI"还要**至少有这么多个绑楼名字**才允许。
+ *
+ * 真机 2026-10-17（z15.9，真机读数 `nameBind.labels = 0`）：整屏只有 28 个未绑 POI、
+ * 一个片区名都没有 —— 按"z≥14 就收"的规则会把屏清空。低/中缩放本来就看不清楼，
+ * 把地名也收掉等于整屏没字 ⇒ 绑楼名字不足 5 个时**保留**未绑 POI（按地面锚点，计入未绑）。
+ * 5 的依据：z≥16 的名字上限是 26；5 个是"一屏能读出方位"的下限，也是真机 z19 的绑定数。
+ */
+export const NAME_BIND_HIDE_MIN_BOUND = 5;
+
 /** 楼脚印缓存（同一要素对象只解析一次；`drawnBuildings` 每轮重写但要素对象稳定） */
 interface BldGeo {
   id: string | null;
@@ -222,6 +232,14 @@ export interface NameLayerHost {
    * 而不是改代码。显示出来的那批**仍按地面锚点**并计入 `unboundPoiNames`（不会假装绑上了）。
    */
   showUnbound?: () => boolean;
+  /**
+   * 是否做"未绑分类"（无楼 / 楼没画 / 无 id）——**只在量具/诊断时开**。
+   *
+   * 为什么要这个开关：分类要扫楼仓库（30k 栋），真机性能读数里它是 `name-layer-update`
+   * 最大的一段（数百 ms）。上屏只需要知道"绑没绑上"，不需要知道"为什么没绑"。
+   * 默认（不传）= 做分类（自检/诊断兼容）；宿主只在 `?wsalign=1` 时传 true。
+   */
+  classifyUnbound?: () => boolean;
   /** 置信度阈值（默认取索引里的 `minConfidenceRecommended`） */
   minConf?: () => number | null;
   /** 每一轮算完的回调（宿主写 HUD / 渲染） */
@@ -351,6 +369,8 @@ export interface NameFacts {
      `ambiguous` = 点落在**多栋**楼脚印里（取脚印面积最小的那栋，见 `bindPointToBuilding`）。 */
   bindState: "counted" | "uncounted";
   bindWhy: string | null;
+  /** 未绑分类是否真跑了（`skipped` = 为了性能没扫仓库；不是 0） */
+  bindClass: "counted" | "skipped";
   boundNames: number;
   unboundPoiNames: number;
   hiddenUnbound: number;
@@ -363,6 +383,12 @@ export interface NameFacts {
   roof3d: number;
   roofGround: number;
   roofNull: number;
+  /** 这一轮名字层各段耗时（ms；fetch 含网络/JSON 解析，其余是同步主线程段） */
+  ms: { fetch: number; items: number; grid: number; bindDrawn: number; bindPool: number; poolGrid: number; poolQuery: number; zones: number; pick: number; nodes: number; total: number };
+  /** 候选分档（真机判"为什么没字"用）：POI 总数 / 被 z 闸挡掉的 POI / 片区行政名总数 */
+  poiCandidates: number;
+  poiGated: number;
+  areaCandidates: number;
   /* ── 计划缓存读数（2026-10-01："像高德那样不用重算"必须**可数**）───────────
      判词三态在缓存上同样成立：`planComputes` = **真算过几次**（正数），`planReuses` = 命中几次。
      `planReason` = 这一轮为什么算/为什么复用（cold/tier/drift/data/viewport/reuse）。 */
@@ -407,7 +433,9 @@ export function nameVerdictLine(f: NameFacts): string {
     f.bindState === "uncounted"
       ? ` · 🏢 名字↔楼 数不出来：${f.bindWhy || "没拿到楼几何"}`
       : ` · 🏢 名字↔楼 绑 ${f.boundNames} / 未绑POI ${f.unboundPoiNames}${f.hiddenUnbound ? `（z≥14 收起 ${f.hiddenUnbound}）` : ""}` +
-        `（没画 ${f.boundButNotDrawn} · 无楼 ${f.noBldNear} · 多义 ${f.ambiguous} · 无id ${f.noBldId} · 重复 ${f.droppedByDupBld}` +
+        (f.bindClass === "skipped"
+          ? "（未绑分类未算：仅 ?wsalign=1）"
+          : `（没画 ${f.boundButNotDrawn} · 无楼 ${f.noBldNear} · 多义 ${f.ambiguous} · 无id ${f.noBldId} · 重复 ${f.droppedByDupBld}`) +
         ` · 楼顶投影 3D ${f.roof3d}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`;
   return (
     `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}` +
@@ -416,7 +444,7 @@ export function nameVerdictLine(f: NameFacts): string {
     ` · 🚫生成名上屏 ${f.generatedOnScreen} · 点 ${f.points} · 格 ${f.hit}/${f.cells}` +
     /* 划区的**中间量**也要看得见：否则"区名 0 个"就只剩一句结论，查不出是"没够格"还是"过半=0"
        （0.05° 上 food 过半就是 0 格 —— 这条实测事实必须能从 HUD 上读出来）。 */
-    ` · 子格 够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf}` +
+    ` · 子格 ${f.mode === "zones" ? `够格 ${f.zoneEligible}/${f.zoneCells} 过半 ${f.zoneOverHalf}` : "未算（names）"}` +
     ` · D ${f.density === null ? "数不出来" : f.density.toFixed(2)} · ${f.mode === "zones" ? "区名模式" : "名字模式"}` +
     /* 缓存读数：**复用几次 / 真算几次**（"不用重算"要能在屏上数出来，不靠调试出口）。
        右侧那个词是**这一轮为什么**算/复用（reuse = 命中缓存 ⇒ 没重排、没换字）。 */
@@ -451,11 +479,13 @@ function emptyFacts(on: boolean): NameFacts {
     zoneCells: 0, zoneEligible: 0, zoneOverHalf: 0,
     attribution: null, cellSize: null,
     planComputes: 0, planReuses: 0, planReason: "cold",
-    bindState: "uncounted", bindWhy: null,
+    bindState: "uncounted", bindWhy: null, bindClass: "counted",
     boundNames: 0, unboundPoiNames: 0, hiddenUnbound: 0,
     boundButNotDrawn: 0, noBldNear: 0, ambiguous: 0,
     droppedByDupBld: 0, noBldId: 0,
     roof3d: 0, roofGround: 0, roofNull: 0,
+    ms: { fetch: 0, items: 0, grid: 0, bindDrawn: 0, bindPool: 0, poolGrid: 0, poolQuery: 0, zones: 0, pick: 0, nodes: 0, total: 0 },
+    poiCandidates: 0, poiGated: 0, areaCandidates: 0,
     why: null,
   };
 }
@@ -590,6 +620,39 @@ export function bindPointToBuilding(pt: [number, number], list: readonly BldGeo[
   return best ? { bld: best, ambiguous: seen.size > 1 } : null;
 }
 
+/** 绑定用的粗网格：格边长 0.002°（约 200m；楼脚印远小于它，查询 3×3 就够） */
+const BLD_GRID_CELL = 0.002;
+interface BldGrid { cell: number; bins: Map<string, BldGeo[]>; big: BldGeo[] }
+
+function buildBldGrid(list: readonly BldGeo[]): BldGrid {
+  const cell = BLD_GRID_CELL;
+  const bins = new Map<string, BldGeo[]>();
+  /* 跨格太多的超大 footprint 单独一列（不塞满网格，但查询时**总是带上** ⇒ 不漏判） */
+  const big: BldGeo[] = [];
+  for (const b of list) {
+    const i0 = Math.floor(b.minLng / cell), i1 = Math.floor(b.maxLng / cell);
+    const j0 = Math.floor(b.minLat / cell), j1 = Math.floor(b.maxLat / cell);
+    if (i1 - i0 > 2 || j1 - j0 > 2) { big.push(b); continue; }
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const k = `${i},${j}`;
+      const arr = bins.get(k); if (arr) arr.push(b); else bins.set(k, [b]);
+    }
+  }
+  return { cell, bins, big };
+}
+
+/** 点周围 3×3 格里的候选（**只减扫描量，不改判定**：最终仍走 `bindPointToBuilding` 的 bbox + 环内测试） */
+function bldCandidates(grid: BldGrid, pt: [number, number]): BldGeo[] {
+  const i = Math.floor(pt[0] / grid.cell), j = Math.floor(pt[1] / grid.cell);
+  const out: BldGeo[] = [];
+  for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+    const arr = grid.bins.get(`${i + di},${j + dj}`);
+    if (arr) out.push(...arr);
+  }
+  if (grid.big.length) out.push(...grid.big);
+  return out;
+}
+
 /** 一格 `namesbundle` 文件 → 真名点（**没有名字/没有坐标的一条都不留**） */
 export function namePointsOfCell(json: unknown, minConf: number): { points: ZoneNamePoint[]; droppedByConf: number } {
   const list = (json as { places?: unknown } | null)?.places;
@@ -609,6 +672,17 @@ export function namePointsOfCell(json: unknown, minConf: number): { points: Zone
   }
   return { points: pts, droppedByConf: dropped };
 }
+
+/**
+ * 仓库代表点网格的**跨刷新缓存**（模块级）。
+ *
+ * 为什么不在 `createNameLayer` 的闭包里：真机每轮 moveend 都可能新建/重建名字层实例
+ * （热更新/降级恢复），而仓库要素对象是稳定的（`bldPointOf` 也是按对象记忆的）。
+ * 缓存键用"仓库长度 + 首/末 id"：装载新格/淘汰旧格都会变；同键直接复用。
+ */
+let POOL_GRID_CACHE: { sig: string; bins: Map<string, Array<{ f: unknown; p: [number, number] }>> } | null = null;
+/** 未绑分类的跨刷新缓存（键 = 名字 id + 锚点；仓库签名变了就清空） */
+let POOL_CLASS_CACHE = new Map<string, "notDrawn" | "noBld" | "noId">();
 
 export function createNameLayer(host: NameLayerHost): NameLayer {
   const cells = new Map<string, NameCellData>();
@@ -808,7 +882,10 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     return "missing";
   }
 
+  const clock = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
   async function refresh(why = "view"): Promise<NameFacts> {
+    const t0 = clock();
     const on = host.enabled ? host.enabled() : true;
     if (!on) {
       last = { ...emptyFacts(false) };
@@ -848,6 +925,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         else if (r === "missing") missing++;
         else failed++;
       }
+      const tFetch = clock();
       /* 汇总（**视野里那几格**的并集；缓存里别处的格不参与本轮统计） */
       const used = wanted.map((c) => cells.get(c.key)).filter(Boolean) as NameCellData[];
       const hitCells = wanted.filter((c) => cells.get(c.key)?.ok).length;
@@ -932,6 +1010,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
          不取最近质心：凹形/带内院的楼质心可能落在别处，而"包含 + 面积最小"是确定性的。
          `hidden`：z≥14（挤出体档）时没绑上的 POI 名字收起来（它们没有楼顶可站）；
          z<14（平面足迹档）仍作为普通地名显示，计入 `unboundPoiNames`。 */
+      const tItems = clock();
       const bindOf = new Map<string, { id: string; top: number }>();
       const boundIds = new Set<string>();
       const heightByKey = new Map<string, number>();
@@ -939,13 +1018,22 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       const bindCount = {
         state: (drawnNow ? "counted" : "uncounted") as "counted" | "uncounted",
         why: (drawnNow ? null : "宿主没有提供画出来的楼") as string | null,
-        hidden: 0, notDrawn: 0, noBld: 0, ambiguous: 0, dup: 0, noId: 0,
+        hidden: 0, notDrawn: 0, noBld: 0, ambiguous: 0, dup: 0, noId: 0, poolGrid: 0, poolQuery: 0,
       };
       const hKey = (lng: number, lat: number): string => `${lng.toFixed(7)},${lat.toFixed(7)}`;
+      /* 分档计数：z<13 时 POI 本来就进不了标签层（`labelPlanFor.building`），
+         它们不是"被避让挤掉"也不是"取数没到"；单独记 `poiGated`，真机才不会误判。 */
+      const poiCandidates = items.filter((it) => it.kind === "building").length;
+      const areaCandidates = items.length - poiCandidates;
+      const lp = labelPlanFor(z);
+      const poiAllowed = !!lp.building;
+      const poiGated = poiAllowed ? 0 : poiCandidates;
       /* 画出来的楼：同 id 的多块（body/女儿墙/设备箱）只拿 `body` 那圈做脚印；
          没有 body 的 id 才退而用其它块（离线包要素没有 `part`，按 body 算）。 */
+      let tGrid = tItems;
       const drawList: BldGeo[] = [];
-      if (drawnNow && drawnNow.length) {
+      let drawGrid: BldGrid | null = null;
+      if (poiAllowed && drawnNow && drawnNow.length) {
         const other: BldGeo[] = [];
         const bodyIds = new Set<string>();
         for (const raw of drawnNow) {
@@ -960,35 +1048,60 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         }
         for (const g of other) if (!g.id || !bodyIds.has(g.id)) drawList.push(g);
       }
-      /** 仓库全量（只用来给"没绑上"分类；不参与上屏选择） */
-      let poolCache: BldGeo[] | null = null;
-      const poolGeos = (): BldGeo[] => {
-        if (poolCache) return poolCache;
-        if (!host.buildingPool) return [];
+      drawGrid = buildBldGrid(drawList);
+      tGrid = clock();
+      /** 仓库全量的**代表点**网格：只用来给"没绑上"分类，不参与上屏选择。
+       *  为什么按点建网格：真机性能读数里 `bindPool` 是最大的一段（30k 栋全解析环 ⇒ 数百 ms）。
+       *  代表点由 `wsOfflineFeed.bldPointOf` 记忆化；网格按仓库签名缓存，平移不重建。
+       *  查询 3×3（0.005° 格 ≈ ±1.5km）够盖住正常楼；超大脚印的楼由 bbox 判据兜底。 */
+      const POOL_CELL = 0.002;
+      const poolPointGrid = (): Map<string, Array<{ f: unknown; p: [number, number] }>> | null => {
+        if (!host.buildingPool) return null;
         const pool = host.buildingPool() || [];
-        const bb = view.bounds;
-        if (!bb) { poolCache = []; return poolCache; }
-        const w0 = bb.getWest() - 0.01, e0 = bb.getEast() + 0.01;
-        const s0 = bb.getSouth() - 0.01, n0 = bb.getNorth() + 0.01;
-        const out: BldGeo[] = [];
-        for (const raw of pool) {
-          /* 先按代表点裁到视野（外扩 0.01°）——仓库最多 30k 栋，全量解析会卡住 moveend */
-          try {
-            const p = bldPointOf(raw as Parameters<typeof bldPointOf>[0]);
-            if (p && (p[0] < w0 || p[0] > e0 || p[1] < s0 || p[1] > n0)) continue;
-          } catch { /* 代表点取不到就不裁（宁可多扫，不漏判） */ }
-          const g = bldGeoOfFeature(raw);
-          if (g) out.push(g);
+        const sig = `${pool.length}:${String((pool[0] as { id?: unknown } | undefined)?.id ?? "")}:${String((pool[pool.length - 1] as { id?: unknown } | undefined)?.id ?? "")}`;
+        if (POOL_GRID_CACHE?.sig === sig) return POOL_GRID_CACHE.bins;
+        const bins = new Map<string, Array<{ f: unknown; p: [number, number] }>>();
+        for (const f of pool) {
+          let p: [number, number] | null = null;
+          try { p = bldPointOf(f as Parameters<typeof bldPointOf>[0]) as [number, number] | null; } catch { p = null; }
+          if (!p) continue;
+          const k = `${Math.floor(p[0] / POOL_CELL)},${Math.floor(p[1] / POOL_CELL)}`;
+          const arr = bins.get(k); if (arr) arr.push({ f, p }); else bins.set(k, [{ f, p }]);
         }
-        poolCache = out;
+        if (POOL_GRID_CACHE && POOL_GRID_CACHE.sig !== sig) POOL_CLASS_CACHE = new Map();
+        POOL_GRID_CACHE = { sig, bins };
+        return bins;
+      };
+      const poolCandidates = (bins: Map<string, Array<{ f: unknown; p: [number, number] }>>, pt: [number, number]): BldGeo[] => {
+        const i = Math.floor(pt[0] / POOL_CELL), j = Math.floor(pt[1] / POOL_CELL);
+        const out: BldGeo[] = [];
+        for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+          const arr = bins.get(`${i + di},${j + dj}`);
+          if (!arr) continue;
+          for (const c of arr) { const g = bldGeoOfFeature(c.f); if (g) out.push(g); }
+        }
         return out;
       };
-      const hideUnbound = Number.isFinite(z) && z >= NAME_BIND_MIN_ZOOM && !(host.showUnbound?.() ?? false);
+      /* 只处理**可能上屏**的 POI（地面投影在视口 + 64px 内）：
+         屏幕外的点在 pickLabels 里也会被丢，先裁掉能省掉大部分绑定/仓库扫描。
+         `onScreen` 的口径与 pickLabels 的 margin(24) 留足余量（64）；宁可比它宽。 */
+      const unboundOnScreen: LabelItem[] = [];
+      const noIdOnScreen = new Set<string>();
       const kept: LabelItem[] = [];
       for (const it of items) {
         if (it.kind !== "building") { kept.push(it); continue; }   // 片区/行政名不是楼名，不参与绑定
+        if (!poiAllowed) continue;                                  // z<13：POI 不进标签层（已计 poiGated）
         const pt: [number, number] = [it.lng, it.lat];
-        const hit = drawList.length ? bindPointToBuilding(pt, drawList) : null;
+        let onScreen = false;
+        if (vp) {
+          try {
+            const p = m?.project(pt);
+            onScreen = !!p && Number.isFinite(p.x) && Number.isFinite(p.y)
+              && p.x >= -64 && p.y >= -64 && p.x <= vp.width + 64 && p.y <= vp.height + 64;
+          } catch { onScreen = false; }
+        }
+        if (!onScreen) continue;
+        const hit = drawList.length && drawGrid ? bindPointToBuilding(pt, bldCandidates(drawGrid, pt)) : null;
         if (hit && hit.bld.id) {
           const id = hit.bld.id;
           if (boundIds.has(id)) { bindCount.dup++; continue; }     // 同 id 唯一：后来的那个不上屏
@@ -1004,32 +1117,48 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           kept.push(it);
           continue;
         }
-        /* 未绑的计数只算**本来会上屏的**那批（地面投影落在视口 + 24px 边距内）；
-           屏幕外的 POI 不影响观感，计进去只会把"藏了几个"说大。 */
-        let onScreen = false;
-        if (vp) {
-          try {
-            const p = m?.project(pt);
-            onScreen = !!p && Number.isFinite(p.x) && Number.isFinite(p.y)
-              && p.x >= -24 && p.y >= -24 && p.x <= vp.width + 24 && p.y <= vp.height + 24;
-          } catch { onScreen = false; }
-        }
-        if (hit) { if (onScreen) bindCount.noId++; }
-        else {
-          /* 没有画出来的楼包含它 ⇒ 去仓库里判定"是没画，还是压根没有楼" */
-          const poolHit = host.buildingPool ? bindPointToBuilding(pt, poolGeos()) : null;
-          if (onScreen) {
-            if (poolHit?.bld.id) bindCount.notDrawn++;
-            else if (poolHit) bindCount.noId++;
-            else if (host.buildingPool) bindCount.noBld++;
-          }
-          if (!host.buildingPool) bindCount.why = bindCount.why || "没拿到楼仓库 ⇒ 未绑分类数不出来";
-          if (poolHit?.ambiguous && onScreen) bindCount.ambiguous++;
-        }
-        if (hideUnbound) { if (onScreen) bindCount.hidden++; continue; }
-        unboundPoiIds.add(it.id);
-        kept.push(it);
+        if (hit) { bindCount.noId++; noIdOnScreen.add(it.id); }
+        unboundOnScreen.push(it);
       }
+      const tBind = clock();
+      /* 收起规则（真机 2026-10-17 修）：z≥14 **且**至少 5 个绑楼名字才收；
+         否则保留未绑 POI（按地面锚点显示）——低/中缩放不能整屏没字。 */
+      const hideUnbound = Number.isFinite(z) && z >= NAME_BIND_MIN_ZOOM
+        && boundIds.size >= NAME_BIND_HIDE_MIN_BOUND && !(host.showUnbound?.() ?? false);
+      const classify = host.classifyUnbound ? !!host.classifyUnbound() : true;
+      if (hideUnbound) {
+        bindCount.hidden = unboundOnScreen.length;
+        const tPoolGrid0 = clock();
+        const poolBins = classify ? poolPointGrid() : null;
+        bindCount.poolGrid = clock() - tPoolGrid0;
+        if (poolBins) {
+          const tPoolQ0 = clock();
+          for (const it of unboundOnScreen) {
+            if (noIdOnScreen.has(it.id)) continue;                  // 已按"楼里但没有 id"计过
+            const ck = `${it.id}|${it.lng.toFixed(6)},${it.lat.toFixed(6)}`;
+            let cat = POOL_CLASS_CACHE.get(ck);
+            if (!cat) {
+              const ph = bindPointToBuilding([it.lng, it.lat], poolCandidates(poolBins, [it.lng, it.lat]));
+              cat = ph?.bld.id ? "notDrawn" : ph ? "noId" : "noBld";
+              if (ph?.ambiguous) bindCount.ambiguous++;
+              if (POOL_CLASS_CACHE.size > 5000) POOL_CLASS_CACHE.clear();
+              POOL_CLASS_CACHE.set(ck, cat);
+            }
+            if (cat === "notDrawn") bindCount.notDrawn++;
+            else if (cat === "noId") bindCount.noId++;
+            else bindCount.noBld++;
+          }
+          bindCount.poolQuery = clock() - tPoolQ0;
+        } else if (classify) {
+          bindCount.why = bindCount.why || "没拿到楼仓库 ⇒ 未绑分类数不出来";
+        }
+      } else {
+        for (const it of unboundOnScreen) { unboundPoiIds.add(it.id); kept.push(it); }
+        if (unboundOnScreen.length && !host.showUnbound?.()) {
+          /* 显示出来的未绑 POI 不细分：读数里 `hidden=0` + `unboundPoi>0` 就是"保留" */
+        }
+      }
+      const tPool = clock();
       items.splice(0, items.length, ...kept);
 
       /* 名字锚点：绑上的用**楼顶**（同一套地图投影），没绑的仍是地面点 */
@@ -1074,7 +1203,8 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           /* 记账走**同一个** `run`（命中缓存 ⇒ 里面的 `work` 一次都不调）⇒ 读数由此而来 */
           planCache.run(key, () => (payload as PlannedPayload).picked);
           const st = planCache.stats();
-          last = { ...payload.facts, planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason };
+          last = { ...payload.facts, planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason,
+            ms: { fetch: tFetch - t0, items: tItems - tFetch, grid: tGrid - tItems, bindDrawn: tBind - tGrid, bindPool: 0, poolGrid: 0, poolQuery: 0, zones: 0, pick: 0, nodes: 0, total: clock() - t0 } };
           lastPlan = planFromPayload(payload);          // ← 只重投影；`changed=false` ⇒ 宿主不换字
           return emit();
         }
@@ -1082,23 +1212,29 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       }
 
       /* ── 以下都是**重算**路径（复用已在上面 return）────────────────────────────── */
-      const zonesPlan = planZoneNames(points, reals, {
-        subDeg: WS_ZONE_SUB_DEG,
-        /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
-        containerDeg: cellSize,
-        containers: okCellKeys,
-      });
       let picked: PickResult | null = null;
       if (m && vp) {
         picked = key
-          ? planCache.run(key, () => pickLabels(items, projectAt, vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx }))
-          : pickLabels(items, projectAt, vp, labelPlanFor(z), { gridPx: LABEL_MOTION.gridPx });
+          ? planCache.run(key, () => pickLabels(items, projectAt, vp, lp, { gridPx: LABEL_MOTION.gridPx }))
+          : pickLabels(items, projectAt, vp, lp, { gridPx: LABEL_MOTION.gridPx });
       }
       const density = picked ? (picked.candidates > 0 ? picked.droppedByCollision / picked.candidates : null) : null;
       /* 采样**一轮只做一次**：上面复用分支里若闸门已经采样过（并真的切了档），这里就不再采一次
          （重复采样会把"连续 N 次"的连击数喂大一倍 = 闸门行为被悄悄改掉）。 */
       const g = gateForced === null ? gate.sample(density, now()) : { zoneMode: gateForced, changed: true, reason: "复用分支里闸门已切档" };
       const mode: NameMode = g.zoneMode ? "zones" : "names";
+      /* 区名聚合只服务**区名模式**：names 模式下不再跑（真机性能热点之一）。
+         names 模式的 HUD 不再念"子格 0/0"（那是没算，不是已量的 0 —— 见判词）。 */
+      const tZonesA = clock();
+      const zonesPlan = mode === "zones"
+        ? planZoneNames(points, reals, {
+            subDeg: WS_ZONE_SUB_DEG,
+            /* 容器 = **这一轮真取到的** 0.05° 格（视野边缘的半格不出结论） */
+            containerDeg: cellSize,
+            containers: okCellKeys,
+          })
+        : { zones: [], cells: 0, eligible: 0, overHalf: 0 };
+      const tZones = clock();
       /* **名额必须分两半**（2026-09-26 真浏览器实测抓到的产品缺陷）：
          实测那一屏有 8 个**真名区**（placesbundle 的社区/街道名，排序里 real 永远在前），
          8 个名额被它们占满 ⇒ **数据驱动区（「零售区」）一个都上不了屏** ——
@@ -1111,6 +1247,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       const zonePickCalc = pickZoneNames(zoneCalc, Math.max(0, NAMES_ZONE_CAP - zonePickReal.shown.length));
       const zoneShown = [...zonePickReal.shown, ...zonePickCalc.shown];
 
+      const tPick = clock();
       /* ── 渲染计划 ── */
       const nodes: NameRenderNode[] = [];
       /** 区名锚点落在画布外被丢弃的个数（与真名那条路的 `skippedOffscreen` 合并计数，见下） */
@@ -1174,6 +1311,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         }
       }
       nodes.forEach((n, i) => { n.slot = i; });
+      const tNodes = clock();
       const lite = nodes.length > LABEL_MOTION.liteAbove;
       const sig = mode + "|" + nodes.map((n) => n.id + ":" + n.text).join(",");
       /* `changed` 就是"集合变没变"（= `batch` 变没变）——**宿主只在它为 true 时才允许整层换字** */
@@ -1238,6 +1376,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         planReason: planCache.stats().lastReason,
         bindState: bindCount.state,
         bindWhy: bindCount.why,
+        bindClass: classify ? "counted" : "skipped",
         boundNames: nodes.filter((n) => !!n.buildingId).length,
         unboundPoiNames: nodes.filter((n) => unboundPoiIds.has(n.id)).length,
         hiddenUnbound: bindCount.hidden,
@@ -1249,6 +1388,10 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         roof3d: roofCount.three,
         roofGround: roofCount.ground,
         roofNull: roofCount.none,
+        ms: { fetch: tFetch - t0, items: tItems - tFetch, grid: tGrid - tItems, bindDrawn: tBind - tGrid, bindPool: tPool - tBind, poolGrid: bindCount.poolGrid, poolQuery: bindCount.poolQuery, zones: tZones - tZonesA, pick: tPick - tZones, nodes: tNodes - tPick, total: tNodes - t0 },
+        poiCandidates,
+        poiGated,
+        areaCandidates,
         why: hitCells === 0 && wanted.length > 0 ? "视野里的格一格都没取到" : null,
       };
       /* 只把**真算过且真的产出了挑选结果**的那一批存成模板（没地图/没画布时 `picked` 是 null ⇒ 不存） */

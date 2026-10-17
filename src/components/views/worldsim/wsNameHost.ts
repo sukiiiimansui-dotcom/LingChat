@@ -50,6 +50,7 @@ import {
   type NameRoofProjection,
 } from "./wsNameLayer";
 import { alignProbeOn, wsDiag } from "./wsRenderBackend";
+import { projectRoofOn, type RoofMapLike } from "./wsRoofProject";
 import type { NameHostCtx } from "./wsStageTypes";
 
 /**
@@ -64,45 +65,18 @@ export function createNameHost(ctx: NameHostCtx) {
   const { aliveNow, mapNow, drawnBldNow, bldPoolNow } = ctx;
 
   /**
-   * 经纬度 + 楼顶高度（米）→ 屏幕像素。用**地图库自己的** 3D 矩阵
-   * （`map.transform.locationToScreenPoint` + `_pixelMatrix3D`），不在这里重算相机。
-   *
-   * ⚠️ `_pixelMatrix3D` 是 MapLibre 的**私有成员**（v6.10.0 实测存在）：
-   *   取不到 / 抛错 ⇒ 返回 `via:"ground"`（退回地面投影）**并计数**；
-   *   连地面都投不出来 ⇒ `null`。**绝不让"回退到地面"悄悄退化成错位**。
+   * 经纬度 + 楼顶高度（米）→ 屏幕像素。实现在 `wsRoofProject.ts`（包装器/内层各试一次；
+   * 真机 2026-10-17 的 `roof3d:0` 就是"只看了包装器上的私有字段"造成的，见那个文件头）。
    */
   function projectRoofNow(lng: number, lat: number, height: number): NameRoofProjection {
-    const m = mapNow() as {
-      transform?: {
-        locationToScreenPoint?: (p: [number, number], helper: { getElevationForLngLat: () => number }) => { x: number; y: number } | null;
-        _pixelMatrix3D?: unknown;
-      };
-      project?: (p: [number, number]) => { x: number; y: number };
-    } | null;
-    if (!m) return null;
-    try {
-      const tr = m.transform;
-      if (tr && typeof tr.locationToScreenPoint === "function" && tr._pixelMatrix3D) {
-        const p = tr.locationToScreenPoint([lng, lat], { getElevationForLngLat: () => Number(height) || 0 });
-        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y, via: "matrix3d" };
-      }
-    } catch {
-      /* 私有成员不可用：落到地面投影那条路（下面计数） */
-    }
-    try {
-      const p = m.project?.([lng, lat]);
-      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y, via: "ground" };
-    } catch {
-      /* 投影失败（地图没就绪） */
-    }
-    return null;
+    return projectRoofOn(mapNow() as RoofMapLike | null, lng, lat, height);
   }
 
   /**
    * 名字↔楼的真机读数（仅 `?wsalign=1`）：每节点锚点 / 地面投影 / 高度 + 未绑分类。
    * 写进共享只读账本 `wsDiag.nameBind`，叠加层量具回传时原样带走（不改它既有键名）。
    */
-  function noteNameBind(plan: NameRenderPlan, facts: NameFacts): void {
+  function noteNameBind(plan: NameRenderPlan, facts: NameFacts, domMs: number): void {
     if (!alignProbeOn()) return;
     const m = mapNow() as { project?: (p: [number, number]) => { x: number; y: number } } | null;
     const rows: Array<{ t: string; id: string | null; k: string; x: number; y: number; bx: number; by: number; h: number }> = [];
@@ -131,6 +105,7 @@ export function createNameHost(ctx: NameHostCtx) {
       ver: 1,
       state: facts.bindState,
       why: facts.bindWhy,
+      classState: facts.bindClass,
       labels: facts.labels,
       bound: facts.boundNames,
       unboundPoi: facts.unboundPoiNames,
@@ -143,6 +118,10 @@ export function createNameHost(ctx: NameHostCtx) {
       roof3d: facts.roof3d,
       roofGround: facts.roofGround,
       roofNull: facts.roofNull,
+      poiCandidates: facts.poiCandidates,
+      poiGated: facts.poiGated,
+      areaCandidates: facts.areaCandidates,
+      ms: { layer: facts.ms, dom: Math.round(domMs * 100) / 100 },
       nodes: rows,
       dxMed: med(dxs),
       dyMed: med(dys),
@@ -178,13 +157,17 @@ export function createNameHost(ctx: NameHostCtx) {
     buildingPool: bldPoolNow ? () => bldPoolNow() : undefined,
     /* 楼顶锚点：用地图库自己的 3D 矩阵；回退率进判词/回传 */
     projectRoof: (lng, lat, h) => projectRoofNow(lng, lat, h),
+    /* 未绑分类只在量具模式跑（它要扫 30k 栋仓库，是 name-layer-update 最大的一段） */
+    classifyUnbound: () => alignProbeOn(),
     /* `?namesunbound=1` = 真机 A/B 口：z≥14 仍显示没绑楼的地名（默认收起） */
     showUnbound: () => {
       try { return /[?&]namesunbound=1\b/.test(String(typeof location !== "undefined" ? location.search : "")); } catch { return false; }
     },
     onPlan: (plan, facts) => {
+      const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
       applyNamePlanWithHud(plan, nameVerdictLine(facts));
-      noteNameBind(plan, facts);
+      const domMs = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+      noteNameBind(plan, facts, domMs);
     },
     onError: (why) => {
       stats.note = stats.note ? `${stats.note} · ${why}` : why;

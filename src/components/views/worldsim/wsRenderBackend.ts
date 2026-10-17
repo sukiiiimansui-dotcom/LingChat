@@ -55,6 +55,10 @@ export interface WsNameBindRow {
   by: number;
   /** 锚点高度（米）；0 = 地面 */
   h: number;
+  /** 用共享尺子算的期望竖向偏移（负 = 向上；null = 尺子不可用） */
+  expDy: number | null;
+  /** 实际竖向偏移（锚点 y − 地面 y） */
+  dy: number | null;
 }
 
 export interface WsNameBindProbe {
@@ -74,8 +78,12 @@ export interface WsNameBindProbe {
   droppedByDupBld: number;
   noBldId: number;
   roof3d: number;
+  /** 3D 矩阵不可用、用共享尺子近似抬升的次数 */
+  roofApprox: number;
   roofGround: number;
   roofNull: number;
+  /** 3D 入口的异常/可用性/高程输入（`lastFail` 只在非 matrix3d 时更新） */
+  roofErr: { calls: number; matrix3d: number; approx: number; ground: number; none: number; lastFail: unknown } | null;
   /** 分档计数（"为什么没字"）：POI 候选 / 被 z 闸挡掉的 POI / 片区行政名候选 */
   poiCandidates: number;
   poiGated: number;

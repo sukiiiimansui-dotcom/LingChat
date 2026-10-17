@@ -156,7 +156,9 @@ export interface NameMapLike {
 /** 楼顶投影结果：`via` 说明用的是哪条路（**回退必须可数**，不许悄悄退回地面）。 */
 export type NameRoofProjection =
   | { x: number; y: number; via: "matrix3d" }
-  /** 3D 矩阵不可用（私有成员缺失/抛错）⇒ 退回地面投影；调用方按 `ground` 计数 */
+  /** 这版 MapLibre 的平面 transform 上没有可用的 3D 矩阵 ⇒ 用共享尺子把地面投影向上抬（近似楼顶） */
+  | { x: number; y: number; via: "approx" }
+  /** 连尺子都拿不到 ⇒ 退回地面投影；调用方按 `ground` 计数 */
   | { x: number; y: number; via: "ground" }
   | null;
 
@@ -381,6 +383,8 @@ export interface NameFacts {
   noBldId: number;
   /** 楼顶投影走的是哪条路：3D 矩阵 / 退回地面 / 投不出来（回退率必须可数） */
   roof3d: number;
+  /** 3D 矩阵不可用、用 `bldPxPerMeter` 近似抬升的次数（与地面分开计） */
+  roofApprox: number;
   roofGround: number;
   roofNull: number;
   /** 这一轮名字层各段耗时（ms；fetch 含网络/JSON 解析，其余是同步主线程段） */
@@ -434,9 +438,9 @@ export function nameVerdictLine(f: NameFacts): string {
       ? ` · 🏢 名字↔楼 数不出来：${f.bindWhy || "没拿到楼几何"}`
       : ` · 🏢 名字↔楼 绑 ${f.boundNames} / 未绑POI ${f.unboundPoiNames}${f.hiddenUnbound ? `（z≥14 收起 ${f.hiddenUnbound}）` : ""}` +
         (f.bindClass === "skipped"
-          ? `（未绑分类未算：仅 ?wsalign=1 · 楼顶投影 3D ${f.roof3d}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`
+          ? `（未绑分类未算：仅 ?wsalign=1 · 楼顶投影 3D ${f.roof3d}/近似 ${f.roofApprox}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`
           : `（没画 ${f.boundButNotDrawn} · 无楼 ${f.noBldNear} · 多义 ${f.ambiguous} · 无id ${f.noBldId} · 重复 ${f.droppedByDupBld}` +
-            ` · 楼顶投影 3D ${f.roof3d}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`);
+            ` · 楼顶投影 3D ${f.roof3d}/近似 ${f.roofApprox}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`);
   return (
     `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}` +
     `（候选 ${f.candidates}${f.capped ? " · 被上限截断" : ""}）` +
@@ -483,7 +487,7 @@ function emptyFacts(on: boolean): NameFacts {
     boundNames: 0, unboundPoiNames: 0, hiddenUnbound: 0,
     boundButNotDrawn: 0, noBldNear: 0, ambiguous: 0,
     droppedByDupBld: 0, noBldId: 0,
-    roof3d: 0, roofGround: 0, roofNull: 0,
+    roof3d: 0, roofApprox: 0, roofGround: 0, roofNull: 0,
     ms: { fetch: 0, items: 0, grid: 0, bindDrawn: 0, bindPool: 0, poolGrid: 0, poolQuery: 0, zones: 0, pick: 0, nodes: 0, total: 0 },
     poiCandidates: 0, poiGated: 0, areaCandidates: 0,
     why: null,
@@ -1253,7 +1257,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       /** 区名锚点落在画布外被丢弃的个数（与真名那条路的 `skippedOffscreen` 合并计数，见下） */
       let zoneDroppedOffscreen = 0;
       /** 楼顶投影回退账（每上屏一个绑楼节点记一次；回退率必须能在判词/回传里看到） */
-      const roofCount = { three: 0, ground: 0, none: 0 };
+      const roofCount = { three: 0, approx: 0, ground: 0, none: 0 };
       const nodeOfLabel = (s: PlacedLabel): NameRenderNode => {
         const a = anchorOf.get(s.id);
         const b = bindOf.get(s.id);
@@ -1266,6 +1270,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
             if (p) {
               x = p.x; y = p.y;
               if (p.via === "matrix3d") roofCount.three++;
+              else if (p.via === "approx") roofCount.approx++;
               else roofCount.ground++;
             } else roofCount.none++;
           } else if (roofH > 0) {
@@ -1386,6 +1391,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         droppedByDupBld: bindCount.dup,
         noBldId: bindCount.noId,
         roof3d: roofCount.three,
+        roofApprox: roofCount.approx,
         roofGround: roofCount.ground,
         roofNull: roofCount.none,
         ms: { fetch: tFetch - t0, items: tItems - tFetch, grid: tGrid - tItems, bindDrawn: tBind - tGrid, bindPool: tPool - tBind, poolGrid: bindCount.poolGrid, poolQuery: bindCount.poolQuery, zones: tZones - tZonesA, pick: tPick - tZones, nodes: tNodes - tPick, total: tNodes - t0 },

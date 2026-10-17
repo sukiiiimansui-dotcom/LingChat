@@ -50,7 +50,8 @@ import {
   type NameRoofProjection,
 } from "./wsNameLayer";
 import { alignProbeOn, wsDiag } from "./wsRenderBackend";
-import { projectRoofOn, type RoofMapLike } from "./wsRoofProject";
+import { projectRoofOn, roofDiag, type RoofMapLike } from "./wsRoofProject";
+import { bldPxPerMeter } from "./wsBldBudget";
 import type { NameHostCtx } from "./wsStageTypes";
 
 /**
@@ -78,8 +79,19 @@ export function createNameHost(ctx: NameHostCtx) {
    */
   function noteNameBind(plan: NameRenderPlan, facts: NameFacts, domMs: number): void {
     if (!alignProbeOn()) return;
-    const m = mapNow() as { project?: (p: [number, number]) => { x: number; y: number } } | null;
-    const rows: Array<{ t: string; id: string | null; k: string; x: number; y: number; bx: number; by: number; h: number }> = [];
+    const m = mapNow() as {
+      project?: (p: [number, number]) => { x: number; y: number };
+      getPitch?: () => number; getZoom?: () => number; getCenter?: () => { lat: number; lng: number };
+    } | null;
+    /* 同一栋楼的"期望竖向偏移"（共享尺子；用于和实际 y 对拍） */
+    let pxPerM = 0;
+    try {
+      const c = m?.getCenter?.();
+      const z = Number(m?.getZoom?.() ?? NaN);
+      const p = Number(m?.getPitch?.() ?? NaN);
+      if (c && Number.isFinite(z) && Number.isFinite(p)) pxPerM = bldPxPerMeter(z, Number(c.lat), p);
+    } catch { pxPerM = 0; }
+    const rows: Array<{ t: string; id: string | null; k: string; x: number; y: number; bx: number; by: number; h: number; expDy: number | null; dy: number | null }> = [];
     const dxs: number[] = [];
     const dys: number[] = [];
     for (const n of plan.nodes) {
@@ -92,7 +104,9 @@ export function createNameHost(ctx: NameHostCtx) {
         if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) { bx = p.x; by = p.y; }
       } catch { /* 保留同值 */ }
       const r = (v: number): number => Math.round(v * 10) / 10;
-      rows.push({ t: n.text, id: n.buildingId ?? null, k: n.pick.kind, x: r(n.x), y: r(n.y), bx: r(bx), by: r(by), h: r(Number(n.roofH) || 0) });
+      const hh = Number(n.roofH) || 0;
+      const expDy = hh > 0 && pxPerM > 0 ? Math.round(-hh * pxPerM * 10) / 10 : null;
+      rows.push({ t: n.text, id: n.buildingId ?? null, k: n.pick.kind, x: r(n.x), y: r(n.y), bx: r(bx), by: r(by), h: r(hh), expDy, dy: r(n.y - by) });
       if (n.buildingId) { dxs.push(n.x - bx); dys.push(n.y - by); }
     }
     const med = (a: number[]): number | null => {
@@ -130,8 +144,10 @@ export function createNameHost(ctx: NameHostCtx) {
       droppedByDupBld: facts.droppedByDupBld,
       noBldId: facts.noBldId,
       roof3d: facts.roof3d,
+      roofApprox: facts.roofApprox,
       roofGround: facts.roofGround,
       roofNull: facts.roofNull,
+      roofErr: { ...roofDiag },
       poiCandidates: facts.poiCandidates,
       poiGated: facts.poiGated,
       areaCandidates: facts.areaCandidates,

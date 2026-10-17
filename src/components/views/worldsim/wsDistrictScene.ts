@@ -34,6 +34,9 @@ import { themeForTier, themeStyleParts, type WsMapTheme } from "./wsMapTheme";
 import { sceneLayerPlan } from "./wsScene";
 /* **取参只有一份**（`bldArtParamsOf`）—— 本文件只决定"参数怎么变成图层"，不决定参数从哪来 */
 import { bldArtParamsOf } from "./wsArtParams";
+/* 瓦片路的 paint 构造器（零依赖）：颜色 / 竖向渐变 / 不透明度 / 描边都**取自同一份取参**，
+   不在这里写第二份常量。 */
+import { extrusionPaint, footPaint, outlinePaint, swapField, type MvtArtParams } from "./wsMvtPaint";
 /* 基准上妆要 `buildingPartSet`（拆件：主体 + 屋顶系，纯函数）。
    本文件**只**用它的纯函数，不碰"形体细化"那套（那属于 `?bld=2` 的 `decorateBuildings`）。
    `renderHeight` 已不再直接调（它现在在 `buildingPartSet` 里算，两边各算一次迟早漂移）。 */
@@ -495,11 +498,40 @@ export function applyBuildingsTo(
 }
 
 /** 高度色阶表达式：**复用共享真源那一份**，只把输入字段从 `h3d` 换成瓦片带的 `h`
- *（不写第二份色阶 —— 两页/两条数据路的颜色口径必须同一个字节）。 */
-export function mvtHeightColorExpression(): unknown[] {
-  const base = heightColorExpression() as unknown[];
-  /* base = ["interpolate", ["linear"], ["coalesce", ["get","h3d"], 8], h1,c1, h2,c2, …] */
-  return [base[0], base[1], ["coalesce", ["get", "h"], 8], ...base.slice(3)];
+ *（不写第二份色阶 —— 两页/两条数据路的颜色口径必须同一个字节）。
+ *
+ * `art` 给了就用**主题取参的色阶**（`P.rampColor`），否则退回共享默认色阶；
+ * 两者都只做同一件事：把色阶读的字段从 `h3d` 换成 `h`（瓦片只带渲染高度）。 */
+export function mvtHeightColorExpression(art?: MvtArtParams): unknown[] {
+  const base = (art && art.rampColor ? art.rampColor : heightColorExpression()) as unknown;
+  return swapField(base, "h3d", "h") as unknown[];
+}
+
+/**
+ * 从**旧路那份 spec 数组**里反推导取参（`P`）。
+ *
+ * 为什么这么取：取参真源是 `bldArtParamsOf(theme, …)`，而 `flushBldStore` 拿得到的是宿主
+ * 建好的旧路 spec 数组（`opts.specs()`）——它里面的 `bld-ext` / `bld-line` 已经把
+ * `vgrad` / `opacity` / 色阶 / 描边色与宽**落进了 paint**。从这里反推 ⇒ **构造上必然同源**，
+ * 既不用改宿主、也不用再写一个主题单例。
+ */
+export function mvtArtFromLegacySpecs(specs: ReadonlyArray<Record<string, unknown>> | null | undefined): MvtArtParams | undefined {
+  if (!Array.isArray(specs) || !specs.length) return undefined;
+  const find = (id: string) => specs.find((l) => l && l.id === id) as { paint?: Record<string, unknown> } | undefined;
+  const ext = find("bld-ext"), line = find("bld-line");
+  const ep = (ext && ext.paint) || {};
+  /* 旧路颜色是 `["coalesce", ["get","color3d"], P.rampColor]` ⇒ 取第三项当色阶 */
+  const col = ep["fill-extrusion-color"];
+  const ramp = Array.isArray(col) && col[0] === "coalesce" && col.length >= 3 ? col[2] : undefined;
+  const lp = (line && line.paint) || {};
+  const out: MvtArtParams = {
+    rampColor: ramp,
+    vgrad: ep["fill-extrusion-vertical-gradient"] === true,
+    opacity: typeof ep["fill-extrusion-opacity"] === "number" ? (ep["fill-extrusion-opacity"] as number) : undefined,
+    lineWidth: lp["line-width"],
+    outline: lp["line-color"] === undefined ? null : { color: lp["line-color"] },
+  };
+  return out;
 }
 
 /** MVT 楼房那五条图层的 id（`setFilter` 的遍历口径只此一处） */
@@ -600,57 +632,56 @@ export function applyMvtBldKFilter(m: DistrictMapLike | null | undefined, k: num
  *  （slim 瓦片每档只写 `rk<K` 的那批）。`rk` 那支只给 `useRk === true` 的手动排障用，
  *  默认不启用；`?k=` / `mvtKNow` 对地图**已失效**。
  *
- *  ⚠️ 已知差异（本条**只做结构对齐**，没有主题取参）：原路的屋顶/设备箱颜色取自要素自带的
- *  `color3d`（同一张色阶 + 按部位调明暗：女儿墙偏亮、设备箱偏深），瓦片里不带 `color3d`
- *  ⇒ 这里三条挤出层共用同一份高度色阶 ⇒ **屋顶件与主体同色、层次弱一些**。要补齐需要把主题
- *  取参（`bldArtParamsOf` 那一份）传进本函数，属下一片的事，不在这里偷偷改色。
+ *  **颜色与光影与旧路同源**（2026-10-17）：三条挤出层读瓦片自带的 `c`（生成侧写的就是运行时的
+ *  `color3d` ⇒ 女儿墙偏亮、设备箱偏深的明暗天然在），色阶/竖向渐变/不透明度/描边色与宽全部取自
+ *  `art`（= 从旧路 spec 反推的取参，见 `mvtArtFromLegacySpecs`）——**本文件不写第二份常量**。
  *
  *  @param k 每格上限（**只在 `useRk === true` 的排障路径里用**；默认过滤不读它）
  *  @param useRk 默认 false；true = 临时加回 `rk<K`（排障/对拍）
+ *  @param art 取参（不给 ⇒ 用共享默认色阶、无竖向渐变、0.95 不透明度、0.6 描边宽）
  */
-export function mvtBldLayerSpecs(k?: number, useRk?: boolean): Array<Record<string, unknown>> {
-  const color = mvtHeightColorExpression();
+export function mvtBldLayerSpecs(k?: number, useRk?: boolean, art?: MvtArtParams): Array<Record<string, unknown>> {
   /* 只有排障路径（useRk=true）才需要 K；默认过滤是纯档位，不读档位/`?k=`。 */
   const kk = k !== undefined ? Math.max(0, Math.floor(Number(k)) || 0) : (useRk === true ? mvtKNow() : 0);
   /* 默认**不加 rk**（产物已保证密度）；只有手动排障显式 useRk=true 才加。 */
   const withRk = useRk === true;
   const filterOf = (t: 0 | 1 | 2): unknown[] => (withRk ? mvtBldLayerFilter(t, kk) : mvtTierFilter(t));
-  const detailPaint = {
-    "fill-extrusion-height": ["coalesce", ["get", "h"], 8],
-    "fill-extrusion-base": ["coalesce", ["get", "hb"], 0],
-    "fill-extrusion-opacity": 0.95,
-    "fill-extrusion-color": color,
-  };
+  /* 颜色走**瓦片自带的 `c`**（生成侧写的就是运行时的 color3d ⇒ 部件明暗天然有），
+     缺 `c` 才退回色阶；色阶取主题那一份（给了 `art` 就用 `P.rampColor`）。 */
+  const ramp = mvtHeightColorExpression(art);
+  const extPaint = extrusionPaint({ rampExpr: ramp, vgrad: art ? art.vgrad : false, opacity: art ? art.opacity : 0.95 });
+  const footPaintSpec = footPaint({ rampExpr: ramp, opacity: WS_BLD_FOOTPRINT_OPACITY });
+  const linePaint = outlinePaint({ color: art && art.outline ? art.outline.color : undefined, width: art ? art.lineWidth : undefined, fallbackRamp: ramp });
   const src = { source: "bld", "source-layer": "bld" };
   return [
     {
       id: "bld-foot", type: "fill", ...src,
       minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: WS_BLD_FOOTPRINT_MAXZOOM,
       filter: filterOf(0),
-      paint: { "fill-color": color, "fill-opacity": WS_BLD_FOOTPRINT_OPACITY },
+      paint: { ...footPaintSpec },
     },
     {
       id: "bld-ext", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
       filter: filterOf(0),
-      paint: { ...detailPaint },
+      paint: { ...extPaint },
     },
     {
       id: "bld-roof", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_DETAIL_ROOF_ZOOM,
       filter: filterOf(1),
-      paint: { ...detailPaint },
+      paint: { ...extPaint },
     },
     {
       id: "bld-equip", type: "fill-extrusion", ...src,
       minzoom: WS_BLD_DETAIL_EQUIP_ZOOM,
       filter: filterOf(2),
-      paint: { ...detailPaint },
+      paint: { ...extPaint },
     },
     {
       id: "bld-line", type: "line", ...src,
       minzoom: WS_BLD_FOOTPRINT_MAXZOOM,
-      paint: { "line-color": color, "line-width": 0.6 },
+      paint: { ...linePaint },
       filter: filterOf(0),
     },
   ];
@@ -663,12 +694,12 @@ export function mvtBldLayerSpecs(k?: number, useRk?: boolean): Array<Record<stri
  * 所以这里**不调** `applyMvtBldKFilter`、不读 `?k=`、不探测 manifest ⇒ 同一个 zoom 下
  * 换相机/平移/旋转，画出来的集合天然不变（结构上不可能"换楼"）。
  */
-export function applyMvtTo(m: DistrictMapLike, template: string): void {
+export function applyMvtTo(m: DistrictMapLike, template: string, art?: MvtArtParams): void {
   if (!m.getSource("bld")) {
     m.addSource("bld", { type: "vector", tiles: [template], minzoom: WS_BLD_VECTOR_MINZOOM, maxzoom: 16 });
   }
   const before = planBeforeOf(m, "buildings") ?? (m.getLayer("ref") ? "ref" : undefined);
-  for (const l of mvtBldLayerSpecs()) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
+  for (const l of mvtBldLayerSpecs(undefined, undefined, art)) if (!m.getLayer(l.id as string)) m.addLayer(l, before);
 }
 
 /**
@@ -782,7 +813,11 @@ export function flushBldStore<T>(opts: BldFlushOpts<T>, why = "flush"): void {
     opts.beforeDraw?.(why, data);
     const mm = opts.map();
     if (!mm) { opts.onNoMap?.(data); return; }
-    applyMvtTo(mm, mvt.template);
+    /* 取参从**旧路那份 spec 数组**反推（构造上同源）：颜色/竖向渐变/不透明度/描边色与宽
+       全部一致；瓦片路的层因此不再有自己的常量。旧路 spec 建不出来时传 undefined（退回默认）。 */
+    let art: MvtArtParams | undefined;
+    try { art = mvtArtFromLegacySpecs(opts.specs() as Array<Record<string, unknown>>); } catch { art = undefined; }
+    applyMvtTo(mm, mvt.template, art);
     opts.afterDraw?.(why, data);
     opts.afterMvtRegister?.();
     return;

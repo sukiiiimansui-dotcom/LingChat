@@ -44,6 +44,7 @@ import { wsMapTheme } from "./wsMapTheme";
 /* 楼的几何整块搬去了 `wsBldMesh.ts`（叠加层那条路要用**同一份**，见那个文件头）。
    这里只留"把它产出的扁平数组包成 three 的缓冲"这一步。 */
 import { BLD_CAP, buildBldMeshData, hexToRgb, ringPts } from "./wsBldMesh";
+import { modelFactsNow } from "./wsBldLod";
 import {
   contractActors,
   contractTheme,
@@ -178,6 +179,18 @@ function linesOf(geom: unknown): Array<Array<[number, number]>> {
  * 模块加载与 WebGL2 探测都在 `init` 里做（不在工厂里做）—— 工厂必须同步返回，
  *    失败要走"抛错 ⇒ 舞台回退"那条路，而不是在 import 期把整个页面带崩。
  */
+/** S6：把最近一次建模 facts 压成 HUD 一行（真机 note 里能直接读） */
+function modelHudNote(): string {
+  const mf = modelFactsNow() as {
+    modeledBuildings?: number; massingParts?: number; parapetBands?: number;
+    roofs?: number; roofDropped?: number; detailDropped?: number;
+    lodTiers?: number[]; modelCpuMs?: number;
+  } | null;
+  if (!mf) return "";
+  const tiers = Array.isArray(mf.lodTiers) ? mf.lodTiers.join("/") : "?";
+  return ` / 建模 ${mf.modeledBuildings ?? 0} 栋 · 体块 ${mf.massingParts ?? 0} · 女儿墙 ${mf.parapetBands ?? 0} · 坡屋顶 ${mf.roofs ?? 0} · 屋顶丢 ${mf.roofDropped ?? 0} · 细节丢 ${mf.detailDropped ?? 0} · LOD ${tiers} · ${mf.modelCpuMs ?? 0}ms`;
+}
+
 export function createThreeBackend(): WsRenderBackend {
   let THREE: Record<string, any> | null = null;
   let renderer: any = null;
@@ -1017,7 +1030,7 @@ export function createThreeBackend(): WsRenderBackend {
         dpr: renderer?.getPixelRatio?.() ?? 1,
         fps: Math.round(fps * 10) / 10,
         rendering: state === "running",
-        note: `${diag.buildings} 栋${diag.capped ? `（另有 ${diag.capped} 栋超上限未画）` : ""} / ${diag.tris} 三角 / 路 ${diag.roadSegs} 段 / 立绘 ${diag.actors}${diag.holesDropped ? ` / 洞未画 ${diag.holesDropped}` : ""}${worldNote()}`,
+        note: `${diag.buildings} 栋${diag.capped ? `（另有 ${diag.capped} 栋超上限未画）` : ""} / ${diag.tris} 三角 / 路 ${diag.roadSegs} 段 / 立绘 ${diag.actors}${diag.holesDropped ? ` / 洞未画 ${diag.holesDropped}` : ""}${worldNote()}${modelHudNote()}`,
       };
     },
 

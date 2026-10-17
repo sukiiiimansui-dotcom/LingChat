@@ -45,6 +45,8 @@ export const ROOF_KINDS: ReadonlySet<string> = new Set([
 
 /** 总屋顶顶点预算（只算屋顶三角；体块/女儿墙走另一本账） */
 export const ROOF_VERTS_MAX = 24_000;
+/** 坡屋顶楼数上限（防止整片住宅区把重建拖慢；超了按 h/面积/id 降级） */
+export const ROOF_MAX_BUILDINGS = 256;
 
 const num = (v: unknown): number => {
   const n = Number(v);

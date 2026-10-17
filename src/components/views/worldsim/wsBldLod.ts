@@ -16,6 +16,10 @@ export const LOD_FULL_PX = 72;
 export const LOD_HYSTERESIS = 0.15;
 /** 细节顶点预算（只算女儿墙/设备/天线；体块不算） */
 export const DETAIL_VERTS_MAX = 22_000;
+/** 单栋细节顶点上限（女儿墙/设备/天线；体块不算） */
+export const DETAIL_PER_BUILDING_VERTS = 96;
+/** 地标/多体块塔的单栋细节上限（4 段体块 + 女儿墙 + 设备/天线要放得下） */
+export const DETAIL_PER_BUILDING_LANDMARK_VERTS = 1_200;
 /** 默认 mpp：z16.4 · 纬度 29.56°（米/CSS 像素，512px 瓦片口径）。真机接线前 `?model=1` 用这个。 */
 export const DEFAULT_LOD_MPP = 0.787;
 
@@ -96,4 +100,21 @@ export function mppAtZoom(zoom: number, lat = 29.56): number {
   const z = Number.isFinite(zoom) ? zoom : 16.4;
   const la = Number.isFinite(lat) ? lat : 29.56;
   return ((40075016.686 / 512) * Math.cos((la * Math.PI) / 180)) / Math.pow(2, z);
+}
+
+
+/* ── S6：最近一次建模的 facts（真机/HUD 读；不参与几何） ───────────────── */
+let modelFacts: Record<string, unknown> | null = null;
+
+export function noteModelFacts(facts: Record<string, unknown>): void {
+  modelFacts = facts;
+  try {
+    (globalThis as { __WS_MODEL__?: unknown }).__WS_MODEL__ = facts;
+  } catch {
+    /* 写入失败不影响渲染 */
+  }
+}
+
+export function modelFactsNow(): Record<string, unknown> | null {
+  return modelFacts;
 }

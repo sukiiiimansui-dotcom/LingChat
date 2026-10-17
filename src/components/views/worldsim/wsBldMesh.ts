@@ -29,8 +29,8 @@ import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
 import { bandRingsOf, massingOf, modelPartsOf, type BldPartLike } from "./wsBldModel";
-import { DEFAULT_LOD_MPP, DETAIL_VERTS_MAX, lodMppNow, mppAtZoom, sharedBldLodState, type BldLodState, type LodTier } from "./wsBldLod";
-import { ROOF_VERTS_MAX, roofKindEligible, roofPlanOf, type RoofPlan } from "./wsBldRoof";
+import { DEFAULT_LOD_MPP, DETAIL_PER_BUILDING_LANDMARK_VERTS, DETAIL_PER_BUILDING_VERTS, DETAIL_VERTS_MAX, lodMppNow, mppAtZoom, noteModelFacts, sharedBldLodState, type BldLodState, type LodTier } from "./wsBldLod";
+import { ROOF_MAX_BUILDINGS, ROOF_VERTS_MAX, roofKindEligible, roofPlanOf, type RoofPlan } from "./wsBldRoof";
 
 type Pt2 = readonly [number, number];
 type Rgb3 = [number, number, number];
@@ -241,12 +241,16 @@ export interface BldMeshInput {
     detailVerts?: number;
     state?: BldLodState;
     forceTier?: LodTier;
+    /** 单栋细节顶点上限（缺省 `DETAIL_PER_BUILDING_VERTS`；变异可设大） */
+    detailPerBuilding?: number;
   };
   /** S4 坡屋顶：auto（默认）/ all（变异：未知类型也做）/ off（影子）；
    *  verts = 屋顶总顶点预算（缺省 `ROOF_VERTS_MAX`）。 */
   roof?: {
     force?: "auto" | "all" | "off";
     verts?: number;
+    /** 坡屋顶楼数上限（缺省 `ROOF_MAX_BUILDINGS`；变异可设大） */
+    max?: number;
   };
 }
 
@@ -289,6 +293,14 @@ export interface BldMeshStats {
   roofCap: number;
   roofDropped: number;
   roofTypes: { gable: number; hip: number; pyramid: number };
+  /** S6：本次重建耗时（ms）/ 单栋细节最大顶点 / 单栋 cap / 坡屋顶楼数 cap */
+  modelCpuMs: number;
+  detailMaxVerts: number;
+  detailMaxOrdinary: number;
+  detailMaxLandmark: number;
+  detailPerBuildingCap: number;
+  detailPerBuildingCapLandmark: number;
+  roofCapBuildings: number;
 }
 
 export interface BldMeshData {
@@ -320,6 +332,7 @@ export interface BldMeshData {
  * 例外只有三个 URL 开关（`?model=1` / `?mpp=` / `?z=`）与可注入的 LOD 状态。
  */
 export function buildBldMeshData(input: BldMeshInput): BldMeshData {
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   const { toLocal, themeId, cap } = input;
   const modelOn = input.model === true || (input.model === undefined && urlModelOn());
   const lodMpp = (() => {
@@ -336,6 +349,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     const v = Number(input.lod?.detailVerts);
     return Number.isFinite(v) && v >= 0 ? v : DETAIL_VERTS_MAX;
   })();
+  const detailPerBuildingRaw = Number(input.lod?.detailPerBuilding);
+  const detailPerBuildingOverride = Number.isFinite(detailPerBuildingRaw) && detailPerBuildingRaw >= 0 ? detailPerBuildingRaw : -1;
+  const detailPerBuildingCap = detailPerBuildingOverride >= 0 ? detailPerBuildingOverride : DETAIL_PER_BUILDING_VERTS;
   const lodState = input.lod?.state ?? sharedBldLodState;
   const forceTier = input.lod?.forceTier;
   const stats: BldMeshStats = {
@@ -344,6 +360,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     modeledBuildings: 0, massingBuildings: 0, massingParts: 0, parapetBands: 0, parapetDropped: 0, massFallback: 0,
     lodTiers: [0, 0, 0], detailVerts: 0, detailCap: 0, detailDropped: 0, equipParts: 0, antennaParts: 0, lodMpp: 0,
     roofs: 0, roofVerts: 0, roofCap: 0, roofDropped: 0, roofTypes: { gable: 0, hip: 0, pyramid: 0 },
+    modelCpuMs: 0, detailMaxVerts: 0, detailMaxOrdinary: 0, detailMaxLandmark: 0,
+    detailPerBuildingCap: 0, detailPerBuildingCapLandmark: 0, roofCapBuildings: 0,
   };
   const pos: number[] = [];
   const col: number[] = [];
@@ -490,23 +508,39 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
     );
     let remaining = detailCap;
+    let detailMax = 0;
+    let detailMaxOrdinary = 0;
+    let detailMaxLandmark = 0;
     for (const plan of plans) {
+      const isLandmark = plan.massing.length >= 2;
+      const bCap = detailPerBuildingOverride >= 0
+        ? detailPerBuildingOverride
+        : isLandmark ? DETAIL_PER_BUILDING_LANDMARK_VERTS : DETAIL_PER_BUILDING_VERTS;
       if (plan.tier === 2) {
-        if (plan.fullCost <= remaining) {
+        if (plan.fullCost <= bCap && plan.fullCost <= remaining) {
           plan.selected = 2;
           remaining -= plan.fullCost;
-        } else if (plan.wallCost <= remaining) {
+          detailMax = Math.max(detailMax, plan.fullCost);
+          if (isLandmark) detailMaxLandmark = Math.max(detailMaxLandmark, plan.fullCost);
+          else detailMaxOrdinary = Math.max(detailMaxOrdinary, plan.fullCost);
+        } else if (plan.wallCost <= bCap && plan.wallCost <= remaining) {
           plan.selected = 1;
           remaining -= plan.wallCost;
+          detailMax = Math.max(detailMax, plan.wallCost);
+          if (isLandmark) detailMaxLandmark = Math.max(detailMaxLandmark, plan.wallCost);
+          else detailMaxOrdinary = Math.max(detailMaxOrdinary, plan.wallCost);
           stats.detailDropped += 1;
         } else {
           plan.selected = 0;
           stats.detailDropped += 1;
         }
       } else if (plan.tier === 1) {
-        if (plan.wallCost <= remaining) {
+        if (plan.wallCost <= bCap && plan.wallCost <= remaining) {
           plan.selected = 1;
           remaining -= plan.wallCost;
+          detailMax = Math.max(detailMax, plan.wallCost);
+          if (isLandmark) detailMaxLandmark = Math.max(detailMaxLandmark, plan.wallCost);
+          else detailMaxOrdinary = Math.max(detailMaxOrdinary, plan.wallCost);
         } else {
           plan.selected = 0;
           stats.detailDropped += 1;
@@ -515,20 +549,29 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     }
     stats.detailVerts = detailCap - remaining;
     stats.detailCap = detailCap;
+    stats.detailMaxVerts = detailMax;
+    stats.detailMaxOrdinary = detailMaxOrdinary;
+    stats.detailMaxLandmark = detailMaxLandmark;
+    stats.detailPerBuildingCap = detailPerBuildingCap;
+    stats.detailPerBuildingCapLandmark = detailPerBuildingOverride >= 0 ? detailPerBuildingOverride : DETAIL_PER_BUILDING_LANDMARK_VERTS;
     stats.lodMpp = lodMpp;
     /* S4 屋顶预算：h 高 → 面积大 → id 小优先；超了不画并计数 */
     const roofCapRaw = Number(input.roof?.verts);
     const roofCap = Number.isFinite(roofCapRaw) && roofCapRaw >= 0 ? roofCapRaw : ROOF_VERTS_MAX;
+    const roofMaxRaw = Number(input.roof?.max);
+    const roofMax = Number.isFinite(roofMaxRaw) && roofMaxRaw >= 0 ? roofMaxRaw : ROOF_MAX_BUILDINGS;
     roofCandidates.sort((a, b) =>
       b.rp.peak - a.rp.peak ||
       b.rp.area - a.rp.area ||
       (a.plan.key < b.plan.key ? -1 : a.plan.key > b.plan.key ? 1 : 0)
     );
     let roofLeft = roofCap;
+    let roofCount = 0;
     for (const item of roofCandidates) {
-      if (item.rp.verts <= roofLeft) {
+      if (roofCount < roofMax && item.rp.verts <= roofLeft) {
         item.plan.roofSelected = true;
         roofLeft -= item.rp.verts;
+        roofCount += 1;
         stats.roofs += 1;
         stats.roofVerts += item.rp.verts;
         stats.roofTypes[item.rp.type] += 1;
@@ -537,6 +580,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       }
     }
     stats.roofCap = roofCap;
+    stats.roofCapBuildings = roofMax;
   }
 
   let featureIndex = 0;
@@ -862,6 +906,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       }
     }
 
+  stats.modelCpuMs = t0 > 0 ? Math.round((performance.now() - t0) * 10) / 10 : 0;
+  noteModelFacts({ ...stats, at: Date.now() });
   return {
     positions: pos,
     uvs,

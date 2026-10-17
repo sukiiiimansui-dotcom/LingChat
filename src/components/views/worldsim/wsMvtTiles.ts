@@ -74,7 +74,7 @@ export const MVT_PLAIN_TEMPLATE = "/mvt/{z}/{x}/{y}.pbf";
 
 import { decodeMvtFeatures } from "./wsMvtDecode";
 import { createCoverageRegistrar, type CoverageBounds, type CoverageResult } from "./wsMvtCoverage";
-import { noteView } from "./wsBldLod";
+import { modelFactsNow, noteView } from "./wsBldLod";
 /* **profile 的纯逻辑**（无 vue）：目录映射只有 `bldMvtDirOf` 一处；本文件只拼模板。 */
 import { bldMvtDirOf, effectiveBldProfile, type WsBldProfile } from "./wsBldProfile";
 
@@ -339,6 +339,8 @@ export async function setupMvtProtocol(
     get tiles() { return tiles.facts(); },
     get ids() { return idTable.facts(); },
     get coverage() { return coverage.facts(); },
+    /* S6：最近一次建模 facts（真机探针直接读 __WS_MVT__.model） */
+    get model() { return modelFactsNow(); },
   };
   return RUNTIME;
 }

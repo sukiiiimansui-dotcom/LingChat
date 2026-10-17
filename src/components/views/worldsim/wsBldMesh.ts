@@ -21,6 +21,7 @@
  *    调用方自己包成它那套引擎认识的缓冲。
  */
 
+import { atlasUvOf, cellOf, repeatOf, ROOF_CELL_INDEX } from "./wsBldFacade";
 import { renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
@@ -154,6 +155,12 @@ export interface BldMeshStats {
 export interface BldMeshData {
   /** xyz 三元组（**局部米**；y 是高度） */
   positions: number[];
+  /** 逐顶点 UV（单格内 0..1；顶面常量） */
+  uvs: number[];
+  /** 逐顶点图集矩形 (u0, v0, du, dv)；顶面 = 屋面格 */
+  facadeRect: number[];
+  /** 逐顶点重复次数 (uRep, vRep)；顶面 = (1,1) */
+  facadeRep: number[];
   /** 逐顶点 rgb（0..1） */
   colors: number[];
   /** **一个三角形一个槽**：值 = 该三角形属于第几个要素 */
@@ -181,6 +188,10 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   };
   const pos: number[] = [];
   const col: number[] = [];
+  /* 立面图集用的三个逐顶点属性（顶面用屋面格常量，**不拆索引段**） */
+  const uvs: number[] = [];
+  const facadeRect: number[] = [];
+  const facadeRep: number[] = [];
   const triTo: number[] = [];
   const featBox: number[] = [];
   const featureIds: string[] = [];
@@ -241,6 +252,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         const tris = triangulateRing(pts);
         if (!tris.length) continue;
         added = true;
+        /* 立面图集：**每栋取一次**（id → 格；不在这里算抖动，抖动走顶点色） */
+        const fId = String((f as { id?: unknown }).id ?? (props as { id?: unknown }).id ?? "");
+        const roofRect = atlasUvOf(ROOF_CELL_INDEX);
         /* 顶盖（法线朝上：算一下叉积，朝下就换序，绝不靠"输入一定是逆时针"） */
         for (let i = 0; i < tris.length; i += 3) {
           const a = pts[tris[i]!]!;
@@ -251,6 +265,10 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           for (const p of q) {
             pos.push(p[0], top, p[1]);
             col.push(rgb[0], rgb[1], rgb[2]);
+            /* 顶面：UV 常量 + 屋面格（窗格不会贴到屋顶上） */
+            uvs.push(0.5, 0.5);
+            facadeRect.push(roofRect.u0, roofRect.v0, roofRect.u1 - roofRect.u0, roofRect.v1 - roofRect.v0);
+            facadeRep.push(1, 1);
           }
           /* 🔴 一个三角形**一个槽**（墙那边每个四边形 2 个三角形、也是 2 个槽）。
              原来这里 push 三个 ⇒ 槽位与三角形下标错位，`centerPick` 按槽位反查就会指错/指空
@@ -275,9 +293,18 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           const wr = rgb[0] * k;
           const wg = rgb[1] * k;
           const wb = rgb[2] * k;
-          for (const p of quad) {
+          /* 立面：这面墙的重复次数（横向按边长、竖向按层数/楼高）与图集格 */
+          const cellRect = atlasUvOf(cellOf(fId));
+          const rep = repeatOf(el, top - base, (props as { lv?: unknown }).lv);
+          const quadUv: Array<[number, number]> = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+          for (let qi = 0; qi < quad.length; qi++) {
+            const p = quad[qi]!;
             pos.push(p[0]!, p[1]!, p[2]!);
             col.push(wr, wg, wb);
+            const uv2 = quadUv[qi]!;
+            uvs.push(uv2[0], uv2[1]);
+            facadeRect.push(cellRect.u0, cellRect.v0, cellRect.u1 - cellRect.u0, cellRect.v1 - cellRect.v0);
+            facadeRep.push(rep.uRep, rep.vRep);
           }
           triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
         }
@@ -295,6 +322,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
 
   return {
     positions: pos,
+    uvs,
+    facadeRect,
+    facadeRep,
     colors: col,
     triFeature: triTo,
     boxes: featBox,

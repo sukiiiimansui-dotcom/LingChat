@@ -39,6 +39,7 @@ import { ensureBldLayers, hasBldLayers } from "./wsBldLayerSwitch";
 import { bldLayerSpecsFor, mvtBldLayerSpecs } from "./wsDistrictScene";
 import { mvtEnabled } from "./wsMvtTiles";
 import { mapMvtBldFeatures } from "./wsMvtBldMap";
+import { drawFacadeAtlas } from "./wsBldFacade";
 import { fpsMark } from "./wsFpsProbe";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
@@ -178,6 +179,72 @@ export function createOverlayBackend(): WsRenderBackend {
   let drawsTotal = 0;
   /** 其中多少帧是**重建后补画**的（不是地图 render 驱动）——`overlayFrames>mapFrames` 的来源 */
   let drawsFromRebuild = 0;
+  /* ── 立面图集（2026-10-17）──
+     一张 512 图集 + `aFacade`(格矩形) + `aRep`(重复次数) + `aUv2`(格内 0..1)，
+     **一个材质一个纹理**，draw call 不变。补丁失效/纹理生成失败都**退回纯色**并记账。 */
+  let facadePatchFailed = 0;
+  let facadeTextureFailed = 0;
+  let facadeApplied = 0;
+  let facadeTex: unknown = null;
+  const facadeOn = (() => {
+    try { return !/[?&]facade=0\b/.test(location.search); } catch { return true; }
+  })();
+
+  /** 懒加载：首次重建后生成图集（别拖慢首屏）；失败记 `facadeTextureFailed` 并退回纯色 */
+  function facadeTexture(): unknown {
+    if (facadeTex) return facadeTex;
+    try {
+      const size = { w: 512, h: 512 };
+      const cv = document.createElement("canvas");
+      cv.width = size.w;
+      cv.height = size.h;
+      const ctx = cv.getContext("2d") as unknown as { fillStyle: string; fillRect(x: number, y: number, w: number, h: number): void } | null;
+      if (!ctx) { facadeTextureFailed = 1; return null; }
+      const r = drawFacadeAtlas(ctx);
+      if (!r.ok) { facadeTextureFailed = 1; return null; }
+      const T = THREE as unknown as { CanvasTexture?: new (c: unknown) => { flipY: boolean } } | null;
+      if (!T?.CanvasTexture) { facadeTextureFailed = 1; return null; }
+      const tex = new T.CanvasTexture(cv);
+      tex.flipY = false;
+      facadeTex = tex;
+      return tex;
+    } catch {
+      facadeTextureFailed = 1;
+      return null;
+    }
+  }
+
+  /**
+   * `MeshBasicMaterial` 的**最小补丁**（不换材质类型）：把图集乘进漫反射色。
+   * 先检测锚点是否在（three 版本不同会对不上）⇒ 不在就记 `facadePatchFailed`、**保持纯色**。
+   */
+  function patchFacade(shader: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }): void {
+    try {
+      const vAnchor = "void main() {";
+      const fAnchor = "vec4 diffuseColor = vec4( diffuse, opacity );";
+      if (!shader.vertexShader.includes(vAnchor) || !shader.fragmentShader.includes(fAnchor)) {
+        facadePatchFailed = 1;
+        return;
+      }
+      const tex = facadeTexture();
+      if (!tex) return;                       /* 纹理失败：不补丁 = 纯色 */
+      shader.uniforms.facadeMap = { value: tex };
+      shader.vertexShader =
+        "attribute vec2 aUv2;\nattribute vec4 aFacade;\nattribute vec2 aRep;\nvarying vec2 vUv2;\nvarying vec4 vFacade;\nvarying vec2 vRep;\n" +
+        shader.vertexShader.replace(vAnchor, vAnchor + "\n  vUv2 = aUv2; vFacade = aFacade; vRep = aRep;");
+      shader.fragmentShader =
+        "uniform sampler2D facadeMap;\nvarying vec2 vUv2;\nvarying vec4 vFacade;\nvarying vec2 vRep;\n" +
+        shader.fragmentShader.replace(
+          fAnchor,
+          fAnchor +
+            "\n  { vec2 l2 = fract(vUv2 * vRep); vec2 cuv = vFacade.xy + clamp(l2, vec2(0.001953125), vec2(0.998046875)) * vFacade.zw; diffuseColor.rgb *= texture2D(facadeMap, cuv).rgb; }"
+        );
+      facadeApplied = 1;
+    } catch {
+      facadePatchFailed = 1;
+    }
+  }
+
   let draws = 0;
   let fps = 0;
   let fpsAt = 0;
@@ -519,8 +586,19 @@ export function createOverlayBackend(): WsRenderBackend {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(next.positions), 3));
     g.setAttribute("color", new THREE.BufferAttribute(Float32Array.from(next.colors), 3));
+    /* 立面图集三个属性（缺任何一组就退回纯色，不许崩） */
+    try {
+      if (facadeOn && next.uvs?.length) {
+        g.setAttribute("aUv2", new THREE.BufferAttribute(Float32Array.from(next.uvs), 2));
+        g.setAttribute("aFacade", new THREE.BufferAttribute(Float32Array.from(next.facadeRect), 4));
+        g.setAttribute("aRep", new THREE.BufferAttribute(Float32Array.from(next.facadeRep), 2));
+      }
+    } catch { /* 属性失败就当没有，纯色照画 */ }
     g.computeVertexNormals();
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    if (facadeOn) {
+      mat.onBeforeCompile = (sh: unknown) => patchFacade(sh as { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> });
+    }
     const newer = new THREE.Mesh(g, mat);
     newer.name = "ws-overlay-buildings";
     scene.add(newer);
@@ -1414,6 +1492,8 @@ export function createOverlayBackend(): WsRenderBackend {
         mvtUniqueIds,
         mvtPartsDropped, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
+      /* 立面图集：on = 开关；applied = 补丁真的挂上了；patchFailed = 着色器锚点对不上（退回纯色） */
+      facade: { on: facadeOn, applied: facadeApplied, patchFailed: facadePatchFailed, textureFailed: facadeTextureFailed },
       /* **每帧分解**（拖动期间"谁在花时间"）：`mapFrames` = 地图 render 回调次数，
          `overlayFrames` = 我们真画了几帧，`labelWrites` = 名字层 DOM 写入次数，
          `labelNodes` = 这个名字层现有多少节点（10 个 vs 500 个代价差一个量级）。 */

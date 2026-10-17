@@ -106,6 +106,9 @@
   --ws-primary-soft: rgba(143, 214, 192, 0.18);
   --ws-on-primary: #17332c;
   --ws-accent: #a8c8e8; /* 雾蓝 */
+  /* 可选主题也要有 `--ws-brand`：组件里当"小面积品牌文字"用，取本主题的雾蓝，
+     否则会退回默认主题的品牌色（薄荷套里冒出一枚青色标签）。 */
+  --ws-brand: var(--ws-accent);
   --ws-accent-2: #f0a6b8; /* 自己头像点（两套主题都有，玻璃套是主色） */
   --ws-radius: 16px;
   --ws-radius-sm: 14px;
@@ -136,6 +139,8 @@
   --ws-primary-soft: rgba(154, 166, 232, 0.2);
   --ws-on-primary: #232a45;
   --ws-accent: #b8c2f0;
+  /* 同薄荷套：可选主题的小面积品牌文字取本主题的 accent（深色变体会覆盖 accent，自动跟着走） */
+  --ws-brand: var(--ws-accent);
   --ws-accent-2: #f0a6b8;
   --ws-radius: 18px;
   --ws-radius-sm: 14px;

@@ -34,7 +34,7 @@ import {
 } from "./wsRenderBackend";
 import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
 import { matEq, projectPoint } from "./wsMatMul";
-import { wsDiag } from "./wsRenderBackend";
+import { alignProbeOn, wsDiag } from "./wsRenderBackend";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
 /** 每度多少米（与 `wsThreeCam.M_PER_DEG` 同口径；这里只用它做锚点漂移判断） */
@@ -87,8 +87,9 @@ const REFRESH_DEBOUNCE_MS = 400;
  *   4 = **矩阵口径修正**（"画出去那一帧"的投影原先按行主序读 = 转置口径，量出来的位置
  *       整个是错的，真机那批 844~1210 px 就是这么来的）+ `centerErr` 改成**发车前现算**
  *       + 回传带上下文/降级账（`ctx`/`engine`）。⚠️ **≤3 的读数与 ≥4 不可比。**
+ *   5 = 加 `nameBind`（名字↔楼 id / 楼顶锚点 / 回退账）。⚠️ **≤4 没有这一栏**（不是 0）。
  */
-const ALIGN_VER = 4;
+const ALIGN_VER = 5;
 
 /**
  * 自用开关：`?ovlpix=0` **关掉"像素取证"那一道**（默认开）。
@@ -109,11 +110,8 @@ function pixProbeOff(): boolean {
 
 /** 自用开关：`?wsalign=1` 才装 */
 export function alignProbeWanted(): boolean {
-  try {
-    return new URLSearchParams(location.search).get("wsalign") === "1";
-  } catch {
-    return false;
-  }
+  /* 判定只在 `wsRenderBackend.alignProbeOn` 一处（名字层回传也读它，别写第二份） */
+  return alignProbeOn();
 }
 
 /** 一行回传（`<img>` beacon；跨端口没问题，不用 fetch ⇒ 不会因 CORS/预检卡住） */
@@ -1068,6 +1066,8 @@ export function createOverlayBackend(): WsRenderBackend {
       })(),
       /* 屏幕正中那一圈：地图还能不能答出要素（`bld` 计数 = 藏起来的楼还答不答） */
       pick,
+      /* 名字↔楼绑定（2026-10-17）：每节点锚点/楼顶/地面投影差 + 未绑分类；没装/没算过 = null */
+      nameBind: wsDiag.nameBind,
       /* ── 上下文与降级账（2026-10-14）：真机"划着划着掉回 2D 自绘路"要有账可查 ── */
       ctx: {
         ovlCreated: ovlCtxCreated,

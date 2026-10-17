@@ -43,10 +43,13 @@ import {
   LABEL_MOTION,
   createNameLayer,
   nameVerdictLine,
+  type NameFacts,
   type NameMapLike,
   type NameRenderNode,
   type NameRenderPlan,
+  type NameRoofProjection,
 } from "./wsNameLayer";
+import { alignProbeOn, wsDiag } from "./wsRenderBackend";
 import type { NameHostCtx } from "./wsStageTypes";
 
 /**
@@ -58,7 +61,95 @@ import type { NameHostCtx } from "./wsStageTypes";
  */
 export function createNameHost(ctx: NameHostCtx) {
   const { stats, fetchCell, perf, renderKind } = ctx;
-  const { aliveNow, mapNow, drawnBldNow } = ctx;
+  const { aliveNow, mapNow, drawnBldNow, bldPoolNow } = ctx;
+
+  /**
+   * 经纬度 + 楼顶高度（米）→ 屏幕像素。用**地图库自己的** 3D 矩阵
+   * （`map.transform.locationToScreenPoint` + `_pixelMatrix3D`），不在这里重算相机。
+   *
+   * ⚠️ `_pixelMatrix3D` 是 MapLibre 的**私有成员**（v6.10.0 实测存在）：
+   *   取不到 / 抛错 ⇒ 返回 `via:"ground"`（退回地面投影）**并计数**；
+   *   连地面都投不出来 ⇒ `null`。**绝不让"回退到地面"悄悄退化成错位**。
+   */
+  function projectRoofNow(lng: number, lat: number, height: number): NameRoofProjection {
+    const m = mapNow() as {
+      transform?: {
+        locationToScreenPoint?: (p: [number, number], helper: { getElevationForLngLat: () => number }) => { x: number; y: number } | null;
+        _pixelMatrix3D?: unknown;
+      };
+      project?: (p: [number, number]) => { x: number; y: number };
+    } | null;
+    if (!m) return null;
+    try {
+      const tr = m.transform;
+      if (tr && typeof tr.locationToScreenPoint === "function" && tr._pixelMatrix3D) {
+        const p = tr.locationToScreenPoint([lng, lat], { getElevationForLngLat: () => Number(height) || 0 });
+        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y, via: "matrix3d" };
+      }
+    } catch {
+      /* 私有成员不可用：落到地面投影那条路（下面计数） */
+    }
+    try {
+      const p = m.project?.([lng, lat]);
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y, via: "ground" };
+    } catch {
+      /* 投影失败（地图没就绪） */
+    }
+    return null;
+  }
+
+  /**
+   * 名字↔楼的真机读数（仅 `?wsalign=1`）：每节点锚点 / 地面投影 / 高度 + 未绑分类。
+   * 写进共享只读账本 `wsDiag.nameBind`，叠加层量具回传时原样带走（不改它既有键名）。
+   */
+  function noteNameBind(plan: NameRenderPlan, facts: NameFacts): void {
+    if (!alignProbeOn()) return;
+    const m = mapNow() as { project?: (p: [number, number]) => { x: number; y: number } } | null;
+    const rows: Array<{ t: string; id: string | null; k: string; x: number; y: number; bx: number; by: number; h: number }> = [];
+    const dxs: number[] = [];
+    const dys: number[] = [];
+    for (const n of plan.nodes) {
+      if (rows.length >= 12) break;
+      if (n.pick.kind === "zone") continue;
+      let bx = n.x;
+      let by = n.y;
+      try {
+        const p = m?.project?.([n.lng, n.lat]);
+        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) { bx = p.x; by = p.y; }
+      } catch { /* 保留同值 */ }
+      const r = (v: number): number => Math.round(v * 10) / 10;
+      rows.push({ t: n.text, id: n.buildingId ?? null, k: n.pick.kind, x: r(n.x), y: r(n.y), bx: r(bx), by: r(by), h: r(Number(n.roofH) || 0) });
+      if (n.buildingId) { dxs.push(n.x - bx); dys.push(n.y - by); }
+    }
+    const med = (a: number[]): number | null => {
+      if (!a.length) return null;
+      const s = [...a].sort((x, y) => x - y);
+      return Math.round(s[Math.floor(s.length / 2)]! * 10) / 10;
+    };
+    const maxAbs = (a: number[]): number | null => (a.length ? Math.round(Math.max(...a.map((v) => Math.abs(v))) * 10) / 10 : null);
+    wsDiag.nameBind = {
+      ver: 1,
+      state: facts.bindState,
+      why: facts.bindWhy,
+      labels: facts.labels,
+      bound: facts.boundNames,
+      unboundPoi: facts.unboundPoiNames,
+      hidden: facts.hiddenUnbound,
+      boundButNotDrawn: facts.boundButNotDrawn,
+      noBldNear: facts.noBldNear,
+      ambiguous: facts.ambiguous,
+      droppedByDupBld: facts.droppedByDupBld,
+      noBldId: facts.noBldId,
+      roof3d: facts.roof3d,
+      roofGround: facts.roofGround,
+      roofNull: facts.roofNull,
+      nodes: rows,
+      dxMed: med(dxs),
+      dyMed: med(dys),
+      dxMax: maxAbs(dxs),
+      dyMax: maxAbs(dys),
+    };
+  }
 
   /** 动效降级两问（2026-10-04 从宿主搬来：**只有这一族函数读它们**，见文件头"为什么搬"）。
    *  `perfLow` 原先声明在宿主更靠后的位置，而它在宿主里的**第一个读点就在本文件搬走的那三个
@@ -83,7 +174,18 @@ export function createNameHost(ctx: NameHostCtx) {
     /* 行政区名：街区级这一屏**没有**名册（城市包线还没给）⇒ 如实传空（不是"这里没有行政区"） */
     admins: () => [],
     drawnBuildings: () => drawnBldNow(),
-    onPlan: (plan, facts) => { applyNamePlanWithHud(plan, nameVerdictLine(facts)); },
+    /* 仓库全量只用于"没绑上"的分类（楼没画 / 周围没楼），不参与上屏选择 */
+    buildingPool: bldPoolNow ? () => bldPoolNow() : undefined,
+    /* 楼顶锚点：用地图库自己的 3D 矩阵；回退率进判词/回传 */
+    projectRoof: (lng, lat, h) => projectRoofNow(lng, lat, h),
+    /* `?namesunbound=1` = 真机 A/B 口：z≥14 仍显示没绑楼的地名（默认收起） */
+    showUnbound: () => {
+      try { return /[?&]namesunbound=1\b/.test(String(typeof location !== "undefined" ? location.search : "")); } catch { return false; }
+    },
+    onPlan: (plan, facts) => {
+      applyNamePlanWithHud(plan, nameVerdictLine(facts));
+      noteNameBind(plan, facts);
+    },
     onError: (why) => {
       stats.note = stats.note ? `${stats.note} · ${why}` : why;
     },

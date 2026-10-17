@@ -18,6 +18,27 @@ export const BLD_MAX_NUM_ID = 0xffffffffffff;
 /** 12 位 hex 的正则（小写口径；大写会被 `bldIdOfFeature` 归一） */
 const HEX12 = /^[0-9a-f]{12}$/;
 
+/**
+ * 体块/分片后缀：`<楼 id>#body` / `#tower-t1` / `#equip-0`，
+ * 以及离线包里多环楼的 `<楼 id>#0`（见 `wsOfflineFeed.bundleBuildingsOf`）。
+ *
+ * 为什么要在这里剥：落图用的是**拆件后的要素**（`buildingPartSet` 给每块加了后缀），
+ * 而"是哪一栋"的答案只有一个 id；调用方（名字层/点选/楼卡）必须拿到同一个。
+ * 只在这个文件里剥 —— 下游一处都不许再写第二份规则。
+ */
+const PART_SUFFIX = /^(.*)#(?:body|podium|tower|setback|parapet|equip|antenna|roof|\d+)(?:-[a-z0-9]+)*$/i;
+
+/** 剥掉体块/分片后缀（最多两层：`<id>#0#body`）；没有后缀原样返回 */
+export function bldIdBase(s: string): string {
+  let out = String(s || "").trim();
+  for (let i = 0; i < 3; i++) {
+    const m = PART_SUFFIX.exec(out);
+    if (!m) break;
+    out = m[1].trim();
+  }
+  return out;
+}
+
 /** 数字 → 12 位小写 hex；非法（负数/小数/超 48bit）⇒ `null` */
 export function bldHexOfNumber(n: unknown): string | null {
   const v = typeof n === "number" ? n : Number(n);
@@ -38,15 +59,21 @@ export function bldNumberOfHex(h: unknown): number | null {
 /**
  * 要素 → 规范 12 位 hex。三种入口都收：
  *   ① MVT：数字 `feature.id`；② 离线包：字符串 `osm_id` / `i`；③ 数字属性。
+ * 字符串入口会先剥掉体块/分片后缀（`#body` / `#0` / `#tower-t1`）——
+ *   落图要素是拆件后的，同一栋楼的所有体块必须归一到**同一个** id。
  * 认不出来 ⇒ `null`（**不编 id**；调用方照旧走"无 id"那条降级路）。
  */
 export function bldIdOfFeature(f: { id?: unknown; properties?: Record<string, unknown> } | null | undefined): string | null {
   if (!f || typeof f !== "object") return null;
   if (typeof f.id === "number") { const h = bldHexOfNumber(f.id); if (h) return h; }
   const p = (f.properties || {}) as Record<string, unknown>;
-  for (const v of [p.osm_id, p.store_id, p.id, (f as { i?: unknown }).i, p.i]) {
-    if (typeof v === "string" && HEX12.test(v.trim().toLowerCase())) return v.trim().toLowerCase();
-    if (typeof v === "string" && /^\d+$/.test(v.trim())) { const h = bldHexOfNumber(Number(v.trim())); if (h) return h; }
+  for (const v of [p.osm_id, p.store_id, p.id, (f as { i?: unknown }).i, p.i, (f as { id?: unknown }).id]) {
+    if (typeof v === "string") {
+      const s = bldIdBase(v);
+      if (HEX12.test(s.toLowerCase())) return s.toLowerCase();
+      if (/^\d+$/.test(s)) { const h = bldHexOfNumber(Number(s)); if (h) return h; }
+      continue;
+    }
     if (typeof v === "number") { const h = bldHexOfNumber(v); if (h) return h; }
   }
   return null;

@@ -40,6 +40,49 @@ export type WsRenderBackendId = "map" | "three" | "overlay";
  *
  * 口径：谁的那一格谁写；这里**只记事实**，不参与任何判定（判定在量具里读它）。
  */
+export interface WsNameBindRow {
+  /** 屏上文案 */
+  t: string;
+  /** 绑到的楼（规范 12 位 hex）；没绑上 = null */
+  id: string | null;
+  /** `pick.kind`（`building` / `place` / `zone`） */
+  k: string;
+  /** 锚点（楼顶；没绑 = 地面） */
+  x: number;
+  y: number;
+  /** 同一锚点的地面投影（用来算"锚点离楼底差多少"） */
+  bx: number;
+  by: number;
+  /** 锚点高度（米）；0 = 地面 */
+  h: number;
+}
+
+export interface WsNameBindProbe {
+  ver: 1;
+  /** 名字层这一轮的三态（`counted` / `uncounted`）与原因 */
+  state: string;
+  why: string | null;
+  labels: number;
+  bound: number;
+  unboundPoi: number;
+  hidden: number;
+  boundButNotDrawn: number;
+  noBldNear: number;
+  ambiguous: number;
+  droppedByDupBld: number;
+  noBldId: number;
+  roof3d: number;
+  roofGround: number;
+  roofNull: number;
+  /** 只回传屏上的（最多 12 条）——不刷屏 */
+  nodes: WsNameBindRow[];
+  /** 锚点相对地面投影的像素差（只统计绑了楼的节点） */
+  dxMed: number | null;
+  dyMed: number | null;
+  dxMax: number | null;
+  dyMax: number | null;
+}
+
 export const wsDiag = {
   /** 引擎现在走哪条路（`init` / `webgl` / `waiting` / `failed` / `fallback2d`） */
   renderKind: "",
@@ -58,7 +101,23 @@ export const wsDiag = {
    * `notLoaded` = "样式在、层也在、但 loaded=false"被观测到的次数（老判据的误报次数）。
    */
   style: { loaded: null as boolean | null, hasStyle: false, layers: 0, err: "", notLoaded: 0 },
+  /**
+   * 名字↔楼绑定的真机读数（2026-10-17；名字宿主每次落计划时写，`?wsalign=1` 的回传原样带走）。
+   * `null` = 名字层还没落过一版计划（**不是 0**）。
+   */
+  nameBind: null as WsNameBindProbe | null,
 };
+
+/**
+ * `?wsalign=1` 的唯一判定处（叠加层量具与名字层回传共用；别名只在这里写一次）。
+ * 没有 `location`（Node 自检）⇒ false。
+ */
+export function alignProbeOn(search?: string): boolean {
+  try {
+    const q = search !== undefined ? search : (typeof location !== "undefined" ? location.search : "");
+    return /[?&]wsalign=1\b/.test(q);
+  } catch { return false; }
+}
 
 /**
  * 三种状态（2026-10-07 追加的口径：「maplibre 那个很丑的 C 的话值得一试」）：

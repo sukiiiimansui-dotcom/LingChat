@@ -348,6 +348,13 @@ export interface NameHostCtx {
   mapNow(): unknown;
   /** 宿主那个 `let drawnBld` 的**取值器**（`afterDraw` 每轮重写 ⇒ 名字层要读当下那一份） */
   drawnBldNow(): readonly unknown[];
+  /**
+   * 宿主 `bldStore`（**仓库全量**，不只是画出来的那批）的取值器。
+   *
+   * 名字层只拿它回答"这个名字为什么没绑上"（楼没画 / 周围没楼），
+   * **不**参与上屏选择。不传 ⇒ 那一类分类数不出来（如实写原因）。
+   */
+  bldPoolNow?: () => readonly unknown[];
 }
 
 /** M5（`createJoystickStage`）要用的宿主状态 —— 全部**只读**（宿主仍是它们唯一的拥有者）。

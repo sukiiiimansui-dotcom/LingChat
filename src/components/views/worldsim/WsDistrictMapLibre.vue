@@ -1518,6 +1518,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     aliveNow: () => alive,
     mapNow: () => map,
     drawnBldNow: () => drawnBld,
+    /* 仓库全量：只给名字层回答"没绑上是因为楼没画，还是周围没楼"（不参与上屏选择） */
+    bldPoolNow: () => bldStore.features(),
   });
   const {
     nameLayer, namesOn, namePlan, nameNodes, switching, labRootEl,

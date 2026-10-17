@@ -90,7 +90,7 @@ export function ringPts(raw: unknown): Array<[number, number]> {
 }
 
 /** 一个（Multi）Polygon 的**外环**列表（洞本轮不画，只计数） */
-function outerRingsOf(geom: unknown): { rings: Array<Array<[number, number]>>; holes: number } {
+export function outerRingsOf(geom: unknown): { rings: Array<Array<[number, number]>>; holes: number } {
   const g = geom as { type?: string; coordinates?: unknown } | null;
   const rings: Array<Array<[number, number]>> = [];
   let holes = 0;
@@ -144,6 +144,11 @@ export interface BldMeshStats {
   fromReal: number;
   fromLevels: number;
   fromKind: number;
+  /** **因为太扁被丢掉的**（`top - base < 0.4`：`h_base` 与 `h3d` 打架/顶底同高）
+   *  —— 真机"整屏只有一栋楼"那条要紧的数：数据退化时这个会很大 */
+  thinDropped: number;
+  /** 因为轮廓画不出三角形被丢掉的（环退化/自交/点太少） */
+  shapeDropped: number;
 }
 
 export interface BldMeshData {
@@ -172,7 +177,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const { toLocal, themeId, cap } = input;
   const stats: BldMeshStats = {
     buildings: 0, capped: 0, holesDropped: 0, withColor3d: 0, withH3d: 0,
-    fromReal: 0, fromLevels: 0, fromKind: 0,
+    fromReal: 0, fromLevels: 0, fromKind: 0, thinDropped: 0, shapeDropped: 0,
   };
   const pos: number[] = [];
   const col: number[] = [];
@@ -207,7 +212,10 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const top = Number.isFinite(h3dRaw) && h3dRaw > 0 ? h3dRaw : rh.h;
       const baseRaw = Number(props.h_base ?? props.min_height ?? 0);
       const base = Number.isFinite(baseRaw) && baseRaw > 0 ? Math.min(baseRaw, top - 0.4) : 0;
-      if (!(top - base >= 0.4)) continue;
+      if (!(top - base >= 0.4)) {
+        stats.thinDropped += 1;
+        continue;
+      }
       if (Number.isFinite(h3dRaw) && h3dRaw > 0) stats.withH3d++;
       if (typeof props.color3d === "string" && props.color3d) stats.withColor3d++;
       if (rh.from === "real") stats.fromReal++;
@@ -281,6 +289,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         /* 没画成的那一栋要**从名单里退掉**，否则 `centerPick` 会指到一栋画不出来的楼上 */
         featureIds.pop();
         featureMeta.pop();
+        stats.shapeDropped += 1;
       }
     }
 

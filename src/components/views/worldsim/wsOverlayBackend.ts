@@ -18,7 +18,7 @@
  * · 没有命中/卡片（P3）。
  */
 
-import { BLD_CAP, buildBldMeshData, type BldMeshData } from "./wsBldMesh";
+import { BLD_CAP, buildBldMeshData, outerRingsOf, type BldMeshData } from "./wsBldMesh";
 import {
   contractTheme,
   metersPerPixelAt,
@@ -46,6 +46,13 @@ const REANCHOR_M = 2000;
  * `bld-roof` / `bld-equip` / `bld-line` 五个）。**只碰这一组**：底图/水面/绿地/路网/标签一律不碰。
  */
 const BLD_LAYER_PREFIX = "bld";
+
+/**
+ * 像素取证的**绝对值下限**（真机 2026-10-17：`pix.alive = 1` 也放行过 ⇒ 闸太弱）。
+ * 采样框 20×20（缓冲像素，最多 4 个点 + 2 条兜底横带 = 最多 2400 px）；
+ * 真画出楼时读到的是几百~几千，1~2 个只是噪点/边角。比例那条见闸的第 ⑤ 条（`cover`）。
+ */
+const PIX_MIN_ALIVE = 40;
 
 /** `sourcedata` 之后的补建防抖（毫秒） */
 const REFRESH_DEBOUNCE_MS = 400;
@@ -319,8 +326,23 @@ export function createOverlayBackend(): WsRenderBackend {
         if (known && curS === "none") continue;   /* 已经藏好了：一次写都不做 */
         if (!known) prev = curS;                  /* 头一次见：记下原值 */
         m.setLayoutProperty(id, "visibility", "none");
+        /* **写完读回**（真机 2026-10-17：`hidLive` 报 5 层全 visible 而 `hideSyncs=35`
+           —— 两个数不可能同时为真 ⇒ 加自校验：没生效就重试一次，再不行如实计数） */
+        let back = m.getLayoutProperty?.(id, "visibility");
+        let backS = back === undefined || back === null ? null : String(back);
+        if (backS !== "none") {
+          hideRetries += 1;
+          m.setLayoutProperty(id, "visibility", "none");
+          back = m.getLayoutProperty?.(id, "visibility");
+          backS = back === undefined || back === null ? null : String(back);
+          if (backS !== "none") {
+            hideVerifyFailed += 1;
+            continue;                            /* 没藏上：**不记进名单**（免得出场还原一个假账） */
+          }
+        }
       } catch {
-        /* 单层失败不影响其它层（也不记进名单，免得还的时候报错） */
+        /* 单层失败不影响其它层（也不记进名单，免得还的时候报错）—— 但要计数，不许静默 */
+        hideErrors += 1;
         continue;
       }
       if (!known) hiddenLayers.set(id, prev === undefined ? null : prev);
@@ -365,7 +387,8 @@ export function createOverlayBackend(): WsRenderBackend {
   }
 
   /** 用一份 `bld` 要素重建楼（几何走共用模块 ⇒ 与 three 那条路画的是同一批） */
-  function rebuild(themeId: string, fc: WsRenderFc | null): void {
+  function rebuild(themeId: string, fcIn: WsRenderFc | null): void {
+    const fc = fcIn;
     /* 🔴 2026-10-16 真机"楼会变掉"那条：重建**必须是原子的** ——
        旧网格一直画着，新网格**先在本地建好**再一次性换上；只有"新网格是空的/建不出来"
        才允许把地图那套还原。原来先 `disposeMesh()`（屏幕上一瞬间没楼）+ 先 `restoreMapBuildings()`
@@ -399,6 +422,41 @@ export function createOverlayBackend(): WsRenderBackend {
     disposeMesh();                  /* 旧的这时候才退场（同一帧里完成） */
     bldMesh = newer;
     data = next;
+    /* 覆盖面：**同一份 fc、同一个视野**两边各数一遍（楼少的根因要能一眼看出来） */
+    if (fc) {
+    try {
+      const v = lastSeen || readMapView();
+      const r2 = v ? v.radius * 1.25 : Number.POSITIVE_INFINITY;
+      const inView = (x: number, z: number): boolean => Math.hypot(x, z) <= r2;
+      let exp = 0;
+      for (const f2 of fc.features) {
+        const g = (f2 as { geometry?: unknown }).geometry;
+        const { rings } = outerRingsOf(g);
+        const p0 = rings[0]?.[0];
+        if (!p0) continue;
+        const xy = toLocal(p0[0], p0[1]);
+        if (inView(xy[0], xy[1])) exp += 1;
+      }
+      let act = 0;
+      const bx = next.boxes;
+      for (let i = 0; i + 3 < bx.length; i += 4) {
+        const cx = (bx[i]! + bx[i + 2]!) / 2;
+        const cz = (bx[i + 1]! + bx[i + 3]!) / 2;
+        if (inView(cx, cz)) act += 1;
+      }
+      cover.expected = exp;
+      cover.actual = act;
+      cover.srcAll = fc.features.length;
+      cover.meshAll = next.stats.buildings;
+      cover.thinDropped = next.stats.thinDropped;
+      cover.shapeDropped = next.stats.shapeDropped;
+      cover.judgedAt = performance.now();
+    } catch {
+      /* 数不出来就不判（宁可漏，不误判） */
+      cover.expected = 0;
+      cover.actual = 0;
+    }
+    }
     /* 数据是**后到**的 ⇒ 重建完立刻画一帧：渲染是"地图画完一帧"驱动的，地图静止时不会再来
        render，等它就等于这一批楼不显示。 */
     drawOnce();
@@ -409,6 +467,7 @@ export function createOverlayBackend(): WsRenderBackend {
     try {
       const src = map?.getSource?.("bld");
       if (!src?.getData) return null;
+      getDataCalls += 1;
       const d = (await src.getData()) as WsRenderFc | null;
       if (!d || !Array.isArray(d.features)) return null;
       return { type: "FeatureCollection", features: d.features };
@@ -419,6 +478,7 @@ export function createOverlayBackend(): WsRenderBackend {
 
   /** 后到的数据自己补上（`bld` 落图 ⇒ 重建）；防抖，别在一次落图里重建十遍 */
   function scheduleRefresh(): void {
+    refreshScheduled += 1;
     if (refreshTimer) window.clearTimeout(refreshTimer);
     refreshTimer = window.setTimeout(() => {
       refreshTimer = 0;
@@ -427,6 +487,8 @@ export function createOverlayBackend(): WsRenderBackend {
         if (fc) {
           lastSource = "source";
           rebuild(curThemeId, fc);
+          refreshDone += 1;
+          lastRefreshMs = performance.now();
         }
       })();
     }, REFRESH_DEBOUNCE_MS);
@@ -494,8 +556,26 @@ export function createOverlayBackend(): WsRenderBackend {
   let hideSyncAt = 0;
   /** 像素取证连续判空几次（**两振才出局**：单次读空可能只是抖动，立刻还原会造成"楼会变掉"的闪） */
   let pixStrikes = 0;
+  /**
+   * **覆盖面**（2026-10-17 真机："整屏只有一栋楼"）：`actual` 是我们网格里**落在视野内**的楼数，
+   * `expected` 是地图源里**落在视野内**的要素数（同一份数据、同一个视野）。
+   * 楼少到 `actual*2 < expected` 就当作"没画够" ⇒ 还原地图那套（不许静默：数进 note 与回传）。
+   */
+  const cover: { expected: number; actual: number; srcAll: number; meshAll: number; thinDropped: number; shapeDropped: number; judgedAt: number } =
+    { expected: 0, actual: 0, srcAll: 0, meshAll: 0, thinDropped: 0, shapeDropped: 0, judgedAt: 0 };
+  /** 覆盖面连续判短几次（**两振才出局**：源刚长出来、网格还没跟上时会短暂偏短） */
+  let coverStrikes = 0;
+  /** 数据通道的账（"为什么只画出一栋"要能查：调度了几次 / 完成几次 / 取了几次数） */
+  let refreshScheduled = 0;
+  let refreshDone = 0;
+  let getDataCalls = 0;
+  let lastRefreshMs = -1;
   /** 藏/还原各发生了多少次、**为什么**（真机上"楼会变掉"要能查账） */
   let hideSyncs = 0;
+  /** 藏楼自校验的账：重试几次 / 写完读回仍不是 none 的层数 / 写入抛错次数（都不许静默） */
+  let hideRetries = 0;
+  let hideVerifyFailed = 0;
+  let hideErrors = 0;
   const restoreReasons: Record<string, number> = {};
 
   /**
@@ -514,6 +594,22 @@ export function createOverlayBackend(): WsRenderBackend {
     if (!(draws > 0)) return { ok: false, why: "叠加层还没发出绘制调用" };
     const mat = (bldMesh as unknown as { material?: { diagnostics?: unknown } } | null)?.material;
     if (mat && (mat as { diagnostics?: unknown }).diagnostics) return { ok: false, why: "叠加层着色器报错（材料诊断有内容）" };
+    /* ⑤ **画得够不够**：真机 2026-10-17「整屏只有一栋楼」—— 当时的闸只问"有没有画"，
+       一栋楼就能满足。现在与**地图源在同一个视野内的要素数**成对比：
+       少于一半（且源至少 4 个）就算没画够 ⇒ 先**往前修**（补一次数据重建），
+       连续两次仍短 ⇒ 还原地图那套。
+       阈值为什么是一半：两套读的是**同一份源**，我们能合法丢掉的只有"建不出体块"的那些
+       （扁到 `top-base<0.4` / 轮廓退化成不了三角），正常情况下这个比例很低（夹具 135 栋实测 0 栋）；
+       掉到一半以下说明**结构性地少**（1 对 40 这种），不是正常损耗。 */
+    if (cover.expected >= 4 && cover.actual * 2 < cover.expected) {
+      coverStrikes += 1;
+      if (coverStrikes === 1) {
+        scheduleRefresh();          /* 先往前修一次：源可能刚长出来、网格还没跟上 */
+        return { ok: false, why: "画得太少（源 " + cover.expected + " / 实画 " + cover.actual + "）· 已补一次数据" };
+      }
+      return { ok: false, why: "画得太少（源 " + cover.expected + " / 实画 " + cover.actual + " · 第 " + coverStrikes + " 次）" };
+    }
+    coverStrikes = 0;
     const gl = (() => { try { return (renderer?.getContext?.() ?? null) as WebGLRenderingContext | null; } catch { return null; } })();
     if (!gl?.readPixels) return { ok: true, why: "画了（像素取证不可用）" };
     /* 🔴 像素只能在**刚画完那一刻**读：`preserveDrawingBuffer:false` 时，帧一旦被合成，
@@ -559,9 +655,15 @@ export function createOverlayBackend(): WsRenderBackend {
       } catch {
         /* 采样点算不出来就退回横带 */
       }
+      /* 🔴 真机 2026-10-17 定位的**量具 bug**：采样点来自 `projectPoint`（**CSS 像素**），
+         而 `readPixels` 要的是**缓冲像素**。dpr=3 的真机上我原来直接把 CSS 坐标喂进去
+         ⇒ 读的位置偏到 1/3 处 ⇒ 常年只读到 1 个像素（真机序列就是 `1,1,1,1100,1,...`）。
+         ⇒ 这里乘 dpr 换算到缓冲像素；采样框也用缓冲像素（20×20）。 */
       for (const [x, y] of samplePts) {
-        alive += readRect(Math.round(x) - 12, bh - Math.round(y) - 12, 24, 24);
-        if (alive > 0) break;
+        const bxp = Math.round(x * dpr);
+        const byp = bh - Math.round(y * dpr);
+        alive += readRect(bxp - 10, byp - 10, 20, 20);
+        if (alive >= 40) break;
       }
       /* ② 兜底：**两条横带**（楼正好都不在采样点附近时还能看见"画面上有东西"） */
       if (alive <= 0) {
@@ -575,9 +677,13 @@ export function createOverlayBackend(): WsRenderBackend {
     } catch {
       return { ok: true, why: "画了（像素取证抛错）" };
     }
-    if (alive <= 0) {
+    /* 阈值两条都要（真机 2026-10-17：`pix.alive = 1` 也放行过 —— 一栋楼/一个像素就够，闸太弱）：
+       ① **绝对值** ≥ `PIX_MIN_ALIVE`(40)：采样框 20×20（最多 4 个点 + 兜底横带），
+          真画出楼时这个数在几百到几千；1~2 个像素只是噪点/边角。
+       ② **比例**（与"该看到的量"成比例）：见闸的第 ⑤ 条 `cover`（源里 N 个、我们只画 M 个 ⇒ 不放行）。 */
+    if (alive < PIX_MIN_ALIVE) {
       pixStrikes += 1;
-      return { ok: false, why: "叠加层这一帧画不出像素（采样点+横带全空 · 第 " + pixStrikes + " 次）" };
+      return { ok: false, why: "叠加层画出来的像素太少（" + alive + " < " + PIX_MIN_ALIVE + " · 第 " + pixStrikes + " 次）" };
     }
     pixStrikes = 0;
     pixAlive = alive;
@@ -855,7 +961,13 @@ export function createOverlayBackend(): WsRenderBackend {
           }
           if (err) shown = { ...(shown || {}), err };
         }
-        pick = { hid, shown, at, hiddenIds: ids };
+        /* 源侧交叉确认（真机 2026-10-17：`shown.n=0` ⇒ 要分清"藏楼把命中弄哑"还是"源/渲染本身没东西"） */
+        let srcQ: number | null = null;
+        try {
+          const q = (map as unknown as { querySourceFeatures?: (id: string) => unknown[] })?.querySourceFeatures?.("bld");
+          srcQ = Array.isArray(q) ? q.length : null;
+        } catch { srcQ = null; }
+        pick = { hid, shown, at, hiddenIds: ids, srcQuerySource: srcQ, srcAll: cover.srcAll, meshAll: cover.meshAll };
       } else {
         pick = { hid: null, why: "no-query" };
       }
@@ -923,10 +1035,28 @@ export function createOverlayBackend(): WsRenderBackend {
       hidLayers: hidCount,
       hidIds: [...hiddenLayers.keys()],
       /* 藏楼闸的现况（真机事故：藏了地图那套、叠加层又没画出来 ⇒ 整屏没楼） */
-      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws },
+      /* ⚠️ `draws` 是**上一帧的绘制调用数**（three 的 `info.render.calls` 每帧重置），
+         **不是累计值** —— 真机那 23 条"draws 恒为 1"就是这么来的（一帧画 1 次）。
+         要知道"到底在不在出帧"看 `frames`（累计）与 `drawGapMs`（距上次画多久）。 */
+      hidGate: { ok: hideGateOk, why: hideGateWhy, draws: draws, frames, drawGapMs: lastDrawAt ? Math.round(performance.now() - lastDrawAt) : null },
       /* 藏/还原各发生几次、为什么（真机"楼会变掉"要能查账） */
       pix: { alive: pixAlive, probed: pixEverProbed, strikes: pixStrikes },
-      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons },
+      /* 覆盖面（"整屏只有一栋楼"那条：源里有几个 vs 我们画了几个） */
+      cover: { expected: cover.expected, actual: cover.actual, srcAll: cover.srcAll, meshAll: cover.meshAll, thinDropped: cover.thinDropped, shapeDropped: cover.shapeDropped, strikes: coverStrikes },
+      /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
+      feed: { refreshScheduled, refreshDone, getDataCalls, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
+      meshStats: data?.stats ?? null,
+      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors },
+      /* 地图那套楼到底藏上没藏上：**写进去的**与**读回来的**并排（真机那两个数打架时要能一眼分开） */
+      hidWrote: [...hiddenLayers.keys()],
+      /* 手里这台地图还活着吗（"读回全 visible"还有一个可能是**我们握的是旧实例**） */
+      mapAlive: (() => {
+        try {
+          const cv = (map as unknown as { getCanvas?: () => Element | null })?.getCanvas?.() ?? null;
+          const st = (map as unknown as { getStyle?: () => unknown })?.getStyle?.() ?? null;
+          return { hasStyle: !!st, canvasInDom: cv ? document.contains(cv as unknown as Node) : null, sameCanvas: cv ? cv === renderer?.domElement?.parentElement?.querySelector?.(".maplibregl-canvas") : null };
+        } catch { return null; }
+      })(),
       /* **当场回读**地图那 5 层的真实可见性（判据读它，不读我自己的记账） */
       hidLive: (() => {
         const mm = map as unknown as { getLayoutProperty?: (id: string, k: string) => unknown } | null;
@@ -1443,6 +1573,8 @@ export function createOverlayBackend(): WsRenderBackend {
         note:
           `${st?.buildings ?? 0} 栋（叠加在地图上） / ${data?.triangles ?? 0} 三角` +
           (hidCount ? ` / 藏起地图楼 ${hidCount} 层` : ` / 没藏地图楼（${hideGateWhy}）`) +
+          ` / 覆盖 源${cover.expected}:实画${cover.actual}` +
+          (cover.thinDropped || cover.shapeDropped ? `（丢扁 ${cover.thinDropped}·丢形 ${cover.shapeDropped}）` : "") +
           (restoredCount ? ` / 已还原 ${restoredCount} 层` : "")
           + ` / 相机跟地图：${lastSeen ? "在跟" : "还没读到"}`
           + (errors.length ? ` / ⚠️ ${errors[0]}` : "")

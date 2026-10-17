@@ -416,8 +416,12 @@ export function saneRadius(r: number, dflt = 300): number {
  * 二、偏好（`wsm:v1:renderer`，坏值回 map）
  * ══════════════════════════════════════════════════════════════════════════ */
 
-/** 把任意字符串解析成后端 id（**坏值回 `map`**，这是唯一判据） */
+/** 把任意字符串解析成后端 id（**坏值回默认**，这是唯一判据；三个合法 id 各自照原样返回） */
 export function parseRendererId(raw: unknown): WsRenderBackendId {
+  /* 🔴 `map` 必须显式认出来：默认值改成 `overlay` 之后，原来靠"兜底回 map"顺带认它的写法
+     会把持久化的 `map` 偏好（老版本芯片写下的）当成坏值 ⇒ 静默变成 overlay
+     （`?renderer=map` 那条"只看底图/路网"的回退口也因此失效）。 */
+  if (raw === "map") return "map";
   if (raw === "three") return "three";
   if (raw === "overlay") return "overlay";
   return WS_RENDER_DEFAULT;

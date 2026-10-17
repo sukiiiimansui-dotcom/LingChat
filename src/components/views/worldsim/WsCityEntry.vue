@@ -180,15 +180,9 @@
            它**不是**第二个地图实现：换的是这一屏下面那层画布由谁画（同一座城、同一份 `bld`/`roads`
            数据、同一套 `wstheme.json` 配色）。真源与切换都在 `wsRenderBackend` / `WsSceneView`
            的舞台上，本页只渲染这颗 chip + 转交点击（与上面那颗「楼房档位」同一个写法）。 -->
-      <button
-        class="wsce__btn wsce__btn--render"
-        type="button"
-        data-ws-act="renderer"
-        :title="rendererChipTitle"
-        @click="toggleRenderer"
-      >
-        {{ rendererChipText }}
-      </button>
+      <!-- 2026-10-17：**去掉「地图 / 立体楼」这颗芯片** —— 楼只由 three 画（地图那套 `bld-*`
+           图层不再创建），切到"地图"就没有楼可看，这颗芯片也就没有内容了。
+           `toggleRenderer` / `rendererChipText` 保留在脚本里（自用排查仍可用 `?renderer=map`）。 -->
     </header>
 
     <!-- 没装过城市数据时的**常驻提示**（点了就开引导）——"少了一整座城市的楼房"这种事

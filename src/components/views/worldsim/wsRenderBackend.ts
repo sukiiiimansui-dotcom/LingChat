@@ -213,8 +213,10 @@ export const OVERLAY_GAP = "";
 
 /** `localStorage` 键（与现存 17 个 `wsm:v1:*` 同口径） */
 export const WS_RENDER_KEY = "wsm:v1:renderer";
-/** 默认后端：**永远是 map**（three 只是用户可选的那一种） */
-export const WS_RENDER_DEFAULT: WsRenderBackendId = "map";
+/** 默认后端：**叠加层（three.js）**。楼只由 three 画，地图那套 `bld-*` 图层不再创建。
+ *  （2026-10-17 改：原来的默认是 map —— 那时地图会自己画一套楼；现在楼只留 three 这一套，
+ *   `map` 仍可显式指定（`?renderer=map`），但它**不画楼**，只剩底图/路网。） */
+export const WS_RENDER_DEFAULT: WsRenderBackendId = "overlay";
 
 export interface WsRenderCenter {
   lat: number;

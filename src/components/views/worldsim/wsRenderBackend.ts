@@ -120,6 +120,32 @@ export const wsLiveMap: { set: (m: unknown) => void; get: () => unknown } = (() 
   };
 })();
 
+/**
+ * **楼房图层宿主的登记处**（2026-10-17）。
+ *
+ * 叠加层是楼房渲染者时会**拆掉**地图那套 `bld*` 图层（结构性，见 `wsBldLayerSwitch`）；
+ * 它一旦画不出来（闸不放行）或退出，必须把地图那套**建回来** —— 但重建规格/落图管线
+ * 归落图线（`wsBldLanding` 的 `bldFlush`），本模块**不写第二份重建**：
+ * 地图宿主把自己的 `bldFlush` 登记进来，叠加层在需要时**调既有入口**。
+ */
+export const wsBuildingsHost: { set: (f: ((why: string) => void) | null) => void; flush: (why: string) => boolean } = (() => {
+  let flush: ((why: string) => void) | null = null;
+  return {
+    set: (f) => {
+      flush = f;
+    },
+    flush: (why: string) => {
+      if (!flush) return false;
+      try {
+        flush(why);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+})();
+
 export const wsDiag = {
   /** 引擎现在走哪条路（`init` / `webgl` / `waiting` / `failed` / `fallback2d`） */
   renderKind: "",

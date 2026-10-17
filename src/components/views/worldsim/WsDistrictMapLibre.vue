@@ -470,7 +470,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
      用户「之前的没了…必须保证视野内完整」那条。合并/淘汰/格键的规则只有那一份，这里只调用。 */
   import { createFeatureStore } from "./wsFeatureStore";
   /* 跨模块诊断账本（叠加层那边的 `?wsalign=1` 回传要读它：走了哪条路 / 为什么降级 / 看门狗几次） */
-  import { wsDiag, wsLiveMap } from "./wsRenderBackend";
+  import { wsBuildingsHost, wsDiag, wsLiveMap } from "./wsRenderBackend";
   /* **离线包取数管道**（App 侧承载；代拍页里那份是原型的内联写法，不进 PR）：
      串行取格 + 每格独立超时 + 并进仓库 + 一次 setData。判词/决策/半径仍从 `wsScene` 来。 */
   import {
@@ -1468,6 +1468,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     bldStore, roadsStore, bldFlush, roadsFlush, bldTierCrossedFlush,
     bldFeed, roadsFeed, placesFeed, placesGetter, gwLayer,
   } = bldLanding;
+  /* 把**落图线既有的** `bldFlush` 登记给叠加层：它拆/建楼房图层后要恢复时调这一条，
+     不另写一份重建（2026-10-17 与落图线对齐的约定）。 */
+  try { wsBuildingsHost.set((why: string) => { bldFlush(why); }); } catch { /* 登记失败不影响建图 */ }
 
   /* ══ 只读探针出口（2026-10-10）══════════════════════════════════════════════════
      为什么要有它：性能这一摊此前在 App 侧**只有 HUD 那一行**，而"卡"是个毫秒级的事实 ——

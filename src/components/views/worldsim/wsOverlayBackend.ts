@@ -34,7 +34,10 @@ import {
 } from "./wsRenderBackend";
 import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
 import { matEq, projectPoint } from "./wsMatMul";
-import { alignProbeOn, wsDiag, wsLiveMap } from "./wsRenderBackend";
+import { alignProbeOn, wsBuildingsHost, wsDiag, wsLiveMap } from "./wsRenderBackend";
+import { ensureBldLayers, hasBldLayers } from "./wsBldLayerSwitch";
+import { bldLayerSpecsFor, mvtBldLayerSpecs } from "./wsDistrictScene";
+import { mvtEnabled } from "./wsMvtTiles";
 import { fpsMark } from "./wsFpsProbe";
 
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
@@ -723,6 +726,10 @@ export function createOverlayBackend(): WsRenderBackend {
   let hideSyncs = 0;
   /** 藏楼自校验的账：重试几次 / 写完读回仍不是 none 的层数 / 写入抛错次数（都不许静默） */
   let hideRetries = 0;
+  /** 结构性拆层：累计删了几条、恢复（调落图线 flush）几次 */
+  let layersRemovedTotal = 0;
+  let layersRecovered = 0;
+  let lastRemoveAt = 0;
   /** 重绑次数（地图实例/画布被换过 ⇒ 重新绑到屏幕当前那张上） */
   let mapRebinds = 0;
   /** 名字层 DOM 写入次数（MutationObserver，只读）；名字节点现数在回传时取 */
@@ -940,6 +947,19 @@ export function createOverlayBackend(): WsRenderBackend {
         const gate = meshDrawingOk(true);
         hideGateOk = gate.ok;
         hideGateWhy = gate.why;
+        /* 结构性拆层（节流 1.2s）：闸放行 ⇒ 楼房图层必须**一条都不存在**；
+           闸不放行（叠层画不出来）⇒ **调落图线既有入口重建**，屏幕回到地图那套。 */
+        try {
+          if (gate.ok) {
+            if (performance.now() - lastRemoveAt > 1200) {
+              lastRemoveAt = performance.now();
+              const f = ensureBldLayers(map, "overlay");
+              layersRemovedTotal += f.removed.length;
+            }
+          } else if (wsBuildingsHost.flush("overlay-failed")) {
+            layersRecovered += 1;
+          }
+        } catch { /* 拆/恢复失败下一帧再来 */ }
         const now2 = performance.now();
         /* ❗"立刻还原"这条**不受节流约束**（画面变空必须当帧处理）；补藏才节流 */
         /* 两类"可先往前修"的判据（**两振出局**），其余条件仍是当帧立刻还原：
@@ -1292,6 +1312,8 @@ export function createOverlayBackend(): WsRenderBackend {
       })(),
       meshHeights,
       pixProbesRun,
+      /* 结构性拆层读数：present = 现在还剩几条 bld*（0 = 目标达成），removedTotal / recovered */
+      bldLayers: { present: (() => { try { const all = (map as unknown as { getStyle?: () => { layers?: Array<{ id?: unknown }> } })?.getStyle?.()?.layers || []; return all.filter((l) => String((l as { id?: unknown })?.id ?? "").startsWith(BLD_LAYER_PREFIX)).length; } catch { return -1; } })(), removedTotal: layersRemovedTotal, recovered: layersRecovered },
       hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors, mapRebinds, hideDrift, hideDriftIds, hideRounds },
       /* **事件序列位置**（判"补藏到底在 styledata 之后还是之前"）：
          lastStyleAgoMs = 最近一次 styledata 距今；lastHideAgoMs = 最近一次补藏距今；

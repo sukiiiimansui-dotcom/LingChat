@@ -30,6 +30,10 @@ export interface BldModelParts {
   massing: BldPartLike[];
   /** 女儿墙（p=4），一条环带环 */
   parapet: BldPartLike[];
+  /** 设备箱（p=6），可能多个 */
+  equip: BldPartLike[];
+  /** 天线（p=7），至多一个 */
+  antenna: BldPartLike[];
 }
 
 const num = (v: unknown): number => {
@@ -162,30 +166,49 @@ export function bandTopAreaOf(outer: readonly Pt[], inner: readonly Pt[]): numbe
 }
 
 /**
- * 一栋楼的建模件：
- * · `__parts` 里的 p=1/2/3 是体块；p=4 是女儿墙；
+ * 只取**体块**（p=1/2/3）。远景只需要它，不必解析女儿墙/设备/天线。
  * · 主体自己如果是 p=1/2/3（没有 p=0）也补进体块（S1 为避免双画把它从 `__parts` 排除了）；
  * · 去重键 `p + h(0.1m) + hb(0.01m)`，同键留先到的（S1 已按环点数挑过更完整的）。
  */
-export function modelPartsOf(props: Record<string, unknown>, primary: BldPartLike): BldModelParts {
-  const raw = Array.isArray(props.__parts) ? props.__parts : [];
+export function massingOf(props: Record<string, unknown>, primary: BldPartLike): BldPartLike[] {
   const masses = new Map<string, BldPartLike>();
-  const parapets = new Map<string, BldPartLike>();
   const add = (part: BldPartLike): void => {
-    const code = partCodeOf(part.p);
-    if (MASS_CODE.has(code)) {
-      const key = `${code}:${Math.round(num(part.h) * 10)}:${Math.round(num(part.hb) * 100)}`;
-      if (!masses.has(key)) masses.set(key, part);
-    } else if (code === 4) {
-      const key = `4:${Math.round(num(part.h) * 10)}:${Math.round(num(part.hb) * 100)}`;
-      if (!parapets.has(key)) parapets.set(key, part);
-    }
+    if (!MASS_CODE.has(partCodeOf(part.p))) return;
+    const key = `${partCodeOf(part.p)}:${Math.round(num(part.h) * 10)}:${Math.round(num(part.hb) * 100)}`;
+    if (!masses.has(key)) masses.set(key, part);
   };
+  const raw = Array.isArray(props.__parts) ? props.__parts : [];
   for (const part of raw) {
     if (part && typeof part === "object") add(part as BldPartLike);
   }
   add(primary);
-  const massing = [...masses.values()].sort((a, b) => num(a.hb) - num(b.hb) || num(a.h) - num(b.h) || partCodeOf(a.p) - partCodeOf(b.p));
+  return [...masses.values()].sort((a, b) => num(a.hb) - num(b.hb) || num(a.h) - num(b.h) || partCodeOf(a.p) - partCodeOf(b.p));
+}
+
+/** 体块 + 女儿墙 + 设备箱 + 天线（只有 LOD 中/近档才需要全量算） */
+export function modelPartsOf(props: Record<string, unknown>, primary: BldPartLike): BldModelParts {
+  const massing = massingOf(props, primary);
+  const parapets = new Map<string, BldPartLike>();
+  const equip: BldPartLike[] = [];
+  const antenna: BldPartLike[] = [];
+  const add = (part: BldPartLike): void => {
+    const code = partCodeOf(part.p);
+    if (code === 4) {
+      const key = `4:${Math.round(num(part.h) * 10)}:${Math.round(num(part.hb) * 100)}`;
+      if (!parapets.has(key)) parapets.set(key, part);
+    } else if (code === 6) {
+      equip.push(part);
+    } else if (code === 7) {
+      antenna.push(part);
+    }
+  };
+  const raw = Array.isArray(props.__parts) ? props.__parts : [];
+  for (const part of raw) {
+    if (part && typeof part === "object") add(part as BldPartLike);
+  }
+  add(primary);
   const parapet = [...parapets.values()].sort((a, b) => num(a.hb) - num(b.hb) || num(a.h) - num(b.h));
-  return { massing, parapet };
+  equip.sort((a, b) => num(a.hb) - num(b.hb) || num(a.h) - num(b.h));
+  antenna.sort((a, b) => num(a.h) - num(b.h));
+  return { massing, parapet, equip, antenna };
 }

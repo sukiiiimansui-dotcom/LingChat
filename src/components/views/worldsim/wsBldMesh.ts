@@ -9,6 +9,8 @@
  * · 不 import three、不碰 `document`/`window`（`world_map/ws_bldmesh_move_selftest.mjs` 会扫）；
  * · 不认识相机、不认识画布：调用方把"经纬度 → 局部米"的投影函数（`toLocal`）传进来；
  * · 不做渲染决策（材质/灯光/层序都在调用方）。
+ * · 唯一的 ambient 读：`?model=1` / `?mpp=` / `?z=`（默认关；Node 无 `location` 时按关）。
+ *   几何仍只由输入要素 + 这些标量决定；LOD 的滞回状态由 `lod.state` 注入（默认共享）。
  *
  * ## 口径（与 2D 的 `bld-*` 层逐项对齐）
  * · 高度：`h3d` 优先，没有才用 `renderHeight()`（真高 → 层数×3 → 按类型估）；
@@ -26,7 +28,8 @@ import { ROOF_MUL, bandsForBase, toonBandOf, toonMulOf } from "./wsToon";
 import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
-import { bandRingsOf, modelPartsOf, type BldPartLike } from "./wsBldModel";
+import { bandRingsOf, massingOf, modelPartsOf, type BldPartLike } from "./wsBldModel";
+import { DEFAULT_LOD_MPP, DETAIL_VERTS_MAX, mppAtZoom, sharedBldLodState, type BldLodState, type LodTier } from "./wsBldLod";
 
 type Pt2 = readonly [number, number];
 type Rgb3 = [number, number, number];
@@ -36,6 +39,35 @@ type Bands = { k: [number, number, number]; mix: [number, number, number] };
 
 /** 一次最多画几栋楼（**离锚点最近的先画**）；超出部分如实报出来，不静默丢 */
 export const BLD_CAP = 3500;
+
+/* ── S3 的浏览器开关（只在 input 没显式给时读；Node 自检 `location` 不存在 ⇒ 默认关） ── */
+function urlModelOn(): boolean {
+  try {
+    return /[?&]model=1\b/.test(typeof location !== "undefined" ? location.search : "");
+  } catch {
+    return false;
+  }
+}
+
+/** `?mpp=` 直接给米/CSS 像素；`?z=` 按 Web Mercator 反算（默认纬度 29.56°）。 */
+function urlLodMpp(): number | null {
+  try {
+    const q = typeof location !== "undefined" ? location.search : "";
+    const mm = /[?&]mpp=([0-9.]+)/.exec(q);
+    if (mm) {
+      const v = Number(mm[1]);
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+    const mz = /[?&]z=([0-9.]+)/.exec(q);
+    if (mz) {
+      const v = Number(mz[1]);
+      if (Number.isFinite(v)) return mppAtZoom(v);
+    }
+  } catch {
+    /* 读不到 URL 就用默认 mpp */
+  }
+  return null;
+}
 
 function rampHexAt(themeId: string, h: number): string {
   const th = wsMapTheme(themeId) as unknown as { ramp?: Array<[number, string]> };
@@ -197,9 +229,18 @@ export interface BldMeshInput {
   themeId: string;
   /** 一次最多画几栋（离锚点最近的先画） */
   cap: number;
-  /** S2 建模开关：true = 用 `__parts` 的体块/女儿墙；
-   *  缺省 false = 影子路（输出与旧版逐字节相同，`model=0` 回证用）。 */
+  /** S2/S3 建模开关：true = 用 `__parts` 的体块/女儿墙/设备/天线；
+   *  不传时读 `?model=1`；显式 false = 影子路（输出与旧版逐字节相同，`model=0` 回证用）。 */
   model?: boolean;
+  /** S3 LOD：mpp（米/CSS 像素，缺省 `?mpp=` / `?z=` / z16.4）/ 垂直压缩 /
+   *  细节顶点预算 / 滞回状态（缺省共享）/ 自检强制档。 */
+  lod?: {
+    mpp?: number;
+    pitchCos?: number;
+    detailVerts?: number;
+    state?: BldLodState;
+    forceTier?: LodTier;
+  };
 }
 
 /** 与 `WsThreeDiag` 里那几个计数逐字对应（**搬迁不改行为**：数字含义一字不变） */
@@ -224,6 +265,17 @@ export interface BldMeshStats {
   parapetBands: number;
   parapetDropped: number;
   massFallback: number;
+  /** S3：各 LOD 档的栋数（0 远 / 1 中 / 2 近） */
+  lodTiers: [number, number, number];
+  /** 细节实际用掉的顶点数 / 预算 / 因预算被降级或跳过的细节数 */
+  detailVerts: number;
+  detailCap: number;
+  detailDropped: number;
+  /** 设备箱 / 天线实际画出的件数 */
+  equipParts: number;
+  antennaParts: number;
+  /** 本次用的 mpp（米/CSS 像素；0 = 没走 LOD/建模） */
+  lodMpp: number;
 }
 
 export interface BldMeshData {
@@ -251,16 +303,32 @@ export interface BldMeshData {
 }
 
 /**
- * 把一份 `bld` 要素变成顶点数据。**纯函数**：同样的输入永远同样的输出，
- * 不读时钟、不读全局、不碰引擎。
+ * 把一份 `bld` 要素变成顶点数据。**纯几何**：不读时钟、不碰引擎；
+ * 例外只有三个 URL 开关（`?model=1` / `?mpp=` / `?z=`）与可注入的 LOD 状态。
  */
 export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const { toLocal, themeId, cap } = input;
-  const modelOn = input.model === true;
+  const modelOn = input.model === true || (input.model === undefined && urlModelOn());
+  const lodMpp = (() => {
+    const v = Number(input.lod?.mpp);
+    if (Number.isFinite(v) && v > 0) return v;
+    return urlLodMpp() ?? DEFAULT_LOD_MPP;
+  })();
+  const pitchCos = (() => {
+    const v = Number(input.lod?.pitchCos);
+    return Number.isFinite(v) ? Math.max(0.5, Math.min(1, v)) : 1;
+  })();
+  const detailCap = (() => {
+    const v = Number(input.lod?.detailVerts);
+    return Number.isFinite(v) && v >= 0 ? v : DETAIL_VERTS_MAX;
+  })();
+  const lodState = input.lod?.state ?? sharedBldLodState;
+  const forceTier = input.lod?.forceTier;
   const stats: BldMeshStats = {
     buildings: 0, capped: 0, holesDropped: 0, withColor3d: 0, withH3d: 0,
     fromReal: 0, fromLevels: 0, fromKind: 0, thinDropped: 0, shapeDropped: 0,
     modeledBuildings: 0, massingBuildings: 0, massingParts: 0, parapetBands: 0, parapetDropped: 0, massFallback: 0,
+    lodTiers: [0, 0, 0], detailVerts: 0, detailCap: 0, detailDropped: 0, equipParts: 0, antennaParts: 0, lodMpp: 0,
   };
   const pos: number[] = [];
   const col: number[] = [];
@@ -303,7 +371,124 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     list = keyed.slice(0, cap).map((k) => k.f);
   }
 
+  /* ── S3：先算每栋的 LOD 档与细节代价，再按预算确定性选细节 ─────────────────
+     两遍：① 只算档/代价（不写几何）；② 正式画时按 plan 决定画不画细节。
+     这样几何顺序/拾取编号与旧路完全一致，预算超了也能按 tier/屏幕高度/id 降级。 */
+  type DetailPlan = {
+    key: string;
+    tier: LodTier;
+    hpx: number;
+    h: number;
+    massing: BldPartLike[];
+    parapet: BldPartLike[];
+    equip: BldPartLike[];
+    antenna: BldPartLike[];
+    wallCost: number;
+    fullCost: number;
+    selected: 0 | 1 | 2;
+  };
+  const planByKey = new Map<string, DetailPlan>();
+  if (modelOn) {
+    const plans: DetailPlan[] = [];
+    let pi = 0;
     for (const raw of list) {
+      const myIndex = pi++;
+      const f = raw as { id?: unknown; properties?: Record<string, unknown>; geometry?: unknown };
+      const props = f.properties || {};
+      const h3dRaw = Number(props.h3d);
+      const rh = renderHeight(props);
+      const top = Number.isFinite(h3dRaw) && h3dRaw > 0 ? h3dRaw : rh.h;
+      const baseRaw = Number(props.h_base ?? props.min_height ?? 0);
+      const base = Number.isFinite(baseRaw) && baseRaw > 0 ? Math.min(baseRaw, top - 0.4) : 0;
+      const c3d = typeof props.color3d === "string" && props.color3d ? String(props.color3d) : "";
+      const primaryPart: BldPartLike = { p: props.p, h: top, hb: base, c: c3d || undefined, geometry: f.geometry };
+      /* 远景只需要体块；全量拆件（女儿墙/设备/天线）只在 tier>0 才算 —— 省掉 680 栋的无用解析 */
+      const massing = massingOf(props, primaryPart);
+      let hTop = top;
+      for (const part of massing) {
+        const ph = Number(part.h);
+        if (Number.isFinite(ph)) hTop = Math.max(hTop, ph);
+      }
+      const id = String(f.id ?? "");
+      const key = id || "#" + myIndex;
+      const hpx = (hTop / lodMpp) * pitchCos;
+      const tier = forceTier !== undefined ? forceTier : lodState.tierOf(key, hpx);
+      stats.lodTiers[tier] += 1;
+      const plan: DetailPlan = {
+        key, tier, hpx, h: hTop, massing,
+        parapet: [], equip: [], antenna: [],
+        wallCost: 0, fullCost: 0, selected: 0,
+      };
+      if (tier > 0) {
+        const mp = modelPartsOf(props, primaryPart);
+        const parapet: BldPartLike[] = [];
+        let wallCost = 0;
+        for (const part of mp.parapet) {
+          const br = bandRingsOf(part);
+          if (!br) {
+            stats.parapetDropped += 1;
+            continue;
+          }
+          parapet.push(part);
+          wallCost += 6 * br.outer.length;
+        }
+        let extraCost = 0;
+        for (const part of mp.equip) {
+          const { rings: er } = outerRingsOf(part.geometry);
+          for (const r of er) extraCost += 9 * r.length - 6;
+        }
+        for (const part of mp.antenna) {
+          const { rings: ar } = outerRingsOf(part.geometry);
+          for (const r of ar) extraCost += 9 * r.length - 6;
+        }
+        plan.parapet = parapet;
+        plan.equip = mp.equip;
+        plan.antenna = mp.antenna;
+        plan.wallCost = wallCost;
+        plan.fullCost = wallCost * 3 + extraCost;
+        plans.push(plan);
+      }
+      planByKey.set(key, plan);
+    }
+    /* 优先级：近档 → 屏幕高度 → 楼高 → id；同输入永远同一顺序 */
+    plans.sort((a, b) =>
+      b.tier - a.tier ||
+      b.hpx - a.hpx ||
+      b.h - a.h ||
+      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+    );
+    let remaining = detailCap;
+    for (const plan of plans) {
+      if (plan.tier === 2) {
+        if (plan.fullCost <= remaining) {
+          plan.selected = 2;
+          remaining -= plan.fullCost;
+        } else if (plan.wallCost <= remaining) {
+          plan.selected = 1;
+          remaining -= plan.wallCost;
+          stats.detailDropped += 1;
+        } else {
+          plan.selected = 0;
+          stats.detailDropped += 1;
+        }
+      } else if (plan.tier === 1) {
+        if (plan.wallCost <= remaining) {
+          plan.selected = 1;
+          remaining -= plan.wallCost;
+        } else {
+          plan.selected = 0;
+          stats.detailDropped += 1;
+        }
+      }
+    }
+    stats.detailVerts = detailCap - remaining;
+    stats.detailCap = detailCap;
+    stats.lodMpp = lodMpp;
+  }
+
+  let featureIndex = 0;
+    for (const raw of list) {
+      const myIndex = featureIndex++;
       const f = raw as { id?: unknown; properties?: Record<string, unknown>; geometry?: unknown };
       const props = f.properties || {};
       const { rings, holes } = outerRingsOf(f.geometry);
@@ -315,12 +500,15 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const baseRaw = Number(props.h_base ?? props.min_height ?? 0);
       const base = Number.isFinite(baseRaw) && baseRaw > 0 ? Math.min(baseRaw, top - 0.4) : 0;
       const c3d = typeof props.color3d === "string" && props.color3d ? String(props.color3d) : "";
-      /* S2：先把这栋该画的体块/女儿墙算出来。model=0 时 massing/parapets 都是空，
-         后面完全走旧路（影子哈希要求逐字节相同）。 */
-      const primaryPart: BldPartLike = { p: props.p, h: top, hb: base, c: c3d || undefined, geometry: f.geometry };
-      const modelParts = modelOn ? modelPartsOf(props, primaryPart) : null;
-      const massing = modelParts?.massing ?? [];
-      const parapets = modelParts?.parapet ?? [];
+      /* S2/S3：plan 由预扫算好（LOD/预算已决定）。model=0 时 plan 为空，完全走旧路。 */
+      const fId = String((f as { id?: unknown }).id ?? (props as { id?: unknown }).id ?? "");
+      const planKey = fId || "#" + myIndex;
+      const plan = modelOn ? planByKey.get(planKey) : undefined;
+      const massing = plan?.massing ?? [];
+      const parapets = plan?.parapet ?? [];
+      const equipParts = plan?.equip ?? [];
+      const antennaParts = plan?.antenna ?? [];
+      const selectedTier = plan?.selected ?? 0;
       let metaTop = top;
       let metaBase = base;
       if (modelOn && massing.length) {
@@ -353,7 +541,6 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const fi = featureIds.length;
       featureIds.push(String(f.id ?? ""));
       featureMeta.push({ color: hex, h3d: metaTop, hBase: metaBase });
-      const fId = String((f as { id?: unknown }).id ?? (props as { id?: unknown }).id ?? "");
       const massCellRect = atlasUvOf(cellOf(fId));
       const roofRect = atlasUvOf(ROOF_CELL_INDEX);
       const plainRect = atlasUvOf(PLAIN_CELL_INDEX);
@@ -404,7 +591,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         }
         triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
       };
-      const drawSolid = (part: BldPartLike): boolean => {
+      const drawSolid = (part: BldPartLike, wallRect: UvRect = massCellRect): boolean => {
         const t = Number(part.h);
         const b = Number(part.hb);
         if (!Number.isFinite(t) || !Number.isFinite(b)) return false;
@@ -434,12 +621,12 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
             if (a[0] === b2[0] && a[1] === b2[1]) continue;
             const el = Math.hypot(b2[0] - a[0], b2[1] - a[1]) || 1;
             const rep = repeatOf(el, pTop - pBase, undefined);
-            pushWall(a, b2, pBase, pTop, phex, prgb, pbands, massCellRect, rep, 1);
+            pushWall(a, b2, pBase, pTop, phex, prgb, pbands, wallRect, rep, 1);
           }
         }
         return any;
       };
-      const drawBand = (part: BldPartLike): boolean => {
+      const drawBand = (part: BldPartLike, full = true): boolean => {
         const t = Number(part.h);
         const b = Number(part.hb);
         if (!Number.isFinite(t) || !Number.isFinite(b)) return false;
@@ -457,6 +644,14 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         const phex = typeof part.c === "string" && part.c ? themedBuildingHex(part.c, pTop, themeId) : hex;
         const prgb = hexToRgb(phex);
         const pbands = bandsOf(phex);
+        /* LOD1：只画外圈墙（6n），不画内圈/顶环带；设备/天线也不画 */
+        if (!full) {
+          for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            pushWall(outer[i]!, outer[j]!, pBase, pTop, phex, prgb, pbands, plainRect, oneRep, 1);
+          }
+          return true;
+        }
         const capRgb: Rgb3 = [prgb[0] * ROOF_MUL[0], prgb[1] * ROOF_MUL[1], prgb[2] * ROOF_MUL[2]];
         for (let i = 0; i < n; i++) {
           const j = (i + 1) % n;
@@ -556,15 +751,31 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         }
       }
       }
-      /* S2：有 p=4 就画环带（体块/主体之上）；环带按中点拆外圈 + 0.7m 内圈 */
-      if (modelOn) {
+      /* S3：细节按预算选出的档画。tier1 = 女儿墙外圈墙；tier2 = 全带 + 设备 + 天线。 */
+      if (modelOn && selectedTier >= 1) {
         for (const part of parapets) {
-          if (drawBand(part)) {
+          if (drawBand(part, selectedTier === 2)) {
             added = true;
             stats.parapetBands += 1;
             modeled = true;
           } else {
             stats.parapetDropped += 1;
+          }
+        }
+      }
+      if (modelOn && selectedTier === 2) {
+        for (const part of equipParts) {
+          if (drawSolid(part, plainRect)) {
+            added = true;
+            stats.equipParts += 1;
+            modeled = true;
+          }
+        }
+        for (const part of antennaParts) {
+          if (drawSolid(part, plainRect)) {
+            added = true;
+            stats.antennaParts += 1;
+            modeled = true;
           }
         }
       }

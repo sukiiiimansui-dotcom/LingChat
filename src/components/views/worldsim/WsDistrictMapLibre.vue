@@ -2420,6 +2420,41 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       m.once("load", flushPending);
       /* 帧率采集的行为打点：样式每次（重）加载都标一段，上下文丢失后的重建也能跟 fps 对上 */
       m.on("style.load", () => fpsMark("style-reload"));
+      /* ══ 3D 地形（自用开关 `?terrain=1`，默认关）════════════════════════════════════
+         高程瓦片用 **AWS 的 Terrarium 编码**（免 key、公网直连），`setTerrain` 打开后：
+           · 地面的起伏由 MapLibre 自己画（含 `centerClampedToGround` 的相机贴地效果）；
+           · 垂直夸张由 `?terr=<数字>` 给（缺省 1.2）。
+         ⚠️ 叠加层（three）现在是**平地投影**：开地形后它那套假设不成立 ⇒ 这条先只给
+            「地图」模式用，叠加层的地形适配另做（`?terrain=1` + `?renderer=overlay` 时
+            会看到楼浮在地面上，属已知限制）。 */
+      if (/[?&]terrain=1\b/.test(location.search)) {
+        const ex = (() => {
+          const hit = location.search.match(/[?&]terr=([\d.]+)/);
+          const v = hit ? Number(hit[1]) : NaN;
+          return Number.isFinite(v) && v > 0 ? v : 1.2;
+        })();
+        const mm = m as unknown as {
+          getSource?: (id: string) => unknown;
+          addSource?: (id: string, spec: unknown) => void;
+          setTerrain?: (spec: unknown) => void;
+        };
+        const ensureTerrain = (): void => {
+          try {
+            if (!mm.getSource?.("ws-dem")) {
+              mm.addSource?.("ws-dem", {
+                type: "raster-dem",
+                tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+                encoding: "terrarium",
+                tileSize: 256,
+                maxzoom: 15,
+              });
+            }
+            mm.setTerrain?.({ source: "ws-dem", exaggeration: ex });
+          } catch { /* 地形失败不影响地图 */ }
+        };
+        m.once("style.load", ensureTerrain);
+        ensureTerrain();
+      }
       window.setTimeout(flushPending, 4000);
     } catch { /* 包装失败不影响地图 */ }
     /* 建图后补 resize（含观察容器尺寸变化）—— 见上面那段"真 P0"的说明 */

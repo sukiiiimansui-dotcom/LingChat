@@ -36,6 +36,12 @@ export interface RoofMapLike {
 export interface RoofDiagLast {
   via: "matrix3d" | "approx" | "ground" | "none";
   h: number;
+  /** 传进来的 map 是什么（`hasTransform:false` 时用来分辨"是不是原生 Map"） */
+  mapCtor: string;
+  hasProject: boolean;
+  hasGetPitch: boolean;
+  hasGetZoom: boolean;
+  hasGetCenter: boolean;
   hasTransform: boolean;
   hasLSTP: boolean;
   hasCurrent: boolean;
@@ -86,8 +92,15 @@ export function projectRoofOn(map: RoofMapLike | null | undefined, lng: number, 
   roofDiag.calls += 1;
   const h = Number(height) || 0;
   const helper = { getElevationForLngLat: () => h };
+  let ctor = "";
+  try { ctor = String((map as { constructor?: { name?: string } })?.constructor?.name || ""); } catch { ctor = ""; }
   const diag: RoofDiagLast = {
     via: "none", h,
+    mapCtor: ctor,
+    hasProject: typeof map?.project === "function",
+    hasGetPitch: typeof map?.getPitch === "function",
+    hasGetZoom: typeof map?.getZoom === "function",
+    hasGetCenter: typeof map?.getCenter === "function",
     hasTransform: !!map?.transform,
     hasLSTP: typeof map?.transform?.locationToScreenPoint === "function",
     hasCurrent: !!map?.transform?.currentTransform,

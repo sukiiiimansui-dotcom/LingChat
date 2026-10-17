@@ -72,6 +72,8 @@ export interface WsNameBindProbe {
   bound: number;
   unboundPoi: number;
   hidden: number;
+  /** 被收起规则命中的个数（floor 补位前；判"规则有没有误收"看这个） */
+  hiddenByRule: number;
   boundButNotDrawn: number;
   noBldNear: number;
   ambiguous: number;
@@ -84,6 +86,10 @@ export interface WsNameBindProbe {
   roofNull: number;
   /** 3D 入口的异常/可用性/高程输入（`lastFail` 只在非 matrix3d 时更新） */
   roofErr: { calls: number; matrix3d: number; approx: number; ground: number; none: number; lastFail: unknown } | null;
+  /** 绑定用的楼从哪来（`drawn` / `pool` 回退 / `none`）+ 数量 + 其中有高度的 */
+  drawn: { source: string; count: number; withHeight: number };
+  /** 兜底补位的未绑 POI 名个数（规则要收、但屏上 0 个绑楼名字时） */
+  fallbackNames: number;
   /** 分档计数（"为什么没字"）：POI 候选 / 被 z 闸挡掉的 POI / 片区行政名候选 */
   poiCandidates: number;
   poiGated: number;

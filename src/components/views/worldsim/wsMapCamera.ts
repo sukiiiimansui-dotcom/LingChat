@@ -107,6 +107,9 @@ export function createMapCamera(ctx: MapCameraCtx) {
      之后每帧算它现在在哪 ⇒ 差值就是整层的位移（地图平移 = 全体标签同位移，所以这是**精确**的）。
      只在**平移**（pan）时这么做；旋转/俯仰不是平移，那时整层淡到 0.25 就够（§4.2）。 */
   let panAnchor: { lng: number; lat: number; x: number; y: number } | null = null;
+  /** 容器跟手的最小写间隔（~15Hz）；真机 6~10fps 时本来就不会触发，快机上减少 DOM 写 */
+  let lastPanWriteAt = 0;
+  const PAN_WRITE_MIN_MS = 66;
   function onMoveStart(map = ctx.mapNow()): void {
     if (!namesOn.value || !nameNodes.value.length) return;
     const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
@@ -119,6 +122,9 @@ export function createMapCamera(ctx: MapCameraCtx) {
   }
   function onMove(map = ctx.mapNow()): void {
     if (!panAnchor || !cameraMoving.value) return;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (now - lastPanWriteAt < PAN_WRITE_MIN_MS) return;
+    lastPanWriteAt = now;
     const m = map as unknown as { project?: (c: [number, number]) => { x: number; y: number } } | null;
     if (!m?.project) return;
     const p = m.project([panAnchor.lng, panAnchor.lat]);

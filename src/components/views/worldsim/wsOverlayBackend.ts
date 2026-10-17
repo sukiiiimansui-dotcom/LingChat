@@ -760,6 +760,9 @@ export function createOverlayBackend(): WsRenderBackend {
   let mapRebinds = 0;
   /** 名字层 DOM 写入次数（MutationObserver，只读）；名字节点现数在回传时取 */
   let labelWrites = 0;
+  /** 拆开：名字节点自身的写入 vs 容器（跟手 translate3d）的写入 */
+  let labelNodeWrites = 0;
+  let labelContainerWrites = 0;
   let labelObs: MutationObserver | null = null;
   /**
    * **藏楼"漂移"**（真机 2026-10-17：写后立刻读是 none，之后又变 visible）
@@ -1381,6 +1384,8 @@ export function createOverlayBackend(): WsRenderBackend {
         overlayFrames: drawsTotal,
         rebuildFrames: drawsFromRebuild,
         labelWrites,
+        labelNodeWrites,
+        labelContainerWrites,
         labelNodes: (() => { try { return document.querySelectorAll(".ws-labs *").length; } catch { return -1; } })(),
         dpr: renderer?.getPixelRatio?.() ?? null,
         dprCap: dprCapOf(),
@@ -1656,8 +1661,16 @@ export function createOverlayBackend(): WsRenderBackend {
           if (labRoot && MO) {
             labelObs = new MO((list) => {
               for (const rec of list) {
-                if (rec.type === "attributes") labelWrites += 1;
-                else labelWrites += rec.addedNodes.length + rec.removedNodes.length;
+                const t = rec.target as Element | null;
+                const isNode = !!t && typeof (t as Element).classList?.contains === "function" && (t as Element).classList.contains("ws-lab");
+                if (rec.type === "attributes") {
+                  labelWrites += 1;
+                  if (isNode) labelNodeWrites += 1; else labelContainerWrites += 1;
+                } else {
+                  const n = rec.addedNodes.length + rec.removedNodes.length;
+                  labelWrites += n;
+                  labelContainerWrites += n;
+                }
               }
             });
             labelObs.observe(labRoot, { subtree: true, childList: true, attributes: true, attributeFilter: ["style", "class"] });

@@ -152,6 +152,27 @@ export const wsBuildingsHost: { set: (f: ((why: string) => void) | null) => void
   };
 })();
 
+/**
+ * **叠加层实际画出去的楼 id 登记处**（2026-10-17，名字绑定用）。
+ *
+ * 名字层绑的是"已画楼"（宿主 `drawnBld`），但叠加层现在画的是**瓦片扫出来的那批**，
+ * 两套 id 集合不是同一份 ⇒ 视野一换就绑不上、名字发不上来。
+ * 叠加层每次重建后把自己画出去的 id（带 `h3d/h_base`，够名字层做楼顶锚点）登记在这里；
+ * 宿主读"已画楼"时**优先用这里**（叠加层负责画楼时），退出时清空。
+ */
+export const wsDrawnBld: {
+  set: (list: ReadonlyArray<{ id: string; properties: Record<string, unknown> }> | null) => void;
+  get: () => ReadonlyArray<{ id: string; properties: Record<string, unknown> }> | null;
+} = (() => {
+  let cur: ReadonlyArray<{ id: string; properties: Record<string, unknown> }> | null = null;
+  return {
+    set: (list) => {
+      cur = list && list.length ? list : null;
+    },
+    get: () => cur,
+  };
+})();
+
 export const wsDiag = {
   /** 引擎现在走哪条路（`init` / `webgl` / `waiting` / `failed` / `fallback2d`） */
   renderKind: "",

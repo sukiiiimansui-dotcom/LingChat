@@ -34,7 +34,7 @@ import {
 } from "./wsRenderBackend";
 import { FOV_Y, NEAR_M, camFrameOf, farOf, nearOf } from "./wsThreeCam";
 import { matEq, projectPoint, projectPointY } from "./wsMatMul";
-import { alignProbeOn, wsBuildingsHost, wsDiag, wsLiveMap } from "./wsRenderBackend";
+import { alignProbeOn, wsBuildingsHost, wsDiag, wsDrawnBld, wsLiveMap } from "./wsRenderBackend";
 import { ensureBldLayers, hasBldLayers } from "./wsBldLayerSwitch";
 import { bldLayerSpecsFor, mvtBldLayerSpecs } from "./wsDistrictScene";
 import { mvtEnabled } from "./wsMvtTiles";
@@ -609,6 +609,17 @@ export function createOverlayBackend(): WsRenderBackend {
     fpsMark("mesh-swap");
     bldMesh = newer;
     data = next;
+    /* 把"画出去的这批楼"登记给名字层（id + 高度；瓦片路径没有 name，名字由名字索引补） */
+    try {
+      const ids = data?.featureIds ?? [];
+      const metas = data?.featureMeta ?? [];
+      const list = ids.map((id, i) => ({
+        id: String(id),
+        properties: { h3d: Number(metas[i]?.h3d ?? 0), h_base: Number(metas[i]?.hBase ?? 0) },
+      }));
+      wsDrawnBld.set(list);
+      drawnPublished = list.length;
+    } catch { /* 登记失败不影响渲染 */ }
     /* 网格换好了 ⇒ 这一刻才切锚点（相机与网格从此又是同一个局部框架） */
     if (nextAnchor) anchor = nextAnchor;
     /* 网格帧采样点（最多 6 条）：楼心局部坐标（网格帧）+ 真实经纬度 */
@@ -692,6 +703,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let mvtQueries = 0;
   /** 叠加层自己的重建次数（与落图线的 refreshDone 不是一回事） */
   let rebuildCount = 0;
+  /** 最近一次登记给名字层的楼数（回传用） */
+  let drawnPublished = 0;
 
   /**
    * 从**瓦片（矢量源）**取当前视野的楼。
@@ -1507,7 +1520,10 @@ export function createOverlayBackend(): WsRenderBackend {
         mvtQueryMs,
         mvtQueryMaxMs,
         mvtQueries,
-        rebuilds: rebuildCount, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
+        rebuilds: rebuildCount,
+        /* 名字绑定用：叠加层画出去的这批（宿主读"已画楼"时会优先用它） */
+        drawnSource: "overlay",
+        drawnIds: drawnPublished, refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
       /* 立面图集：on = 开关；applied = 补丁真的挂上了；patchFailed = 着色器锚点对不上（退回纯色） */
       facade: { on: facadeOn, applied: facadeApplied, patchFailed: facadePatchFailed, textureFailed: facadeTextureFailed },
@@ -1947,6 +1963,7 @@ export function createOverlayBackend(): WsRenderBackend {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = 0;
       try { labelObs?.disconnect(); } catch { /* ignore */ }
+      try { wsDrawnBld.set(null); } catch { /* ignore */ }
       labelObs = null;
       disposeMesh();
       /* 先**摘掉事件**再还原：`setLayoutProperty` 会同步触发 `styledata`，

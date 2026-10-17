@@ -434,9 +434,9 @@ export function nameVerdictLine(f: NameFacts): string {
       ? ` · 🏢 名字↔楼 数不出来：${f.bindWhy || "没拿到楼几何"}`
       : ` · 🏢 名字↔楼 绑 ${f.boundNames} / 未绑POI ${f.unboundPoiNames}${f.hiddenUnbound ? `（z≥14 收起 ${f.hiddenUnbound}）` : ""}` +
         (f.bindClass === "skipped"
-          ? "（未绑分类未算：仅 ?wsalign=1）"
-          : `（没画 ${f.boundButNotDrawn} · 无楼 ${f.noBldNear} · 多义 ${f.ambiguous} · 无id ${f.noBldId} · 重复 ${f.droppedByDupBld}`) +
-        ` · 楼顶投影 3D ${f.roof3d}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`;
+          ? `（未绑分类未算：仅 ?wsalign=1 · 楼顶投影 3D ${f.roof3d}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`
+          : `（没画 ${f.boundButNotDrawn} · 无楼 ${f.noBldNear} · 多义 ${f.ambiguous} · 无id ${f.noBldId} · 重复 ${f.droppedByDupBld}` +
+            ` · 楼顶投影 3D ${f.roof3d}/地面 ${f.roofGround}${f.roofNull ? "/投不出 " + f.roofNull : ""}）`);
   return (
     `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}` +
     `（候选 ${f.candidates}${f.capped ? " · 被上限截断" : ""}）` +

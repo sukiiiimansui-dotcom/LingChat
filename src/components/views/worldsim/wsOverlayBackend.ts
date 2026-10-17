@@ -159,6 +159,8 @@ export function createOverlayBackend(): WsRenderBackend {
   /** 每帧从地图读到的四量（**只是读数的缓存**，不是"我们的相机状态"） */
   let lastSeen: { center: { lat: number; lng: number }; radius: number; bearing: number; pitch: number } | null = null;
   let refreshTimer = 0;
+  /** 重锚正在异步重建（别叠加第二次；也保证"锚点与网格同一刻切"） */
+  let reanchorInFlight = false;
   const errors: string[] = [];
 
   /* ── 上下文与降级计数（`?wsalign=1` 的回传要带着它们：真机"划着划着变成 2D 自绘路"要有账）── */
@@ -386,10 +388,20 @@ export function createOverlayBackend(): WsRenderBackend {
   }
 
   /** 用一份 `bld` 要素重建楼（几何走共用模块 ⇒ 与 three 那条路画的是同一批） */
-  function rebuild(themeId: string, fcIn: WsRenderFc | null): void {
+  function rebuild(themeId: string, fcIn: WsRenderFc | null, nextAnchor: { lat: number; lng: number; cos: number } | null = null): void {
     /* 帧率采集的行为打点：几何重建是本模块最贵的一段（覆盖层低帧率窗口要能归因到这里） */
     fpsMark("overlay-rebuild");
     const fc = fcIn;
+    /* 🔴 2026-10-17 真机"楼会变掉/多出奇怪的楼"：**锚点必须与网格同一刻切**。
+       原来是先换全局 `anchor`、再异步重建 ⇒ 重建那几十~几百毫秒里，**旧网格（旧锚点坐标）**
+       配着**新锚点相机**画，整体按锚点位移（最多 2 km）瞬移。
+       现在：建网格用 `useAnchor`（目标锚点），建好换上网格的那一刻才 `anchor = nextAnchor`。 */
+    const useAnchor = nextAnchor ?? anchor;
+    const toLocalForBuild = (lng: number, lat: number): [number, number] => {
+      const a = useAnchor;
+      if (!a) return [0, 0];
+      return [(lng - a.lng) * M_PER_DEG * a.cos, -(lat - a.lat) * M_PER_DEG];
+    };
     /* 🔴 2026-10-16 真机"楼会变掉"那条：重建**必须是原子的** ——
        旧网格一直画着，新网格**先在本地建好**再一次性换上；只有"新网格是空的/建不出来"
        才允许把地图那套还原。原来先 `disposeMesh()`（屏幕上一瞬间没楼）+ 先 `restoreMapBuildings()`
@@ -397,7 +409,7 @@ export function createOverlayBackend(): WsRenderBackend {
     const next = fc
       ? buildBldMeshData({
           features: fc.features,
-          toLocal: (lng: number, lat: number) => toLocal(lng, lat),
+          toLocal: toLocalForBuild,
           themeId,
           cap: BLD_CAP,
         })
@@ -424,6 +436,8 @@ export function createOverlayBackend(): WsRenderBackend {
     fpsMark("mesh-swap");
     bldMesh = newer;
     data = next;
+    /* 网格换好了 ⇒ 这一刻才切锚点（相机与网格从此又是同一个局部框架） */
+    if (nextAnchor) anchor = nextAnchor;
     /* 覆盖面：**同一份 fc、同一个视野**两边各数一遍（楼少的根因要能一眼看出来） */
     if (fc) {
     try {
@@ -453,6 +467,11 @@ export function createOverlayBackend(): WsRenderBackend {
       cover.thinDropped = next.stats.thinDropped;
       cover.shapeDropped = next.stats.shapeDropped;
       cover.judgedAt = performance.now();
+      /* 视野外（我们画了、但不在当前视野半径内）—— 真机"多出奇怪的楼"先看这两个数：
+         `meshOut` = 网格里落在视野外的栋数（跨视野累积仓库的主要来源），
+         `srcOut` = 源里视野外的要素数（它不为 0 是**累积仓库的设计**，不是 bug）。 */
+      cover.meshOut = Math.max(0, next.stats.buildings - act);
+      cover.srcOut = Math.max(0, fc.features.length - exp);
       try {
         const hs = next.featureMeta.map((m) => Number(m.h3d)).filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
         const q = (pp: number): number => (hs.length ? hs[Math.min(hs.length - 1, Math.max(0, Math.floor(hs.length * pp)))]! : 0);
@@ -572,8 +591,8 @@ export function createOverlayBackend(): WsRenderBackend {
    */
   /** 网格里每栋楼的高度分布（给名字层"楼顶投影 vs 楼本来就是平的"那条判据） */
   let meshHeights: { n: number; p10: number; p50: number; p90: number; flat: number } | null = null;
-  const cover: { expected: number; actual: number; srcAll: number; meshAll: number; thinDropped: number; shapeDropped: number; judgedAt: number } =
-    { expected: 0, actual: 0, srcAll: 0, meshAll: 0, thinDropped: 0, shapeDropped: 0, judgedAt: 0 };
+  const cover: { expected: number; actual: number; srcAll: number; meshAll: number; thinDropped: number; shapeDropped: number; judgedAt: number; meshOut: number; srcOut: number } =
+    { expected: 0, actual: 0, srcAll: 0, meshAll: 0, thinDropped: 0, shapeDropped: 0, judgedAt: 0, meshOut: 0, srcOut: 0 };
   /** 覆盖面连续判短几次（**两振才出局**：源刚长出来、网格还没跟上时会短暂偏短） */
   let coverStrikes = 0;
   /** 数据通道的账（"为什么只画出一栋"要能查：调度了几次 / 完成几次 / 取了几次数） */
@@ -1082,7 +1101,7 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 藏/还原各发生几次、为什么（真机"楼会变掉"要能查账） */
       pix: { alive: pixAlive, probed: pixEverProbed, strikes: pixStrikes },
       /* 覆盖面（"整屏只有一栋楼"那条：源里有几个 vs 我们画了几个） */
-      cover: { expected: cover.expected, actual: cover.actual, srcAll: cover.srcAll, meshAll: cover.meshAll, thinDropped: cover.thinDropped, shapeDropped: cover.shapeDropped, strikes: coverStrikes },
+      cover: { expected: cover.expected, actual: cover.actual, srcAll: cover.srcAll, meshAll: cover.meshAll, thinDropped: cover.thinDropped, shapeDropped: cover.shapeDropped, meshOut: cover.meshOut, srcOut: cover.srcOut, strikes: coverStrikes },
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
       feed: { refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
@@ -1206,13 +1225,20 @@ export function createOverlayBackend(): WsRenderBackend {
     }
     /* 地图中心漂太远 ⇒ 重锚 + 重建（局部框架的近似误差随距离平方涨） */
     const v = readMapView();
-    if (v && anchor && anchorDriftM(v.center) > REANCHOR_M) {
-      anchor = { lat: v.center.lat, lng: v.center.lng, cos: Math.cos((v.center.lat * Math.PI) / 180) };
+    if (v && anchor && anchorDriftM(v.center) > REANCHOR_M && !reanchorInFlight) {
+      /* 🔴 **不要在这里动 `anchor`**（真机"楼会变掉"就是它）：先记下目标锚点，
+         异步取数据、用目标锚点建网格，**建好那一刻**由 `rebuild` 与网格一起切。 */
+      reanchorInFlight = true;
+      const nextAnchor = { lat: v.center.lat, lng: v.center.lng, cos: Math.cos((v.center.lat * Math.PI) / 180) };
       void (async () => {
-        const fc = await grabBld();
-        if (fc) {
-          lastSource = "source";
-          rebuild(curThemeId, fc);
+        try {
+          const fc = await grabBld();
+          if (fc) {
+            lastSource = "source";
+            rebuild(curThemeId, fc, nextAnchor);
+          }
+        } finally {
+          reanchorInFlight = false;
         }
       })();
     }
@@ -1617,7 +1643,7 @@ export function createOverlayBackend(): WsRenderBackend {
         note:
           `${st?.buildings ?? 0} 栋（叠加在地图上） / ${data?.triangles ?? 0} 三角` +
           (hidCount ? ` / 藏起地图楼 ${hidCount} 层` : ` / 没藏地图楼（${hideGateWhy}）`) +
-          ` / 覆盖 源${cover.expected}:实画${cover.actual}` +
+          ` / 覆盖 源${cover.expected}:实画${cover.actual}（视野外 网格${cover.meshOut}·源${cover.srcOut}）` +
           (cover.thinDropped || cover.shapeDropped ? `（丢扁 ${cover.thinDropped}·丢形 ${cover.shapeDropped}）` : "") +
           (restoredCount ? ` / 已还原 ${restoredCount} 层` : "")
           + ` / 相机跟地图：${lastSeen ? "在跟" : "还没读到"}`

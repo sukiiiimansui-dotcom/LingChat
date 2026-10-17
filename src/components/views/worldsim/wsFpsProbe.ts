@@ -32,6 +32,10 @@ export const FPS_TAGS = [
   "pixel-probe",
   "style-reload",
   "hidden-tab",
+  /* 2026-10-17 追加（wire 下标只能追加）：页面刚起的那 30 秒单独打这个标签，
+     别把初始化/首屏算进 idle —— 真机那批"17.6s 起连续 8 个 0fps 窗 · tag=idle"
+     就是标签密度不足造成的**没法归因**。 */
+  "page-load",
 ] as const;
 
 export type FpsTag = (typeof FPS_TAGS)[number];
@@ -74,6 +78,7 @@ const TAG_TTL_MS: Record<FpsTag, number> = {
   "pixel-probe": 120,
   "style-reload": 1500,
   "hidden-tab": 0,
+  "page-load": 30000,
 };
 
 const TAG_INDEX: Record<string, number> = (() => {
@@ -232,6 +237,19 @@ export interface FpsReport {
   dropThr: number | null;
   /** 标签下标 ↔ 名字（自描述，便于离线脚本解） */
   tags: readonly string[];
+  /* ── 2026-10-17 追加（`fv: 2` 起；老字段语义不变，新字段只是多出来）── */
+  /** 回传格式修订号（2 = 有长任务/停滞/首帧） */
+  fv: 2;
+  /** 首帧时刻（相对 `t0` 的毫秒；null = 采样期里还没有帧） */
+  fp: number | null;
+  /** ≥100ms 的长任务**总数**（PerformanceObserver longtask） */
+  ltN: number;
+  /** 最长的一次长任务（ms） */
+  ltMax: number;
+  /** 长任务 top10（按时长降序）：[相对 t0 开始, 时长] —— 把"8 秒 0fps 却标 idle"钉到具体活上 */
+  lt: Array<[number, number]>;
+  /** **停滞事件**：连续 ≥3 个窗 fps=0（且非 hidden）⇒ 带当时的标签与"最近一次标签切换时刻" */
+  st: Array<{ t: number; n: number; tag: string; tagAt: number | null }>;
 }
 
 export interface FpsMeter {
@@ -253,6 +271,10 @@ export interface FpsMeter {
   ringTotal(): number;
   /** 窗口内计数器（自检用） */
   counters(): { frames: number; maxGapMs: number; jank: number; elapsedMs: number };
+  /** 记一条长任务（≥100ms；`PerformanceObserver({type:"longtask"})` 喂进来） */
+  addLongTask(startMs: number, durMs: number): void;
+  /** 最近一次**标签切换**的时刻（停滞事件要带它：出事那一刻到底在干什么） */
+  lastTagAt(): number | null;
 }
 
 export interface FpsMeterOptions {
@@ -270,6 +292,14 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
   const nowFn = opts.now ?? (() => performance.now());
   const t0 = opts.t0 ?? nowFn();
   const sid = opts.sid ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+  /* 长任务：最多留 40 条（回传时取 top10；`ltN` 是总数） */
+  const LONG_TASK_KEEP = 40;
+  const longTasks: Array<[number, number]> = [];
+  let ltN = 0;
+  let ltMax = 0;
+  let firstPaint: number | null = null;
+  let lastTagAtMs: number | null = null;
 
   /* 环形缓冲：数值数组，避免每秒分配对象 */
   const ringT = new Float64Array(FPS_RING);
@@ -307,6 +337,7 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
   }
 
   function frame(ts: number): void {
+    if (firstPaint === null) firstPaint = Math.max(0, ts - t0);
     frames += 1;
     if (lastFrame >= 0) {
       const gap = ts - lastFrame;
@@ -329,6 +360,7 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
     acc[labelNow] = (acc[labelNow] as number) + Math.max(0, now - labelSince);
     labelSince = now;
     labelNow = id;
+    lastTagAtMs = now;
     const ttl = TAG_TTL_MS[tag];
     labelExpire = ttl > 0 ? now + ttl : 0;
   }
@@ -396,6 +428,20 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
     return out;
   }
 
+  /** 长任务（`PerformanceObserver({type:"longtask"})` 喂进来）：留最长的 40 条，回传 top10 */
+  function addLongTask(startMs: number, durMs: number): void {
+    if (!(durMs >= FPS_JANK_MS)) return;
+    ltN += 1;
+    if (durMs > ltMax) ltMax = durMs;
+    const rel = Math.max(0, startMs - t0);
+    if (longTasks.length < LONG_TASK_KEEP) longTasks.push([rel, durMs]);
+    else {
+      let worst = 0;
+      for (let i = 1; i < longTasks.length; i++) if ((longTasks[i] as [number, number])[1] < (longTasks[worst] as [number, number])[1]) worst = i;
+      if (durMs > (longTasks[worst] as [number, number])[1]) longTasks[worst] = [rel, durMs];
+    }
+  }
+
   function snapshot(now: number = nowFn()): FpsReport {
     const all = windows();
     const stat = all.filter((w) => w.tag !== HIDDEN_TAG);
@@ -419,6 +465,47 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
     for (const w of stat) {
       if (w.gapMs > worstGap) worstGap = w.gapMs;
       if (w.jank > 0) jankWindows += 1;
+    }
+
+    /* **停滞事件**（2026-10-17 真机「8 秒 0fps 但 tag=idle」）：连续 ≥3 个窗 fps=0 且非 hidden。
+       带上那一串的起始时刻、窗数、当时主导标签、以及**最近一次标签切换时刻**（出事那一刻在干什么）。
+       `fps === 0` 是"这一秒一帧都没有"——不是"帧率低"，所以单独成一条，别混进 drops。 */
+    const stalls: Array<{ t: number; n: number; tag: string; tagAt: number | null }> = [];
+    {
+      let run = 0;
+      let runStart = 0;
+      for (let i = 0; i < all.length; i++) {
+        const ww = all[i] as FpsWindow;
+        const zero = ww.tag !== HIDDEN_TAG && ww.fps <= 0;
+        if (zero) {
+          if (run === 0) runStart = i;
+          run += 1;
+        } else {
+          if (run >= 3) {
+            const seg = all.slice(runStart, runStart + run);
+            const counts = new Array<number>(FPS_TAG_COUNT).fill(0);
+            for (const x of seg) counts[x.tag] = (counts[x.tag] as number) + 1;
+            stalls.push({
+              t: Math.round((seg[0] as FpsWindow).tMs - t0),
+              n: run,
+              tag: FPS_TAGS[pickDominant(counts)] as string,
+              tagAt: lastTagAtMs === null ? null : Math.round(lastTagAtMs - t0),
+            });
+          }
+          run = 0;
+        }
+      }
+      if (run >= 3) {
+        const seg = all.slice(runStart, runStart + run);
+        const counts = new Array<number>(FPS_TAG_COUNT).fill(0);
+        for (const x of seg) counts[x.tag] = (counts[x.tag] as number) + 1;
+        stalls.push({
+          t: Math.round((seg[0] as FpsWindow).tMs - t0),
+          n: run,
+          tag: FPS_TAGS[pickDominant(counts)] as string,
+          tagAt: lastTagAtMs === null ? null : Math.round(lastTagAtMs - t0),
+        });
+      }
     }
 
     const perReport = Math.max(1, Math.ceil(FPS_REPORT_MS / FPS_WINDOW_MS));
@@ -470,6 +557,12 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
       },
       w: wOut,
       cn: ringTotal,
+      fv: 2,
+      fp: firstPaint === null ? null : Math.round(firstPaint),
+      ltN,
+      ltMax: Math.round(ltMax),
+      lt: [...longTasks].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([t, d]) => [Math.round(t), Math.round(d)] as [number, number]),
+      st: stalls.slice(-5),
       dropThr: dropThr === null ? null : round1(dropThr),
       tags: FPS_TAGS,
     };
@@ -495,6 +588,8 @@ export function createFpsMeter(opts: FpsMeterOptions = {}): FpsMeter {
     currentTag: () => FPS_TAGS[labelNow] as FpsTag,
     ringTotal: () => ringTotal,
     counters: () => ({ frames, maxGapMs: Math.round(maxGap), jank, elapsedMs: Math.round(nowFn() - winStart) }),
+    addLongTask,
+    lastTagAt: () => lastTagAtMs,
   };
 }
 
@@ -531,6 +626,8 @@ interface ActiveProbe {
   onVisibility: () => void;
   hudEl: HTMLElement | null;
   lastP10: number | null;
+  /** 长任务观察器（stop 时断开） */
+  ltObs: PerformanceObserver | null;
 }
 
 let active: ActiveProbe | null = null;
@@ -581,6 +678,9 @@ export function installFpsProbe(opts: { search?: string; sid?: string } = {}): b
   if (!fpsProbeOn(search)) return false;
 
   const core = createFpsMeter({ send: beacon, sid: opts.sid });
+  /* 页面刚起的 30 秒单独打 `page-load`（TTL 30s）：真机那批"17.6s 起 8 个 0fps 窗 · tag=idle"
+     就是因为初始化阶段被标成了 idle，没法归因。 */
+  try { core.mark("page-load"); } catch { /* 打点失败不影响采样 */ }
   const hudEl = fpsHudOn(search) ? makeHud() : null;
   const probe: ActiveProbe = {
     core,
@@ -596,6 +696,7 @@ export function installFpsProbe(opts: { search?: string; sid?: string } = {}): b
     },
     hudEl,
     lastP10: null,
+    ltObs: null,
   };
 
   const tick = (ts: number): void => {
@@ -620,6 +721,24 @@ export function installFpsProbe(opts: { search?: string; sid?: string } = {}): b
     }
   }, FPS_REPORT_MS);
 
+  /* 🔴 长任务观measure（2026-10-17 真机「8 秒 0fps 但 tag=idle」）：主线程上任何 ≥100ms 的
+     同步活都会被记下来（开始时刻 + 时长，回传 top10）⇒ 停滞事件能直接指到"谁干的"。
+     浏览器不支持就静默跳过（老内核/桌面）。 */
+  let ltObs: PerformanceObserver | null = null;
+  try {
+    const PO = (window as unknown as { PerformanceObserver?: typeof PerformanceObserver }).PerformanceObserver;
+    if (PO) {
+      ltObs = new PO((list) => {
+        for (const e of list.getEntries()) {
+          try { core.addLongTask(Number(e.startTime) || 0, Number(e.duration) || 0); } catch { /* 单条失败跳过 */ }
+        }
+      });
+      ltObs.observe({ entryTypes: ["longtask"] });
+    }
+  } catch {
+    ltObs = null;
+  }
+
   try {
     document.addEventListener("visibilitychange", probe.onVisibility);
     if (document.visibilityState === "hidden") core.mark("hidden-tab");
@@ -627,6 +746,7 @@ export function installFpsProbe(opts: { search?: string; sid?: string } = {}): b
     /* 没挂上也能跑：只是少 hidden-tab 标签 */
   }
 
+  (probe as unknown as { ltObs?: PerformanceObserver | null }).ltObs = ltObs;
   active = probe;
   if (hudEl) paintHud(probe, null);
   return true;
@@ -652,6 +772,11 @@ export function stopFpsProbe(): void {
     document.removeEventListener("visibilitychange", probe.onVisibility);
   } catch {
     /* 已移除 */
+  }
+  try {
+    (probe as unknown as { ltObs?: PerformanceObserver | null }).ltObs?.disconnect();
+  } catch {
+    /* 已断开 */
   }
   try {
     probe.hudEl?.remove();

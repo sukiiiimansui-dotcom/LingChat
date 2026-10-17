@@ -30,6 +30,7 @@ import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
 import { bandRingsOf, massingOf, modelPartsOf, type BldPartLike } from "./wsBldModel";
 import { DEFAULT_LOD_MPP, DETAIL_VERTS_MAX, mppAtZoom, sharedBldLodState, type BldLodState, type LodTier } from "./wsBldLod";
+import { ROOF_VERTS_MAX, roofKindEligible, roofPlanOf, type RoofPlan } from "./wsBldRoof";
 
 type Pt2 = readonly [number, number];
 type Rgb3 = [number, number, number];
@@ -241,6 +242,12 @@ export interface BldMeshInput {
     state?: BldLodState;
     forceTier?: LodTier;
   };
+  /** S4 坡屋顶：auto（默认）/ all（变异：未知类型也做）/ off（影子）；
+   *  verts = 屋顶总顶点预算（缺省 `ROOF_VERTS_MAX`）。 */
+  roof?: {
+    force?: "auto" | "all" | "off";
+    verts?: number;
+  };
 }
 
 /** 与 `WsThreeDiag` 里那几个计数逐字对应（**搬迁不改行为**：数字含义一字不变） */
@@ -276,6 +283,12 @@ export interface BldMeshStats {
   antennaParts: number;
   /** 本次用的 mpp（米/CSS 像素；0 = 没走 LOD/建模） */
   lodMpp: number;
+  /** S4：选中的坡屋顶数 / 屋顶顶点 / 预算 / 因预算丢掉 / 各类型数 */
+  roofs: number;
+  roofVerts: number;
+  roofCap: number;
+  roofDropped: number;
+  roofTypes: { gable: number; hip: number; pyramid: number };
 }
 
 export interface BldMeshData {
@@ -329,6 +342,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     fromReal: 0, fromLevels: 0, fromKind: 0, thinDropped: 0, shapeDropped: 0,
     modeledBuildings: 0, massingBuildings: 0, massingParts: 0, parapetBands: 0, parapetDropped: 0, massFallback: 0,
     lodTiers: [0, 0, 0], detailVerts: 0, detailCap: 0, detailDropped: 0, equipParts: 0, antennaParts: 0, lodMpp: 0,
+    roofs: 0, roofVerts: 0, roofCap: 0, roofDropped: 0, roofTypes: { gable: 0, hip: 0, pyramid: 0 },
   };
   const pos: number[] = [];
   const col: number[] = [];
@@ -386,10 +400,13 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     wallCost: number;
     fullCost: number;
     selected: 0 | 1 | 2;
+    roof: RoofPlan | null;
+    roofSelected: boolean;
   };
   const planByKey = new Map<string, DetailPlan>();
   if (modelOn) {
     const plans: DetailPlan[] = [];
+    const roofCandidates: Array<{ plan: DetailPlan; rp: RoofPlan }> = [];
     let pi = 0;
     for (const raw of list) {
       const myIndex = pi++;
@@ -418,7 +435,21 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         key, tier, hpx, h: hTop, massing,
         parapet: [], equip: [], antenna: [],
         wallCost: 0, fullCost: 0, selected: 0,
+        roof: null, roofSelected: false,
       };
+      /* S4：没有体块的低层住宅才算坡屋顶；远景也要（轮廓），不受 LOD 门控 */
+      const roofForce = input.roof?.force ?? "auto";
+      if (massing.length === 0 && roofForce !== "off" && (roofForce === "all" || roofKindEligible(props, top))) {
+        const { rings: rr } = outerRingsOf(f.geometry);
+        if (rr.length === 1 && rr[0]!.length >= 4) {
+          const pts = rr[0]!.map(([lng, lat]) => toLocal(lng, lat));
+          const rp = roofPlanOf(props, pts, top, base, { force: roofForce });
+          if (rp) {
+            plan.roof = rp;
+            roofCandidates.push({ plan, rp });
+          }
+        }
+      }
       if (tier > 0) {
         const mp = modelPartsOf(props, primaryPart);
         const parapet: BldPartLike[] = [];
@@ -484,6 +515,27 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     stats.detailVerts = detailCap - remaining;
     stats.detailCap = detailCap;
     stats.lodMpp = lodMpp;
+    /* S4 屋顶预算：h 高 → 面积大 → id 小优先；超了不画并计数 */
+    const roofCapRaw = Number(input.roof?.verts);
+    const roofCap = Number.isFinite(roofCapRaw) && roofCapRaw >= 0 ? roofCapRaw : ROOF_VERTS_MAX;
+    roofCandidates.sort((a, b) =>
+      b.rp.peak - a.rp.peak ||
+      b.rp.area - a.rp.area ||
+      (a.plan.key < b.plan.key ? -1 : a.plan.key > b.plan.key ? 1 : 0)
+    );
+    let roofLeft = roofCap;
+    for (const item of roofCandidates) {
+      if (item.rp.verts <= roofLeft) {
+        item.plan.roofSelected = true;
+        roofLeft -= item.rp.verts;
+        stats.roofs += 1;
+        stats.roofVerts += item.rp.verts;
+        stats.roofTypes[item.rp.type] += 1;
+      } else {
+        stats.roofDropped += 1;
+      }
+    }
+    stats.roofCap = roofCap;
   }
 
   let featureIndex = 0;
@@ -509,6 +561,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const equipParts = plan?.equip ?? [];
       const antennaParts = plan?.antenna ?? [];
       const selectedTier = plan?.selected ?? 0;
+      const roofPlan = plan?.roofSelected && plan.roof ? plan.roof : null;
       let metaTop = top;
       let metaBase = base;
       if (modelOn && massing.length) {
@@ -688,7 +741,10 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         if (!tris.length) continue;
         added = true;
         /* 立面图集：**每栋取一次**（id → 格；不在这里算抖动，抖动走顶点色） */
-        /* 顶盖（法线朝上：算一下叉积，朝下就换序，绝不靠"输入一定是逆时针"） */
+        const wallTop = roofPlan ? roofPlan.eave : top;
+        /* 顶盖（法线朝上：算一下叉积，朝下就换序，绝不靠"输入一定是逆时针"）；
+           有坡屋顶时不画平顶，墙只砌到檐口，顶上由 roofPlan 的三角接。 */
+        if (!roofPlan) {
         for (let i = 0; i < tris.length; i += 3) {
           const a = pts[tris[i]!]!;
           const b = pts[tris[i + 1]!]!;
@@ -709,14 +765,15 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
              （2026-10-11 靶场"对着某栋楼问它命中了谁"那条测出来的）。 */
           triTo.push(fi);
         }
+        }
         /* 墙：每条边一个四边形（不做背面剔除的取舍 —— 材质用 DoubleSide，朝向错了也看得见） */
         for (let i = 0; i < pts.length; i++) {
           const a = pts[i]!;
           const b = pts[(i + 1) % pts.length]!;
           if (a[0] === b[0] && a[1] === b[1]) continue;
           const quad = [
-            [a[0], base, a[1]], [b[0], base, b[1]], [b[0], top, b[1]],
-            [a[0], base, a[1]], [b[0], top, b[1]], [a[0], top, a[1]],
+            [a[0], base, a[1]], [b[0], base, b[1]], [b[0], wallTop, b[1]],
+            [a[0], base, a[1]], [b[0], wallTop, b[1]], [a[0], wallTop, a[1]],
           ];
           /* 墙面法线 = 这条边在水平面里转 90°（朝外那一侧由叉积定；DoubleSide 下无所谓正负，
              只要"同一个朝向拿到同一个系数"） */
@@ -736,7 +793,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           const wb = rgb[2] * tm[2] * (1 - mixW) + mixW;
           /* 立面：这面墙的重复次数（横向按边长、竖向按层数/楼高）与图集格 */
           const cellRect = atlasUvOf(cellOf(fId));
-          const rep = repeatOf(el, top - base, (props as { lv?: unknown }).lv);
+          const rep = repeatOf(el, wallTop - base, (props as { lv?: unknown }).lv);
           const quadUv: Array<[number, number]> = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
           for (let qi = 0; qi < quad.length; qi++) {
             const p = quad[qi]!;
@@ -749,10 +806,23 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           }
           triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
         }
+        /* S4：坡屋顶三角（檐口→脊/顶点）；屋顶面用屋面格，平顶盖已跳过 */
+        if (roofPlan) {
+          const roofRgb: Rgb3 = [rgb[0] * ROOF_MUL[0], rgb[1] * ROOF_MUL[1], rgb[2] * ROOF_MUL[2]];
+          for (const face of roofPlan.faces) {
+            for (const p of face) {
+              pushV(p[0], p[1], p[2], roofRgb[0], roofRgb[1], roofRgb[2], 0.5, 0.5, roofRect, oneRep);
+              grow(p[0], p[2]);
+            }
+            triTo.push(fi);
+          }
+          added = true;
+          modeled = true;
+        }
       }
       }
       /* S3：细节按预算选出的档画。tier1 = 女儿墙外圈墙；tier2 = 全带 + 设备 + 天线。 */
-      if (modelOn && selectedTier >= 1) {
+      if (modelOn && !roofPlan && selectedTier >= 1) {
         for (const part of parapets) {
           if (drawBand(part, selectedTier === 2)) {
             added = true;
@@ -763,7 +833,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           }
         }
       }
-      if (modelOn && selectedTier === 2) {
+      if (modelOn && !roofPlan && selectedTier === 2) {
         for (const part of equipParts) {
           if (drawSolid(part, plainRect)) {
             added = true;

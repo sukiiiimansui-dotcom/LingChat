@@ -63,6 +63,7 @@
  */
 import type { BldMapLike, StageEventsCtx } from "./wsStageTypes";
 import type { BundleBuildingFeature } from "./wsOfflineFeed";
+import { fpsMark } from "./wsFpsProbe";
 export function createStageEvents(ctx: StageEventsCtx) {
   /* 解构出来的名字与宿主里原来的闭包变量**同名** ⇒ 下面这些回调体除别名之外一个字节都不用动
      （对拍闸 回归测试 断言 diff = 0；别名逐类见文件头）。 */
@@ -309,8 +310,10 @@ export function createStageEvents(ctx: StageEventsCtx) {
        `panBy({duration:0})` 每帧都会发一轮 movestart/move/moveend，不早退就是"每帧重投影 +
        每帧起一条 600ms 去抖 + 每帧重排标签"。跟手由 `joyNamesFollow()` 自己写**一个容器**，
        松手由 `onJoyHalt()` **恰好一次**重算 —— 判据 3/4/5/6 都钉在这里。 */
-    m.on("movestart", () => { if (joyActiveNow()) return; onMoveStart(); });
-    m.on("move", () => { if (joyActiveNow()) return; onMove(); });
+    /* 帧率采集的行为打点：放在早退**之前** —— 摇杆期间这两个事件照样每帧来一次，
+       只有打点能说明"这些低帧率的窗口是在移动中"。打点本身不分配、不碰 DOM。 */
+    m.on("movestart", () => { fpsMark("moving"); if (joyActiveNow()) return; onMoveStart(); });
+    m.on("move", () => { fpsMark("moving"); if (joyActiveNow()) return; onMove(); });
     /* 移动中点击**丢弃**（不排队、不 `queryRenderedFeatures`）：相机在动，射线命中的楼已经移走，
        "点中"本身没意义；排队又会在松手时弹卡（判据 5）。 */
     m.on("click", (e: unknown) => {

@@ -44,6 +44,7 @@
 import { bldPointOf, bundleCellUrl, fetchWithTimeout, bundlePlacesOf, type BundleFetch, type BundleView } from "./wsOfflineFeed";
 import { bundleCellsForView } from "./wsFeatureStore";
 import { bldIdOfFeature } from "./wsBldIdKey";
+import { fpsMark } from "./wsFpsProbe";
 import {
   type LabelItem,
   type LabelPlan,
@@ -813,6 +814,8 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
       last = { ...emptyFacts(false) };
       return emit();
     }
+    /* 帧率采集的行为打点：取数/避让/落节点的整段都算名字层更新（打点本身只写一个标签） */
+    fpsMark("name-layer-update");
     try {
       await loadIndex();
       const cellSize = indexFact?.cellSize ?? null;
@@ -863,6 +866,9 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
          **点选**需要原始记录 ⇒ 这里同时建两张按 id 索引的表，节点生成时取。
          这一段**每轮都跑**：它就是"候选集"本身，缓存判据 `dataSig` 要用它。
             被省掉的是它**下游**那一大块（投影 + 避让 + 上限 + 区名聚合 + 节点计划，见下面的 reuse 分支）。 */
+      /* 帧率采集的行为打点（第二处）：上面那些 `await` 取数可能把入口那次打点的 TTL 耗完，
+         真正吃 CPU 的是下面这段同步的候选集/投影/避让/节点计划 ⇒ 在这里重新标一次。 */
+      fpsMark("name-layer-update");
       const items: LabelItem[] = [];
       const anchorOf = new Map<string, [number, number]>();
       const pickOf = new Map<string, NameRenderNode["pick"]>();

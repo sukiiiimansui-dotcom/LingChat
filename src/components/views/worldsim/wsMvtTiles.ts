@@ -44,6 +44,8 @@ export function mvtEnabled(search?: string): boolean {
  * `?renderer=` 的解析真源在 `WsCityEntry.vue`（boot 参数）；这里只读同一个参数名做护栏，
  * 若那边改名，这里要一起改。持久化偏好走共享的 `readRendererPref()`（不写第二份）。
  */
+import { fpsMark } from "./wsFpsProbe";
+
 function overlayNeedsGeo(): boolean {
   try {
     const q = typeof location !== "undefined" ? location.search : "";
@@ -151,6 +153,8 @@ export function createMvtTiles(opts: MvtTilesOptions = {}): MvtTiles {
 
   async function protocolHandler(params: { url?: string } | string, abort?: AbortController): Promise<{ data: ArrayBuffer }> {
     facts.requests += 1;
+    /* 帧率采集的行为打点：瓦片请求在协议 loader 里发生，打在这里才能和低帧率窗口对上 */
+    fpsMark("mvt-tiles-fetch");
     const url = (typeof params === "string" ? params : (params && params.url) || "").replace(/^mvt:\/\//, "/");
     let res: { status: number; u8: Uint8Array };
     try {
@@ -163,6 +167,9 @@ export function createMvtTiles(opts: MvtTilesOptions = {}): MvtTiles {
       facts.empty += 1;
       return { data: new ArrayBuffer(0) };                 // 空瓦片语义：给空 buffer，**不抛**（不制造 tile error 噪声）
     }
+    /* 帧率采集的行为打点（第二处）：网络等待已经结束，下面这段解码/登记是同步 CPU 开销；
+       入口那次打点的 TTL 可能已经耗完，在这里重新标一次。 */
+    fpsMark("mvt-tiles-fetch");
     let u8 = res.u8;
     if (mvtIsGzip(u8)) {
       facts.gzipSeen += 1;

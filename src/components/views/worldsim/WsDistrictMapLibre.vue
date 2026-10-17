@@ -269,6 +269,9 @@
      宿主只做**装配**（构造只读 ctx + 调用那几个函数），依赖方向永远向下：那个模块**不 import 宿主**。
      装配点 = 下面 `domPins` 之后那一段（它必须在所有被 ctx 捕获的量都声明之后）。 */
   import { createFallback2d } from "./wsFallback2d";
+  /* 帧率/行为采样（后台）：默认开启，`?fpsprobe=0` 关闭；`?fpshud=1` 才在屏上显示一行读数。
+     与 `?wsalign=1` 的对齐量具各自开关、互不读写（回传 tag 也不同）。 */
+  import { fpsMark, installFpsProbe, stopFpsProbe } from "./wsFpsProbe";
   /* 重构：**HUD/stats** 与 **相机/手势** 各搬进一个模块（§2.1/§2.2/§3）。
      · `createHudStats`  —— 早装配（stats / aiOn / 长等待 / fps）：必须早于 S2 的装配点，
        因为那边（2D 降级路）的只读 ctx 里就有 `stats` / `aiOn` / `stopTimer`；
@@ -1928,6 +1931,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     /* 守卫看的是 **host**，不是 `cv`：2D 画布在 WebGL 路下**故意不存在**（`v-if="show2d"`），
        以前那句 `if (!cv.value) return;` 会让整段建图逻辑**直接不跑**（白屏零报错那种）。 */
     if (!host.value) return;
+    /* 帧率/行为采样从页面挂载起就跑：首屏/取数/渲染都会落进样本里。
+       开关是独立的（`?fpsprobe=0` 关），不依赖也没有 `?wsalign=1`。 */
+    installFpsProbe();
     /* `?autoshot=1` = 开代拍（页面自己截图回传）。写在最前面：
        后面任何一步 return（降级路）都不影响"开关已经开了"这件事。 */
     selfShotMaybeArmFromUrl();
@@ -2387,6 +2393,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       };
       m.once("style.load", flushPending);
       m.once("load", flushPending);
+      /* 帧率采集的行为打点：样式每次（重）加载都标一段，上下文丢失后的重建也能跟 fps 对上 */
+      m.on("style.load", () => fpsMark("style-reload"));
       window.setTimeout(flushPending, 4000);
     } catch { /* 包装失败不影响地图 */ }
     /* 建图后补 resize（含观察容器尺寸变化）—— 见上面那段"真 P0"的说明 */
@@ -2583,6 +2591,8 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
       /* 断开失败无所谓 */
     }
     resizeRo = null;
+    /* 帧率/行为采样停止（rAF / 两个定时器 / 可见性监听 / HUD 节点一起清） */
+    stopFpsProbe();
     /* S3（：rAF 句柄随 `startFps` 搬去了 `wsHudStats.ts` ⇒ 这里调它的出口（逐字等价于
        原来那两句 `if (raf) cancelAnimationFrame(raf); raf = 0;`）。 */
     stopFps();

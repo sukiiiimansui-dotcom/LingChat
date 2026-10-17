@@ -2240,8 +2240,27 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          全库只出现 1 次（`defaultOptions.canvasContextAttributes:{antialias:!1,preserveDrawingBuffer:!1,…}`），
          构造期做的是 `{...jm, ...e, canvasContextAttributes:{...jm.canvasContextAttributes, ...e.canvasContextAttributes}}`
          ⇒ 写在顶层 = 截图/自拍**拍到空白**（App 自拍那条链一直拿不到真画面）。
-         只写这一个键：其余默认值靠库的浅合并保住（`antialias` 等行为一字不变）。 */
-      canvasContextAttributes: { preserveDrawingBuffer: true },
+         只写这一个键：其余默认值靠库的浅合并保住（`antialias` 等行为一字不变）。
+         2026-10-17：改成**按需打开** —— `preserveDrawingBuffer:true` 让浏览器每帧保留一份
+         缓冲副本，是实打实的开销（库默认就是 false）。只有"要拍图/量像素"的那几条自用链
+         （`?selfshot` / `?wsverify` / `?autoshot`）才需要它。 */
+      canvasContextAttributes: {
+        preserveDrawingBuffer: (() => {
+          try { return /[?&](selfshot|wsverify|autoshot)=1\b/.test(location.search); } catch { return false; }
+        })(),
+      },
+      /* **画布尺寸上限**（mapLibre 官方机制，PR 2674：超过上限时库会自动压像素比）。
+         真机 1280×578 CSS × dpr 3 = 3840×1734 ⇒ 设 2048 后有效 dpr ≈ 1.6，
+         地图画布的填充率降到约 1/3.5。`?maxcanvas=` 可覆盖；传 4096 = 回到库默认。 */
+      maxCanvasSize: (() => {
+        try {
+          const v = Number(new URLSearchParams(location.search).get("maxcanvas"));
+          if (Number.isFinite(v) && v >= 512 && v <= 8192) return [v, v] as [number, number];
+        } catch {
+          /* 读不到就用默认 */
+        }
+        return [2048, 2048] as [number, number];
+      })(),
       /* **关掉世界副本**：库默认 `renderWorldCopies: true` —— 经度滚过边界时最多多画 7 份世界
          （`for(let e=1;e<=3;e++)`）。只做中国城市级，那 6 份一份都不需要（纯白花填充率）。 */
       renderWorldCopies: false,

@@ -503,6 +503,7 @@ export function createOverlayBackend(): WsRenderBackend {
 
   const onSourceData = (e: { sourceId?: string }): void => {
     if (e?.sourceId !== "bld") return;
+    srcDataEvents += 1;
     /* 楼图层可能**刚刚才建出来**（冷启动直接进叠加层），也可能被"源在层缺"的看门狗补回来
        ⇒ 每一次落图都补一次藏（幂等：已经藏好时一次写都不做）。 */
     hideMapBuildings();
@@ -514,6 +515,7 @@ export function createOverlayBackend(): WsRenderBackend {
    * 我们自己 `setLayoutProperty` 也会触发它 —— 那种情况下层已经是 `none`，补藏是空转，不会自激。
    */
   const onStyleData = (): void => {
+    styleDataEvents += 1;
     hideMapBuildings();
   };
 
@@ -577,6 +579,9 @@ export function createOverlayBackend(): WsRenderBackend {
   /** 数据通道的账（"为什么只画出一栋"要能查：调度了几次 / 完成几次 / 取了几次数） */
   let refreshScheduled = 0;
   let refreshDone = 0;
+  /** 地图事件来的次数（真机"藏了又被显示"要查是不是 style/data 事件在反复触发重建） */
+  let srcDataEvents = 0;
+  let styleDataEvents = 0;
   let getDataCalls = 0;
   let lastRefreshMs = -1;
   /** 藏/还原各发生了多少次、**为什么**（真机上"楼会变掉"要能查账） */
@@ -1079,7 +1084,7 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 覆盖面（"整屏只有一栋楼"那条：源里有几个 vs 我们画了几个） */
       cover: { expected: cover.expected, actual: cover.actual, srcAll: cover.srcAll, meshAll: cover.meshAll, thinDropped: cover.thinDropped, shapeDropped: cover.shapeDropped, strikes: coverStrikes },
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
-      feed: { refreshScheduled, refreshDone, getDataCalls, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
+      feed: { refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
       meshHeights,
       pixProbesRun,

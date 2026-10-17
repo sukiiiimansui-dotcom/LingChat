@@ -55,6 +55,23 @@ const BLD_LAYER_PREFIX = "bld";
  */
 const PIX_MIN_ALIVE = 40;
 
+/**
+ * **叠加层画布的 dpr 上限**（`?ovldpr=`，默认 3 = 与改造前一致）。
+ *
+ * 为什么要有：真机 2026-10-17「一拖动帧率就从 40 掉到 5-15」。叠加层画布在 dpr=3 时是
+ * **3840×1734** 的缓冲，**填充率随 dpr² 走**（9 倍像素）；拖动时它每帧重画一遍。
+ * 把叠加层单独压到 2 或 1.5 是最便宜的一档，用它做 A/B 就能把"填充率"与"别的开销"分开。
+ */
+function dprCapOf(): number {
+  try {
+    const v = Number(new URLSearchParams(location.search).get("ovldpr"));
+    if (Number.isFinite(v) && v > 0.5 && v <= 4) return v;
+  } catch {
+    /* 读不到就用默认 */
+  }
+  return 3;
+}
+
 /** `sourcedata` 之后的补建防抖（毫秒） */
 const REFRESH_DEBOUNCE_MS = 400;
 
@@ -307,6 +324,42 @@ export function createOverlayBackend(): WsRenderBackend {
    * 边界：**只碰 `bld` 打头的层**。底图、水面、绿地、路网、标签一律不动 —— 那些是叠加层
    * 不画的东西，藏了就是黑屏。每层进名单前先 `getLayer`，出场时逐项**照原值**还回去。
    */
+  /** 延迟复读的定时器（同一时刻只挂一个） */
+  let hideVerifyTimer = 0;
+  /**
+   * **1 秒后再读一遍**：真机上"写后立刻是 none、之后又 visible"说明**当时的复读不够**
+   * （样式重载把层重建 / 读写不是同一个 style 对象）。这里 1 秒后复读全部已藏的层：
+   * 全部仍 none ⇒ 这一轮算生效；任一层不是 ⇒ `hideDrift++`、记 ids、**重试一轮**。
+   */
+  function scheduleHideVerify(ms: number): void {
+    if (hideVerifyTimer) return;                 /* 只挂一个 */
+    hideVerifyTimer = window.setTimeout(() => {
+      hideVerifyTimer = 0;
+      const m = map as unknown as { getLayoutProperty?: (id: string, k: string) => unknown } | null;
+      if (!m?.getLayoutProperty || state === "destroyed") return;
+      const bad: string[] = [];
+      for (const id of hiddenLayers.keys()) {
+        try {
+          const v = m.getLayoutProperty?.(id, "visibility");
+          const vs = v === undefined || v === null ? null : String(v);
+          if (vs !== "none") bad.push(id);
+        } catch {
+          bad.push(id);
+        }
+      }
+      if (!bad.length) return;
+      hideDrift += 1;
+      hideDriftIds = bad.slice(0, 8);
+      if (hideRounds < 3) {
+        hideRounds += 1;
+        /* 重试：清掉这几层的记录（让补藏重新记原值），下一帧补藏会再写一次 */
+        for (const id of bad) hiddenLayers.delete(id);
+        hideSyncAt = 0;
+        try { hideMapBuildings(); } catch { /* 下一帧再来 */ }
+      }
+    }, ms);
+  }
+
   /**
    * **确认手里是屏幕当前那张地图**（真机 2026-10-17：`mapAlive.sameCanvas:false` ⇒
    * 我们的补藏全打在**旧实例**上，屏幕上那张图的楼一直没藏 ⇒ 用户看到"怪楼"）。
@@ -379,6 +432,9 @@ export function createOverlayBackend(): WsRenderBackend {
     }
     hidCount = hiddenLayers.size;
     hideSyncs += 1;
+    lastHideAt = performance.now();
+    hidesSinceStyle += 1;
+    scheduleHideVerify(1000);
   }
 
   /** 出场：**倒序**把藏起来的楼逐项还原（与藏的顺序相反，成对出现；失败路径也走它） */
@@ -584,6 +640,11 @@ export function createOverlayBackend(): WsRenderBackend {
    */
   const onStyleData = (): void => {
     styleDataEvents += 1;
+    lastStyleAt = performance.now();
+    styleDataStamps.push(Math.round(lastStyleAt));
+    if (styleDataStamps.length > 20) styleDataStamps.shift();
+    /* 事件里**立刻**补藏一次（hidesSinceStyle 会在补藏末尾 +1 ⇒ 能看出"补藏在事件之后"） */
+    hidesSinceStyle = 0;
     hideMapBuildings();
   };
 
@@ -664,6 +725,22 @@ export function createOverlayBackend(): WsRenderBackend {
   let hideRetries = 0;
   /** 重绑次数（地图实例/画布被换过 ⇒ 重新绑到屏幕当前那张上） */
   let mapRebinds = 0;
+  /** 名字层 DOM 写入次数（MutationObserver，只读）；名字节点现数在回传时取 */
+  let labelWrites = 0;
+  let labelObs: MutationObserver | null = null;
+  /**
+   * **藏楼"漂移"**（真机 2026-10-17：写后立刻读是 none，之后又变 visible）
+   * —— 写后立刻复读只能证明"那一刻"，证不了"之后"。所以再挂一次**延迟复读**（1 秒后）：
+   * 任一层不是 none ⇒ `hideDrift++`、记下是哪几层、并**重试**（最多 3 轮，防死循环）。
+   */
+  let hideDrift = 0;
+  let hideDriftIds: string[] = [];
+  let hideRounds = 0;
+  /** 样式/数据事件的最近时刻与"补藏发生在事件之后"的计数（判"补藏在事件序列里的位置"） */
+  let lastStyleAt = 0;
+  let lastHideAt = 0;
+  let hidesSinceStyle = 0;
+  let styleDataStamps: number[] = [];
   let hideVerifyFailed = 0;
   let hideErrors = 0;
   const restoreReasons: Record<string, number> = {};
@@ -1178,6 +1255,17 @@ export function createOverlayBackend(): WsRenderBackend {
       /* 数据通道的账（"为什么只画出一栋"：调度几次 / 完成几次 / 取了几次数） */
       feed: { refreshScheduled, refreshDone, getDataCalls, srcDataEvents, styleDataEvents, lastRefreshMs: lastRefreshMs < 0 ? null : Math.round(performance.now() - lastRefreshMs) },
       meshStats: data?.stats ?? null,
+      /* **每帧分解**（拖动期间"谁在花时间"）：`mapFrames` = 地图 render 回调次数，
+         `overlayFrames` = 我们真画了几帧，`labelWrites` = 名字层 DOM 写入次数，
+         `labelNodes` = 这个名字层现有多少节点（10 个 vs 500 个代价差一个量级）。 */
+      perFrame: {
+        mapFrames: frames,
+        overlayFrames: drawsTotal,
+        labelWrites,
+        labelNodes: (() => { try { return document.querySelectorAll(".ws-labs *").length; } catch { return -1; } })(),
+        dpr: renderer?.getPixelRatio?.() ?? null,
+        dprCap: dprCapOf(),
+      },
       /* **叠加层那块画布到底在不在屏幕最上层**（像素取证读的是自己的缓冲，
          证明不了"它有没有被地图画布盖住"——"楼没了"还可能是这层被盖） */
       layer: (() => {
@@ -1204,7 +1292,17 @@ export function createOverlayBackend(): WsRenderBackend {
       })(),
       meshHeights,
       pixProbesRun,
-      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors, mapRebinds },
+      hidCounters: { hideSyncs, restoreTotal: Object.values(restoreReasons).reduce((a, b) => a + b, 0), restoreReasons, hideRetries, hideVerifyFailed, hideErrors, mapRebinds, hideDrift, hideDriftIds, hideRounds },
+      /* **事件序列位置**（判"补藏到底在 styledata 之后还是之前"）：
+         lastStyleAgoMs = 最近一次 styledata 距今；lastHideAgoMs = 最近一次补藏距今；
+         hidesSinceStyle = 最近一次 styledata 之后补藏了几次（>0 ⇒ 补藏确实发生在事件之后） */
+      hidTiming: {
+        lastStyleAgoMs: lastStyleAt ? Math.round(performance.now() - lastStyleAt) : null,
+        lastHideAgoMs: lastHideAt ? Math.round(performance.now() - lastHideAt) : null,
+        hidesSinceStyle,
+        styleDataStamps: styleDataStamps.slice(-6),
+        now: Math.round(performance.now()),
+      },
       /* 地图那套楼到底藏上没藏上：**写进去的**与**读回来的**并排（真机那两个数打架时要能一眼分开） */
       hidWrote: [...hiddenLayers.keys()],
       /* 手里这台地图还活着吗（"读回全 visible"还有一个可能是**我们握的是旧实例**） */
@@ -1416,7 +1514,22 @@ export function createOverlayBackend(): WsRenderBackend {
           /* 挂不上监听不影响渲染（计数少一个而已） */
         }
         renderer.setClearAlpha(0);
-        renderer.setPixelRatio(Math.min(3, window.devicePixelRatio || 1));
+        /* 名字层的 DOM 写入计数（只读观察，不改它的行为）：
+           `?fpshud=1` 那条 fps 采样按标签分桶，但"拖动时标签到底写了多少次"要有个数。 */
+        try {
+          const labRoot = document.querySelector(".ws-labs");
+          const MO = (window as unknown as { MutationObserver?: typeof MutationObserver }).MutationObserver;
+          if (labRoot && MO) {
+            labelObs = new MO((list) => {
+              for (const rec of list) {
+                if (rec.type === "attributes") labelWrites += 1;
+                else labelWrites += rec.addedNodes.length + rec.removedNodes.length;
+              }
+            });
+            labelObs.observe(labRoot, { subtree: true, childList: true, attributes: true, attributeFilter: ["style", "class"] });
+          }
+        } catch { labelObs = null; }
+        renderer.setPixelRatio(Math.min(dprCapOf(), window.devicePixelRatio || 1));
         renderer.setSize(w, hh, false);
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(fovYDeg(), w / hh, NEAR_M, 8000);
@@ -1537,6 +1650,8 @@ export function createOverlayBackend(): WsRenderBackend {
       alignBadge = null;
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = 0;
+      try { labelObs?.disconnect(); } catch { /* ignore */ }
+      labelObs = null;
       disposeMesh();
       /* 先**摘掉事件**再还原：`setLayoutProperty` 会同步触发 `styledata`，
          监听器还在的话就会把刚还原的楼又藏回去（自己跟自己打架）。 */

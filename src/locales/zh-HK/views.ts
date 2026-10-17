@@ -59,6 +59,7 @@ export default {
     miniGame: "小遊戲（開發緊）",
     worldSim: "世界模擬",
     back: "返回",
+    leaveStoryConfirm: "個劇本仲未做完，轉去自由傾偈模式會中止今次劇情，亦都唔會當完成。確定退出？",
   },
   pet: {
     chatInput: {

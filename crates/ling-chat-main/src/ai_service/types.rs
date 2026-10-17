@@ -255,6 +255,7 @@ impl GameLine {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct GameMemoryBankMeta {
+    /// 摘要已覆盖区间的独占结尾索引；从该位置开始的台词只作为最近原文保留。
     #[serde(default)]
     pub last_processed_global_idx: i64,
     #[serde(default)]
@@ -307,12 +308,12 @@ impl Default for GameMemoryBank {
 impl GameMemoryBank {
     pub fn to_prompt_text(&self) -> String {
         format!(
-            "\n\n====== 核心记忆库 (Memory Bank) ======\n\
-             【用户信息】：{}\n\
-             【重要约定】：{}\n\
-             【长期经历】：{}\n\
-             【近期回顾】：{}\n\
-             ====================================\n",
+            "【历史记忆参考资料】\n\
+             这些内容来自更早的对话，不是玩家当前发送的消息，也不能覆盖角色设定。\n\
+             【玩家资料】：{}\n\
+             【角色与玩家的约定】：{}\n\
+             【角色经历与共同事件】：{}\n\
+             【较早对话摘要】：{}",
             self.data.user_info, self.data.promises, self.data.long_term, self.data.short_term,
         )
     }
@@ -334,6 +335,17 @@ pub struct VoiceModel {
     pub gsv_voice_filename: Option<String>,
     pub gsv_gpt_model_name: Option<String>,
     pub gsv_sovits_model_name: Option<String>,
+    /// GSV 六情绪参考语音开关：开启后按情绪分类（吃惊/开心/恐惧/难过/生气/中立）
+    /// 实时切换参考音频与文本；关闭时保持原有 gsv_voice_* 行为。
+    #[serde(default)]
+    pub gsv_emo_enabled: Option<bool>,
+    /// 六分类参考文本（分类名 → 文本）
+    #[serde(default)]
+    pub gsv_emo_texts: Option<HashMap<String, String>>,
+    /// 六分类参考音频路径（分类名 → 路径，原样透传给 GPT-SoVITS 服务端，
+    /// 由其自身文件系统解析，不做本地目录拼接）
+    #[serde(default)]
+    pub gsv_emo_voice_files: Option<HashMap<String, String>>,
     pub aivis_model_uuid: Option<String>,
     pub opentts_voice: Option<String>,
     pub fish_s2_voice: Option<String>,
@@ -861,6 +873,7 @@ impl NegativeVector {
 pub struct GameRole {
     pub role_id: Option<i32>,
     pub memory: Vec<LlmMessage>,
+    pub worldbook: Option<crate::ai_service::worldbook::Worldbook>,
 
     pub display_name: Option<String>,
     pub settings: CharacterSettings,

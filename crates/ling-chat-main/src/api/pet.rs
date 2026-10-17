@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
+#[cfg(desktop)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
+#[cfg(desktop)]
+use std::time::Instant;
 use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::Emitter;
@@ -292,18 +296,26 @@ pub fn spawn_hit_test_poll(window: tauri::WebviewWindow) {
 
 /// 两窗共用的宽度基准：视觉上必须一致，否则气泡窗与宠物窗明显错位。
 const WINDOW_W: f64 = 264.0;
-/// 宠物窗高度 = 头像带 210 + 输入带 64（与 constants.ts 的 PET_WINDOW_H_BASE 同步）
-const PET_WINDOW_H: f64 = 274.0;
+/// 顶部留白：给头像圆框外圈的频谱圆环腾地方，头像带因此整体下移一段。
+/// 气泡定位要按它补偿，否则气泡与头像的间距会从 8 变成 34
+/// （与 constants.ts 的 PET_SPECTRUM_TOP_PAD_BASE 同步）
+const PET_TOP_PAD: f64 = 26.0;
+/// 宠物窗高度 = 顶部留白 26 + 头像带 210 + 输入带 64
+/// （与 constants.ts 的 PET_WINDOW_H_BASE 同步）
+const PET_WINDOW_H: f64 = 300.0;
 /// 气泡窗高度 = 气泡带 278 + 长尾余量 10 + 间隙 8
 const BUBBLE_H: f64 = 296.0;
 const BUBBLE_GAP: f64 = 8.0;
 
 /// 按宠物窗当前位置重算气泡窗位置。
 ///
-/// 上置：气泡窗底边落在宠物窗顶边上方 `BUBBLE_GAP` 处；
+/// 上置：气泡窗底边落在头像顶边上方 `BUBBLE_GAP` 处；
 /// 下置：气泡窗顶边落在宠物窗底边下方 `BUBBLE_GAP` 处；
 /// 左/右置：气泡窗贴宠物窗左侧/右侧（长尾水平指向宠物），纵向按 `align` 与宠物窗
-/// 对齐同一条边 —— 贴上边则两窗顶边齐平，贴下边则两窗底边齐平。
+/// 对齐同一条边 —— 贴上边则气泡窗顶边与头像顶边齐平，贴下边则两窗底边齐平。
+///
+/// 窗口顶部有一段专供频谱圆环的留白 `PET_TOP_PAD`，头像盒在它下面；
+/// 凡是以「头像顶边」为参照的分支都要补上这段留白，详见下方注释。
 ///
 /// 用气泡窗/宠物窗**实测**逻辑尺寸而不是常量，这样换缩放倍率时偏移自动跟着变。
 /// 两窗共用同一 scale_factor，逻辑坐标可直接相加。
@@ -337,13 +349,17 @@ fn place_bubble(app: &AppHandle, pet: &tauri::WebviewWindow) {
         .unwrap_or_default();
     let pet_left = f64::from(pos.x) / scale;
     let pet_top = f64::from(pos.y) / scale;
-    // 左右置时的纵向基准：与宠物窗对齐同一条边
+    // 左右置时的纵向基准：与「头像盒」对齐同一条边。
+    // 贴上边对齐的是头像顶边，要补顶部留白；贴下边对齐的是宠物窗底边
+    // （头像底边到窗底恒为输入带高，不受留白影响），不补。
     let side_y = match placement.align {
-        BubbleAlign::Top => pet_top,
+        BubbleAlign::Top => pet_top + PET_TOP_PAD,
         BubbleAlign::Bottom => pet_top + pet_h - bubble_h,
     };
     let (x, y) = match placement.side {
-        BubbleSide::Above => (pet_left, pet_top - bubble_h - BUBBLE_GAP),
+        // 上置：气泡窗底边落在头像顶边上方 BUBBLE_GAP 处
+        BubbleSide::Above => (pet_left, pet_top + PET_TOP_PAD - bubble_h - BUBBLE_GAP),
+        // 下置：留白在顶部，与窗底边无关，公式不变
         BubbleSide::Below => (pet_left, pet_top + pet_h + BUBBLE_GAP),
         BubbleSide::Left => (pet_left - bubble_w - BUBBLE_GAP, side_y),
         BubbleSide::Right => (pet_left + pet_w + BUBBLE_GAP, side_y),
@@ -432,6 +448,22 @@ fn ensure_bubble_window(app: &AppHandle, scale: f64) -> tauri::Result<()> {
     // topmost 组内的前后顺序会丢失，靠 2s 轮询兜底会有一段被遮挡的空窗期。
     if let Some(pet) = app.get_webview_window("main") {
         place_bubble(app, &pet);
+    }
+
+    tracing::info!("气泡窗已创建");
+    Ok(())
+}
+
+/// 宠物窗的跟随监听只挂一次。
+#[cfg(desktop)]
+fn watch_pet_window(app: &AppHandle) {
+    static PET_WINDOW_WATCHED: OnceLock<()> = OnceLock::new();
+
+    // get_or_init 保证只注册一份；主窗由配置在启动时创建，取不到属于异常状态
+    PET_WINDOW_WATCHED.get_or_init(|| {
+        let Some(pet) = app.get_webview_window("main") else {
+            return;
+        };
         let handle = app.clone();
         pet.on_window_event(move |event| {
             if let tauri::WindowEvent::Focused(true) = event {
@@ -443,10 +475,7 @@ fn ensure_bubble_window(app: &AppHandle, scale: f64) -> tauri::Result<()> {
                 }
             }
         });
-    }
-
-    tracing::info!("气泡窗已创建");
-    Ok(())
+    });
 }
 /// 退出全屏，并等到它真正结束。
 ///
@@ -549,9 +578,11 @@ pub async fn set_pet_mode(
 
         if enable {
             let scale_val = scale.unwrap_or(1.0);
+            let started = Instant::now();
 
-            // 宠物窗 = 头像带 + 输入带，**不含气泡**：气泡独立成窗，宠物窗顶边因此
-            // 就是头像顶边，可以贴到屏幕最顶。改这里必须同步 components/pet/constants.ts。
+            // 宠物窗 = 顶部留白 + 头像带 + 输入带，**不含气泡**：气泡独立成窗，
+            // 顶部的留白专供频谱圆环，头像顶边在它下面。改这里必须同步
+            // components/pet/constants.ts。
             let width = (WINDOW_W * scale_val) as u32;
             let height = (PET_WINDOW_H * scale_val) as u32;
 
@@ -561,14 +592,28 @@ pub async fn set_pet_mode(
             let _ = window.set_decorations(false);
             let _ = window.set_maximizable(false);
             let _ = window.set_size(LogicalSize::new(width, height));
+            let styled_ms = started.elapsed().as_millis();
+
+            // 跟随监听只挂一次，不能跟着气泡窗的创建走
+            watch_pet_window(&app_handle);
 
             if let Err(e) = ensure_bubble_window(&app_handle, scale_val) {
                 tracing::warn!("气泡窗创建失败，桌宠降级为无气泡: {e}");
             }
+            let bubble_ms = started.elapsed().as_millis();
+
             // 改尺寸走的是"只 resize 不重建"，位置需要跟着新尺寸重算一次
             if let Some(pet) = app_handle.get_webview_window("main") {
                 place_bubble(&app_handle, &pet);
             }
+            let place_ms = started.elapsed().as_millis();
+
+            // 进桌宠偶发整机卡顿：分段耗时留待复现时定位（样式重建 / 建气泡窗 / 重排）
+            tracing::info!(
+                "[Pet] 进入桌宠耗时: 样式 {styled_ms}ms / 建气泡窗 {}ms / 重排 {}ms / 合计 {place_ms}ms",
+                bubble_ms - styled_ms,
+                place_ms - bubble_ms
+            );
         } else {
             close_bubble_window(&app_handle);
 

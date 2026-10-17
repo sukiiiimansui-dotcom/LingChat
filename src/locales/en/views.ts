@@ -61,6 +61,8 @@ export default {
     miniGame: "Mini Games (In Development)",
     worldSim: "World Simulation",
     back: "Back",
+    leaveStoryConfirm:
+      "The current story is not finished. Switching to Free Chat Mode will abort it and it will not count as completed. Leave anyway?",
   },
   pet: {
     chatInput: {

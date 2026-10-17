@@ -31,6 +31,9 @@ export interface MediaFileSettings {
 
 export type ToolAccessMode = "manual" | "auto_approve" | "full_access";
 
+/** 每轮发言前的工具推荐方式：不推荐 / 上帝 Agent 挑 / 静默检索。 */
+export type ToolRecommendMode = "off" | "agent" | "rag";
+
 export interface ToolSettings {
   web_search: WebSearchSettings;
   media_file: MediaFileSettings;
@@ -40,6 +43,10 @@ export interface ToolSettings {
   access_mode: ToolAccessMode;
   /** 主聊天单次回复可连续执行工具的最大轮数；每轮可能包含多个工具调用。 */
   max_tool_rounds: number;
+  /** 工具按需检索（Tool RAG）：只下发常驻工具 + 检索激活的工具，而不是全部已授权工具。 */
+  tool_rag: boolean;
+  /** 工具推荐方式；两种推荐都只是临时提示，不写台词表也不进记忆。 */
+  tool_recommend_mode: ToolRecommendMode;
 }
 
 /** 全局访问模式快照，供主界面的完全访问警告即时响应设置保存。 */

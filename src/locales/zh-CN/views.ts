@@ -58,6 +58,7 @@ export default {
     miniGame: "小游戏（开发中）",
     worldSim: "世界模拟",
     back: "返回",
+    leaveStoryConfirm: "当前剧本尚未结束，切到自由对话模式会中止本次剧情且不计入完成。确定退出吗？",
   },
   pet: {
     chatInput: {

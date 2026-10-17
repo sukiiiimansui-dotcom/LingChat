@@ -24,6 +24,28 @@ pub fn emit_thinking(app: &AppHandle, is_thinking: bool) {
     }
 }
 
+/// 请求前端弹出待办截止提醒的系统通知。
+/// 只发给主窗口：其余窗口（如桌宠模式另开的设置窗）也注册了全局监听，广播会重复弹。
+pub fn emit_proactive_remind(
+    app: &AppHandle,
+    title: String,
+    todo_text: String,
+    minutes_before: i32,
+) {
+    let payload = super::responses::ProactiveRemindResponse {
+        title,
+        todo_text,
+        minutes_before,
+    };
+    if let Err(e) = app.emit_to(
+        "main",
+        super::responses::event_names::PROACTIVE_REMIND,
+        &payload,
+    ) {
+        tracing::warn!("emit proactive:remind 失败: {e}");
+    }
+}
+
 /// 通知前端思考链累计字数有更新。
 pub fn emit_thinking_progress(app: &AppHandle, thinking_length: usize) {
     let payload = super::responses::ThinkingProgressResponse::new(thinking_length);

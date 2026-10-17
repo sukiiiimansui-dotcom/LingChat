@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod background_command;
+pub mod background_effect;
 pub mod character;
 pub mod clock;
 pub mod executor;
@@ -14,6 +15,9 @@ pub mod settings;
 pub mod skill_files;
 pub mod status;
 pub mod tool_loop;
+pub mod tool_rag;
+pub mod tool_search;
+pub mod weather;
 pub mod web_search;
 // 世界模拟（P3）：get_my_location / get_nearby_facilities / move_to。
 // 注意这个 `world_map` 是**聊天工具的模块名**，与 `crate::world_map`（地图后端）
@@ -32,6 +36,7 @@ use tokio::sync::Mutex;
 use crate::AppState;
 use crate::ai_service::game_system::game_status::GameStatus;
 
+use background_effect::SetBackgroundEffect;
 use character::{CharacterGetClothes, CharacterList, CharacterSetClothes, CharacterSwitch};
 use clock::CurrentTimeTool;
 use memory::{AddNote, DeleteNote, GetCurrentMemory, GetNotes, UpdateNote};
@@ -49,6 +54,7 @@ use skill_files::{
     SearchFiles, WriteFile,
 };
 use status::{CurrentStatus, SceneStatus};
+use weather::WeatherTool;
 use web_search::WebSearchTool;
 use world_map::{GetMyLocation, GetNearbyFacilities, MoveTo};
 
@@ -105,6 +111,9 @@ pub fn built_in_registry(
     let registry = ToolRegistry::new();
     registry.register(Arc::new(CurrentTimeTool))?;
     registry.register(Arc::new(WebSearchTool::new(tool_settings.clone())))?;
+    // Tool RAG 的检索入口：常驻下发（且不归任何设置分组，语义就是「总是可用」），
+    // 让它在注册顺序里紧随网页搜索，两者都是常驻工具。
+    registry.register(Arc::new(tool_search::ToolSearch))?;
     registry.register(Arc::new(GetAllSchedule))?;
     registry.register(Arc::new(AddTodo))?;
     registry.register(Arc::new(UpdateTodo))?;
@@ -118,6 +127,8 @@ pub fn built_in_registry(
     registry.register(Arc::new(SceneStatus))?;
     registry.register(Arc::new(SceneList))?;
     registry.register(Arc::new(SceneSwitch))?;
+    registry.register(Arc::new(SetBackgroundEffect))?;
+    registry.register(Arc::new(WeatherTool))?;
     registry.register(Arc::new(CharacterList))?;
     registry.register(Arc::new(CharacterSwitch))?;
     registry.register(Arc::new(CharacterGetClothes))?;

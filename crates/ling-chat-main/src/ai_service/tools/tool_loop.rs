@@ -13,10 +13,11 @@ use crate::ai_service::llm::{ChunkStream, LlmChunk, LlmClient};
 use crate::ai_service::message_system::generator::GeneratorSource;
 use crate::ai_service::message_system::producer::{PresentationChunk, PresentationStream};
 use crate::ai_service::message_system::responses::event_names;
-use crate::ai_service::types::LlmMessage;
+use crate::ai_service::types::{LlmMessage, ToolDefinition};
 
 use super::executor::{ToolContext, ToolExecutor};
 use super::registry::ToolRegistry;
+use super::tool_rag::{apply_dynamic_search_description, effective_allowed};
 
 /// 工具结果会写入角色长期记忆；限制单轮会话累计量，避免大文件/命令输出永久撑大上下文。
 const MAX_PERSISTED_TOOL_RESULT_CHARS: usize = 32_000;
@@ -30,6 +31,13 @@ const CONTINUATION_PROMPT: &str = "工具结果已返回。请接着你上一条
 /// 要求直接输出总结正文，避免整条回复落空触发前端报错。
 const FINAL_SYNTHESIS_RETRY_PROMPT: &str = "你刚才尝试调用的工具未被执行：当前已没有可用工具。请不要再尝试调用工具，直接基于已完成的工具结果，用正文给出最终答复；如仍有未完成事项，请明确说明。";
 const TOOL_USE_POLICY_PROMPT: &str = "你可以调用本请求随附的工具。用户要求执行文件读写/删除、命令运行、角色或场景切换等实际操作时，必须先真正调用相应工具，并在收到工具结果后再说明结果。绝不能只在思考中计划调用，或在没有成功工具结果时声称已经执行、删除、写入、切换或完成。需要用户确认的危险操作会由应用弹窗处理，请直接发起工具调用，不要用文字假装已经操作；如果工具失败、被拒绝或没有调用，必须明确说明操作尚未完成。";
+
+/// Tool RAG 开启时的检索引导。
+///
+/// 开启后随请求下发的工具被收窄为「常驻工具 + 已激活的工具」，模型必须知道两件事
+/// 才可能用上其余能力：一是「还有别的工具可以检索」，二是「有哪些」。后者写在
+/// `tool_search` 的动态描述里（见 `tool_rag::search_description`），这里负责前者。
+const TOOL_SEARCH_PROMPT: &str = "本请求只随附了少量常用工具，其余工具都可以用 tool_search 检索到。tool_search 的说明里列出了当前可用的工具清单，请先看那份清单判断有没有能用的工具：有就用一句自然语言描述你想完成的事调用 tool_search，它会返回匹配工具的名称与完整说明（含参数），拿到之后再调用那些工具完成任务。用户要求你做某件事而清单里有对应工具时，不要因为「请求里没直接附带这个工具」就说自己做不到；只有清单和检索结果里都没有合适的工具，才如实说明做不到，不要编造能力，也不要假装已经完成。";
 
 /// 工具执行前等待"前导台词已经 emit"的上限。
 ///
@@ -84,14 +92,27 @@ pub async fn stream_with_tool_loop(
     source: GeneratorSource,
     role_name: Option<String>,
     app: &AppHandle,
+    recommended: &[String],
 ) -> Result<ToolLoopResult> {
     // 每次回复开始时读取一次设置，避免同一轮执行期间修改配置导致边界跳变。
-    let max_tool_rounds = app
-        .state::<AppState>()
-        .tool_settings
-        .get()
-        .tool_round_limit();
-    let initial_allowed = registry.allowed_tools(source, role_name.as_deref());
+    let (settings, tool_rag) = {
+        let state = app.state::<AppState>();
+        (state.tool_settings.get(), state.tool_rag.clone())
+    };
+    let max_tool_rounds = settings.tool_round_limit();
+    // 模型缺失 / onnxruntime 不可用时 is_enabled 为 false，自动回退到全量工具下发。
+    let rag_on = settings.tool_rag && tool_rag.is_enabled();
+    if settings.tool_rag && !tool_rag.is_enabled() {
+        tracing::info!("Tool RAG 已开启但嵌入引擎不可用，本次回退为全量工具下发");
+    }
+
+    let initial_base_allowed = registry.allowed_tools(source, role_name.as_deref());
+    let initial_allowed = effective_allowed(
+        &initial_base_allowed,
+        &tool_rag,
+        role_name.as_deref(),
+        rag_on,
+    );
     let initial_definitions = registry.definitions_for_allowed(&initial_allowed);
     if initial_definitions.is_empty() || !llm.supports_streaming_tools() {
         if !initial_definitions.is_empty() {
@@ -113,6 +134,8 @@ pub async fn stream_with_tool_loop(
     let llm = llm.clone();
     let registry = registry.clone();
     let app = app.clone();
+    let tool_rag = tool_rag.clone();
+    let recommended = recommended.to_vec();
 
     let stream = async_stream::try_stream! {
         let executor = ToolExecutor::new(&registry);
@@ -128,6 +151,9 @@ pub async fn stream_with_tool_loop(
             .find(|message| message.role == "user")
             .cloned();
         let mut active_role_name = role_name;
+        if rag_on && !initial_base_allowed.is_empty() {
+            messages.insert(1, LlmMessage::system(TOOL_SEARCH_PROMPT));
+        }
         let mut persisted_tool_result_chars = 0usize;
 
         // 收尾轮（无工具定义）可能仍返回工具调用且不给正文，多留一轮补救重试。
@@ -141,12 +167,51 @@ pub async fn stream_with_tool_loop(
                 messages.push(LlmMessage::system(FINAL_SYNTHESIS_PROMPT));
             }
             // 角色可以在上一轮工具执行中发生变化。每轮按当前角色重新计算权限，
-            // 防止切换后沿用旧角色的工具授权。
-            let allowed = registry.allowed_tools(source, active_role_name.as_deref());
+            // 防止切换后沿用旧角色的工具授权。Tool RAG 下还要重算激活集：第 N 轮的
+            // tool_search 把命中的工具写进缓存，第 N+1 轮重算时它们才作为定义下发，
+            // 「先检索再调用」因此成立。
+            let base_allowed = registry.allowed_tools(source, active_role_name.as_deref());
+            let allowed = activate_recommended(
+                effective_allowed(
+                    &base_allowed,
+                    &tool_rag,
+                    active_role_name.as_deref(),
+                    rag_on,
+                ),
+                &base_allowed,
+                &recommended,
+            );
             let definitions = if final_synthesis {
                 Vec::new()
             } else {
-                registry.definitions_for_allowed(&allowed)
+                let mut definitions = registry.definitions_for_allowed(&allowed);
+                if rag_on {
+                    // tool_search 的描述要反映「本轮到底能检索到哪些工具」。
+                    // 只给模型一个「可以检索」的入口、不给任何能力线索，它不会想到去检索，
+                    // 只会直接回答做不到。
+                    let available = registry.definitions_for_allowed(&base_allowed);
+                    apply_dynamic_search_description(&mut definitions, &available);
+                    if round == 0 && tracing::enabled!(tracing::Level::DEBUG) {
+                        // 只在真的开了 debug 时算体积，避免每轮为日志做无谓的序列化。
+                        let payload_chars = |list: &[ToolDefinition]| -> usize {
+                            list.iter()
+                                .map(|def| {
+                                    def.function.name.len()
+                                        + def.function.description.len()
+                                        + def.function.parameters.to_string().len()
+                                })
+                                .sum()
+                        };
+                        tracing::debug!(
+                            sent = definitions.len(),
+                            searchable = available.len(),
+                            sent_chars = payload_chars(&definitions),
+                            full_chars = payload_chars(&available),
+                            "Tool RAG 工具集已收窄"
+                        );
+                    }
+                }
+                definitions
             };
             let mut response_stream = if definitions.is_empty() {
                 llm.complete_stream(&messages).await?
@@ -255,10 +320,29 @@ pub async fn stream_with_tool_loop(
                 image_data_url: None,
             };
             let mut round_messages = vec![assistant_message];
-            let context = ToolContext::new(allowed).with_app(app.clone());
+            // 工具附带的图片：只进本轮请求，顺着工具结果后面另起一条用户消息（tool
+            // 角色带不了图）。不进 sink，也就不进长期记忆。
+            let mut pending_images: Vec<LlmMessage> = Vec::new();
+            let context = ToolContext::new(allowed)
+                .with_base_allowed(base_allowed)
+                .with_role_name(active_role_name.clone())
+                .with_app(app.clone());
             let mut character_switched = false;
             for call in calls {
                 tracing::info!(tool = call.function.name, call_id = call.id, "执行聊天工具");
+
+                if context.base_allowed.contains(&call.function.name)
+                    && !context.allowed_tools.contains(&call.function.name)
+                {
+                    tracing::info!(
+                        tool = %call.function.name,
+                        "本轮没有下发这个工具（模型凭记忆直接调用），已重新激活"
+                    );
+                    tool_rag.touch(
+                        active_role_name.as_deref(),
+                        std::slice::from_ref(&call.function.name),
+                    );
+                }
                 emit_tool_activity_event(
                     &app,
                     &call.id,
@@ -288,8 +372,12 @@ pub async fn stream_with_tool_loop(
                 if call.function.name == "character_switch" && succeeded {
                     character_switched = true;
                 }
-                let tool_result = LlmMessage::tool_result(call.id, result);
+                let (content, image) = split_tool_image(&result);
+                let tool_result = LlmMessage::tool_result(call.id, content);
                 round_messages.push(tool_result);
+                if let Some((hint, data_url)) = image {
+                    pending_images.push(LlmMessage::user_with_image(hint, data_url));
+                }
             }
 
             if character_switched {
@@ -301,9 +389,19 @@ pub async fn stream_with_tool_loop(
                     active_user_message.as_ref(),
                     &round_messages,
                 );
+                messages.extend(pending_images);
                 active_role_name = refreshed_name;
+                // rebase 用新角色的记忆整体替换了 messages，上面两条临时 system 提示
+                // 会一并丢失。新角色的激活缓存是空的，不补回提示模型就不知道
+                // tool_search 的存在，会以为自己没有任何可用的工具。
+                let switched_base = registry.allowed_tools(source, active_role_name.as_deref());
+                messages.insert(0, LlmMessage::system(TOOL_USE_POLICY_PROMPT));
+                if rag_on && !switched_base.is_empty() {
+                    messages.insert(1, LlmMessage::system(TOOL_SEARCH_PROMPT));
+                }
             } else {
                 messages.extend(round_messages.clone());
+                messages.extend(pending_images);
                 messages.push(LlmMessage::system(CONTINUATION_PROMPT));
             }
 
@@ -320,6 +418,65 @@ pub async fn stream_with_tool_loop(
         tool_messages,
         tool_calls_seen,
     })
+}
+
+/// 单张工具附带图片的上限（data URL 字符数，约 6MB 原图）。超了只记日志、不带图。
+const MAX_TOOL_IMAGE_CHARS: usize = 8 * 1024 * 1024;
+/// 工具给了图却没给说明时的兜底提示。
+const TOOL_IMAGE_HINT: &str = "（这次工具调用附了一张图片，请一起看。）";
+
+/// 把工具结果里的图片摘出来。
+///
+/// 约定：`{"image": {"data_url": "data:image/…", "hint": "说明"}}`。返回
+/// `(落进长期记忆的文本, 要附给模型的那一条)`。图必须从文本里摘掉——base64 写进记忆
+/// 既白占上下文，下一轮还会被重新发一遍；它只属于本轮请求。
+fn split_tool_image(result: &str) -> (String, Option<(String, String)>) {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(result) else {
+        return (result.to_string(), None);
+    };
+    let Some(object) = value.as_object_mut() else {
+        return (result.to_string(), None);
+    };
+    let Some(serde_json::Value::Object(image)) = object.remove("image") else {
+        return (result.to_string(), None);
+    };
+    let Some(data_url) = image
+        .get("data_url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return (value.to_string(), None);
+    };
+    if data_url.len() > MAX_TOOL_IMAGE_CHARS {
+        tracing::warn!(chars = data_url.len(), "工具附带的图片过大，已丢弃");
+        return (value.to_string(), None);
+    }
+    let hint = image
+        .get("hint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(TOOL_IMAGE_HINT)
+        .to_string();
+    (value.to_string(), Some((hint, data_url)))
+}
+
+/// 把上帝 Agent 推荐的工具并进本轮工具集。
+///
+/// Tool RAG 下推荐的理由才成立：它们随本请求作为定义下发，模型不用先 `tool_search`
+/// 就能直接调用；权限集之外的名字一律丢掉（推荐不构成授权）。RAG 关闭时全量下发，
+/// 这一步是空操作。
+fn activate_recommended(
+    mut allowed: HashSet<String>,
+    base_allowed: &HashSet<String>,
+    recommended: &[String],
+) -> HashSet<String> {
+    for name in recommended {
+        if base_allowed.contains(name) {
+            allowed.insert(name.clone());
+        }
+    }
+    allowed
 }
 
 /// 当前请求继续使用完整工具结果完成推理；只对写入角色长期记忆的副本做有界裁剪。
@@ -502,4 +659,49 @@ fn presentation_stream(stream: ChunkStream) -> PresentationStream {
             Err(e) => Some(Err(e)),
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_tool_image;
+
+    #[test]
+    fn image_field_is_split_out_of_tool_result() {
+        let result = r#"{"ok":true,"message":"看了一眼","image":{"data_url":"data:image/jpeg;base64,AA","hint":"看图"}}"#;
+        let (text, image) = split_tool_image(result);
+        // 图不能留在文本里：base64 写进长期记忆既占上下文，下一轮还会被重发。
+        assert!(!text.contains("data:image"));
+        assert!(!text.contains("\"image\""));
+        assert_eq!(
+            image,
+            Some(("看图".to_string(), "data:image/jpeg;base64,AA".to_string()))
+        );
+    }
+
+    #[test]
+    fn plain_tool_result_is_untouched() {
+        let result = r#"{"ok":true,"message":"好"}"#;
+        assert_eq!(split_tool_image(result), (result.to_string(), None));
+    }
+
+    #[test]
+    fn missing_hint_falls_back_to_generic_text() {
+        let result = r#"{"ok":true,"image":{"data_url":"data:image/png;base64,BB"}}"#;
+        let (_, image) = split_tool_image(result);
+        assert_eq!(
+            image,
+            Some((
+                super::TOOL_IMAGE_HINT.to_string(),
+                "data:image/png;base64,BB".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn image_without_data_url_is_dropped() {
+        let result = r#"{"ok":true,"image":{"hint":"没有图"}}"#;
+        let (text, image) = split_tool_image(result);
+        assert_eq!(image, None);
+        assert!(!text.contains("\"image\""));
+    }
 }

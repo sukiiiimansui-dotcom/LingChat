@@ -381,8 +381,9 @@
 </script>
 
 <style scoped>
-  /* 配色口径抄的是本页既有的浮动面板（`WsVerifyPanel` / `.ws-dml__hud`）：
-     深底 rgba(7,11,17,·) + 冰蓝描边 + 等宽字体小字 —— 不新立美术方向（已排除擅自改美术）。 */
+  /* 配色口径 = 主应用（AppDialog / CharacterCard / SettingItem）：
+     slate-900 面板 + white/20 描边 + 品牌色 #79d9ff 点缀 + 系统 sans 字体。
+     原来这里写的是"深底 + 冰蓝描边 + 等宽字体"，是第三套语言。 */
   .wscg {
     position: absolute;
     inset: 0;
@@ -390,8 +391,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: #eaf6ff;
+    font-family: var(--ws-font);
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--ws-fg, #ffffff);
   }
   .wscg__mask {
     position: absolute;
@@ -406,15 +409,15 @@
     max-height: min(88vh, 640px);
     display: flex;
     flex-direction: column;
-    border-radius: 16px;
-    background: rgba(7, 11, 17, 0.95);
-    border: 1px solid rgba(121, 217, 255, 0.28);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    border-radius: var(--ws-radius, 16px);
+    background: var(--ws-panel, #0f172a);
+    border: 1px solid var(--ws-border, rgba(255, 255, 255, 0.2));
+    box-shadow: var(--ws-shadow-lg);
     overflow: hidden;
   }
   .wscg__head {
     padding: 14px 16px 10px;
-    border-bottom: 1px solid rgba(121, 217, 255, 0.16);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   }
   .wscg__title {
     margin: 0 0 6px;
@@ -424,16 +427,16 @@
   }
   .wscg__lead {
     margin: 0;
-    color: #b8cede;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
   }
   .wscg__src {
     margin: 6px 0 0;
-    color: #7f95a8;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
     font-size: 11px;
     word-break: break-all;
   }
   .wscg__src code {
-    color: #9fd8ef;
+    color: var(--ws-brand, #79d9ff);
   }
   /* 「下载源」**同一行**的"未配置/覆盖值坏掉"提示：跟警告色，但不抢列表（小字、可换行） */
   .wscg__srcwarn {
@@ -450,24 +453,24 @@
     flex: 1;
     min-width: 0;
     padding: 6px 9px;
-    border-radius: 9px;
-    border: 1px solid rgba(121, 217, 255, 0.28);
-    background: rgba(12, 18, 26, 0.92);
-    color: #eaf6ff;
+    border-radius: var(--ws-radius-sm, 12px);
+    border: 1px solid var(--ws-border, rgba(255, 255, 255, 0.2));
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--ws-fg, #ffffff);
     font: inherit;
     font-size: 11.5px;
   }
   .wscg__baseinput::placeholder {
-    color: #6c8093;
+    color: rgba(255, 255, 255, 0.4);
   }
   .wscg__btn.is-mini {
     padding: 6px 10px;
-    border-radius: 9px;
+    border-radius: var(--ws-radius-sm, 12px);
     font-size: 11.5px;
   }
   .wscg__basenote {
     margin: 6px 0 0;
-    color: #9fb4c4;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
     font-size: 11px;
     word-break: break-all;
   }
@@ -490,12 +493,12 @@
     margin-bottom: 4px;
   }
   .wscg__why {
-    color: #cfe3f0;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
     word-break: break-all;
   }
   .wscg__hint {
     margin-top: 8px;
-    color: #85a0b3;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
     font-size: 11.5px;
   }
   .wscg__spin {
@@ -508,7 +511,7 @@
     }
   }
   .wscg__sect {
-    color: #7f95a8;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
     font-size: 11px;
     margin: 2px 0 8px;
   }
@@ -525,9 +528,9 @@
     gap: 10px;
     align-items: center;
     padding: 10px 12px;
-    border-radius: 12px;
-    background: rgba(18, 26, 36, 0.86);
-    border: 1px solid rgba(121, 217, 255, 0.14);
+    border-radius: var(--ws-radius-sm, 12px);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
   }
   .wscg__row.is-installed {
     border-color: rgba(126, 235, 178, 0.38);
@@ -548,8 +551,8 @@
     font-weight: 500;
     padding: 1px 6px;
     border-radius: 999px;
-    background: rgba(121, 217, 255, 0.16);
-    color: #9fd8ef;
+    background: var(--ws-primary-soft, rgba(121, 217, 255, 0.2));
+    color: var(--ws-brand, #79d9ff);
   }
   .wscg__tag.is-ok {
     background: rgba(126, 235, 178, 0.18);
@@ -557,14 +560,14 @@
   }
   .wscg__meta {
     margin-top: 2px;
-    color: #9fb4c4;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
     font-size: 11.5px;
     display: flex;
     gap: 5px;
     flex-wrap: wrap;
   }
   .wscg__attr {
-    color: #7f95a8;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
   }
   .wscg__inst {
     margin-top: 3px;
@@ -579,23 +582,24 @@
   }
   .wscg__btn {
     padding: 7px 12px;
-    border-radius: 10px;
-    border: 1px solid rgba(121, 217, 255, 0.32);
-    background: rgba(18, 26, 36, 0.9);
-    color: #eaf6ff;
+    border-radius: var(--ws-radius-sm, 12px);
+    border: 1px solid var(--ws-border, rgba(255, 255, 255, 0.2));
+    background: var(--ws-panel-2, rgba(255, 255, 255, 0.1));
+    color: var(--ws-fg, #ffffff);
     font: inherit;
     cursor: pointer;
     white-space: nowrap;
   }
   .wscg__btn.is-primary {
-    background: rgba(64, 156, 214, 0.9);
-    border-color: rgba(121, 217, 255, 0.5);
-    color: #04121c;
-    font-weight: 700;
+    /* 主应用实心按钮：`bg-cyan-500` + `text-white`（AppDialog.vue:55） */
+    background: var(--ws-primary-action, #06b6d4);
+    border-color: transparent;
+    color: var(--ws-on-primary-action, #ffffff);
+    font-weight: 600;
   }
   .wscg__btn.is-ghost {
-    border-color: rgba(255, 255, 255, 0.18);
-    color: #b8cede;
+    border-color: var(--ws-border, rgba(255, 255, 255, 0.2));
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
   }
   .wscg__btn:disabled {
     opacity: 0.5;
@@ -609,13 +613,13 @@
     justify-content: space-between;
     gap: 10px;
     font-size: 11.5px;
-    color: #cfe3f0;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
   }
   .wscg__bar {
     margin-top: 6px;
     height: 6px;
     border-radius: 999px;
-    background: rgba(121, 217, 255, 0.16);
+    background: var(--ws-primary-soft, rgba(121, 217, 255, 0.2));
     overflow: hidden;
   }
   .wscg__bar i {
@@ -627,7 +631,8 @@
        与 `width:N%` 时逐帧一致（缩放不改变两端的颜色，也不改变线性插值）。 */
     width: 100%;
     height: 100%;
-    background: linear-gradient(90deg, #409cd6, #7eebb2);
+    /* 进度条两端取自主应用的两个品牌/主色档（cyan-500 → 品牌 #79d9ff） */
+    background: linear-gradient(90deg, var(--ws-primary-action, #06b6d4), var(--ws-brand, #79d9ff));
     /* 原点 = **左端**：原来 `width:N%` 左对齐生长，默认的 `50% 50%` 会变成从中间往两边长。 */
     transform-origin: left center;
     transition: transform 0.18s linear;
@@ -650,9 +655,9 @@
     justify-content: space-between;
     gap: 10px;
     padding: 10px 16px 12px;
-    border-top: 1px solid rgba(121, 217, 255, 0.16);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
     font-size: 11.5px;
-    color: #9fb4c4;
+    color: var(--ws-fg-dim, rgba(255, 255, 255, 0.6));
   }
   .wscg__instsum {
     min-width: 0;

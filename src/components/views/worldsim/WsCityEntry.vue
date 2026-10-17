@@ -63,6 +63,12 @@
   `onPhoneApp()` / `wsPhoneApps` import，以及本页的 `:phone=` 与 `.wsphone-fab` 让位样式）。
   `worldmap/WsPhone*.vue` 本体**不动** —— 老 `/world` 页仍在用（那是另一条线）。
 
+  ## 2026-10-17 · 默认主题改成 `.theme-lingchat`（与主应用同一套设计语言）
+  原来根元素挂的是 `.theme-mint`（薄荷奶油）：顶栏/名字标签写死深蓝、右侧卡片却是浅色薄荷、
+  3D 楼又来自另一套深色阶 ⇒ 三套色系同屏。现在默认主题的令牌**逐项取自**主应用
+  （品牌色 / slate-900 面板 / white-20 描边 / 圆角 / 阴影 / 字体，出处见 `worldsim.css` 的
+  `.theme-lingchat` 块）；`.theme-mint` / `.theme-glass` **保留**为可选主题，换根元素 class 即可。
+
   ## 2026-10-01（当晚第二轮）· 把**世界模拟的皮肤**挂回来（根元素加 `ws-root theme-mint` + import CSS）
   已报「点了角色**连个UI都没有，字直接在地图上显示**」⇒ 实测：**这一屏根本没有 `--ws-*` 令牌表**。
   旧入口（WorldSim.vue，已删除）干了两件事：`import "@/assets/styles/worldsim.css"` + 根元素
@@ -74,7 +80,7 @@
   而这一屏底下是每帧重画的 WebGL 画布 ⇒ 所以下面把两个 blur 令牌**显式置 `none`**。
 -->
 <template>
-  <div class="wsce ws-root theme-mint" :class="{ 'wsce--panel': panelOpen }">
+  <div class="wsce ws-root theme-lingchat" :class="{ 'wsce--panel': panelOpen }">
     <!-- 地图常驻（新入口 = 直接进 3D 地图）。
          `chrome=false` 只关掉底栏那三个按钮（「← 回到区县」在没有区县这一级时是死按钮）；
          `tf=false` 关掉交通设施那条接线 —— 它会发一条 `/api/roads`（真机冷查分钟级、必超时），
@@ -1503,7 +1509,9 @@
     inset: 0;
     z-index: 50;
     overflow: hidden;
-    background: #0a0f16;
+    /* 主题底（默认 = LingChat 那套的深蓝黑；地图画布铺满时看不到，只在加载/降级时露出来） */
+    background: var(--ws-bg, #0b1220);
+    font-family: var(--ws-font);
   }
 
   /* **整屏地图上禁毛玻璃**（红线 R1 的同一口径，见 `assets/styles/worldsim.css:198-201`）：
@@ -1530,6 +1538,26 @@
     -webkit-backdrop-filter: none;
     /* 顶栏那一排按钮在 `top:0`（44px 高）⇒ 角标默认的 `top:.7em` 会压在「城市数据」上 */
     top: 52px;
+    /* 角标也是"压在浅色地图上的小面板" ⇒ 与顶栏/卡片同一套 surface + 描边 + 字色 + 字体。
+       只在**这一屏**覆盖：那份共享样式还有别的页在读，不替所有人做决定。 */
+    background: var(--ws-panel, #0f172a);
+    border-color: var(--ws-border, rgba(255, 255, 255, 0.2));
+    color: var(--ws-fg, #ffffff);
+    font-family: var(--ws-font);
+  }
+  .wsce :deep(.ws-wxtag.is-degraded) {
+    background: var(--ws-panel, #0f172a);
+    border-color: var(--ws-border, rgba(255, 255, 255, 0.2));
+  }
+  /* 时段角标（`.ws-todtag`）同一个理由：共享文件里是 rgba(18,26,44,.42) + 冰蓝字，
+     在浅色底图上与顶栏的 slate-900 不是一套。只在世界模拟这一屏对齐。 */
+  .wsce :deep(.ws-todtag) {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--ws-panel, #0f172a);
+    border-color: var(--ws-border, rgba(255, 255, 255, 0.2));
+    color: var(--ws-fg, #ffffff);
+    font-family: var(--ws-font);
   }
 
 /* 事件气泡的位置由组件自己算（`position:absolute`），这里只保证它**不吃地图手势**：
@@ -1550,17 +1578,24 @@
     padding: 6px 8px;
     /* 只让**这一条**吃手势，其余地方照旧留给地图（拖动/捏合不能被顶栏吃掉） */
     pointer-events: none;
-    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* 字体与主应用同栈（`--ws-font`）；原来这里写死等宽字体，是与 LingChat 三处不一致之一 */
+    font-family: var(--ws-font);
+    font-size: 12.5px;
+    line-height: 1.5;
   }
   .wsce__top > * {
     pointer-events: auto;
   }
+  /* 顶栏芯片：主应用设置页那套 `rounded-lg border-white/20 bg-white/10 text-white`
+     （`SettingItem.vue:31`），这里把 10% 白换成 slate-900 的高不透明度（要压住浅色底图）。
+     圆角取 `rounded-xl`（12px）与主应用弹窗按钮同档。 */
   .wsce__btn {
     padding: 6px 10px;
-    border-radius: 10px;
-    border: 1px solid rgba(121, 217, 255, 0.28);
-    background: rgba(7, 11, 17, 0.66);
-    color: #eaf6ff;
+    border-radius: var(--ws-radius-sm, 12px);
+    border: 1px solid var(--ws-border, rgba(255, 255, 255, 0.2));
+    background: var(--ws-panel, #0f172a);
+    color: var(--ws-fg, #ffffff);
+    box-shadow: var(--ws-shadow);
     font: inherit;
     cursor: pointer;
     /* 2026-09-28 兼容矩阵实测：这颗「←」只有 **30×33**（WCAG 触控目标 44×44 不达标）；
@@ -1578,9 +1613,10 @@
     gap: 6px;
     min-width: 0;
     padding: 5px 10px;
-    border-radius: 10px;
-    background: rgba(7, 11, 17, 0.5);
-    color: #eaf6ff;
+    border-radius: var(--ws-radius-sm, 12px);
+    border: 1px solid var(--ws-border, rgba(255, 255, 255, 0.2));
+    background: var(--ws-panel, #0f172a);
+    color: var(--ws-fg, #ffffff);
   }
   .wsce__name {
     font-weight: 700;
@@ -1592,8 +1628,9 @@
     white-space: nowrap;
     padding: 1px 7px;
     border-radius: 999px;
-    background: rgba(121, 217, 255, 0.16);
-    color: #9fd8ef;
+    background: var(--ws-primary-soft, rgba(121, 217, 255, 0.2));
+    /* 品牌色当文字（主应用 `text-brand` 的读法） */
+    color: var(--ws-brand, #79d9ff);
     font-size: 11px;
   }
   .wsce__chip {
@@ -1602,11 +1639,13 @@
     top: 46px;
     z-index: 30;
     padding: 5px 10px;
-    border-radius: 10px;
+    border-radius: var(--ws-radius-sm, 12px);
     border: 1px solid rgba(255, 207, 138, 0.42);
-    background: rgba(7, 11, 17, 0.62);
+    background: var(--ws-panel, #0f172a);
     color: #ffcf8a;
-    font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--ws-font);
+    font-size: 11.5px;
+    line-height: 1.5;
     cursor: pointer;
   }
 
@@ -1620,11 +1659,14 @@
     z-index: 30;
     min-height: 44px;
     padding: 8px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(143, 214, 192, 0.5);
-    background: rgba(7, 11, 17, 0.7);
-    color: #d8f5e8;
-    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    border-radius: var(--ws-radius-sm, 12px);
+    /* 走近说话 = 主按钮性质：品牌色描边（主应用 `hover:border-(--accent-color)` 的读法） */
+    border: 1px solid rgba(121, 217, 255, 0.4);
+    background: var(--ws-panel, #0f172a);
+    color: var(--ws-fg, #ffffff);
+    font-family: var(--ws-font);
+    font-size: 12.5px;
+    line-height: 1.5;
     cursor: pointer;
     max-width: 62vw;
     overflow: hidden;
@@ -1653,7 +1695,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     border-color: rgba(121, 217, 255, 0.42);
-    color: #9fd8ef;
+    color: var(--ws-brand, #79d9ff);
   }
   /* 2026-10-07 · 顶栏第五颗（「渲染」chip）。取法与上面两颗同一条（`flex: 0 1 auto` +
      省略号；顶栏只有一行、绝不换行）。文案刻意**短**（「地图」/「3D」）——

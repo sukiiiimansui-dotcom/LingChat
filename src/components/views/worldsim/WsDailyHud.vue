@@ -116,12 +116,15 @@
     max-height: min(46vh, 320px);
     overflow-y: auto;
     padding: 6px 9px;
-    border-radius: var(--ws-radius-sm, 14px);
+    /* 与主应用卡片同一档：`rounded-2xl`（16px）+ white/20 描边 + 玻璃阴影（令牌见 worldsim.css） */
+    border-radius: var(--ws-radius, 16px);
     border: 1px solid var(--ws-border);
     background: var(--ws-panel);
     box-shadow: var(--ws-shadow-lg);
     color: var(--ws-fg);
-    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--ws-font);
+    font-size: 12px;
+    line-height: 1.5;
     text-align: left;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -154,7 +157,7 @@
     width: 20px;
     height: 20px;
     margin: 0;
-    accent-color: var(--ws-primary-deep, #62b79d);
+    accent-color: var(--ws-primary, #62b79d);
     cursor: pointer;
   }
   .wsdaily__txt {

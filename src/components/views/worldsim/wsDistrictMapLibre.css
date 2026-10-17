@@ -352,7 +352,7 @@
     font: inherit;
     font-size: 11px;
     line-height: 14px;
-    color: #eaf2f6;
+    color: #ffffff;                    /* 主应用文字色就是 text-white（原 #eaf2f6 偏冰蓝） */
     white-space: nowrap;
     cursor: pointer;
     pointer-events: auto;
@@ -361,16 +361,19 @@
     transition: transform 90ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 120ms cubic-bezier(0.3, 0, 1, 1);
   }
   .ws-lab::before {
-    /* 文字底衬（纯色 + 1px 描边，**无模糊**）：只有实际文字大小，不吃命中区 */
+    /* 文字底衬（纯色 + 1px 描边，**无模糊**）：只有实际文字大小，不吃命中区。
+       取值与主应用同一套：surface = slate-900（`AppDialog.vue:18`）、
+       描边 = border-white/20、圆角 8px（`rounded-lg` 那一档）——
+       原来那版是 `rgba(16,24,32,.72)` + 5px，色相与圆角都跟主应用对不上。 */
     content: "";
     position: absolute;
     left: 8px;
     right: 8px;
     top: 10px;
     bottom: 10px;
-    border-radius: 5px;
-    background: rgba(16, 24, 32, 0.72);
-    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     z-index: -1;
   }
   .ws-lab:hover,

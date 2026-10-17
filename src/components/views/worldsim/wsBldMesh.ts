@@ -22,7 +22,7 @@
  */
 
 import { atlasUvOf, cellOf, repeatOf, ROOF_CELL_INDEX } from "./wsBldFacade";
-import { renderHeight } from "./wsBuildingLook";
+import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
 import { triangulateRing } from "./wsShapeTri";
 
@@ -56,6 +56,62 @@ function mixHexStr(a: string, b: string, t: number): string {
   const cb = hexToRgb(b);
   const c = ca.map((x, i) => Math.round((x + (cb[i]! - x) * t) * 255));
   return "#" + c.map((x) => Math.max(0, Math.min(255, x)).toString(16).padStart(2, "0")).join("");
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 楼色：**瓦片里的 `c` 只当"明度档"，色相与绝对明度由主题色阶给**
+ *
+ * 背景：瓦片/离线包里烤进去的 `c`（= 生成时的 `color3d`）来自 `HEIGHT_COLOR_RAMP`
+ *   那套**深蓝灰**（#23323e → #e8f7ff，L* 20.0 → 96.4）。而地图主题（默认 anime）的
+ *   色阶是**浅天蓝 → 近白**（#B0E0F8 → #FFFFFF，L* 86.7 → 100）。两套并排出现时，
+ *   楼是深色、底图是浅色、HUD 又是一套深蓝玻璃 ⇒ 三种色系互不相干。
+ *
+ * 做法（**不改瓦片**，生成物归生成线管）：
+ *   · 把 `c` 的 WCAG 相对亮度映射到**瓦片那条暗色阶的首尾之间**，得到一个 0..1 的
+ *     位置 `u`（单调，所以"越高越亮 / 女儿墙偏亮 / 设备箱偏深"这些关系原样保留）；
+ *   · 再按同一个 `u` 在**当前主题色阶**上取色。
+ *   ⇒ 屏幕上的色相**只可能**来自主题色阶（`c` 的蓝灰色相一个通道都进不去），
+ *     而逐栋/逐部件的明暗差仍然来自 `c`。
+ *
+ * 代价（写清楚，别让人以为免费）：
+ *   ① 这是**运行时映射**：换了主题，同一批 `c` 会映射到新主题的色阶（不必重出瓦片）；
+ *      但因为顶点色在 `buildBldMeshData` 里烘进几何，**主题切换仍需重建网格**才生效
+ *      （宿主原来就有"主题变了要重取数据"的提示，本改动没有让这条变好）。
+ *   ② `c` 的绝对明度信息被丢掉（那本来就是旧暗色阶的值，与当前主题无关）。
+ *   ③ 2D 地图那条 `bld-ext` 的 paint 仍读 `color3d`（`?renderer=map` 的排查通路）——
+ *      本条只统一 3D 两条路（three / overlay），**没有**动 2D 图层表达式。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** WCAG 相对亮度（伽马展开后）：只用来把"暗色阶里的一档"换算成 0..1 的位置 */
+function relativeLuma(rgb: [number, number, number]): number {
+  const ch = (c: number): number => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return 0.2126 * ch(rgb[0]) + 0.7152 * ch(rgb[1]) + 0.0722 * ch(rgb[2]);
+}
+
+/** 主题色阶按**位置**取色（0 = 最暗档，1 = 最亮档；相邻档之间线性插值） */
+function rampHexAtU(themeId: string, u: number): string {
+  const th = wsMapTheme(themeId) as unknown as { ramp?: Array<[number, string]> };
+  const stops = Array.isArray(th.ramp) && th.ramp.length ? th.ramp : [[0, "#cccccc"] as [number, string]];
+  if (stops.length === 1) return stops[0]![1];
+  const x = Math.max(0, Math.min(1, Number.isFinite(u) ? u : 0)) * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(x));
+  return mixHexStr(stops[i]![1], stops[i + 1]![1], x - i);
+}
+
+/**
+ * 一栋楼（或一个部件）的最终颜色。`color3d` 缺席 ⇒ 直接按高度在主题色阶取色；
+ * 有 ⇒ 只取它的相对明度位置，色相/绝对明度由主题给。纯函数、无全局。
+ */
+export function themedBuildingHex(color3d: string, h: number, themeId: string): string {
+  const raw = String(color3d || "").trim();
+  const hex = /^#?[0-9a-fA-F]{6}$/.test(raw) ? (raw.startsWith("#") ? raw : `#${raw}`) : "";
+  if (!hex) return rampHexAt(themeId, h);
+  const stops = HEIGHT_COLOR_RAMP;
+  const lo = relativeLuma(hexToRgb(stops[0]![1]));
+  const hi = relativeLuma(hexToRgb(stops[stops.length - 1]![1]));
+  const span = hi - lo;
+  const u = span > 1e-6 ? (relativeLuma(hexToRgb(hex)) - lo) / span : 0;
+  return rampHexAtU(themeId, u);
 }
 
 /* ── 烘进顶点色的 Lambert（**这个 three 构建没有 MeshLambertMaterial**，见文件头）────────
@@ -228,11 +284,13 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         continue;
       }
       if (Number.isFinite(h3dRaw) && h3dRaw > 0) stats.withH3d++;
-      if (typeof props.color3d === "string" && props.color3d) stats.withColor3d++;
+      const c3d = typeof props.color3d === "string" && props.color3d ? String(props.color3d) : "";
+      if (c3d) stats.withColor3d++;
       if (rh.from === "real") stats.fromReal++;
       else if (rh.from === "levels") stats.fromLevels++;
       else stats.fromKind++;
-      const hex = typeof props.color3d === "string" && props.color3d ? props.color3d : rampHexAt(themeId, top);
+      /* `c`/`color3d` 只当明度档；最终颜色按当前主题色阶走（见 `themedBuildingHex`） */
+      const hex = themedBuildingHex(c3d, top, themeId);
       const rgb = hexToRgb(hex);
       const fi = featureIds.length;
       featureIds.push(String(f.id ?? ""));

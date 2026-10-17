@@ -12,13 +12,22 @@
  *   · 所有全局类名一律 `ws-` 前缀，关键帧一律 `ws-` 前缀；
  *   · 地图本体（高德/暗色/水系三套）仍由 Rust 渲染器决定，这里只负责「外壳」。
  *
- * 两套主题（看过预览后确定的：保留第 1 套 + 第 3 套，砍掉日系手绘那套）：
- *   .theme-mint  薄荷奶油 —— **默认亮色**：薄荷绿 #8fd6c0 / 奶油白 #fdfbf6 /
+ * 三套主题：
+ *   .theme-lingchat —— **默认**：与 LingChat 主应用同一套设计语言。取值**逐项来自**
+ *                variables.css / base.css / AppDialog.vue / CharacterCard.vue（见下面令牌里的出处），
+ *                不在这里另立色号：深色玻璃面板（slate-900）+ 白字 + 白色 20% 描边 +
+ *                品牌色 #79d9ff 点缀 + 圆角 12/16px。页面本身压在一张浅色底图上，
+ *                所以取的是主应用**弹窗/设置面板**那一档不透明度（不是视频背景上的 10% 白）。
+ *   .theme-mint  薄荷奶油 —— **可选**：薄荷绿 #8fd6c0 / 奶油白 #fdfbf6 /
  *                雾蓝 #a8c8e8 / 暖灰文字 #4a5b63，圆角 14~18px，轻阴影
- *   .theme-glass 现代简约·毛玻璃 —— 可选：低饱和蓝紫 #9aa6e8 / 底 #eef1f8 /
+ *   .theme-glass 现代简约·毛玻璃 —— **可选**：低饱和蓝紫 #9aa6e8 / 底 #eef1f8 /
  *                文字 #3c4560 / 自己头像点 #f0a6b8，圆角 18px，
  *                卡片 backdrop-filter: blur(10px) + 半透明白
  *   （第三套「暖木/纸纹」**不实现**，代码里也不留残留。）
+ *
+ * 主题切换：根元素换 class 即可（`.ws-root.theme-*`）。三套都是**同一组令牌名**，
+ *   组件里不写第二套样式；`--ws-brand` / `--ws-primary-action` 这类新令牌在旧两套里
+ *   有兜底（`var(..., 旧令牌)`），所以老主题不会因为缺键而变透明。
  *
  * 深色模式：JS 在根节点上打两个类之一（见 useWorldSimGeo.ts 的 useWorldSimTheme）
  *   · .ws-dark      —— 明确的深色（用户选择 / LingChat 主题说是深色）
@@ -31,7 +40,59 @@
  *   · @supports not (backdrop-filter: blur(1px)) → 毛玻璃退化成纯色卡片
  * ========================================================================== */
 
-/* ── 主题一：薄荷奶油（默认亮色）──────────────────────────────────────────── */
+/* ── 主题零：LingChat 同款（默认）──────────────────────────────────────────
+ *
+ * 每个色值都能在主仓里指到出处（这是"同款"的定义，不是凭印象调的）：
+ *   · 品牌色 #79d9ff        —— `src/assets/styles/variables.css:2` `--accent-color`
+ *   · 面板底 #0f172a        —— `src/components/ui/AppDialog.vue:18` `bg-slate-900`
+ *   · 白 10% 玻璃底         —— `src/assets/styles/base.css:130` `.glass-effect`
+ *   · 描边 white/20         —— `AppDialog.vue:18` `border-white/20`（CharacterCard.vue:3 同值）
+ *   · 实心按钮 #06b6d4      —— `AppDialog.vue:55` `bg-cyan-500`（悬停 cyan-400 = #22d3ee）
+ *   · 焦点外圈 rgba(121,217,255,.2) —— `base.css:155` `.glass-input:focus`
+ *   · 阴影 0 8px 32px rgba(0,0,0,.1) + inset 1px 白 10% —— `base.css:134-136`
+ *   · 悬停阴影 0 12px 40px rgba(0,0,0,.15) + inset 2px 白 15% —— `SceneCard.vue:28`
+ *   · 圆角：rounded-xl 12px / rounded-2xl 16px —— `SceneCard.vue:3` / `CharacterCard.vue:3`
+ *   · 字体：主应用的 `--font-sans` 栈 —— `base.css:5-6`
+ *
+ * 为什么 `--ws-panel` 是**不透明**的 #0f172a 而不是主应用卡片那层 10% 白：
+ *   主应用的玻璃底压在一张（通常偏暗的）背景图上；这一页压在**每帧重画的浅色地图**上，
+ *   10% 白玻璃会让白字直接读不出来。主应用自己在"必须压住底图"的地方同样用不透明面板
+ *   （`AppDialog` 的 `bg-slate-900`）；这里取的就是那一档，且不给 `backdrop-filter`
+ *   （值不是 `none` 就每帧读回底下像素 —— 见下面 `.ws-perf-low` 那段说明）。
+ */
+.ws-root.theme-lingchat {
+  --ws-brand: #79d9ff;                              /* = --accent-color */
+  --ws-bg: #0b1220;                                 /* 比 slate-900 再深半档，给面板留层次 */
+  --ws-bg-2: #111c2e;
+  --ws-panel: #0f172a;                              /* = bg-slate-900 */
+  --ws-panel-2: rgba(255, 255, 255, 0.1);           /* = .glass-effect 底 */
+  --ws-border: rgba(255, 255, 255, 0.2);            /* = border-white/20 */
+  --ws-fg: #ffffff;
+  --ws-fg-dim: rgba(255, 255, 255, 0.6);            /* = text-white/60 */
+  --ws-primary: #79d9ff;                            /* 品牌色：文字/图标/芯片/进度条 */
+  --ws-primary-deep: #22d3ee;                       /* = cyan-400（悬停） */
+  --ws-primary-soft: rgba(121, 217, 255, 0.2);      /* = .glass-input:focus 外圈 */
+  --ws-primary-action: #06b6d4;                     /* = bg-cyan-500（实心按钮） */
+  --ws-on-primary: #08222c;                         /* 亮青上的深字（芯片/勾选） */
+  --ws-on-primary-action: #ffffff;                  /* = 按钮上的 text-white */
+  --ws-accent: #79d9ff;
+  --ws-accent-2: #f0a6b8;
+  --ws-radius: 16px;                                /* = rounded-2xl */
+  --ws-radius-sm: 12px;                             /* = rounded-xl */
+  --ws-radius-lg: 20px;                             /* 底部抽屉（比卡片大一号，主应用 rounded-[20px] 同档） */
+  --ws-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  --ws-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.15), inset 0 2px 2px rgba(255, 255, 255, 0.15);
+  --ws-blur: 0px;                                   /* 这一屏底下是 WebGL 画布，不建 backdrop 层 */
+  --ws-hl: #79d9ff;                                 /* 地图命中高亮 = 品牌色 */
+  --ws-hl-line: #b9ecff;
+  --ws-ok: #6cc39a;
+  --ws-warn: #e8b86d;
+  --ws-err: #e08d8d;
+  --ws-stage-bg: #0b1220;
+  --ws-primary-ink: #79d9ff;
+}
+
+/* ── 主题一：薄荷奶油（可选亮色）──────────────────────────────────────────── */
 .ws-root.theme-mint {
   --ws-bg: #fdfbf6; /* 奶油白 */
   --ws-bg-2: #f2f8f5; /* 次级底：极浅薄荷 */
@@ -154,6 +215,11 @@
      取 12.2 而不是更小：中文小字低于 12px 在手机屏上开始难认，
      「像浏览桌面版」要的是**布局不变**，不是把字缩到看不清。 */
   --ws-fs: clamp(12.2px, 0.45vw + 10.6px, 15px);
+  /* 字体：**与主应用同一个栈**（`assets/styles/base.css:5-6` 的 `--font-sans`）。
+     世界模拟原先在顶栏/卡片/引导页各写了一份 `ui-monospace`，是第三套语言；
+     统一收到这里，组件只写 `font-family: var(--ws-font)`。 */
+  --ws-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
   /* 与既有的地图整页 WorldMap.vue 用同一套定位（position: fixed + inset:0 + 高 z-index），
      这样「整页路由」在全屏 WebView 里怎么表现，两个页面是一致的。
      层级对照（给定的层叠表 + 本仓库实测）：
@@ -296,8 +362,12 @@
   gap: 0.4em;
   padding: 0.42em 0.95em;
   font: inherit;
+  font-family: var(--ws-font);
   color: var(--ws-fg);
-  background: var(--ws-panel-2);
+  /* 与卡片同一个面板色（`--ws-panel`），而不是 10% 白：这些按钮有的直接浮在**浅色地图**上
+     （加载态的「停止」），10% 白 + 白字会读不出来；主应用在"必须压住底图"的地方同样用
+     不透明的 slate-900 面板（`AppDialog.vue:18`）。 */
+  background: var(--ws-panel);
   border: 1px solid var(--ws-border);
   border-radius: var(--ws-radius-sm);
   cursor: pointer;
@@ -319,9 +389,11 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* 实心主按钮：底色/字色取主应用的 `bg-cyan-500` + `text-white`（`AppDialog.vue:55`）。
+   旧两套主题没有这两个令牌 ⇒ 兜底回原来的 `--ws-primary` / `--ws-on-primary`，观感不变。 */
 .ws-btn--primary {
-  color: var(--ws-on-primary);
-  background: var(--ws-primary);
+  color: var(--ws-on-primary-action, var(--ws-on-primary));
+  background: var(--ws-primary-action, var(--ws-primary));
   border-color: transparent;
   font-weight: 600;
 }

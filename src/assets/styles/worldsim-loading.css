@@ -561,10 +561,22 @@
     opacity: 1;
   }
 }
-/* 文字：白字 + 一层 text-shadow（LingChat 全站压在图上就这么读的），不再用薄荷色 */
+/* 文字：白字 + 一层 text-shadow（LingChat 全站压在图上就这么读的），不再用薄荷色。
+ * 但这一页的"图"是**浅色**底图（#BDDAE7 一带）：纯白字 + 阴影在浅底上只有约 1.6:1，
+ * 机主会直接说"看不清"。所以**独立加载层**（不是抽屉里的横排小加载）给文字加一枚
+ * 与主应用同款的深色药丸（slate-900 + white/20 描边，见 worldsim.css 的 theme-lingchat）；
+ * `--inline`（抽屉/面板里）保持纯白字，因为那底下本来就是深色面板。 */
 .ws-loading__text {
   color: #fff;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+}
+.ws-loading:not(.ws-loading--inline) .ws-loading__text {
+  display: inline-block;
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: var(--ws-panel, #0f172a);
+  border: 1px solid var(--ws-border, rgba(255, 255, 255, 0.2));
+  text-shadow: none;
 }
 .ws-loading__sub {
   color: rgba(255, 255, 255, 0.72);

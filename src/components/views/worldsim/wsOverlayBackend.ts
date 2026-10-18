@@ -555,6 +555,16 @@ export function createOverlayBackend(): WsRenderBackend {
       return;
     }
     rebuildCount += 1;
+    /* 排查口（只读、不影响渲染）：把「期望色」与「实际顶点色」各抽几个放进全局，
+       页面里 eval `__WS_MESHCOLORS__` 就能看出颜色是在哪一层被改掉的。 */
+    try {
+      (window as unknown as { __WS_MESHCOLORS__?: unknown }).__WS_MESHCOLORS__ = {
+        meta: next.featureMeta.slice(0, 8).map((m) => m.color),
+        colors: Array.from(next.colors.slice(0, 24)).map((x) => Math.round(x * 255)),
+        tris: next.triangles,
+        themeId,
+      };
+    } catch { /* 排查口失败不影响渲染 */ }
     /* 落图数据确实到过（启动时间线 / 拆层稳定窗口的判据）：`sourcedata` 只在**新瓦片**落地时来，
        冷启动时瓦片很可能在本后端订阅之前就下完了 ⇒ 只靠事件会让 `tlLandingAt` 永远为 0、
        拆层判据永远不放行（地图那套 `bld-*` 一直留在屏上）。这里在"真建出非空网格"时补记。 */

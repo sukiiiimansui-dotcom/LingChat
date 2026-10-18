@@ -92,6 +92,16 @@ export function hexToRgb(hex: string): [number, number, number] {
   if (!Number.isFinite(n)) return [0.8, 0.8, 0.8];
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
+/* 2026-10-18：three 的 shader 把顶点色当**线性**、输出时再做一次 sRGB 编码；
+   而我们的颜色来自 CSS 的 sRGB ⇒ 直接塞进去等于**多一次 gamma**，屏幕上整体发白
+   （实测：探针里顶点色是 rgb(95,134,180)，屏幕上是淡紫蓝）。这里在入口转成线性。 */
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+export function hexToLinearRgb(hex: string): [number, number, number] {
+  const [r, g, b] = hexToRgb(hex);
+  return [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b)];
+}
 function mixHexStr(a: string, b: string, t: number): string {
   const ca = hexToRgb(a);
   const cb = hexToRgb(b);
@@ -639,7 +649,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       /* `c`/`color3d` 只当明度档；最终颜色按当前主题色阶走（见 `themedBuildingHex`）。
          建模时按最高体块取色，保证同一栋的体块/女儿墙落在同一色阶档。 */
       const hex = themedBuildingHex(c3d, metaTop, themeId);
-      const rgb = hexToRgb(hex);
+      const rgb = hexToLinearRgb(hex);
       const fi = featureIds.length;
       featureIds.push(String(f.id ?? ""));
       featureMeta.push({ color: hex, h3d: metaTop, hBase: metaBase });
@@ -703,7 +713,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         const { rings: prings } = outerRingsOf(part.geometry);
         if (!prings.length) return false;
         const phex = typeof part.c === "string" && part.c ? themedBuildingHex(part.c, pTop, themeId) : hex;
-        const prgb = hexToRgb(phex);
+        const prgb = hexToLinearRgb(phex);
         const pbands = bandsOf(phex);
         let any = false;
         for (const ring of prings) {
@@ -744,7 +754,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         for (const p of outer) grow(p[0], p[1]);
         for (const p of inner) grow(p[0], p[1]);
         const phex = typeof part.c === "string" && part.c ? themedBuildingHex(part.c, pTop, themeId) : hex;
-        const prgb = hexToRgb(phex);
+        const prgb = hexToLinearRgb(phex);
         const pbands = bandsOf(phex);
         /* LOD1：只画外圈墙（6n），不画内圈/顶环带；设备/天线也不画 */
         if (!full) {

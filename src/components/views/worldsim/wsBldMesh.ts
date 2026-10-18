@@ -152,7 +152,11 @@ export function themedBuildingHex(color3d: string, h: number, themeId: string): 
   const hi = relativeLuma(hexToRgb(stops[stops.length - 1]![1]));
   const span = hi - lo;
   const u = span > 1e-6 ? (relativeLuma(hexToRgb(hex)) - lo) / span : 0;
-  return rampHexAtU(themeId, u);
+  /* 2026-10-18：把档位**压到色阶的下半段**（5%~60%）。瓦片里的 `c` 普遍偏亮（u 约 0.8~1）
+     ⇒ 直接取 `u` 会落在这套色阶的最亮端，屏上发白、与地面（L* 85.4）几乎同色。
+     压到下半段后楼落在 L* 约 55~72：比地面暗 13~30，体块/明暗才读得出来。 */
+  const uu = 0.05 + 0.55 * Math.max(0, Math.min(1, u));
+  return rampHexAtU(themeId, uu);
 }
 
 /* ── 烘进顶点色的 Lambert（**这个 three 构建没有 MeshLambertMaterial**，见文件头）────────

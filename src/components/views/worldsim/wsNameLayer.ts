@@ -827,15 +827,20 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   }
 
   /**
-   * 视口尺寸（CSS px）。
+   * 视口尺寸（**CSS px**，与标签 DOM 所在的坐标系同一个口径）。
    *
-   * 2026-09-28 性能账单实测：**这个函数在拖动手势期花了 1.1~1.2 秒**
-   *    （`viewportOf` → `getCanvas()` → `clientWidth` 会**强制同步布局**，每调一次算一次）。
-   * 现在：
-   *   · **优先读绘制缓冲尺寸**（`canvas.width/height`）—— 纯属性读，**不触发布局**；
-   *     maplibre 的 `canvas.width` 本来就是 `CSS 尺寸 × dpr`，除掉 dpr 就是 CSS px；
-   *   · 结果按 `缓冲尺寸@dpr` **缓存**（同尺寸直接命中，不再读任何东西）；
-   *   · 缓冲拿不到（0）时才退回 `clientWidth/clientHeight`（会强制布局，但这是罕见分支）。
+   * 2026-09-28 性能账单实测：**这个函数在拖动手势期花过 1.1~1.2 秒**
+   *    （`clientWidth` 会**强制同步布局**，每调一次算一次）——所以当时改成"优先读绘制缓冲"。
+   * 2026-10-19 更正：那个假设在这台机器上**不成立**。
+   *    MapLibre 6 会为 GPU 上限把**绘制缓冲**降到更低的像素比（`_getClampedPixelRatio`）：
+   *    真机实测视口 2280×995、`canvas.width/height` 只有 2048×893（≈0.898 倍）。
+   *    映射的 transform 仍然按 `clientWidth/clientHeight` 算 ⇒ `map.project()` 给的是 CSS px，
+   *    拿 `canvas.width / dpr` 当视口会把右/下**仍然可见**的标签误判成出框（实测多丢了一条）。
+   * 现在的口径：
+   *   · **CSS 尺寸优先**（`clientWidth/clientHeight`）——它才是标签 DOM 的坐标系；
+   *   · CSS 读不到（0）时才退回绘制缓冲 ÷ dpr（老路径，保留兜底）；
+   *   · 结果按 `CSS 尺寸` 缓存：读完才知道变没变，但**调用点只在 moveend / 重算 / 重投影**
+   *     （每次手势几次），不在逐帧、更不在逐节点（"逐节点读布局"才是红线）。
    * 语义不变：拿不到合法尺寸仍返回 null（调用方按"数不出来"处理）。
    */
   let vpKey = "";
@@ -844,17 +849,18 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     const m = host.map();
     const c = m?.getCanvas?.();
     if (!c) return null;
-    const bw = Number(c.width);
-    const bh = Number(c.height);
-    const dpr = typeof devicePixelRatio === "number" && devicePixelRatio > 0 ? devicePixelRatio : 1;
-    const key = `${bw}x${bh}@${dpr}`;
-    if (key === vpKey) return vpVal;
-    let w = bw > 0 ? bw / dpr : 0;
-    let h = bh > 0 ? bh / dpr : 0;
+    let w = Number(c.clientWidth);
+    let h = Number(c.clientHeight);
     if (!(w > 0) || !(h > 0)) {
-      w = Number(c.clientWidth);
-      h = Number(c.clientHeight);
+      /* 兜底：CSS 尺寸拿不到（元素还没上屏）⇒ 绘制缓冲 ÷ dpr（老口径） */
+      const bw = Number(c.width);
+      const bh = Number(c.height);
+      const dpr = typeof devicePixelRatio === "number" && devicePixelRatio > 0 ? devicePixelRatio : 1;
+      w = bw > 0 ? bw / dpr : 0;
+      h = bh > 0 ? bh / dpr : 0;
     }
+    const key = `${w}x${h}`;
+    if (key === vpKey) return vpVal;
     vpVal = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { width: w, height: h } : null;
     vpKey = key;
     return vpVal;
@@ -1309,8 +1315,10 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           const st = planCache.stats();
           const rp = planFromPayload(payload);          // ← 只重投影；`changed=false` ⇒ 宿主不换字
           lastPlan = rp.plan;
+          /* 出框计数 = **计划期丢的**（模板里已经没有）+ **本次重投影又丢的** ⇒ 与 `pickedShown` 对得上 */
           last = {
-            ...payload.facts, ...countNodes(lastPlan.nodes), droppedByViewport: rp.dropped,
+            ...payload.facts, ...countNodes(lastPlan.nodes),
+            droppedByViewport: (payload.facts.droppedByViewport || 0) + rp.dropped,
             planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason,
             ms: { fetch: tFetch - t0, items: tItems - tFetch, grid: tGrid - tItems, bindDrawn: tBind - tGrid, bindPool: 0, poolGrid: 0, poolQuery: 0, zones: 0, pick: 0, nodes: 0, total: clock() - t0 },
           };
@@ -1616,7 +1624,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
     if (host.enabled && !host.enabled()) return null;            // `?names=0` 关着 ⇒ 不画
     const rp = planFromPayload(payload);
     lastPlan = rp.plan;
-    last = { ...last, ...countNodes(lastPlan.nodes), droppedByViewport: rp.dropped };
+    last = { ...last, ...countNodes(lastPlan.nodes), droppedByViewport: (payload.facts.droppedByViewport || 0) + rp.dropped };
     emit();
     return lastPlan;
   }

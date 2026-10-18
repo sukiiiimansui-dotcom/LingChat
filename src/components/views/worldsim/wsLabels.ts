@@ -185,6 +185,60 @@ export function labelBox(name: string, kind: LabelKind): { w: number; h: number 
   return { w: Math.max(16, Math.round(n * CHAR_W) + pad), h };
 }
 
+/* ── 屏上标签盒（判"会不会被视口裁掉"；**不是**上面的避让盒）────────────────────────
+   `.ws-lab` 的 CSS 在两个页面里是同一套（`wsDistrictMapLibre.css` 与 `ws3dshow.html`）：
+     padding: 12px 10px; font-size: 11px; line-height: 14px; white-space: nowrap;
+     margin: -14px 0 0 -10px;  transform: translate3d(x, y, 0)
+   节点 `x/y` 是**锚点**，真实盒子 = `[x-10, x-10+w] × [y-14, y+24]`：
+     · 高 38 = line-height 14 + 上下 padding 12×2（实测真机 `getBoundingClientRect().height` 也是 38）；
+     · 宽 w = 文字宽 + 左右 padding 10×2。
+   尺寸只按 CSS 口径算，**不读 DOM**：逐帧 `getBoundingClientRect()` 会强制布局（项目红线）。
+   文字宽是估算，且**宁宽勿窄**（宽了最多多藏一条，窄了就会把裁掉半截的标签留在屏上）：
+   全角/CJK 按 1em（11px），其余按避让用的 `CHAR_W`。 */
+export const LABEL_DOM_BOX = {
+  /** 盒子左边在锚点左侧多少 px（= margin-left: -10px） */
+  padLeft: 10,
+  /** 盒子上边在锚点上方多少 px（= margin-top: -14px） */
+  top: 14,
+  /** 盒子高度 px（line-height 14 + padding 12×2） */
+  height: 38,
+  /** 文字左右 padding 合计 px（10×2） */
+  padX: 20,
+} as const;
+
+/** 全角 / CJK / 假名 / 谚文 / 全角标点（这些字形在 11px 字号下≈1em 宽） */
+const WIDE_CHAR = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/;
+
+/** 估文字宽（px）。只服务"会不会被裁"的判定 ⇒ **只许估宽不许估窄** */
+export function labelTextWidth(name: string): number {
+  let w = 0;
+  for (const ch of String(name)) {
+    const cp = ch.codePointAt(0) ?? 0;
+    w += cp > 0xffff || WIDE_CHAR.test(ch) ? 11 : CHAR_W;   // 代理对（emoji 等）也按 1em 算
+  }
+  return w;
+}
+
+/** 标签盒在**视口坐标**里的四条边（`x/y` = 节点 `translate3d` 的锚点） */
+export function labelDomRect(name: string, x: number, y: number): { left: number; top: number; right: number; bottom: number } {
+  const w = Math.max(16, Math.round(labelTextWidth(name)) + LABEL_DOM_BOX.padX);
+  const left = x - LABEL_DOM_BOX.padLeft;
+  const top = y - LABEL_DOM_BOX.top;
+  return { left, top, right: left + w, bottom: top + LABEL_DOM_BOX.height };
+}
+
+/**
+ * 标签盒是不是**完整**落在视口里（A 口径：放不下就**不画**，宁缺勿裁）。
+ *
+ * `x/y` = 节点 `translate3d` 的锚点；`vw/vh` = 视口 CSS 尺寸；`inset` = 额外安全边距。
+ * 视口尺寸无效 ⇒ `false`：数不出来**不假装"放得下"**（调用方要么已经有合法视口，要么自己按"数不出来"处理）。
+ */
+export function labelDomFits(name: string, x: number, y: number, vw: number, vh: number, inset = 0): boolean {
+  if (!Number.isFinite(vw) || !Number.isFinite(vh) || vw <= 0 || vh <= 0) return false;
+  const r = labelDomRect(name, x, y);
+  return r.left >= inset && r.top >= inset && r.right <= vw - inset && r.bottom <= vh - inset;
+}
+
 /**
  * 挑标签：**边界内 + 有名字 + 类别允许 + 只 real** → 按优先级排序 → **网格碰撞避让** → 上限截断。
  *

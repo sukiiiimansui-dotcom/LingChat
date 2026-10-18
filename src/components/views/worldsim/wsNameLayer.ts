@@ -58,6 +58,7 @@ import {
   buildingLabelsFrom,
   createLabelPlanCache,
   labelBox,
+  labelDomFits,
   labelItemsSig,
   labelPlanFor,
   labelTierOf,
@@ -343,6 +344,12 @@ export interface NameFacts {
   capped: boolean;
   skippedNoName: number;
   skippedOffscreen: number;
+  /**
+   * 因为**标签盒放不进视口**（会被上下/左右边缘裁掉半截）而**不画**的节点数。
+   * 与 `skippedOffscreen` 分开：那个是"锚点都看不到"，这个是"锚点在、但盒子出框"。
+   * 三态：正数 / 0（已量、真的没出框）/ 数不出来时不参与（视口拿不到就不丢，见 `planFromPayload`）。
+   */
+  droppedByViewport: number;
   /** 密度信号 D = 撞掉 / 候选；**没候选 = null（数不出来，不是 0）** */
   density: number | null;
   /** 当前模式（迟滞闸门判的） */
@@ -454,6 +461,7 @@ export function nameVerdictLine(f: NameFacts): string {
   return (
     `🏷 标签 显示 ${f.pickedShown} / 丢弃(避让) ${f.droppedByCollision} / 超上限 ${f.droppedByCap}` +
     `（候选 ${f.candidates}${f.capped ? " · 被上限截断" : ""}）` +
+    ` · 出框 ${f.droppedByViewport}` +
     ` · 屏上 ${f.labels}（大名字 ${f.bigLabels} · 真名 ${f.realLabels} · 区名 ${f.zoneLabels}=数据驱动 ${f.zoneDerived}+真名区/示意 ${f.zoneSketch}）` +
     ` · 🚫生成名上屏 ${f.generatedOnScreen} · 点 ${f.points} · 格 ${f.hit}/${f.cells}` +
     /* 划区的**中间量**也要看得见：否则"区名 0 个"就只剩一句结论，查不出是"没够格"还是"过半=0"
@@ -486,7 +494,7 @@ function emptyFacts(on: boolean): NameFacts {
     state: on ? "uncounted" : "off",
     labels: 0, pickedShown: 0, realLabels: 0, zoneLabels: 0, bigLabels: 0, zoneDerived: 0, zoneSketch: 0,
     generatedOnScreen: 0,
-    candidates: 0, droppedByCollision: 0, droppedByCap: 0, capped: false, skippedNoName: 0, skippedOffscreen: 0,
+    candidates: 0, droppedByCollision: 0, droppedByCap: 0, capped: false, skippedNoName: 0, skippedOffscreen: 0, droppedByViewport: 0,
     density: null, mode: "names",
     cells: 0, hit: 0, missing: 0, failed: 0,
     points: 0, droppedByConf: 0,
@@ -754,17 +762,55 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
   }
 
   /**
-   * 由**缓存下来的模板**生成一份新计划：只重投影，**集合/batch/避让/上限一律不动**。
+   * 由**缓存下来的模板**生成一份新计划：只重投影 + 一道**视口完整判定**（盒子放不下就不画）。
    * `changed=false` 是硬约束：宿主据此**禁止**整层换字（只允许改坐标）。
+   *
+   * 为什么闸也要放在这条路上：复用/重投影时**集合不变、只有坐标变**，标签完全可能被相机带到
+   * 上/下边缘（真机 2026-10-19 抓到的 `top=-13px` 就是这一类）——只在重排时判，会留下半截药丸。
+   * 判定是 O(N) 纯算术（尺寸走 CSS 口径 `labelDomFits`），**不读任何布局**；视口尺寸复用 `viewportOf`
+   * 的缓存（同一缓冲尺寸不会再读 `clientWidth`）。
    */
-  function planFromPayload(p: PlannedPayload): NameRenderPlan {
-    const nodes = p.nodes.map(projectNode);
-    nodes.forEach((n, i) => { n.slot = i; });
+  function planFromPayload(p: PlannedPayload): { plan: NameRenderPlan; dropped: number } {
+    const vp = viewportOf();
+    const nodes: NameRenderNode[] = [];
+    for (const n of p.nodes) {
+      const m = projectNode(n);
+      if (!fitsViewport(m, vp)) continue;
+      /* `slot` **沿用模板里的**、不重排：宿主拿 `slot:id` 当 key，重编号会让后面那些标签换元素 */
+      nodes.push(m);
+    }
     return {
-      mode: p.mode, nodes, batch: p.batch, lite: p.lite,
-      cameraOpacity: LABEL_MOTION.cameraOpacity,
-      changed: false, entered: [], exited: [],
+      plan: {
+        mode: p.mode, nodes, batch: p.batch, lite: p.lite,
+        cameraOpacity: LABEL_MOTION.cameraOpacity,
+        changed: false, entered: [], exited: [],
+      },
+      dropped: p.nodes.length - nodes.length,
     };
+  }
+
+  /**
+   * 屏上节点的派生计数（重排 / 复用 / 重投影三条路**共用这一份口径**）。
+   * `labels` 必须和 `nodes.length` 同源：被视口判定丢掉的那些不许再算"屏上"。
+   */
+  function countNodes(nodes: readonly NameRenderNode[]): Pick<
+    NameFacts, "labels" | "realLabels" | "zoneLabels" | "bigLabels" | "zoneDerived" | "zoneSketch"
+  > {
+    const zoneLabels = nodes.filter((n) => n.pick.kind === "zone").length;
+    return {
+      labels: nodes.length,
+      realLabels: nodes.filter((n) => n.style === "real").length,
+      zoneLabels,
+      bigLabels: nodes.length - zoneLabels,
+      zoneDerived: nodes.filter((n) => n.style === "derived").length,
+      /** 区名里**不是数据驱动**的那些（真名区 + 示意区） */
+      zoneSketch: nodes.filter((n) => n.pick.kind === "zone" && n.style !== "derived").length,
+    };
+  }
+
+  /** 标签盒完整落在视口里？（A 口径：放不下 ⇒ 不画。`vp` 数不出来 ⇒ 不据此丢，照画） */
+  function fitsViewport(n: NameRenderNode, vp: { width: number; height: number } | null): boolean {
+    return !vp || labelDomFits(n.text, n.x, n.y, vp.width, vp.height);
   }
 
   function viewOf(): BundleView | null {
@@ -1261,9 +1307,13 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
           /* 记账走**同一个** `run`（命中缓存 ⇒ 里面的 `work` 一次都不调）⇒ 读数由此而来 */
           planCache.run(key, () => (payload as PlannedPayload).picked);
           const st = planCache.stats();
-          last = { ...payload.facts, planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason,
-            ms: { fetch: tFetch - t0, items: tItems - tFetch, grid: tGrid - tItems, bindDrawn: tBind - tGrid, bindPool: 0, poolGrid: 0, poolQuery: 0, zones: 0, pick: 0, nodes: 0, total: clock() - t0 } };
-          lastPlan = planFromPayload(payload);          // ← 只重投影；`changed=false` ⇒ 宿主不换字
+          const rp = planFromPayload(payload);          // ← 只重投影；`changed=false` ⇒ 宿主不换字
+          lastPlan = rp.plan;
+          last = {
+            ...payload.facts, ...countNodes(lastPlan.nodes), droppedByViewport: rp.dropped,
+            planComputes: st.computes, planReuses: st.reuses, planReason: st.lastReason,
+            ms: { fetch: tFetch - t0, items: tItems - tFetch, grid: tGrid - tItems, bindDrawn: tBind - tGrid, bindPool: 0, poolGrid: 0, poolQuery: 0, zones: 0, pick: 0, nodes: 0, total: clock() - t0 },
+          };
           return emit();
         }
         gateForced = g0.zoneMode;
@@ -1397,6 +1447,21 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         }
         if (fallbackAdded) bindCount.hidden = Math.max(0, bindCount.hidden - fallbackAdded);
       }
+      /* ── 视口完整判定（A 口径：放不下就**不画**，宁缺勿裁）──────────────────────────
+         真名 / 区名 / 补位三条路的节点都在上面汇进 `nodes` ⇒ 闸只放这一处。
+         判的是**盒子**（锚点 ± 各自的 padding）而不是锚点：锚点还在屏内、盒子却已经被上沿裁掉半截，
+         正是 2026-10-19 真机抓到的 `top=-13px`（锚点 y=0.9、盒高 38）。
+         尺寸按 CSS 口径算（`labelDomFits`），**一次 `getBoundingClientRect` 都不调**（逐帧读布局=强制布局）。
+         复用/重投影那条路在 `planFromPayload` 里用同一道判定（相机一动锚点就变）。 */
+      let droppedByViewport = 0;
+      if (vp) {
+        for (let i = nodes.length - 1; i >= 0; i--) {
+          const n = nodes[i];
+          if (labelDomFits(n.text, n.x, n.y, vp.width, vp.height)) continue;
+          nodes.splice(i, 1);
+          droppedByViewport++;
+        }
+      }
       nodes.forEach((n, i) => { n.slot = i; });
       const tNodes = clock();
       const lite = nodes.length > LABEL_MOTION.liteAbove;
@@ -1445,6 +1510,7 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
         skippedNoName: picked?.skippedNoName ?? 0,
         /* **视野外丢弃** = 真名候选被 `pickLabels` 丢的 + 区名锚点在画布外被丢的（同一口径，一个数） */
         skippedOffscreen: (picked?.skippedOffscreen ?? 0) + zoneDroppedOffscreen,
+        droppedByViewport,
         density,
         mode,
         cells: wanted.length,
@@ -1543,11 +1609,14 @@ export function createNameLayer(host: NameLayerHost): NameLayer {
    * 重排（600ms 去抖 + 取包）完成之前，节点还钉在**上一台相机**的坐标上 ⇒ 那 600ms 里整层是错位的。
    * 这里把这段补上：按**当前**相机把每个保留节点重投一次（O(N)，N ≤ 26），
    * **集合 / `batch` / 避让 / 上限 / 区名聚合一律不动** ⇒ `changed=false` ⇒ 宿主不会整层换字。
+   * 只多做一件事：**盒子放不进视口的节点不画**（`planFromPayload` 里同一道判定），并如实计数。
    */
   function reproject(): NameRenderPlan | null {
     if (!payload) return null;                                   // 还没算过任何一批 ⇒ 什么都不做
     if (host.enabled && !host.enabled()) return null;            // `?names=0` 关着 ⇒ 不画
-    lastPlan = planFromPayload(payload);
+    const rp = planFromPayload(payload);
+    lastPlan = rp.plan;
+    last = { ...last, ...countNodes(lastPlan.nodes), droppedByViewport: rp.dropped };
     emit();
     return lastPlan;
   }

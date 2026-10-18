@@ -950,6 +950,15 @@ if (typeof window !== "undefined") {
         return "null";
       }
     },
+    /** 调试口（排查用）：把一段脚本放到**地图实例**里跑，如逐层 `setLayoutProperty` 定位画面异常 */
+    evalMap: (src: string) => {
+      try {
+        const b = mapBackendNow() as unknown as { evalMap?: (s: string) => unknown } | null;
+        return b?.evalMap ? b.evalMap(String(src)) : null;
+      } catch {
+        return null;
+      }
+    },
     /** 地图 `bld*` 图层的 `visibility` 清单（"地图自己那套楼"显不显示） */
     mapLayersJson: () => {
       try {

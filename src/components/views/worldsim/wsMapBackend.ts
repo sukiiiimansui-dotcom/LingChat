@@ -361,6 +361,21 @@ export function createMapBackend(opts: WsMapBackendOpts = {}): WsRenderBackend {
     },
 
     /**
+     * **调试口**（只用于排查，不参与渲染）：把一段脚本放到地图实例的上下文里跑。
+     * 例：`evalMap("map.setLayoutProperty('bld-foot','visibility','none')")` —— 逐层隐藏定位画面异常。
+     * 拿不到地图实例就返回 null（如实：不是"执行失败"，是"没有实例"）。
+     */
+    evalMap(src: string): unknown {
+      try {
+        const m = map as unknown as Record<string, unknown>;
+        // eslint-disable-next-line no-new-func
+        return new Function("map", String(src))(m) ?? null;
+      } catch (e) {
+        return { error: String((e as Error)?.message || e) };
+      }
+    },
+
+    /**
      * **经纬度 → 屏幕像素**（真地图的 `project()`；纯数学，不需要 GL）。
      * §1.3 那条"同楼四角 ≤1.5 px"的对拍要拿它与叠加层那边的 `camera.project()` 比。
      */

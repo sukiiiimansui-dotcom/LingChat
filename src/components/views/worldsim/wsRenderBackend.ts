@@ -186,6 +186,15 @@ export const wsDiag = {
   mapCtxLost: 0,
   mapCtxRestored: 0,
   /**
+   * 补层包装**幂等跳过**的次数（id 已存在 ⇒ 不再 add）。
+   *
+   * 为什么单独记：`addLayer` 撞已有 id 时 MapLibre **发 error 事件**、`addSource` 则**同步抛错**，
+   * 而看门狗把"地图库报过错"判成**永久**降级（`m.remove()`）。这两个计数非 0 就说明
+   * "那批 already exists 是被包装拦下的重复补齐，不是地图坏了"。
+   */
+  styleSkipSource: 0,
+  styleSkipLayer: 0,
+  /**
    * 样式现况（2026-10-16 真机定位加）：`loaded` = `isStyleLoaded()`（**源没下完也是 false**），
    * `hasStyle`/`layers` = 样式对象在不在、有几条层（**这才是"真死"的判据**），
    * `notLoaded` = "样式在、层也在、但 loaded=false"被观测到的次数（老判据的误报次数）。

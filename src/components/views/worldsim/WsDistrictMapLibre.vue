@@ -981,6 +981,10 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
    *  `getSource` / `getLayer` 两次只读调用（零分配），而"早 2 秒补回来"与"晚 2 秒"观感一样。 */
   const HEAL_WATCHDOG_MS = 2000;
   let healTimer = 0;
+  /** 上下文恢复后的"干净重建"定时器（`webglcontextlost/restored` 那段；卸载时要清） */
+  let ctxRestoreTimer = 0;
+  /** 主动请求恢复的次数（每个实例有界：最多 3 次、间隔翻倍，见 `webglcontextlost` 那段） */
+  let ctxRestoreTries = 0;
   /** **样式/上下文死亡看门狗**（2026-10-11）：真机上"丢了上下文但**没有 restored 事件**"那条主症状
    *  （`~/chk/wslog/phone1.jsonl`：68 秒没有任何恢复事件，样式一直死着）——`bldHeal` 管不了它
    *  （样式没就绪时它**故意**早退），引擎守卫的恢复轮询又只在掉进 2D 之后才跑 ⇒ 活着的 WebGL 路没人看。
@@ -2399,12 +2403,53 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
        修法：样式就绪前**先排队**；`style.load`/`load` 之后按原顺序补做（FIFO ⇒ addSource 一定先于依赖它的 addLayer）。
        兜底再挂一个有界定时器（4s 一次，不常驻）。 */
     const pendingStyleOps: Array<() => void> = [];
+    /* 队列按 **id 去重**（下面 `queueOp`）：上下文丢失的窗口里各条 ensure 通路会反复
+       请求同一批源/层，排队时去重 ⇒ 恢复后不会把同一次补齐重放成一串。 */
+    const pendingKeys = new Set<string>();
+    /** 上下文监听器（在本段之外）用的两个出口：重放补层队列 / 清空它 */
+    let flushStyleOps: (() => void) | null = null;
+    const clearStyleOps = (): void => { pendingStyleOps.splice(0); pendingKeys.clear(); };
+    /** 样式里现有几层（`>0` = 在；`0` = 空样式；`-1` = 还在加载 / 已销毁，`serialize()` 抛错） */
+    let styleLayerCount: (() => number) | null = null;
     try {
       const styleReady = (): boolean => {
         try { return !!(m as unknown as { isStyleLoaded?: () => boolean }).isStyleLoaded?.(); } catch { return false; }
       };
       const _addLayer = m.addLayer.bind(m) as unknown as (s: unknown, b?: unknown) => unknown;
       const _addSource = m.addSource.bind(m) as unknown as (i: string, s: unknown) => unknown;
+      /* ══ **幂等包装**（2026-10-18）════════════════════════════════════════════════════
+         真机取证：上下文丢失后恢复，补层队列会在重建好的样式上**再跑一遍** ——
+           · `addLayer` 撞已有 id ⇒ MapLibre **发 error 事件**（`Layer "x" already exists on this map.`）
+             ⇒ 验证面板②一次捞到 20 条，而看门狗把"报过错"判成**永久**降级（`m.remove()`）；
+           · `addSource` 撞已有 id ⇒ **同步抛错**（`Source "x" already exists.`）。
+         ⇒ id 已存在就**跳过并计数**，不把"补齐"变成报错，也不让看门狗据此拆地图。
+         计数在 `wsDiag.styleSkipSource/Layer`（验证 JSON 可读）。 */
+      const hasSourceId = (id: string): boolean => {
+        try { return !!(m as unknown as { getSource?: (x: string) => unknown }).getSource?.(id); } catch { return false; }
+      };
+      const hasLayerId = (id: string): boolean => {
+        try { return !!(m as unknown as { getLayer?: (x: string) => unknown }).getLayer?.(id); } catch { return false; }
+      };
+      const applyLayer = (spec: unknown, before?: unknown): unknown => {
+        const id = spec && typeof spec === "object" ? (spec as { id?: unknown }).id : null;
+        if (typeof id === "string" && id && hasLayerId(id)) { wsDiag.styleSkipLayer += 1; return m; }
+        return _addLayer(spec, before);
+      };
+      const applySource = (id: string, spec: unknown): unknown => {
+        if (hasSourceId(id)) { wsDiag.styleSkipSource += 1; return m; }
+        return _addSource(id, spec);
+      };
+      const queueOp = (key: string, fn: () => void): void => {
+        if (pendingKeys.has(key)) return;
+        pendingKeys.add(key);
+        pendingStyleOps.push(() => { pendingKeys.delete(key); fn(); });
+      };
+      styleLayerCount = (): number => {
+        try {
+          const st = (m as unknown as { getStyle?: () => { layers?: unknown } }).getStyle?.();
+          return st && Array.isArray(st.layers) ? st.layers.length : 0;
+        } catch { return -1; }      /* `serialize()` 抛 = 样式还在加载 / 已销毁，交给重建那边判 */
+      };
       const flushPending = (): void => {
         const q = pendingStyleOps.splice(0);
         for (const fn of q) {
@@ -2415,13 +2460,19 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
           }
         }
       };
+      flushStyleOps = flushPending;
       (m as unknown as { addLayer: unknown }).addLayer = (spec: unknown, before?: unknown) => {
-        if (!styleReady()) { pendingStyleOps.push(() => { _addLayer(spec, before); }); return m; }
-        return _addLayer(spec, before);
+        if (!styleReady()) {
+          const id = spec && typeof spec === "object" ? (spec as { id?: unknown }).id : null;
+          if (typeof id === "string" && id) queueOp(`layer:${id}`, () => { applyLayer(spec, before); });
+          else pendingStyleOps.push(() => { applyLayer(spec, before); });
+          return m;
+        }
+        return applyLayer(spec, before);
       };
       (m as unknown as { addSource: unknown }).addSource = (id: string, spec: unknown) => {
-        if (!styleReady()) { pendingStyleOps.push(() => { _addSource(id, spec); }); return m; }
-        return _addSource(id, spec);
+        if (!styleReady()) { queueOp(`source:${id}`, () => { applySource(id, spec); }); return m; }
+        return applySource(id, spec);
       };
       m.once("style.load", flushPending);
       m.once("load", flushPending);
@@ -2495,13 +2546,94 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
          ① canvas 的 `webglcontextlost`（真机最常见时机：切后台被系统回收 GPU）；
          ② `webglcontextrestored`（有恢复事件时第一时间补，不等看门狗）；
          ③ **2s 低频看门狗**（有些 WebView 根本不发恢复事件 ⇒ 这条是兜底中的兜底）。
-       计数不静默：`bldHeal` 把"补了几次 / 最后耗时 / 为什么补"写进 `stats.bldHeal`（HUD 可读）。 */
+       计数不静默：`bldHeal` 把"补了几次 / 最后耗时 / 为什么补"写进 `stats.bldHeal`（HUD 可读）。
+
+       2026-10-18 追加（真机读数：`mapCtxLost=1 / mapCtxRestored=0`、样式空、20 条 already exists）：
+         · `webglcontextlost` 里**显式 `preventDefault()`**，并在浏览器不自动恢复时**主动请求恢复**
+           （有界，最多 3 次；拿不到 `WEBGL_lose_context` 就不动作）；
+         · `webglcontextrestored` 里走一次**干净重建**（库的快照为空时整份 `setStyle(diff:false)`），
+           重建后把恢复窗口里排下的补层动作一次性放掉；
+         · `addSource`/`addLayer` 包装改为**幂等**（id 已存在就跳过并计数）：那批 already exists 里
+           `addLayer` 走的是 error 事件，而看门狗把"报过错"判成**永久**降级（`m.remove()`）。
+       ⇒ 三条合起来才闭环：没有幂等，恢复本身也会被那 20 条错判死。 */
     {
       const cv = (() => { try { return m.getCanvas ? m.getCanvas() : null; } catch { return null; } })();
       const healWhy = (why: string) => { try { bldLanding.bldHeal(why); } catch { /* 兜底不许影响地图 */ } };
+      /* 真正的 `WEBGL_lose_context` **必须在丢失之前**拿到（上下文丢了以后 `getExtension` 返回 null）。
+         拿不到就不动作 —— 与 `?ctxkill=` 同一条纪律：宁可失败，不合成事件造假。 */
+      const gl = (() => {
+        try { return (cv?.getContext("webgl2") || cv?.getContext("webgl")) as WebGLRenderingContext | null; } catch { return null; }
+      })();
+      const loseExt = (() => {
+        try {
+          return gl?.getExtension("WEBGL_lose_context") as unknown as { restoreContext?: () => void } | null;
+        } catch { return null; }
+      })();
+      /**
+       * 恢复后的**干净重建**（2026-10-18）。
+       *
+       * 库自己的恢复是"按丢失那一刻的快照 `setStyle`"，而**样式还没加载完就丢上下文**时那份快照
+       * 是空的（vendor `_getStyleAndImages()` 在未加载的样式上会抛）⇒ 恢复事件来了也只剩一个空样式，
+       * 屏幕上是纯色 + 后面所有补齐动作撞 "already exists"。所以不把恢复交给它：
+       * 等一拍（库的恢复是异步的，别抢），样式/层没回来就**整份 `setStyle(diff:false)`** 重建一次，
+       * 再重挂补层队列的 flush（恢复窗口里排下的补齐动作在这里一次性、幂等地放掉）。
+       * 有界：最多两拍等待（400ms / 800ms），之后一定动手；失败交给既有看门狗/重试。
+       */
+      const rebuildStyle = (tries: number): void => {
+        window.clearTimeout(ctxRestoreTimer);
+        ctxRestoreTimer = window.setTimeout(() => {
+          if (!alive || map !== m) return;
+          const layers = styleLayerCount ? styleLayerCount() : 0;
+          if (layers > 0) {
+            try { flushStyleOps?.(); } catch { /* 补层失败不阻断地图 */ }
+            try { clearStyleOps(); } catch { /* 清不掉不影响恢复 */ }
+            healWhy("ctxrestored-flush");
+            return;
+          }
+          if (tries < 2) { rebuildStyle(tries + 1); return; }
+          try {
+            (m as unknown as { setStyle?: (s: unknown, o?: unknown) => void }).setStyle?.(styleNow(), { diff: false });
+          } catch { /* 重建失败交给看门狗/重试 */ }
+          try {
+            m.once("style.load", () => {
+              try { flushStyleOps?.(); } catch { /* 补层失败不阻断地图 */ }
+              try { clearStyleOps(); } catch { /* 清不掉不影响恢复 */ }
+            });
+          } catch { /* 挂不上不影响地图 */ }
+          healWhy("ctxrestored-rebuild");
+        }, tries === 0 ? 400 : 800);
+      };
       if (cv && cv.addEventListener) {
-        cv.addEventListener("webglcontextlost", () => { wsDiag.mapCtxLost += 1; healWhy("ctxlost"); }, false);
-        cv.addEventListener("webglcontextrestored", () => { wsDiag.mapCtxRestored += 1; healWhy("ctxrestored"); }, false);
+        cv.addEventListener("webglcontextlost", (ev: Event) => {
+          wsDiag.mapCtxLost += 1;
+          /* 🔴 不 `preventDefault` 浏览器**不会**恢复这块上下文。vendor（maplibre-gl.mjs 的
+             `_contextLost`）自己也调了；这里显式再做一次，是不把恢复寄托在库的行为上。 */
+          try { ev.preventDefault(); } catch { /* 有的环境 present 但不可取消 */ }
+          healWhy("ctxlost");
+          /* 真机上浏览器**不一定会自己恢复**（`wsStyleWatch.ts` 文件头那份 68 秒读数：restored=0）
+             ⇒ 主动请求一次恢复。有界：每个实例最多 3 次、间隔 300/600/1200ms；
+             上下文已经回来了就不重复请求。 */
+          if (loseExt && ctxRestoreTries < 3) {
+            const wait = 300 * (1 << ctxRestoreTries);
+            ctxRestoreTries += 1;
+            window.clearTimeout(ctxRestoreTimer);
+            ctxRestoreTimer = window.setTimeout(() => {
+              if (!alive || map !== m) return;
+              try {
+                const isLost = (gl as unknown as { isContextLost?: () => boolean })?.isContextLost;
+                if (typeof isLost === "function" && !isLost.call(gl)) return;
+                loseExt.restoreContext?.();
+              } catch { /* 请求失败交给看门狗 */ }
+            }, wait);
+          }
+        }, false);
+        cv.addEventListener("webglcontextrestored", () => {
+          wsDiag.mapCtxRestored += 1;
+          ctxRestoreTries = 0;                       /* 真的回来了 ⇒ 自愈预算重置 */
+          window.clearTimeout(ctxRestoreTimer);
+          healWhy("ctxrestored");
+          rebuildStyle(0);
+        }, false);
       }
       healTimer = window.setInterval(() => healWhy("watchdog"), HEAL_WATCHDOG_MS);
     }
@@ -2634,6 +2766,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     stopTimer();
     if (bldTimer) window.clearTimeout(bldTimer);
     if (healTimer) window.clearInterval(healTimer);   /* 兜底恢复看门狗（2026-10-11） */
+    if (ctxRestoreTimer) window.clearTimeout(ctxRestoreTimer);   /* 上下文恢复/干净重建（2026-10-18） */
     if (styleWatchTimer) window.clearInterval(styleWatchTimer);   /* 样式死亡看门狗（2026-10-11） */
     if (ctxKillTimer) window.clearTimeout(ctxKillTimer);           /* 自用开关 `?ctxkill=`（2026-10-11） */
     if (zoomNameTimer) window.clearTimeout(zoomNameTimer);

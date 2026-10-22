@@ -19,6 +19,8 @@ on:
 
 jobs:
   build:
+    # 2026-10-23：矩阵里去掉了 macos —— fork 上拿不到 macOS runner（排队约 15 分钟后被取消 ⇒ 全红）。
+    # macOS 产物交给上游与本地构建。
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -28,8 +30,6 @@ jobs:
             os: windows-latest
           - platform: linux-amd64
             os: ubuntu-latest
-          - platform: macos
-            os: macos-latest
           - platform: linux-aarch64
             os: ubuntu-24.04-arm
 

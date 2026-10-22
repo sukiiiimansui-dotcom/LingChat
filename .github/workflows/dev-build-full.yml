@@ -50,6 +50,10 @@ jobs:
     # macOS 那一路改成"尽力而为"：跑成了有产物，跑不成不拖红整条流水线；真机 iOS/macOS 产物由
     # 上游与本地构建兜底。其余三平台仍然是硬门禁。
     continue-on-error: ${{ matrix.platform == 'macos' }}
+    # 取消（cancelled）不吃 continue-on-error ⇒ 干脆在 push/PR 上不排 macOS：
+    # 只有定时与手动触发才尝试，避免每次推送都出现一个"排队 15 分钟后被取消"的红任务。
+    if: matrix.platform != 'macos' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
     strategy:
       fail-fast: false
       matrix:

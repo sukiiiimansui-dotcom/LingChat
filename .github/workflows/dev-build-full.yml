@@ -46,6 +46,10 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    # 2026-10-23：fork 上拿不到 macOS runner（任务排队 15 分钟、一步没跑就被取消 ⇒ 整个 run 变红）。
+    # macOS 那一路改成"尽力而为"：跑成了有产物，跑不成不拖红整条流水线；真机 iOS/macOS 产物由
+    # 上游与本地构建兜底。其余三平台仍然是硬门禁。
+    continue-on-error: ${{ matrix.platform == 'macos' }}
     strategy:
       fail-fast: false
       matrix:

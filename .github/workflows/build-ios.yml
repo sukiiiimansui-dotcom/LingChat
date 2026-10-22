@@ -35,6 +35,9 @@ jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 90
+    # 2026-10-23：fork 上 macOS runner 不可用（排队后直接 cancelled）⇒ 这一路"尽力而为"，
+    # 不让它把整条流水线拖红；iOS 产物的硬门禁留给上游和本地构建。
+    continue-on-error: true
     env:
       # workflow_dispatch 的 compression 输入 → 脚本内 data.7z 压缩等级（默认 9）
       IOS_BUNDLED_7Z_LEVEL: ${{ github.event.inputs.compression }}

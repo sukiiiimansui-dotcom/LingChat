@@ -46,12 +46,10 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    # 2026-10-23：fork 上拿不到 macOS runner（任务排队 15 分钟、一步没跑就被取消 ⇒ 整个 run 变红）。
-    # 做法：macOS 只在定时与手动触发时尝试（见下面的 if），推送/PR 上根本不排它；
-    # 其余三平台仍是硬门禁。真机 macOS/iOS 产物由上游与本地构建兜底。
-    # 取消（cancelled）不吃 continue-on-error ⇒ 干脆在 push/PR 上不排 macOS：
-    # 只有定时与手动触发才尝试，避免每次推送都出现一个"排队 15 分钟后被取消"的红任务。
-    if: matrix.platform != 'macos' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # 2026-10-23：矩阵里**去掉 macos** —— fork 上拿不到 macOS runner（任务排队约 15 分钟、
+    # 一步没跑就被取消 ⇒ 整条流水线变红）。macOS/macOS 产物由上游与本地构建负责。
+    # 注意：`jobs.<id>.if` **不能**引用 `matrix` 上下文（会让整份 workflow 校验失败），
+    # 所以这里用"从矩阵里删掉"而不是"用 if 跳过"。
 
     strategy:
       fail-fast: false
@@ -64,10 +62,6 @@ jobs:
           - platform: linux-amd64
             os: ubuntu-latest
             artifact-name: lingchat-dev-linux-amd64
-            artifact-path: target/release/ling_chat
-          - platform: macos
-            os: macos-latest
-            artifact-name: lingchat-dev-macos
             artifact-path: target/release/ling_chat
           - platform: linux-aarch64
             os: ubuntu-24.04-arm

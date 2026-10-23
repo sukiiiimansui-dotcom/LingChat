@@ -292,39 +292,39 @@
    "ramp": [
     [
      3,
-     "#B0E0F8"
+     "#5E88B0"
     ],
     [
      12,
-     "#BCE5F9"
+     "#6A93B9"
     ],
     [
      25,
-     "#C8E9FA"
+     "#78A0C4"
     ],
     [
      45,
-     "#D3EDFB"
+     "#86ADCF"
     ],
     [
      70,
-     "#DEF1FC"
+     "#95BAD9"
     ],
     [
      110,
-     "#E9F6FE"
+     "#A5C8E4"
     ],
     [
      200,
-     "#F3FBFF"
+     "#B5D6EE"
     ],
     [
      320,
-     "#FFFFFF"
+     "#C6E3F7"
     ]
    ],
-   "roofFallback": "#A8DBF5",
-   "antennaFallback": "#FFFFFF",
+   "roofFallback": "#7FA0BE",
+   "antennaFallback": "#C6E3F7",
    "outline": {
     "color": "#1B3550",
     "width": 1.8
@@ -381,8 +381,8 @@
    "metrics": {
     "groundHex": "#bddae7",
     "groundLuma": 0.8345,
-    "rampFloorLuma": 0.8452,
-    "bldGroundRatio": 1.013,
+    "rampFloorLuma": 0.5096,
+    "bldGroundRatio": 0.611,
     "outlineGroundRatio": 8.58,
     "minGroundContrast": 1,
     "separation": "outline",
@@ -506,8 +506,8 @@
      "#FFFFFF"
     ]
    ],
-   "roofFallback": "#A8DBF5",
-   "antennaFallback": "#FFFFFF",
+   "roofFallback": "#7FA0BE",
+   "antennaFallback": "#C6E3F7",
    "outline": {
     "color": "#1B3550",
     "width": 1.8
@@ -895,19 +895,19 @@
     "ramp": [
      [
       3,
-      "#B0E0F8"
+      "#5E88B0"
      ],
      [
       25,
-      "#C8E9FA"
+      "#78A0C4"
      ],
      [
       110,
-      "#E9F6FE"
+      "#A5C8E4"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -1012,8 +1012,8 @@
     "metrics": {
      "groundHex": "#bddae7",
      "groundLuma": 0.8345,
-     "rampFloorLuma": 0.8452,
-     "bldGroundRatio": 1.013,
+     "rampFloorLuma": 0.5096,
+     "bldGroundRatio": 0.611,
      "outlineGroundRatio": 8.58,
      "minGroundContrast": 1,
      "separation": "outline",
@@ -1117,8 +1117,8 @@
       "#EBF7FE"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -1527,39 +1527,39 @@
     "ramp": [
      [
       3,
-      "#B0E0F8"
+      "#5E88B0"
      ],
      [
       12,
-      "#BCE5F9"
+      "#6A93B9"
      ],
      [
       25,
-      "#C8E9FA"
+      "#78A0C4"
      ],
      [
       45,
-      "#D3EDFB"
+      "#86ADCF"
      ],
      [
       70,
-      "#DEF1FC"
+      "#95BAD9"
      ],
      [
       110,
-      "#E9F6FE"
+      "#A5C8E4"
      ],
      [
       200,
-      "#F3FBFF"
+      "#B5D6EE"
      ],
      [
       320,
-      "#FFFFFF"
+      "#C6E3F7"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -1616,8 +1616,8 @@
     "metrics": {
      "groundHex": "#bddae7",
      "groundLuma": 0.8345,
-     "rampFloorLuma": 0.8452,
-     "bldGroundRatio": 1.013,
+     "rampFloorLuma": 0.5096,
+     "bldGroundRatio": 0.611,
      "outlineGroundRatio": 8.58,
      "minGroundContrast": 1,
      "separation": "outline",
@@ -1741,8 +1741,8 @@
       "#FFFFFF"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -2089,39 +2089,39 @@
     "ramp": [
      [
       3,
-      "#B0E0F8"
+      "#5E88B0"
      ],
      [
       12,
-      "#BCE5F9"
+      "#6A93B9"
      ],
      [
       25,
-      "#C8E9FA"
+      "#78A0C4"
      ],
      [
       45,
-      "#D3EDFB"
+      "#86ADCF"
      ],
      [
       70,
-      "#DEF1FC"
+      "#95BAD9"
      ],
      [
       110,
-      "#E9F6FE"
+      "#A5C8E4"
      ],
      [
       200,
-      "#F3FBFF"
+      "#B5D6EE"
      ],
      [
       320,
-      "#FFFFFF"
+      "#C6E3F7"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -2175,8 +2175,8 @@
     "metrics": {
      "groundHex": "#bcd9e5",
      "groundLuma": 0.8299,
-     "rampFloorLuma": 0.8452,
-     "bldGroundRatio": 1.018,
+     "rampFloorLuma": 0.5096,
+     "bldGroundRatio": 0.614,
      "outlineGroundRatio": 8.49,
      "minGroundContrast": 1,
      "separation": "outline",
@@ -2288,8 +2288,8 @@
       "#FFFFFF"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -2621,39 +2621,39 @@
     "ramp": [
      [
       3,
-      "#B0E0F8"
+      "#5E88B0"
      ],
      [
       12,
-      "#BCE5F9"
+      "#6A93B9"
      ],
      [
       25,
-      "#C8E9FA"
+      "#78A0C4"
      ],
      [
       45,
-      "#D3EDFB"
+      "#86ADCF"
      ],
      [
       70,
-      "#DEF1FC"
+      "#95BAD9"
      ],
      [
       110,
-      "#E9F6FE"
+      "#A5C8E4"
      ],
      [
       200,
-      "#F3FBFF"
+      "#B5D6EE"
      ],
      [
       320,
-      "#FFFFFF"
+      "#C6E3F7"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -2707,8 +2707,8 @@
     "metrics": {
      "groundHex": "#d7e1e5",
      "groundLuma": 0.8745,
-     "rampFloorLuma": 0.8452,
-     "bldGroundRatio": 0.966,
+     "rampFloorLuma": 0.5096,
+     "bldGroundRatio": 0.583,
      "outlineGroundRatio": 9.45,
      "minGroundContrast": 1,
      "separation": "outline",
@@ -2820,8 +2820,8 @@
       "#FFFFFF"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -3153,39 +3153,39 @@
     "ramp": [
      [
       3,
-      "#B0E0F8"
+      "#5E88B0"
      ],
      [
       12,
-      "#BCE5F9"
+      "#6A93B9"
      ],
      [
       25,
-      "#C8E9FA"
+      "#78A0C4"
      ],
      [
       45,
-      "#D3EDFB"
+      "#86ADCF"
      ],
      [
       70,
-      "#DEF1FC"
+      "#95BAD9"
      ],
      [
       110,
-      "#E9F6FE"
+      "#A5C8E4"
      ],
      [
       200,
-      "#F3FBFF"
+      "#B5D6EE"
      ],
      [
       320,
-      "#FFFFFF"
+      "#C6E3F7"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -3239,8 +3239,8 @@
     "metrics": {
      "groundHex": "#c3cbcf",
      "groundLuma": 0.7917,
-     "rampFloorLuma": 0.8452,
-     "bldGroundRatio": 1.068,
+     "rampFloorLuma": 0.5096,
+     "bldGroundRatio": 0.644,
      "outlineGroundRatio": 7.64,
      "minGroundContrast": 1,
      "separation": "outline",
@@ -3352,8 +3352,8 @@
       "#FFFFFF"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -3687,39 +3687,39 @@
     "ramp": [
      [
       3,
-      "#B0E0F8"
+      "#5E88B0"
      ],
      [
       12,
-      "#BCE5F9"
+      "#6A93B9"
      ],
      [
       25,
-      "#C8E9FA"
+      "#78A0C4"
      ],
      [
       45,
-      "#D3EDFB"
+      "#86ADCF"
      ],
      [
       70,
-      "#DEF1FC"
+      "#95BAD9"
      ],
      [
       110,
-      "#E9F6FE"
+      "#A5C8E4"
      ],
      [
       200,
-      "#F3FBFF"
+      "#B5D6EE"
      ],
      [
       320,
-      "#FFFFFF"
+      "#C6E3F7"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8
@@ -3773,8 +3773,8 @@
     "metrics": {
      "groundHex": "#797979",
      "groundLuma": 0.4754,
-     "rampFloorLuma": 0.8452,
-     "bldGroundRatio": 1.778,
+     "rampFloorLuma": 0.5096,
+     "bldGroundRatio": 1.072,
      "outlineGroundRatio": 2.89,
      "minGroundContrast": 1,
      "separation": "outline",
@@ -3887,8 +3887,8 @@
       "#FFFFFF"
      ]
     ],
-    "roofFallback": "#A8DBF5",
-    "antennaFallback": "#FFFFFF",
+    "roofFallback": "#7FA0BE",
+    "antennaFallback": "#C6E3F7",
     "outline": {
      "color": "#1B3550",
      "width": 1.8

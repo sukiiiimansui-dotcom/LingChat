@@ -3302,6 +3302,51 @@
         else { map.addSource("bld", { type: "geojson", data: fc }); addBldLayers(); }
       }
 
+      /**
+       * `?bld=2` 的要素是不是**已经拆过件**。
+       * `decorateBuildings` 对每一块都写 `properties.part`（body/podium/…），离线包的楼没有这个字段
+       * ⇒ 可以拿它判"这一批要不要再拆"。2026-10-23：live 通路会把拆件输出并进**共用仓库**，
+       * 离线落图那一遍若再整批拆一次，3 栋会被当成 12 栋（见 `flushBld` 里那段）。
+       */
+      function isDressedBld(f) {
+        return !!(f && f.properties && typeof f.properties.part === "string" && f.properties.part);
+      }
+
+      /**
+       * 已拆件要素 → 形体计数（只用于"仓库并集里混了已拆件"的那条路）。
+       * 纯离线首屏**不走这里**：计数仍完全由 `decorateBuildings` 给出，规则不搬家。
+       * `skipped` / `equipSkipped` 这两项在部件里没有痕迹（跳过纸片楼只会留 body）⇒ 这里如实记 0，
+       * 调用方在"整仓都被画出去"时用上一次的读数覆盖（见 `flushBld`）。
+       */
+      function countDressedBld(dressed) {
+        const c = { n: 0, real: 0, levels: 0, kind: 0, mode: "detail", low: !!BLD_LOW,
+                    body: 0, podium: 0, tower: 0, setback: 0, roof: 0, parapet: 0, equip: 0, antenna: 0,
+                    equipSkipped: 0, skipped: 0, skippedWhy: "", parts: dressed.length };
+        const seen = Object.create(null);
+        const PARTS = ["body", "podium", "tower", "setback", "roof", "parapet", "equip", "antenna"];
+        dressed.forEach(function (f) {
+          const p = (f && f.properties) || {};
+          const b = String(p.osm_id || f.id || p.store_id || "").split("#")[0];
+          if (b && !seen[b]) {
+            seen[b] = 1; c.n++;
+            if (p.h_from === "real") c.real++;
+            else if (p.h_from === "levels") c.levels++;
+            else if (p.h_from === "kind") c.kind++;
+          }
+          const k = String(p.part || "");
+          if (PARTS.indexOf(k) >= 0) c[k]++;
+        });
+        return c;
+      }
+
+      /** 新拆的计数 + 已拆件的计数（`skipped` 只统计新拆那批：部件反推不出来，不编数） */
+      function mergeShapeCounts(fresh, dressedCount) {
+        const out = Object.assign({}, fresh || {});
+        const FIELDS = ["n", "real", "levels", "kind", "body", "podium", "tower", "setback", "roof", "parapet", "equip", "antenna", "parts"];
+        for (const k of FIELDS) out[k] = Number((fresh || {})[k] || 0) + Number(dressedCount[k] || 0);
+        return out;
+      }
+
       /** 直画 GL 的层实例（`?glbld=1` 才建；建过就一直复用，只换实例数据） */
       let glBldLayer = null;
 
@@ -3490,20 +3535,58 @@
           const gen = ++bldDressGen;
           void (async () => {
             try {
+              /* 2026-10-23 修「双次拆件」：仓库是 live / 离线**共用**的，`?live=1` 时 live 通路
+                 已经把 `decorateBuildings` 的输出并进仓库（那些要素带 `part`）。离线落图这一遍
+                 以前对 `data.features` **整批再拆一次** ⇒ 3 栋被拆成 12 栋 / 41 件（HUD 也跟着错）。
+                 判据：`part` = 已拆件（上面 `isDressedBld`）。已拆件的**原样画**，只对没拆过的再拆；
+                 纯离线首屏（一个已拆件都没有）走的分支与改动前完全相同。 */
+              const inFeats = (data && data.features) || [];
+              const dressed = inFeats.filter(isDressedBld);
+              const raw = inFeats.filter(function (f) { return !isDressedBld(f); });
+              /* 全是已拆件 ⇒ **完全跳过**这一次拆件（幂等，不再产生新的 part 要素）。 */
+              if (dressed.length && !raw.length) {
+                const c = countDressedBld(dressed);
+                /* 整仓都被画出去时（`prev.parts` 与这批同长）沿用上一次的"跳过纸片楼"读数；
+                   只是画了子集时不能沿用（那是别栋书的数）⇒ 保持 0（部件里确实数不出来）。 */
+                const prev = window.__BLD_COUNT__;
+                if (prev && typeof prev === "object" && prev.parts === dressed.length) {
+                  c.skipped = Number(prev.skipped) || 0;
+                  c.skippedWhy = String(prev.skippedWhy || "");
+                  c.equipSkipped = Number(prev.equipSkipped) || 0;
+                }
+                /* 上一次 merge 的"生成了几件"是**仓库口径**的读数，跟这一批一起留着（否则回证里变成 undefined） */
+                if (prev && typeof prev === "object" && prev.partsGenerated !== undefined) c.partsGenerated = prev.partsGenerated;
+                window.__BLD_COUNT__ = c;
+                window.__BLD_FALLBACK__ = null;
+                setBldData({ type: "FeatureCollection", features: dressed }, "离线拆件(已拆件跳过)(" + (why || "") + ")");
+                stats.n = c.n;
+                stats.parts = dressed.length;
+                window.__BLD_BUNDLE_FC__ = dressed.length;
+                try { $("m-n").textContent = String(stats.n); } catch (e2) { /* 忽略 */ }
+                try { window.__WSLOG__ && window.__WSLOG__.info("bld-dress", "离线通路：已拆件跳过再拆", { parts: dressed.length, n: stats.n }); } catch (e2) { /* 忽略 */ }
+                return;
+              }
               const TFb = await ensureVendor();
               if (gen !== bldDressGen) return;                    // 期间又刷新过 ⇒ 丢弃这一次
               if (TFb && typeof TFb.decorateBuildings === "function") {
                 const ramp = bldArtRamp();   /* 色阶取参 = 共享真源（`wsArtParams.bldArtParamsOf`）；模块就在手边 ⇒ 必有 */
-                const dec = TFb.decorateBuildings({ type: "FeatureCollection", features: data.features },
+                /* 只拆**没拆过**的那批；已拆件的原样接在后面（顺序：新拆的在前，避免同一栋楼被画两遍） */
+                const dec = TFb.decorateBuildings({ type: "FeatureCollection", features: raw },
                                                   ramp, { mode: "detail", low: BLD_LOW });
-                window.__BLD_COUNT__ = dec.count || null;
+                const outFeats = dressed.length ? dec.features.concat(dressed) : dec.features;
+                const c = dressed.length ? mergeShapeCounts(dec.count, countDressedBld(dressed)) : dec.count;
+                /* 同上：merge 的"生成了几件"是仓库口径读数，换计数对象时别把它弄丢 */
+                const prevC = window.__BLD_COUNT__;
+                if (c && prevC && typeof prevC === "object" && prevC.partsGenerated !== undefined) c.partsGenerated = prevC.partsGenerated;
+                window.__BLD_COUNT__ = c || null;
                 window.__BLD_FALLBACK__ = null;
-                const dd = { type: "FeatureCollection", features: dec.features };
+                const dd = { type: "FeatureCollection", features: outFeats };
                 setBldData(dd, "离线拆件(" + (why || "") + ")");
-                stats.n = dec.count ? dec.count.n : dec.features.length;
-                window.__BLD_BUNDLE_FC__ = dec.features.length;
+                stats.n = c ? c.n : outFeats.length;
+                stats.parts = outFeats.length;
+                window.__BLD_BUNDLE_FC__ = outFeats.length;
                 try { $("m-n").textContent = String(stats.n); } catch (e2) { /* 忽略 */ }
-                try { window.__WSLOG__ && window.__WSLOG__.info("bld-dress", "离线通路拆件上妆完成", { parts: dec.features.length, n: stats.n }); } catch (e2) { /* 忽略 */ }
+                try { window.__WSLOG__ && window.__WSLOG__.info("bld-dress", "离线通路拆件上妆完成", { parts: outFeats.length, n: stats.n, skippedDress: dressed.length }); } catch (e2) { /* 忽略 */ }
               } else {
                 window.__BLD_FALLBACK__ = "数不出来：模块里没有 decorateBuildings（" + tfState + "）";
                 try { window.__WSLOG__ && window.__WSLOG__.warn("bld-dress", window.__BLD_FALLBACK__); } catch (e2) { /* 忽略 */ }

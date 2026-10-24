@@ -2,6 +2,11 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+    /* 容器底色 = **视口顶端那条带**的颜色：相机俯仰时地图平面在远端被裁掉，
+       那一块 canvas 是透明的（实测 pitch=38° 时 23 276 px 透出这层底色；
+       pitch=0° 时 0 px）⇒ 这层必须是**主题色**，不能写死暗色。
+       主题色由模板内联写入（`hostBgStyle`，取 `theme.bg`）；这里的 #101820 只是
+       主题还没算出来时的兜底（暗色口径）。 */
     background: #101820;
     /* 手势必须归地图：不写这行，浏览器会把拖动/捏合当**页面手势**吃掉
        （2026-09-19 在 mock 网页里"无法捕捉手势，只能被浏览器捕捉"）。
@@ -138,7 +143,20 @@
        现在 有 `z-index` 在对上层、可点，但**HUD 右下角那截文字会被按钮盖住** ⇒ 干脆留位。 */
     max-width: calc(100% - 60px);
     box-sizing: border-box;
-    overflow: hidden;
+    /* 层级（2026-10-24）：地图库把 `.maplibregl-canvas-container` **追加在 `.ws-dml` 的最后**
+       （模板渲染完之后才插进来）⇒ 同为 `z-index:auto` 时画布按树序盖住 HUD 与署名（实测
+       HUD 改成红底后可见红像素 0）。给 HUD/署名显式 `z-index` 是最小改法：`pointer-events:none`
+       照旧不吃地图手势，而 `.ws-labs`（3）/验证面板（6/40）仍在更上层。 */
+    z-index: 2;
+    /* 溢出口径（2026-10-24）：`overflow:hidden` 会把**主题按钮 44×44 命中区**（`::after` 外扩 12px）
+       在 HUD 下沿切掉 —— 层级修好后实测：按钮下方 6px 那一点 (354,990) 在 `hidden` 下命中
+       `CANVAS`，换成 `clip` + 12px 余量后命中 `BUTTON`。
+       文字本身没有被切：所有子项底边 984 = 内容盒底边 984（scrollHeight 73 − clientHeight 65
+       的 8px 全部来自那个透明 `::after`；把它 `content:none` 后 scrollHeight 回到 65）。
+       ⇒ `clip` + 12px 余量：命中区完整，长句子仍被裁在药丸外 12px 以内。 */
+    overflow: hidden; /* 老引擎兜底 */
+    overflow: clip;
+    overflow-clip-margin: 12px;
     gap: 2px 8px;
     padding: 3px 8px;
     border-radius: 8px;
@@ -226,16 +244,20 @@
     color: #ffd28a;
   }
   /* **署名条**（ODbL 硬要求：`attributionControl:false` ⇒ 必须有等价可见方案）。
-     刻意做得素且**不占交互**（`pointer-events: none` + 右下角一行小字）：
+     刻意做得素且**不占交互**（`pointer-events: none`）：
      它必须**一直可见**（署名要求"画面上可见"，不是"藏在 title 里"），但不该盖住地图内容。
      `max-width` + 省略号：句子是导出脚本写的原句（可能不短），宁可截断显示也不改写它。
-     位置抬到 HUD 之上（`bottom: 30px`）：HUD 是**一行会很长**的 flex 条，
-     同一条 `bottom: 8px` 上两者会叠在一起（用户横屏时尤其明显）。 */
+     2026-10-24：它是 **HUD 的最后一格**（不是绝对定位在 HUD 上方）。旧写法假设 HUD 只有一行，
+     实测 2280px 宽下 HUD 已是 3 行（65px）⇒ `bottom:30px` 正好落在第二行文字上（两者都可见后
+     才暴露，截图里那团重叠字就是它）。放进 flex 流 + `margin-left:auto` ⇒ 换行也贴右，
+     永远不会压字；代拍页 `#m-attr` 同样是 HUD 里的一格。 */
   .ws-dml__attr {
-    position: absolute;
-    right: 8px;
-    bottom: 30px;
-    max-width: 62%;
+    /* 与 HUD 同一根因：画布是后插入的最后一个子元素，`z-index:auto` 会盖住整条 HUD。
+       作为 flex 子项时 `z-index` 同样生效 ⇒ 留着它，与 HUD 的内联 z-index 双保险。 */
+    z-index: 2;
+    flex: 0 0 auto;
+    margin-left: auto; /* 贴右；换行时也贴右 */
+    max-width: 100%;
     padding: 1px 6px;
     border-radius: 6px;
     background: rgba(10, 16, 24, 0.45);

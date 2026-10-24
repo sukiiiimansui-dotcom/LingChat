@@ -19,7 +19,7 @@
   · 无头环境 WebGL 会在首帧后丢上下文（已知），所以"截图空白但指标正常"要如实写，不当作 bug。
 -->
 <template>
-  <div ref="host" class="ws-dml" :style="joyVars">
+  <div ref="host" class="ws-dml" :style="[joyVars, hostBgStyle]">
     <!-- 2026-09-21 定案：这块模板画布**只在真的走 2D 自绘降级路时才存在**。
          病根：它无条件渲染 ⇒ 在 WebGL 路下是一块**默认 300×150、透明、display:block** 的空壳，
          CSS 又把它拉满整屏 ⇒ **盖住 MapLibre 那块 3759×1287 的真地图**（屏幕上的"浅色矩形"就是它）。
@@ -170,7 +170,7 @@
       <span>{{ hudMode }}</span>
       <span>🏢 {{ stats.count }}</span>
       <span
-        :title="`真高 ${stats.height}=OSM 真的写了 height / 层数 ${stats.levels}=levels×3 / 按类型估 ${stats.default}=**我们按 building=* 类型猜的，不是真数据**（中国 OSM 楼高覆盖率只有一两成）`"
+        :title="`真高 ${stats.height}=OSM 真的写了 height / 层数 ${stats.levels}=levels×3 / 按类型估 ${stats.default}=我们按 building=* 类型猜的，不是真数据（中国 OSM 楼高覆盖率只有一两成）`"
       >
         真高 {{ stats.height }} · 层数 {{ stats.levels }} ·
         <em class="ws-dml__est">按类型估 {{ stats.default }}</em>
@@ -214,7 +214,7 @@
       <span v-if="stats.gwVerdict" :title="stats.gwVerdict">{{ stats.gwVerdict }}</span>
       <!-- 设施：**必须写"示意布局"**——这些点的经纬度是按 /api/facilities 的
            28×30m 方格摊出来的，不是实测位置（实测位置要走另一条卡）。 -->
-      <span v-if="stats.facilities" :title="'设施（' + (stats.facNote || '') + '）—— 点位是**示意布局**，不是实测经纬度'">
+      <span v-if="stats.facilities" :title="'设施（' + (stats.facNote || '') + '）—— 点位是示意布局，不是实测经纬度'">
         🏪 {{ stats.facilities }}
       </span>
       <span v-if="stats.view" :title="'放大到街区才会取楼栋（Overpass 半径有上限）'">{{ stats.view }}</span>
@@ -246,13 +246,17 @@
       <span v-if="aiOn" class="is-ai">
         真楼 {{ stats.count }} 栋（稀疏）· {{ aiDrawn > 0 ? "已叠加 AI 示意层（非事实）" : "AI 示意层待生成" }}
       </span>
-    </div>
 
-    <!-- **署名**（`ROUTE.md` 第 2 条：用了有许可的数据就必须有可见署名，且"关掉 attribution 不算方案"）。
-         地图库开了 `attributionControl: false` ⇒ 这里给一个**等价可见方案**：
-         句子**逐字来自包里的 `index.json`**（`source` 字段，由导出脚本写），页面**不改写第二版**。
-         取不到就如实写"署名取不到"——署名是合规项，**不许猜、不许编**。 -->
-    <div v-if="stats.attribution" class="ws-dml__attr" :title="stats.attribution">{{ stats.attribution }}</div>
+      <!-- **署名**（`ROUTE.md` 第 2 条：用了有许可的数据就必须有可见署名，且"关掉 attribution 不算方案"）。
+           地图库开了 `attributionControl: false` ⇒ 这里给一个**等价可见方案**：
+           句子**逐字来自包里的 `index.json`**（`source` 字段，由导出脚本写），页面**不改写第二版**。
+           取不到就如实写"署名取不到"——署名是合规项，**不许猜、不许编**。
+           2026-10-24：从"绝对定位在 HUD 上方 30px"改成 **HUD 里的最后一格**（`margin-left:auto` 贴右）——
+           旧写法假设 HUD 只有一行；实测 2280px 宽下 HUD 是 3 行（65px），`bottom:30px` 正好压在
+           第二行文字上（两者都可见之后才暴露）。放进 HUD 的 flex 流里 ⇒ 永远不会压在文字上，
+           与代拍页 `#m-attr` 同一个做法（那里署名也是 HUD 里的一格）。 -->
+      <div v-if="stats.attribution" class="ws-dml__attr" :title="stats.attribution">{{ stats.attribution }}</div>
+    </div>
   </div>
 </template>
 
@@ -898,6 +902,18 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     nightOn.value ? Math.max(0, Math.min(1, Number(props.night) || 0)) : 0
   );
   const theme = computed<WsMapTheme>(() => nightVariant(wsMapTheme(themeId.value), nightLvl.value, !!perf.low.value));
+  /**
+   * 容器底色（= **视口顶端那条带**的颜色）。
+   *
+   * 相机一俯仰，地图平面在远端就被裁掉，那块 canvas 是**透明**的
+   * （实测 2280×995、pitch 38°：透出容器底色的像素 23 276 个；pitch 0°：0 个）⇒
+   * 浅色主题下如果容器还是 CSS 里写死的 `#101820`，屏幕顶上就会横一条深色带。
+   * 地图样式那边的根级 `sky` **顶不上**：本仓 vendored 的 maplibre 只把 `sky` 用于
+   * atmosphere/globe（往 style 里加 `type:"sky"` 的图层实测不画）。
+   * ⇒ 取主题自己的兜底色 `theme.bg`（二次元 `#E8F8FF` / 暗色 `#0a1017`，
+   *   夜色会跟着 `nightVariant` 一起变），唯一的颜色真源仍在 `wsMapTheme.ts`。
+   */
+  const hostBgStyle = computed<Record<string, string>>(() => ({ background: theme.value.bg }));
   /** 低端档时要丢什么（`perf.low` 是单一真源，见 `wsCaps.ts`） */
   const themeTier = computed(() => themeForTier(theme.value, !!perf.low));
 
@@ -2112,7 +2128,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
         geo = (await fetchBuildingsWithRetry(lat, lng, props.radius)) as { features?: unknown[] } | null;
       } else if (!districtWide) {
         /* 没走 live ⇒ 如实留一句"楼从离线包来"（不写"没有楼"，也不写 0） */
-        stats.note = "楼从**离线楼房包**来（默认不发 /api/buildings；要现场取数加 ?live=1）";
+        stats.note = "楼从离线楼房包来（默认不发 /api/buildings；要现场取数加 ?live=1）";
       }
       /* OSM 楼栋覆盖**极不均匀**（2026-09-19 实测同一个后端：涪陵区中心 400m→**0 栋**、600m→3 栋、
          1500m→29 栋；渝中区中心 400m→**152 栋**）。所以第一把太少时**自动放大一次**半径

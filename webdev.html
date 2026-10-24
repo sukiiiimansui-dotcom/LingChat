@@ -18,6 +18,12 @@
     <script>
       (function () {
         try {
+          /* 构建命名空间：服务端会把入口 302 到 /w/<stamp>/…（每个构建一个唯一路径，缓存必然不命中）。
+             这里在路由初始化前把前缀摘掉，应用看到的仍然是原来的 /worldsim 等路径。 */
+          var m = location.pathname.match(/^\/w\/[^\/]+(\/.*)$/);
+          if (m) history.replaceState(null, "", m[1] + location.search + location.hash);
+        } catch (e) {}
+        try {
           var url = new URL(location.href);
           fetch("/build.json?t=" + Date.now(), { cache: "no-store" })
             .then(function (r) { return r.ok ? r.json() : null; })

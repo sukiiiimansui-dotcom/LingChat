@@ -18,7 +18,19 @@
  * · 没有命中/卡片（P3）。
  */
 
-import { BLD_CAP, buildBldMeshData, outerRingsOf, type BldMeshData } from "./wsBldMesh";
+import { BLD_CAP, buildBldMeshData, outerRingsOf, urlLodMpp, type BldMeshData } from "./wsBldMesh";
+import {
+  ASSET_CAP,
+  ASSET_FADE_MS,
+  BLD_ASSET_BASE,
+  assetFadeStep,
+  assetTierStep,
+  buildBldAssetLayer,
+  loadBldAssetPack,
+  loadBldAssetTexture,
+  type BldAssetLayer,
+  type BldAssetPack,
+} from "./wsBldAssets";
 import { ringCenter } from "./wsBuildingHint";
 import {
   contractTheme,
@@ -121,6 +133,52 @@ export function createOverlayBackend(): WsRenderBackend {
   let map: OverlayMapLike | null = null;
   let bldMesh: any = null;
   let data: BldMeshData | null = null;
+
+  /* ── 近景资产（S8：Kenney CC0）─────────────────────────────────────────────
+     两套几何**同 id / 同高 / 同占地**（`data.places` 与程序化那栋用同一批外环点）：
+     远景画程序化（含几何变体），近景画资产；档位由 `mpp` + **迟滞**决定，切换时
+     透明度此消彼长（`ASSET_FADE_MS`），资产懒加载，加载好之前一直画程序化。 */
+  let assetPack: BldAssetPack | null = null;
+  let assetTex: unknown = null;
+  let assetLayer: BldAssetLayer | null = null;
+  /** 迟滞后的档位（0 = 程序化，1 = 资产）——**不是**当前透明度 */
+  let assetState: 0 | 1 = 0;
+  /** 当前交叉淡入淡出进度（0 = 全程序化，1 = 全资产） */
+  let assetFade = 0;
+  let assetFadeTarget: 0 | 1 = 0;
+  let assetLastAt = 0;
+  let assetRaf = 0;
+  let assetLoading = false;
+  let assetPrefetchQueued = false;
+  let assetLoadMs = 0;
+  let assetError = "";
+  /** 视野内楼数超预算时不给进资产档的理由（给探针/诊断读） */
+  let assetBlocked = "";
+  let assetMpp = 0;
+  /** 只读读数（diag 用）：本帧资产画了几栋 / 几个 draw / 多少三角 */
+  let assetDrawn = 0;
+  let assetDrawCalls = 0;
+  let assetDrawnTris = 0;
+  /** `?bldassets=0` 关掉这一档（回退/对拍用；默认开） */
+  const assetOn = (() => {
+    try { return !/[?&]bldassets=0\b/.test(location.search); } catch { return true; }
+  })();
+  /** `?bldperf=1`：画完调一次 `gl.finish()` 并把同步毫秒记进 diag（默认关，别拖帧率） */
+  const assetPerf = (() => {
+    try { return /[?&]bldperf=1\b/.test(location.search); } catch { return false; }
+  })();
+  let syncMs = 0;
+  let syncMsMax = 0;
+  /** `?bldfade=<ms>`：只给取证用（把 260ms 的过渡放慢到能抓到中间帧），默认就是常量 */
+  const assetFadeMs = (() => {
+    try {
+      const v = Number(new URLSearchParams(location.search).get("bldfade"));
+      return Number.isFinite(v) && v >= 80 && v <= 8000 ? v : ASSET_FADE_MS;
+    } catch {
+      return ASSET_FADE_MS;
+    }
+  })();
+
   /** 局部平面框架的锚点（地图中心漂太远就重锚） */
   let anchor: { lat: number; lng: number; cos: number } | null = null;
   let state: "created" | "running" | "paused" | "destroyed" | "failed" = "created";
@@ -519,6 +577,226 @@ export function createOverlayBackend(): WsRenderBackend {
     bldMesh = null;
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════
+   * 近景资产：懒加载 → 建实例 → 双档切换（迟滞 + 交叉淡入淡出）
+   * ══════════════════════════════════════════════════════════════════════════ */
+
+  /** 资产包只取一次；失败把原因留在 `assetError`（下一次视图变化再试，不刷屏） */
+  function kickAssetLoad(): void {
+    if (assetLoading || assetPack || !assetOn || !THREE) return;
+    assetLoading = true;
+    const t0 = performance.now();
+    void (async () => {
+      try {
+        const pack = await loadBldAssetPack(BLD_ASSET_BASE);
+        const tex = await loadBldAssetTexture(
+          THREE as Record<string, any>,
+          runtimeUrl(BLD_ASSET_BASE + pack.texture)
+        );
+        assetPack = pack;
+        assetTex = tex;
+        assetLoadMs = Math.round(performance.now() - t0);
+        assetError = "";
+      } catch (e) {
+        assetError = String((e as Error)?.message || e).slice(0, 160);
+      } finally {
+        assetLoading = false;
+      }
+    })();
+  }
+
+  /** 建资产层（几何只建一次；`data.places` 变了就重建实例） */
+  function ensureAssetLayer(): boolean {
+    if (assetLayer) return true;
+    if (!assetPack || !assetTex || !data || !data.places || !data.places.length) return false;
+    if (!THREE || !scene) return false;
+    try {
+      const layer = buildBldAssetLayer(THREE as Record<string, any>, assetPack, assetTex, data.places, {
+        ids: data.featureIds,
+        cap: ASSET_CAP,
+      });
+      scene.add(layer.group);
+      assetLayer = layer;
+      /* 新建的层先按**当前**透明度摆好（重建时可能正处在全资产档） */
+      layer.applyFade(assetFade, assetFadeTarget === 1);
+      return true;
+    } catch (e) {
+      assetError = String((e as Error)?.message || e).slice(0, 160);
+      assetLayer = null;
+      return false;
+    }
+  }
+
+  /** 网格要换（数据变了）⇒ 连资产层一起重来（几何共享，重建很便宜） */
+  function disposeAssets(): void {
+    if (assetRaf) {
+      cancelAnimationFrame(assetRaf);
+      assetRaf = 0;
+    }
+    if (assetLayer) {
+      try { assetLayer.dispose(); } catch { /* 释放失败不影响后续 */ }
+      assetLayer = null;
+    }
+    assetDrawn = 0;
+    assetDrawCalls = 0;
+    assetDrawnTris = 0;
+    assetLastAt = 0;
+  }
+
+  /** 程序化那层恢复成"正常不透明"（退出资产档 / 没有资产时） */
+  function restoreProcMat(): void {
+    const mat = bldMesh?.material;
+    if (!mat) return;
+    mat.transparent = false;
+    mat.opacity = 1;
+    mat.depthTest = true;
+    mat.depthWrite = true;
+    bldMesh.renderOrder = 0;
+  }
+
+  /**
+   * 每帧（`drawOnce` 开头）跑一次：算 mpp → 迟滞定档 → 推透明度 → 摆资产实例。
+   *
+   * 三条硬口径：
+   *  · **没加载好就继续画程序化**（`assetFadeTarget` 停在 0，绝不闪空）；
+   *  · **视野内楼数超预算就不进资产档**（宁可不换，也不留空洞）；
+   *  · 资产是**进入方**时不透明、程序化是退出方时半透明盖在上面 —— 合成的永远是两套的加权和。
+   */
+  function updateAssets(): void {
+    if (!assetOn || state !== "running") return;
+    const now = performance.now();
+    const dt = assetLastAt ? Math.min(120, now - assetLastAt) : 16;
+    assetLastAt = now;
+    const v = lastSeen;
+    if (!v) return;
+    const { h } = sizeOf();
+    /* `?z=`/`?mpp=` 是既有排查口（与程序化 LOD 同一口径）；否则用真机视野 */
+    const mppRaw = urlLodMpp() ?? (v.radius * 2) / Math.max(1, h);
+    assetMpp = mppRaw;
+    assetState = assetTierStep(assetState, mppRaw);
+
+    let target: 0 | 1 = 0;
+    if (assetState === 1) {
+      if (!assetPack) {
+        kickAssetLoad();
+        assetBlocked = assetLoading ? "资产加载中（先画程序化）" : assetError ? "资产加载失败：" + assetError : "";
+      } else if (!ensureAssetLayer()) {
+        assetBlocked = "资产层建不起来：" + (assetError || "未知");
+      } else {
+        const [cx, cz] = toLocal(v.center.lng, v.center.lat);
+        /* 投影筛：用**上一次真的画出去那一帧**的矩阵（滞后一帧，边距兜住）
+           —— 比按距离猜准：屏幕最上沿的远楼不会被漏掉，屏幕外那批也不用白付三角。 */
+        const acc = assetScreenFilter();
+        assetLayer!.update(cx, cz, v.radius, acc);
+        if (assetLayer!.overBudget()) {
+          assetBlocked = "视野内 " + assetLayer!.visible() + " 栋 > 实例预算 " + ASSET_CAP;
+        } else {
+          assetBlocked = "";
+          target = 1;
+        }
+      }
+    } else {
+      assetBlocked = "";
+      /* 还没进近景时也提前把包取好（空闲），第一次推近=已经就绪，不闪 */
+      if (!assetPack && !assetLoading) prefetchAssetsIdle();
+    }
+    assetFadeTarget = target;
+    if (assetFade !== assetFadeTarget) {
+      /* 按**真实经过时间**推进：掉帧/长帧也不会跳变（目标中途翻转时从当前值继续走） */
+      assetFade = assetFadeStep(assetFade, assetFadeTarget, dt, assetFadeMs);
+    }
+
+    if (assetLayer) {
+      if (assetFade > 0) {
+        assetLayer.applyFade(assetFade, assetFadeTarget === 1);
+        assetLayer.group.visible = true;
+        assetDrawn = assetLayer.count();
+        assetDrawCalls = assetLayer.draws();
+        assetDrawnTris = assetLayer.tris();
+      } else {
+        assetLayer.group.visible = false;
+        assetDrawn = 0;
+        assetDrawCalls = 0;
+        assetDrawnTris = 0;
+      }
+    }
+
+    /* 程序化那层：资产全显 ⇒ 藏起来；正在过渡 ⇒ 当"退出方"半透明盖在资产上 */
+    if (bldMesh) {
+      const mat = bldMesh.material;
+      if (assetFade >= 1 && assetFadeTarget === 1) {
+        bldMesh.visible = false;
+        if (mat) { mat.transparent = true; mat.opacity = 0; }
+      } else if (assetFade > 0 && assetFadeTarget === 0) {
+        /* 资产是退出方（自己半透明、不测深度）；程序化是进入方 ⇒ 不透明、先画 */
+        restoreProcMat();
+        bldMesh.visible = true;
+      } else if (assetFade > 0) {
+        /* 资产是进入方、程序化是退出方 ⇒ 程序化半透明、不测深度、后画（盖在资产上） */
+        bldMesh.visible = true;
+        if (mat) {
+          mat.transparent = true;
+          mat.opacity = 1 - assetFade;
+          mat.depthTest = false;
+          mat.depthWrite = false;
+          bldMesh.renderOrder = 2;
+        }
+      } else {
+        restoreProcMat();
+        bldMesh.visible = true;
+      }
+    }
+
+    /* 过渡没走完 ⇒ 自己补帧（地图静止时不会再有 render 事件） */
+    if (assetFade !== assetFadeTarget && !assetRaf) kickAssetFade();
+  }
+
+  /**
+   * 「这栋楼会不会在屏幕上」的投影筛（局部米 x/z → 屏幕像素）。
+   * 边距 140 px：楼有高度，楼心在屏外时楼身也可能压进来一截。
+   * 拿不到上一帧矩阵 ⇒ 返回 null（调用方退回按距离筛）。
+   */
+  function assetScreenFilter(): ((x: number, z: number) => boolean) | null {
+    const ld = lastDraw;
+    if (!ld) return null;
+    const W = ld.w, H = ld.h;
+    return (x: number, z: number): boolean => {
+      const p = projectPoint(ld.mwInv, ld.proj, [x, z], W, H);
+      if (!p) return false;
+      return p[0] > -140 && p[0] < W + 140 && p[1] > -140 && p[1] < H + 140;
+    };
+  }
+
+  /** 空闲预取：`requestIdleCallback` 有就用，没有就 setTimeout 兜底（不抢首屏） */
+  function prefetchAssetsIdle(): void {
+    if (assetPrefetchQueued) return;
+    assetPrefetchQueued = true;
+    try {
+      const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout?: number }) => number }).requestIdleCallback;
+      if (typeof ric === "function") ric(() => { assetPrefetchQueued = false; kickAssetLoad(); }, { timeout: 4000 });
+      else window.setTimeout(() => { assetPrefetchQueued = false; kickAssetLoad(); }, 2500);
+    } catch {
+      window.setTimeout(() => { assetPrefetchQueued = false; kickAssetLoad(); }, 2500);
+    }
+  }
+
+  /** 过渡期间的补帧环（每帧仍是 `syncCamera` + `drawOnce`，计数/闸全都照常走） */
+  function kickAssetFade(): void {
+    if (assetRaf) return;
+    const step = (): void => {
+      assetRaf = 0;
+      if (state !== "running") return;
+      if (assetFade === assetFadeTarget) return;
+      syncCamera();
+      drawOnce();
+      /* ⚠️ `drawOnce → updateAssets → kickAssetFade` 会**自己把这根链续上**（那时 `assetRaf` 还是 0）。
+         这里必须再判一次 `!assetRaf`：否则一帧里续两根链 ⇒ 指数级并发 rAF
+         （实测：8000ms 的过渡 1 秒就跑完了、而且每帧画好几遍）。 */
+      if (state === "running" && assetFade !== assetFadeTarget && !assetRaf) assetRaf = requestAnimationFrame(step);
+    };
+    assetRaf = requestAnimationFrame(step);
+  }
+
   /**
    * 逐要素的**占地中心**（`id` → `[lng, lat]`；退化时退回主环第一个顶点）。
    *
@@ -619,6 +897,8 @@ export function createOverlayBackend(): WsRenderBackend {
     newer.name = "ws-overlay-buildings";
     scene.add(newer);
     disposeMesh();                  /* 旧的这时候才退场（同一帧里完成） */
+    /* 楼记录换了 ⇒ 资产实例也要按新记录重摆（几何共享，重建只是重设矩阵） */
+    disposeAssets();
     fpsMark("mesh-swap");
     bldMesh = newer;
     data = next;
@@ -992,6 +1272,22 @@ export function createOverlayBackend(): WsRenderBackend {
     facadeApplied,
     facadePatchFailed,
     facadeTextureFailed,
+    assetOn,
+    assetState,
+    assetFade,
+    assetFadeTarget,
+    assetMpp,
+    assetDrawn,
+    assetDrawCalls,
+    assetDrawnTris,
+    assetBlocked,
+    assetLoadMs,
+    assetError,
+    assetPack,
+    assetLayer,
+    syncMs,
+    syncMsMax,
+    assetPerf,
     outlineOn,
     outlineOnRef,
     outlineApplied,
@@ -1123,6 +1419,8 @@ export function createOverlayBackend(): WsRenderBackend {
 
   function drawOnce(): void {
     if (state !== "running" || !renderer || !scene || !camera) return;
+    /* 近景资产那一档：定档 / 推透明度 / 摆实例（**在 render 之前**，改的是材质与可见性） */
+    try { updateAssets(); } catch { /* 资产那条路坏了就继续画程序化，别把整帧拖垮 */ }
     const { w, h } = sizeOf();
     lastDrawAt = performance.now();
     try {
@@ -1156,8 +1454,21 @@ export function createOverlayBackend(): WsRenderBackend {
     } else {
       renderer.render(scene, camera);
     }
+    /* `?bldperf=1`：同步等到 GPU 真画完再出时间（默认关 —— `finish()` 会掐掉异步流水线） */
+    if (assetPerf) {
+      try {
+        const gl = (renderer as { getContext?: () => { finish?: () => void } }).getContext?.();
+        gl?.finish?.();
+        const ms = Math.round((performance.now() - lastDrawAt) * 100) / 100;
+        syncMs = ms;
+        if (ms > syncMsMax) syncMsMax = ms;
+      } catch {
+        /* 拿不到上下文就不量 */
+      }
+    }
     drawsTotal += 1;
     draws = renderer.info?.render?.calls ?? 0;
+    assetDrawCalls = assetLayer && assetLayer.group.visible ? assetLayer.draws() : 0;
     /* 启动时间线：**非空**绘制才算数（空网格/0 栋不算"画出来了"） */
     try {
       const nonEmpty = !!data && data.triangles > 0 && draws > 0;
@@ -1565,6 +1876,10 @@ export function createOverlayBackend(): WsRenderBackend {
 
     pause(): void {
       detachDrive();
+      if (assetRaf) {
+        cancelAnimationFrame(assetRaf);
+        assetRaf = 0;
+      }
       state = "paused";
       ledgerMark(instance, "paused");
     },
@@ -1584,6 +1899,7 @@ export function createOverlayBackend(): WsRenderBackend {
       try { labelObs?.disconnect(); } catch { /* ignore */ }
       try { wsDrawnBld.set(null); } catch { /* ignore */ }
       labelObs = null;
+      disposeAssets();
       disposeMesh();
       /* 先**摘掉事件**再还原：`setLayoutProperty` 会同步触发 `styledata`，
          监听器还在的话就会把刚还原的楼又藏回去（自己跟自己打架）。 */
@@ -1645,7 +1961,34 @@ export function createOverlayBackend(): WsRenderBackend {
      * 为什么要它：真机反馈"地图与叠加层的楼不是同一批、明显错位"。要判定是"同一批但投影错位"
      * 还是"两套不同的楼"，就得把**两边各自的 id 表**摆出来做差集 —— 猜没有意义。
      */
-    diag(): { buildings: number; triangles: number; ids: string[]; idsCapped: boolean; source: string } {
+    diag(): {
+      buildings: number;
+      triangles: number;
+      ids: string[];
+      idsCapped: boolean;
+      source: string;
+      /** 近景资产那一档：档位/透明度/实际画了多少（不画资产时全 0，不编） */
+      asset: {
+        on: boolean;
+        state: number;
+        fade: number;
+        /** 楼记录总数 / 视野内可进资产层的栋数（判断"有没有楼被漏在资产层外"） */
+        places: number;
+        visible: number;
+        /** 提亮补丁挂上了没有（1 = 挂上，0 = 走单乘兜底） */
+        lift: number;
+        mpp: number;
+        drawn: number;
+        draws: number;
+        tris: number;
+        pack: { assets: number; verts: number; tris: number; binBytes: number } | null;
+        loadMs: number;
+        error: string;
+        blocked: string;
+        syncMs: number;
+        syncMsMax: number;
+      };
+    } {
       const ids = data?.featureIds ?? [];
       return {
         buildings: data?.stats.buildings ?? 0,
@@ -1653,6 +1996,31 @@ export function createOverlayBackend(): WsRenderBackend {
         ids,
         idsCapped: false,
         source: lastSource,
+        asset: {
+          on: assetOn,
+          state: assetState,
+          fade: Math.round(assetFade * 1000) / 1000,
+          places: data ? Math.floor(data.places.length / 8) : 0,
+          visible: assetLayer ? assetLayer.visible() : 0,
+          lift: assetLayer ? assetLayer.lifted() : 0,
+          mpp: Math.round(assetMpp * 1000) / 1000,
+          drawn: assetDrawn,
+          draws: assetLayer && assetLayer.group.visible ? assetLayer.draws() : 0,
+          tris: assetDrawnTris,
+          pack: assetPack
+            ? {
+                assets: assetPack.counts.assets,
+                verts: assetPack.counts.verts,
+                tris: assetPack.counts.tris,
+                binBytes: assetPack.binBytes,
+              }
+            : null,
+          loadMs: assetLoadMs,
+          error: assetError,
+          blocked: assetBlocked,
+          syncMs,
+          syncMsMax,
+        },
       };
     },
 

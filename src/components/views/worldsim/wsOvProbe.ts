@@ -16,6 +16,7 @@
 
 import { alignProbeOn, metersPerPixelAt, wsDiag, wsLiveMap } from "./wsRenderBackend";
 import type { BldMeshData } from "./wsBldMesh";
+import type { BldAssetLayer, BldAssetPack } from "./wsBldAssets";
 
 /**
  * **量具身份**：这把尺子自己改一次就 +1。
@@ -140,6 +141,23 @@ export interface OvProbeView {
   facadeApplied: number;
   facadePatchFailed: number;
   facadeTextureFailed: number;
+  /* ── 近景资产（S8）：只读读数，见 `wsBldAssets.ts` ── */
+  assetOn: boolean;
+  assetState: 0 | 1;
+  assetFade: number;
+  assetFadeTarget: 0 | 1;
+  assetMpp: number;
+  assetDrawn: number;
+  assetDrawCalls: number;
+  assetDrawnTris: number;
+  assetBlocked: string;
+  assetLoadMs: number;
+  assetError: string;
+  assetPack: BldAssetPack | null;
+  assetLayer: BldAssetLayer | null;
+  syncMs: number;
+  syncMsMax: number;
+  assetPerf: boolean;
   outlineOn: boolean;
   outlineOnRef: boolean;
   outlineApplied: number;

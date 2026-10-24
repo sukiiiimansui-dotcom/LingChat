@@ -61,7 +61,7 @@ function urlVariantOn(): boolean {
 }
 
 /** `?mpp=` 直接给米/CSS 像素；`?z=` 按 Web Mercator 反算（默认纬度 29.56°）。 */
-function urlLodMpp(): number | null {
+export function urlLodMpp(): number | null {
   try {
     const q = typeof location !== "undefined" ? location.search : "";
     const mm = /[?&]mpp=([0-9.]+)/.exec(q);
@@ -356,6 +356,13 @@ export interface BldMeshData {
   triFeature: number[];
   /** 逐要素 `[minX, minZ, maxX, maxZ]`（射线求交预筛用） */
   boxes: number[];
+  /**
+   * 逐要素的**占地锚**（近景资产用；与 `featureIds` 同一套编号，每栋 8 个数）：
+   * `[centerX, centerZ, baseY, topY, width, depth, rotY, height]`。
+   * 点集来自**同一份**外环（与上面画楼用的是同一批点）⇒ 资产与程序化**同 id / 同高 / 同占地**。
+   * `rotY` 的约定：资产局部 +X 对齐主立面（最长边）方向，+Z 是它的法向。
+   */
+  places: Float32Array;
   /** 逐要素 id（与 `triFeature`/`boxes` 的要素下标**同一套编号**） */
   featureIds: string[];
   /** 逐要素元信息（命中时回报的颜色/高度） */
@@ -388,6 +395,76 @@ function localRingArea(pts: readonly Pt2[]): number {
     s += a[0] * b[1] - b[0] * a[1];
   }
   return Math.abs(s) / 2;
+}
+
+/** `places` 每栋几个数（**改了要同步 `wsBldAssets`**：那边按同一 stride 读） */
+export const PLACE_STRIDE = 8;
+
+/**
+ * 一栋楼的**占地锚**：把外环点集投到「最长边」正交基上，得到
+ * `[中心X, 中心Z, 宽, 深, 绕Y旋转]`。资产按这个框摆，才与程序化那栋**同占地**。
+ *
+ * · 朝向取**最长边**（主立面）：矩形楼会得到与自身对齐的框，而不是永远轴对齐；
+ * · 退化（点太少 / 最长边为 0 / 宽深过小）⇒ 退回轴对齐包围盒，`rot = 0`（宁可不转，不转错）。
+ */
+export function ringPlaceOf(
+  rings: readonly (readonly [number, number][])[],
+  toLocal: (lng: number, lat: number) => [number, number]
+): { x: number; z: number; w: number; d: number; rot: number } | null {
+  const pts: Array<[number, number]> = [];
+  let ux = 0, uz = 0, longest = 0;
+  for (const r of rings) {
+    if (!r || r.length < 3) continue;
+    const local: Array<[number, number]> = [];
+    for (const p of r) local.push(toLocal(p[0], p[1]));
+    for (let i = 0; i < local.length; i++) {
+      const a = local[i]!;
+      const b = local[(i + 1) % local.length]!;
+      const dx = b[0] - a[0];
+      const dz = b[1] - a[1];
+      const len = Math.hypot(dx, dz);
+      if (len > longest && len > 1e-6) {
+        longest = len;
+        ux = dx / len;
+        uz = dz / len;
+      }
+      pts.push(a);
+    }
+  }
+  if (pts.length < 3) return null;
+  /* 轴对齐包围盒（退化时的兜底，也用来判断"这个框是不是太小"） */
+  let ax0 = Infinity, az0 = Infinity, ax1 = -Infinity, az1 = -Infinity;
+  for (const p of pts) {
+    if (p[0] < ax0) ax0 = p[0];
+    if (p[0] > ax1) ax1 = p[0];
+    if (p[1] < az0) az0 = p[1];
+    if (p[1] > az1) az1 = p[1];
+  }
+  if (!(longest > 1e-6)) {
+    const w = ax1 - ax0, d = az1 - az0;
+    if (!(w >= 0.5 && d >= 0.5)) return null;
+    return { x: (ax0 + ax1) / 2, z: (az0 + az1) / 2, w, d, rot: 0 };
+  }
+  const vx = -uz, vz = ux;
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const p of pts) {
+    const du = p[0] * ux + p[1] * uz;
+    const dv = p[0] * vx + p[1] * vz;
+    if (du < minU) minU = du;
+    if (du > maxU) maxU = du;
+    if (dv < minV) minV = dv;
+    if (dv > maxV) maxV = dv;
+  }
+  const w = maxU - minU;
+  const d = maxV - minV;
+  if (!(w >= 0.5 && d >= 0.5)) {
+    const bw = ax1 - ax0, bd = az1 - az0;
+    if (!(bw >= 0.5 && bd >= 0.5)) return null;
+    return { x: (ax0 + ax1) / 2, z: (az0 + az1) / 2, w: bw, d: bd, rot: 0 };
+  }
+  const mu = (minU + maxU) / 2;
+  const mv = (minV + maxV) / 2;
+  return { x: ux * mu + vx * mv, z: uz * mu + vz * mv, w, d, rot: Math.atan2(-uz, ux) };
 }
 
 /**
@@ -441,6 +518,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const featBox: number[] = [];
   const featureIds: string[] = [];
   const featureMeta: Array<{ color: string; h3d: number; hBase: number }> = [];
+  /* 近景资产的占地锚（每栋 8 个数，与 `featureIds` 同编号；见 `PLACE_STRIDE`） */
+  const place: number[] = [];
   /* 每栋基色 → 三档系数（缓存；同一基色只算一次） */
   const bandsCache = new Map<string, { k: [number, number, number]; mix: [number, number, number] }>();
   const bandsOf = (hex: string): { k: [number, number, number]; mix: [number, number, number] } => {
@@ -754,6 +833,14 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const fi = featureIds.length;
       featureIds.push(String(f.id ?? ""));
       featureMeta.push({ color: hex, h3d: metaTop, hBase: metaBase });
+      /* 近景资产的占地锚：用**这批已经解析好的外环**（不重新解析几何），
+         与上面画楼用的是同一批点 ⇒ 同 id / 同高 / 同占地。退化时填 0，编号仍然对齐。 */
+      {
+        const pl = ringPlaceOf(rings, toLocal);
+        const ph = Math.max(0, metaTop - metaBase);
+        if (pl) place.push(pl.x, pl.z, metaBase, metaTop, pl.w, pl.d, pl.rot, ph);
+        else place.push(0, 0, metaBase, metaTop, 0, 0, 0, ph);
+      }
       const massCellRect = atlasUvOf(cellOf(fId));
       const roofRect = atlasUvOf(ROOF_CELL_INDEX);
       const plainRect = atlasUvOf(PLAIN_CELL_INDEX);
@@ -1093,6 +1180,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         /* 没画成的那一栋要**从名单里退掉**，否则 `centerPick` 会指到一栋画不出来的楼上 */
         featureIds.pop();
         featureMeta.pop();
+        place.length = fi * PLACE_STRIDE;
         stats.shapeDropped += 1;
       }
     }
@@ -1107,6 +1195,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     colors: col,
     triFeature: triTo,
     boxes: featBox,
+    places: Float32Array.from(place),
     featureIds,
     featureMeta,
     stats,

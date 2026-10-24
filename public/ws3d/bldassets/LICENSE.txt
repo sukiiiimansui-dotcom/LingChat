@@ -1,0 +1,5 @@
+Kenney City Kit Commercial 2.1
+Source: https://kenney.nl/assets/city-kit-commercial
+License: CC0-1.0（公共领域；可商用、署名非必需）
+本目录只保留运行时需要的几何（pack.bin）与共享贴图（colormap.png），
+由 scripts/build-bld-assets.mjs 从原始 GLB 生成。

@@ -8,6 +8,32 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content, maximum-scale=1.0, user-scalable=no"
     />
     <title>LingChat · 浏览器预览（web-mock）</title>
+    <!--
+      构建版本自检（2026-10-24 加）：手机浏览器（尤其第三方便携的 Via）会把 HTML 也缓存住，
+      加 ?v= 也不一定绕开，结果是"页面还是旧包、用户以为没更新"。
+      做法：每次加载都 no-store 取 /build.json 的 stamp；和本次会话记录的不同 ⇒
+      带 ?b=<stamp> 重载一次（只重载一次，靠 sessionStorage 防循环）。
+      对新包没有影响；老包没有这段脚本，需要手动清一次缓存才会进入自动更新。
+    -->
+    <script>
+      (function () {
+        try {
+          var url = new URL(location.href);
+          fetch("/build.json?t=" + Date.now(), { cache: "no-store" })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+              if (!j || !j.stamp) return;
+              var seen = sessionStorage.getItem("ws_build_seen");
+              if (seen === j.stamp) return;
+              sessionStorage.setItem("ws_build_seen", j.stamp);
+              if (url.searchParams.get("b") === j.stamp) return;
+              url.searchParams.set("b", j.stamp);
+              location.replace(url.toString());
+            })
+            .catch(function () {});
+        } catch (e) {}
+      })();
+    </script>
     <style></style>
   </head>
 

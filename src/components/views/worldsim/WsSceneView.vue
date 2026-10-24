@@ -744,6 +744,38 @@
   onMounted(() => {
     /* 开局**永远先走地图**（默认后端不许变）；存了 three 的偏好在 `scene-ready` 之后自动切过去 */
     void ensureMapBackend();
+    /* 🩺 `?layout=1`：把各层 rect 直接打在屏幕上（排查"HUD 不在底部"这类只在一台设备上出现的布局问题）。
+       只在带参数时挂，正常路径零开销。 */
+    try {
+      if (/[?&]layout=1\b/.test(location.search)) {
+        const pre = document.createElement("pre");
+        pre.id = "ws-layout-debug";
+        pre.style.cssText =
+          "position:fixed;left:4px;top:4px;z-index:99999;margin:0;padding:6px 8px;max-width:96vw;" +
+          "background:rgba(0,0,0,.8);color:#9fe;font:11px/1.45 monospace;white-space:pre-wrap;pointer-events:none";
+        document.body.appendChild(pre);
+        const tick = (): void => {
+          const r = (sel: string): string => {
+            const el = document.querySelector(sel) as HTMLElement | null;
+            if (!el) return "—";
+            const b = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            return `${Math.round(b.left)},${Math.round(b.top)} ${Math.round(b.width)}×${Math.round(b.height)}` +
+              ` pos=${cs.position} h=${cs.height} bottom=${cs.bottom}`;
+          };
+          pre.textContent = [
+            `vw×vh = ${innerWidth}×${innerHeight} dpr=${devicePixelRatio}`,
+            `body   = ${r("body")}`,
+            `.ws-dml = ${r(".ws-dml")}`,
+            `.hud   = ${r(".ws-dml__hud")}`,
+            `.attr  = ${r(".ws-dml__attr")}`,
+            `.canvas= ${r(".maplibregl-canvas")}`,
+          ].join("\n");
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }
+    } catch { /* 调试层失败不影响页面 */ }
   });
 
   onBeforeUnmount(() => {

@@ -178,9 +178,21 @@ export function createOverlayBackend(): WsRenderBackend {
   let assetDrawn = 0;
   let assetDrawCalls = 0;
   let assetDrawnTris = 0;
-  /** `?bldassets=0` 关掉这一档（回退/对拍用；默认开） */
+  /**
+   * 资产档开关（`?bldassets=0|1` 显式覆盖）。
+   * 2026-10-24：真机（Android WebView / Mali）上资产层会让整层不可见（桌面 virgl 正常），
+   * 在没有定位到驱动差异之前，**触屏设备默认关**（继续画程序化盒子，页面永远有楼可看），
+   * 用 `?bldassets=1` 显式打开来复现/取证。桌面（非触屏）仍默认开。
+   */
   const assetOn = (() => {
-    try { return !/[?&]bldassets=0\b/.test(location.search); } catch { return true; }
+    try {
+      const q = location.search || "";
+      if (/[?&]bldassets=1\b/.test(q)) return true;
+      if (/[?&]bldassets=0\b/.test(q)) return false;
+      /* 没显式指定：触屏设备默认关（真机上资产层已验证会导致整层不可见），桌面默认开 */
+      const touch = (navigator.maxTouchPoints || 0) > 0;
+      return !touch;
+    } catch { return true; }
   })();
   /** `?bldperf=1`：画完调一次 `gl.finish()` 并把同步毫秒记进 diag（默认关，别拖帧率） */
   const assetPerf = (() => {

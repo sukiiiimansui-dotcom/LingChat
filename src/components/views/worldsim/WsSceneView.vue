@@ -776,6 +776,32 @@
         requestAnimationFrame(tick);
       }
     } catch { /* 调试层失败不影响页面 */ }
+    /* 🩺 `?blddiag=1`：把资产档状态直接打在左上角（真机取证用；不带参数零开销）。 */
+    try {
+      if (/[?&]blddiag=1\b/.test(location.search)) {
+        const box = document.createElement("pre");
+        box.id = "ws-blddiag";
+        box.style.cssText =
+          "position:fixed;left:4px;top:120px;z-index:99999;margin:0;padding:6px 8px;max-width:60vw;" +
+          "background:rgba(0,0,0,.78);color:#9fe;font:11px/1.4 monospace;white-space:pre-wrap;pointer-events:none";
+        document.body.appendChild(box);
+        const tick = (): void => {
+          try {
+            const R = (window as unknown as { __WSRENDER__?: { diagJson?: () => string } }).__WSRENDER__;
+            const raw = R?.diagJson ? R.diagJson() : "";
+            const d = raw ? JSON.parse(raw) : {};
+            const a = d?.asset || {};
+            box.textContent =
+              `asset on=${a.on} state=${a.state} target=${a.target} fade=${a.fade}\n` +
+              `drawn=${a.drawn} draws=${a.draws} tris=${a.tris} places=${a.places}\n` +
+              `mpp=${a.mpp} blocked=${a.blocked || "-"} err=${a.error || "-"}\n` +
+              `bld=${d.buildings} tris=${d.triangles}`;
+          } catch { /* 读不到就空着 */ }
+          window.setTimeout(tick, 500);
+        };
+        tick();
+      }
+    } catch { /* 调试层失败不影响页面 */ }
   });
 
   onBeforeUnmount(() => {

@@ -32,16 +32,6 @@
      "maxzoom": 16,
      "tileSize": 256,
      "crossOrigin": "anonymous"
-    },
-    "hi": {
-     "type": "raster",
-     "tiles": [
-      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-     ],
-     "maxzoom": 19,
-     "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-     "tileSize": 256,
-     "crossOrigin": "anonymous"
     }
    },
    "layers": [
@@ -57,47 +47,10 @@
      "type": "raster",
      "source": "base",
      "paint": {
-      "raster-opacity": [
-       "interpolate",
-       [
-        "linear"
-       ],
-       [
-        "zoom"
-       ],
-       14.5,
-       0.92,
-       16.2,
-       0
-      ],
+      "raster-opacity": 0.92,
       "raster-saturation": -0.25,
       "raster-contrast": 0.04,
       "raster-brightness-max": 0.74
-     }
-    },
-    {
-     "id": "hi",
-     "type": "raster",
-     "source": "hi",
-     "minzoom": 14.5,
-     "paint": {
-      "raster-opacity": [
-       "interpolate",
-       [
-        "linear"
-       ],
-       [
-        "zoom"
-       ],
-       14.5,
-       0,
-       16.2,
-       0.95
-      ],
-      "raster-saturation": -0.22,
-      "raster-contrast": 0.1,
-      "raster-brightness-min": 0,
-      "raster-brightness-max": 0.56
      }
     },
     {
@@ -607,16 +560,6 @@
       "maxzoom": 16,
       "tileSize": 256,
       "crossOrigin": "anonymous"
-     },
-     "hi": {
-      "type": "raster",
-      "tiles": [
-       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "maxzoom": 19,
-      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-      "tileSize": 256,
-      "crossOrigin": "anonymous"
      }
     },
     "layers": [
@@ -632,47 +575,10 @@
       "type": "raster",
       "source": "base",
       "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0.92,
-        16.2,
-        0
-       ],
+       "raster-opacity": 0.92,
        "raster-saturation": -0.25,
        "raster-contrast": 0.04,
        "raster-brightness-max": 0.74
-      }
-     },
-     {
-      "id": "hi",
-      "type": "raster",
-      "source": "hi",
-      "minzoom": 14.5,
-      "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0,
-        16.2,
-        0.95
-       ],
-       "raster-saturation": -0.22,
-       "raster-contrast": 0.1,
-       "raster-brightness-min": 0,
-       "raster-brightness-max": 0.56
       }
      },
      {
@@ -1267,16 +1173,6 @@
       "maxzoom": 16,
       "tileSize": 256,
       "crossOrigin": "anonymous"
-     },
-     "hi": {
-      "type": "raster",
-      "tiles": [
-       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "maxzoom": 19,
-      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-      "tileSize": 256,
-      "crossOrigin": "anonymous"
      }
     },
     "layers": [
@@ -1292,47 +1188,10 @@
       "type": "raster",
       "source": "base",
       "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0.92,
-        16.2,
-        0
-       ],
+       "raster-opacity": 0.92,
        "raster-saturation": -0.25,
        "raster-contrast": 0.04,
        "raster-brightness-max": 0.74
-      }
-     },
-     {
-      "id": "hi",
-      "type": "raster",
-      "source": "hi",
-      "minzoom": 14.5,
-      "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0,
-        16.2,
-        0.95
-       ],
-       "raster-saturation": -0.22,
-       "raster-contrast": 0.1,
-       "raster-brightness-min": 0,
-       "raster-brightness-max": 0.56
       }
      },
      {
@@ -1841,16 +1700,6 @@
       "maxzoom": 16,
       "tileSize": 256,
       "crossOrigin": "anonymous"
-     },
-     "hi": {
-      "type": "raster",
-      "tiles": [
-       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "maxzoom": 19,
-      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-      "tileSize": 256,
-      "crossOrigin": "anonymous"
      }
     },
     "layers": [
@@ -1866,47 +1715,10 @@
       "type": "raster",
       "source": "base",
       "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0.92,
-        16.2,
-        0
-       ],
+       "raster-opacity": 0.92,
        "raster-saturation": -0.25,
        "raster-contrast": 0.04,
        "raster-brightness-max": 0.74
-      }
-     },
-     {
-      "id": "hi",
-      "type": "raster",
-      "source": "hi",
-      "minzoom": 14.5,
-      "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0,
-        16.2,
-        0.95
-       ],
-       "raster-saturation": -0.22,
-       "raster-contrast": 0.1,
-       "raster-brightness-min": 0,
-       "raster-brightness-max": 0.56
       }
      },
      {
@@ -2385,16 +2197,6 @@
       "maxzoom": 16,
       "tileSize": 256,
       "crossOrigin": "anonymous"
-     },
-     "hi": {
-      "type": "raster",
-      "tiles": [
-       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "maxzoom": 19,
-      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-      "tileSize": 256,
-      "crossOrigin": "anonymous"
      }
     },
     "layers": [
@@ -2414,31 +2216,6 @@
        "raster-saturation": 0.55,
        "raster-contrast": 0.06,
        "raster-brightness-max": 1
-      }
-     },
-     {
-      "id": "hi",
-      "type": "raster",
-      "source": "hi",
-      "minzoom": 14.5,
-      "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0,
-        16.2,
-        0.95
-       ],
-       "raster-saturation": -0.22,
-       "raster-contrast": 0.1,
-       "raster-brightness-min": 0,
-       "raster-brightness-max": 0.56
       }
      },
      {
@@ -2917,16 +2694,6 @@
       "maxzoom": 16,
       "tileSize": 256,
       "crossOrigin": "anonymous"
-     },
-     "hi": {
-      "type": "raster",
-      "tiles": [
-       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "maxzoom": 19,
-      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-      "tileSize": 256,
-      "crossOrigin": "anonymous"
      }
     },
     "layers": [
@@ -2946,31 +2713,6 @@
        "raster-saturation": 0.35,
        "raster-contrast": 0.04,
        "raster-brightness-max": 1
-      }
-     },
-     {
-      "id": "hi",
-      "type": "raster",
-      "source": "hi",
-      "minzoom": 14.5,
-      "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0,
-        16.2,
-        0.95
-       ],
-       "raster-saturation": -0.22,
-       "raster-contrast": 0.1,
-       "raster-brightness-min": 0,
-       "raster-brightness-max": 0.56
       }
      },
      {
@@ -3449,16 +3191,6 @@
       "maxzoom": 16,
       "tileSize": 256,
       "crossOrigin": "anonymous"
-     },
-     "hi": {
-      "type": "raster",
-      "tiles": [
-       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "maxzoom": 19,
-      "attribution": "Sources: Esri, Maxar, Earthstar Geographics",
-      "tileSize": 256,
-      "crossOrigin": "anonymous"
      }
     },
     "layers": [
@@ -3479,31 +3211,6 @@
        "raster-contrast": 0.08,
        "raster-brightness-min": 0.18,
        "raster-brightness-max": 1
-      }
-     },
-     {
-      "id": "hi",
-      "type": "raster",
-      "source": "hi",
-      "minzoom": 14.5,
-      "paint": {
-       "raster-opacity": [
-        "interpolate",
-        [
-         "linear"
-        ],
-        [
-         "zoom"
-        ],
-        14.5,
-        0,
-        16.2,
-        0.95
-       ],
-       "raster-saturation": -0.22,
-       "raster-contrast": 0.1,
-       "raster-brightness-min": 0,
-       "raster-brightness-max": 0.56
       }
      },
      {

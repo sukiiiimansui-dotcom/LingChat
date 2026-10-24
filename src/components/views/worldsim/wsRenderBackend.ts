@@ -159,12 +159,16 @@ export const wsBuildingsHost: { set: (f: ((why: string) => void) | null) => void
  * 两套 id 集合不是同一份 ⇒ 视野一换就绑不上、名字发不上来。
  * 叠加层每次重建后把自己画出去的 id（带 `h3d/h_base`，够名字层做楼顶锚点）登记在这里；
  * 宿主读"已画楼"时**优先用这里**（叠加层负责画楼时），退出时清空。
+ *
+ * **`lng/lat` 也是必带的**（2026-10-24）：叠加层拆掉地图那套 `bld-*` 图层之后，
+ * `queryRenderedFeatures` 一个字都查不到、要素也没有 `geometry` ⇒ 点选只剩"屏幕距离"这条路，
+ * 卡片坐标也只能靠这里带出来。`lng/lat` = 占地中心（`ringCenter`，与卡片/导出同口径）。
  */
 export const wsDrawnBld: {
-  set: (list: ReadonlyArray<{ id: string; properties: Record<string, unknown> }> | null) => void;
-  get: () => ReadonlyArray<{ id: string; properties: Record<string, unknown> }> | null;
+  set: (list: ReadonlyArray<{ id: string; properties: Record<string, unknown>; lng?: number; lat?: number }> | null) => void;
+  get: () => ReadonlyArray<{ id: string; properties: Record<string, unknown>; lng?: number; lat?: number }> | null;
 } = (() => {
-  let cur: ReadonlyArray<{ id: string; properties: Record<string, unknown> }> | null = null;
+  let cur: ReadonlyArray<{ id: string; properties: Record<string, unknown>; lng?: number; lat?: number }> | null = null;
   return {
     set: (list) => {
       cur = list && list.length ? list : null;

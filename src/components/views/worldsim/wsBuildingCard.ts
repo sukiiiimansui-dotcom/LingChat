@@ -91,7 +91,7 @@ export const CARD_STRINGS = {
   nameUncountableWhy: "这栋楼连 id 都没有 —— 生成名必须由 id 决定（同 id 永远同名），凭空起一个会让每次刷新都换名字",
   heightReal: "真数据（OSM 写了 height）",
   heightLevels: "层数×3（OSM 写了层数，后端已折算）",
-  heightKind: "**按类型估**（不是真数据：中国 OSM 楼高覆盖率只有一两成）",
+  heightKind: "按类型估（不是真数据：中国 OSM 楼高覆盖率只有一两成）",
   heightNone: "未登记",
   attrMissing: "署名取不到（包索引里没有 attribution）",
   chatSketchPlaceholder: "（生成·示意名，不入对话）",
@@ -335,7 +335,7 @@ export function buildingCardData(input: CardInput): CardData {
     title = genName(id, input?.genKind || "shop");
     titleTag = CARD_STRINGS.tagSketch;
     sketch = true;
-    why = `这栋楼**没有真名**（实测真名覆盖率只有 2.0%）⇒ 这是由 id 决定的**${WS_GEN_TAG}**名（同 id 永远同名），只上屏、不进数据与对话`;
+    why = `这栋楼没有真名（实测真名覆盖率只有 2.0%）⇒ 这是由 id 决定的${WS_GEN_TAG}名（同 id 永远同名），只上屏、不进数据与对话`;
   } else {
     /* 连生成都拿不到（没有 id）/ 或调用方显式禁用生成名 */
     state = "uncountable";

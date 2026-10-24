@@ -67,6 +67,21 @@ import { useWsPanel } from "@/composables/useWsPanel";
 import type { PickInteractCtx } from "./wsStageTypes";
 
 /**
+ * 点选拿到的**一个要素**（三条来源统一成这一个形状）：
+ *  · 地图 `queryRenderedFeatures`：`id` + `properties` + **`geometry`**（经纬度 GeoJSON）；
+ *  · 叠加层登记的已画楼（`wsDrawnBld`）：`id` + `properties{h3d,h_base}` + **`lng/lat`**（占地中心），
+ *    地图那套图层已被拆掉 ⇒ 它没有 `geometry`。
+ * 卡片要代表点（`cardBuildingPoint`）⇒ 这两样**必须至少带一样**，否则坐标只能写「数不出来」。
+ */
+type PickFeat = {
+  id?: unknown;
+  properties?: Record<string, unknown>;
+  geometry?: { coordinates?: unknown };
+  lng?: number;
+  lat?: number;
+};
+
+/**
  * 装配 M7（交互命中：钉子 / 吸附 / 锚点 / AI 示意层 / 信息卡点选）。
  * 位置与理由见文件头「装配位置（TDZ）与依赖方向」那一段。
  */
@@ -574,11 +589,11 @@ export function createPickInteract(ctx: PickInteractCtx) {
       /* `getZoom` 是 2026-10-03「按 zoom 分层」后点选要用的（`z<14` 查足迹层、`z≥14` 查三条挤出层）——
          这里必须一起声明，否则 `bldClickLayersNow(m)` 报 TS2559（两个类型没有共同属性）。 */
       const m = mapNow() as unknown as {
-        queryRenderedFeatures?: (p: unknown, o?: unknown) => Array<{ properties?: Record<string, unknown>; id?: unknown }>;
+        queryRenderedFeatures?: (p: unknown, o?: unknown) => Array<PickFeat>;
         getZoom?: () => number;
       } | null;
       const pt = e?.point;
-      let feats: Array<{ properties?: Record<string, unknown>; id?: unknown }> = [];
+      let feats: PickFeat[] = [];
       if (m?.queryRenderedFeatures && pt) {
         /* 三条挤出层**都要查**（2026-10-02 B1 按 zoom 分了三条：主体 / 女儿墙 / 设备箱+天线）——
            只查 `bld-ext` 会让"点屋顶件"落空（虽然下面还有屏幕距离兜底，但那是降级不是正常路径）。
@@ -599,38 +614,61 @@ export function createPickInteract(ctx: PickInteractCtx) {
          用**屏幕距离**在"这一轮真画出去的那批楼"里找最近的一栋（锚点来自 `afterDraw`，不是猜的）。 */
       if (!feats.length) {
         const nearest = nearestDrawnBuilding(pt);
-        if (nearest) feats = [{ properties: nearest.properties, id: nearest.id }];
+        if (nearest) feats = [{ properties: nearest.properties, id: nearest.id, geometry: nearest.geometry, lng: nearest.lng, lat: nearest.lat }];
       }
       const f = feats[0];
       if (!f) return;                                   // 点到空处：什么都不弹（不编一栋楼出来）
       const pickedId = bldIdOfFeature(f) ?? String((f.properties || {}).osm_id || f.id || "");
-      openCard({ kind: "building", building: { id: pickedId, properties: (f.properties || {}) as Record<string, unknown> }, click: pt || null });
+      /* 坐标**必须跟着要素一起传给卡片**（2026-10-24）：卡片要 `lng/lat` 或 `geometry` 才能算代表点，
+         只传 `{id, properties}` 就恒落「数不出来」（点名字那条路带了 lng/lat 所以一直有值）。
+         三档如实取：显式 `lng/lat`（叠加层登记的那批，占地中心）→ `geometry`（地图命中查询给的
+         经纬度 GeoJSON，卡片自己按环质心算）→ 都没有就不传（卡片照旧写"数不出来"，不硬编一个）。 */
+      const ll = f.geometry ? null : pointOfFeature(f);
+      openCard({
+        kind: "building",
+        building: {
+          id: pickedId,
+          properties: (f.properties || {}) as Record<string, unknown>,
+          geometry: f.geometry,
+          ...(ll ? { lng: ll[0], lat: ll[1] } : {}),
+        },
+        click: pt || null,
+      });
     } catch (err) {
       stats.note = stats.note ? `${stats.note} · 点楼：${String((err as Error)?.message || err).slice(0, 40)}` : `点楼：${err}`;
     }
   }
 
-  /** 屏幕距离最近的一栋**已画**的楼（`queryRenderedFeatures` 拿不到时的**可见降级**，不编数据） */
-  function nearestDrawnBuilding(pt: { x?: number; y?: number } | undefined): { id: string; properties: Record<string, unknown> } | null {
+  /** 屏幕距离最近的一栋**已画**的楼（`queryRenderedFeatures` 拿不到时的**可见降级**，不编数据）
+   *  叠加层画楼时这份名单来自 `wsDrawnBld`：要素**没有 `geometry`**，代表点靠登记时带的 `lng/lat`。 */
+  function nearestDrawnBuilding(pt: { x?: number; y?: number } | undefined): PickFeat | null {
     const m = mapNow() as unknown as { project?: (c: [number, number]) => { x: number; y: number }; getZoom?: () => number } | null;
     if (!m?.project || !pt || !Number.isFinite(Number(pt.x)) || !Number.isFinite(Number(pt.y))) return null;
     const zoom = m.getZoom ? m.getZoom() : 16;
     if (zoom < 13) return null;                          // 远景下楼是亚像素，不该被点到
     const maxPx = 26;                                    // 命中半径（≈ 一栋近景楼的屏幕上尺寸）
-    let best: { id: string; properties: Record<string, unknown> } | null = null;
+    let best: PickFeat | null = null;
     let bestD = maxPx;
     for (const raw of drawnBldNow()) {
-      const f = raw as { id?: unknown; properties?: Record<string, unknown>; geometry?: { coordinates?: unknown } };
+      const f = raw as PickFeat;
       const props = f.properties || {};
       if (String(props.part || "body") !== "body") continue;   // 只认主体（屋顶/天线不该被点）
-      const ll = firstCoordOf(f.geometry);
+      const ll = pointOfFeature(f);
       if (!ll) continue;
       const p = m.project(ll);
       if (!p || !Number.isFinite(p.x)) continue;
       const d = Math.hypot(p.x - Number(pt.x), p.y - Number(pt.y));
-      if (d < bestD) { bestD = d; best = { id: bldIdOfFeature({ id: f.id, properties: props }) ?? String(props.osm_id || f.id || ""), properties: props }; }
+      /* **整条要素照传**（含 `geometry` / `lng` / `lat`）：卡片要靠它算代表点 ——
+         以前只挑出 `{id, properties}`，于是屏幕距离兜底命中之后坐标恒「数不出来」。 */
+      if (d < bestD) { bestD = d; best = { id: bldIdOfFeature({ id: f.id, properties: props }) ?? String(props.osm_id || f.id || ""), properties: props, geometry: f.geometry, lng: f.lng, lat: f.lat }; }
     }
     return best;
+  }
+  /** 要素的代表点：显式 `lng/lat`（叠加层登记 = 占地中心）优先，其次 `geometry` 的第一个坐标 */
+  function pointOfFeature(f: PickFeat): [number, number] | null {
+    const lng = Number(f.lng), lat = Number(f.lat);
+    if (f.lng !== undefined && f.lat !== undefined && Number.isFinite(lng) && Number.isFinite(lat)) return [lng, lat];
+    return firstCoordOf(f.geometry);
   }
   function firstCoordOf(g: { coordinates?: unknown } | null | undefined): [number, number] | null {
     let v: unknown = g?.coordinates;

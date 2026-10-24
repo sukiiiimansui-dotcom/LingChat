@@ -1519,6 +1519,14 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
   /** 上一轮 flush 真正**画出去**的楼（标签锚点必须落在"屏幕上那批"上，
    *  否则会出现已报过的「有的压根没对应楼」——名字指到没画的楼）。 */
   let drawnBld: readonly unknown[] = [];
+  /** **屏幕上那批楼 —— 唯一取值口径**（名字层与点选共用这一条，别再各写一份）。
+   *  叠加层负责画楼时，屏上那批是它登记的 `wsDrawnBld`（地图那套 `bld-*` 已被拆掉，
+   *  宿主 `drawnBld` 那里是空的/过期的）；其余情况才是落图线每轮写的 `drawnBld`。
+   *  `drawnBld` 走取值器是因为宿主 `afterDraw` 每轮重写它，解构只会拿到快照。 */
+  const drawnBldOnScreen = (): readonly unknown[] => {
+    const ov = wsDrawnBld.get();
+    return ov && ov.length ? ov : drawnBld;
+  };
   /** 相机运动中（整层淡化：一次 class + 一次 opacity，**只写 1 个节点**）。
    *  它**没跟着 M4 走**：M1（相机跟手三个 handler）与 M5（摇杆那一路）都在写它，
    *     而模板上的 `labRootClass` 也在读它 ⇒ 所有权留在宿主，两个模块经 ctx 拿同一个 ref。 */
@@ -1544,10 +1552,7 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     aliveNow: () => alive,
     mapNow: () => map,
     /* 叠加层负责画楼时，它画出去的这批才是"屏幕上的楼"（2026-10-17 名字绑定） */
-    drawnBldNow: () => {
-      const ov = wsDrawnBld.get();
-      return ov && ov.length ? ov : drawnBld;
-    },
+    drawnBldNow: drawnBldOnScreen,
     /* 仓库全量：只给名字层回答"没绑上是因为楼没画，还是周围没楼"（不参与上屏选择） */
     bldPoolNow: () => bldStore.features(),
   });
@@ -1678,7 +1683,9 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
     pinsNow: () => pins,
     setPins: (v) => { pins = v; },
     roadSegsNow: () => roadSegs,
-    drawnBldNow: () => drawnBld,
+    /* 点选读的"已画楼"与名字层**同一个取值器**（`drawnBldOnScreen`，见它上面那段）：
+       叠加层画楼时地图那套 `bld-*` 图层已被拆掉 —— 这里再读宿主 `drawnBld` 就会点空。 */
+    drawnBldNow: drawnBldOnScreen,
   });
   /* 解构名与原闭包变量**同名** ⇒ 宿主里所有调用点（含模板与 M5 的 ctx）一个字都没改。 */
   const { cardData, cardOpen, closeCard, onMapClick, openCardFromNode, syncPins } = pickInteract;

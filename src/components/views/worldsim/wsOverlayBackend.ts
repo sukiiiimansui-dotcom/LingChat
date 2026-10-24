@@ -19,6 +19,7 @@
  */
 
 import { BLD_CAP, buildBldMeshData, outerRingsOf, type BldMeshData } from "./wsBldMesh";
+import { ringCenter } from "./wsBuildingHint";
 import {
   contractTheme,
   ledgerMark,
@@ -518,6 +519,32 @@ export function createOverlayBackend(): WsRenderBackend {
     bldMesh = null;
   }
 
+  /**
+   * 逐要素的**占地中心**（`id` → `[lng, lat]`；退化时退回主环第一个顶点）。
+   *
+   * 为什么要有：叠加层画出去的是 three 网格，地图那套 `bld-*` 图层已被拆掉
+   * ⇒ 要素既没有 `geometry`、也查不到渲染命中，点选/卡片要的坐标只能在建网格时顺手算一份。
+   * 口径与卡片/导出同一条（`wsBuildingHint.ringCenter`），不另写一套质心。
+   */
+  function centersOfFeatures(fc: WsRenderFc | null): Map<string, [number, number]> {
+    const out = new Map<string, [number, number]>();
+    for (const f of fc?.features ?? []) {
+      const id = String((f as { id?: unknown }).id ?? "");
+      if (!id || out.has(id)) continue;
+      try {
+        const { rings } = outerRingsOf((f as { geometry?: unknown }).geometry);
+        const ring = rings[0];
+        if (!ring) continue;
+        const c = ringCenter(ring);
+        if (c) out.set(id, c);
+        else out.set(id, [ring[0]![0], ring[0]![1]]);
+      } catch {
+        /* 单栋几何坏了就跳过（它照样会被画，只是点选时没有代表点） */
+      }
+    }
+    return out;
+  }
+
   /** 用一份 `bld` 要素重建楼（几何走共用模块 ⇒ 与 three 那条路画的是同一批） */
   function rebuild(themeId: string, fcIn: WsRenderFc | null, nextAnchor: { lat: number; lng: number; cos: number } | null = null): void {
     /* 帧率采集的行为打点：几何重建是本模块最贵的一段（覆盖层低帧率窗口要能归因到这里） */
@@ -593,14 +620,21 @@ export function createOverlayBackend(): WsRenderBackend {
     fpsMark("mesh-swap");
     bldMesh = newer;
     data = next;
-    /* 把"画出去的这批楼"登记给名字层（id + 高度；瓦片路径没有 name，名字由名字索引补） */
+    /* 把"画出去的这批楼"登记给名字层（id + 高度；瓦片路径没有 name，名字由名字索引补）。
+       `lng/lat`（占地中心）**必带**：叠加层负责画楼时地图那套 `bld-*` 图层已被拆掉
+       ⇒ 点选只能按屏幕距离找最近的已画楼、卡片坐标也只能从这一份取。 */
     try {
       const ids = data?.featureIds ?? [];
       const metas = data?.featureMeta ?? [];
-      const list = ids.map((id, i) => ({
-        id: String(id),
-        properties: { h3d: Number(metas[i]?.h3d ?? 0), h_base: Number(metas[i]?.hBase ?? 0) },
-      }));
+      const centers = centersOfFeatures(fc);
+      const list = ids.map((id, i) => {
+        const c = centers.get(String(id));
+        return {
+          id: String(id),
+          properties: { h3d: Number(metas[i]?.h3d ?? 0), h_base: Number(metas[i]?.hBase ?? 0) },
+          ...(c ? { lng: c[0], lat: c[1] } : {}),
+        };
+      });
       wsDrawnBld.set(list);
       drawnPublished = list.length;
     } catch { /* 登记失败不影响渲染 */ }

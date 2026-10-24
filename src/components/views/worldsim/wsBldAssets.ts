@@ -28,10 +28,13 @@ export const BLD_ASSET_BASE = "/ws3d/bldassets/";
 /* ── 双档阈值（米/CSS 像素） ─────────────────────────────────────────────────
  * `mpp` 是"一米在屏幕上占几个 CSS 像素"的倒数（与 `wsBldLod` 同一把尺子）。
  * 进入 = 更近（mpp 小），退出 = 更远（mpp 大），**中间那段谁都不翻档** ⇒ 不会来回抖。
- * 换算（纬度 29.56、视口高 720）：0.42 ≈ zoom 17.3、0.54 ≈ zoom 16.95，
- * 也就是"摇杆近景推满（+1.18 级）就进资产档"，松手回来才退。 */
-export const ASSET_ENTER_MPP = 0.42;
-export const ASSET_EXIT_MPP = 0.54;
+ * 换算（纬度 29.56、512px 瓦片口径）：`mppAtZoom` 给出
+ *   zoom 16.4 → 0.787（**默认机位**）、0.9 → zoom 16.2、1.15 → zoom 15.85。
+ * 原来的 0.42 / 0.54 是 zoom 17.3 / 16.95 —— 比默认机位近了一级多 ⇒ 打开页面永远停在
+ * 程序化盒子那一档。现在把门槛放到"**默认机位就在资产档**"（0.9 > 0.787），
+ * 退出再往外放一档（1.15）：默认视角附近来回微调不会翻档，拉远到街区级才回程序化。 */
+export const ASSET_ENTER_MPP = 0.9;
+export const ASSET_EXIT_MPP = 1.15;
 /** 交叉淡入淡出时长（毫秒）：两套几何同位置，透明度此消彼长 */
 export const ASSET_FADE_MS = 260;
 /** 一次最多同时画几个资产实例（超了就不进资产档，宁可用程序化，也不留空洞） */
@@ -455,8 +458,11 @@ export function buildBldAssetLayer(
     group.visible = fade > 0;
     /* 目标=资产：资产是**进入方** ⇒ 不透明、写深度、先画；
        目标=程序化：资产是**退出方** ⇒ 半透明、不测深度、后画（压在进入方之上，不会露出底图）。
-       —— 这样两套几何同位置时，任一帧的合成都是"前者 × (1-fade) + 后者 × fade"，没有空洞也没有重影。 */
-    if (toAssets) {
+       —— 这样两套几何同位置时，任一帧的合成都是"前者 × (1-fade) + 后者 × fade"，没有空洞也没有重影。
+       `fade >= 1` **一律走不透明那支**（哪怕目标已经翻成 0）：目标翻过来的那一帧透明度还没降，
+       不该把材质留在"不测深度"上 —— `depthTest=false` 只允许出现在过渡帧，fade=1 必须是实心。 */
+    const opaque = toAssets || fade >= 1;
+    if (opaque) {
       material.transparent = false;
       material.opacity = 1;
       material.depthTest = true;

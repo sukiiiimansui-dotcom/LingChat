@@ -97,6 +97,23 @@ function dprCapOf(): number {
 /** `sourcedata` 之后的补建防抖（毫秒） */
 const REFRESH_DEBOUNCE_MS = 400;
 
+/**
+ * 过渡看门狗的间隔（毫秒）：只要"当前透明度 ≠ 目标"就隔这么久自己补一帧。
+ * 取 400（> 默认过渡 260ms 的 1.5 倍）：正常过渡由 rAF 链跑完，看门狗根本轮不到；
+ * 只有链被打断时它才接管 —— 所以这个值只影响"断了之后多久恢复"，不影响观感。
+ */
+const ASSET_WATCHDOG_MS = 400;
+
+/**
+ * 单帧最多推进多少毫秒的过渡（`assetFadeStep` 的 dt 上限）。
+ *
+ * 为什么不是"按真实经过时间一路推"：这台机器近景只有 1~4 fps，一帧的真实间隔可以到 1 秒；
+ * 若 dt 直接取真实值，260ms 的过渡会在**一帧**里跳完（看起来是硬切，不是淡入）。
+ * 但上限也不能太小（原来是 120ms ⇒ 1 fps 时要 3 帧、约 3 秒才走完，期间楼一直是半透明）。
+ * 250ms ≈ 默认过渡时长 ⇒ 再慢的机器最多 2 帧就把过渡走完。
+ */
+const ASSET_FADE_DT_MAX_MS = 250;
+
 /* ══════════════════════════════════════════════════════════════════════════
  * 🔧 自用对齐探针（`?wsalign=1`）—— **给真机用的量具**，不是产品功能
  * ══════════════════════════════════════════════════════════════════════════
@@ -148,6 +165,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let assetFadeTarget: 0 | 1 = 0;
   let assetLastAt = 0;
   let assetRaf = 0;
+  /** 过渡看门狗（低频兜底：链断了也能把透明度推到目标；过渡结束就停） */
+  let assetWatchdog = 0;
   let assetLoading = false;
   let assetPrefetchQueued = false;
   let assetLoadMs = 0;
@@ -597,6 +616,10 @@ export function createOverlayBackend(): WsRenderBackend {
         assetTex = tex;
         assetLoadMs = Math.round(performance.now() - t0);
         assetError = "";
+        /* 包到齐这一刻地图可能已经**静止**了（没有 render 事件 ⇒ `drawOnce` 不再被调用，
+           `updateAssets` 也就再没人跑 ⇒ 档位判了 1 却永远不建层、fade 停在 0）。
+           这里自己补一帧：建层、定档、起过渡都发生在那一帧里。 */
+        kickDrawOnce();
       } catch (e) {
         assetError = String((e as Error)?.message || e).slice(0, 160);
       } finally {
@@ -629,10 +652,11 @@ export function createOverlayBackend(): WsRenderBackend {
 
   /** 网格要换（数据变了）⇒ 连资产层一起重来（几何共享，重建很便宜） */
   function disposeAssets(): void {
-    if (assetRaf) {
-      cancelAnimationFrame(assetRaf);
-      assetRaf = 0;
-    }
+    /* ⚠️ 这里**不取消**过渡补帧链（`assetRaf`）。
+       重建（瓦片落地 400ms 后的 `scheduleRefresh` / 重锚）随时会落进一次过渡的中间：
+       一取消就只剩"下一次地图 render"能把链续上 —— 而地图**静止时没有 render 事件**
+       ⇒ 淡入/淡出停在中间值，程序化那层就一直半透明（"楼看起来像玻璃"）。
+       链自己会在 `state !== "running"` 时停；`pause` / `destroy` 各自另有取消。 */
     if (assetLayer) {
       try { assetLayer.dispose(); } catch { /* 释放失败不影响后续 */ }
       assetLayer = null;
@@ -665,7 +689,7 @@ export function createOverlayBackend(): WsRenderBackend {
   function updateAssets(): void {
     if (!assetOn || state !== "running") return;
     const now = performance.now();
-    const dt = assetLastAt ? Math.min(120, now - assetLastAt) : 16;
+    const dt = assetLastAt ? Math.min(ASSET_FADE_DT_MAX_MS, now - assetLastAt) : 16;
     assetLastAt = now;
     const v = lastSeen;
     if (!v) return;
@@ -722,16 +746,20 @@ export function createOverlayBackend(): WsRenderBackend {
     }
 
     /* 程序化那层：资产全显 ⇒ 藏起来；正在过渡 ⇒ 当"退出方"半透明盖在资产上 */
+    /* 资产层这一帧**真的画出了东西**才允许把程序化那层变半透明/藏起来：
+       否则（层刚被重建、视野里 0 栋、实例没摆上）会出现"程序化半透明盖空气"的鬼影 ——
+       屏幕上就剩两套都不实心的楼，看起来正是"玻璃楼"。 */
+    const assetsLive = !!assetLayer && assetFade > 0 && assetDrawn > 0;
     if (bldMesh) {
       const mat = bldMesh.material;
-      if (assetFade >= 1 && assetFadeTarget === 1) {
+      if (assetsLive && assetFade >= 1 && assetFadeTarget === 1) {
         bldMesh.visible = false;
         if (mat) { mat.transparent = true; mat.opacity = 0; }
-      } else if (assetFade > 0 && assetFadeTarget === 0) {
+      } else if (assetsLive && assetFade > 0 && assetFadeTarget === 0) {
         /* 资产是退出方（自己半透明、不测深度）；程序化是进入方 ⇒ 不透明、先画 */
         restoreProcMat();
         bldMesh.visible = true;
-      } else if (assetFade > 0) {
+      } else if (assetsLive) {
         /* 资产是进入方、程序化是退出方 ⇒ 程序化半透明、不测深度、后画（盖在资产上） */
         bldMesh.visible = true;
         if (mat) {
@@ -747,8 +775,13 @@ export function createOverlayBackend(): WsRenderBackend {
       }
     }
 
-    /* 过渡没走完 ⇒ 自己补帧（地图静止时不会再有 render 事件） */
-    if (assetFade !== assetFadeTarget && !assetRaf) kickAssetFade();
+    /* 过渡没走完 ⇒ 自己补帧（地图静止时不会再有 render 事件）+ 挂看门狗兜底（链被外部打断时接管） */
+    if (assetFade !== assetFadeTarget) {
+      if (!assetRaf) kickAssetFade();
+      armAssetWatchdog();
+    } else {
+      disarmAssetWatchdog();
+    }
   }
 
   /**
@@ -795,6 +828,50 @@ export function createOverlayBackend(): WsRenderBackend {
       if (state === "running" && assetFade !== assetFadeTarget && !assetRaf) assetRaf = requestAnimationFrame(step);
     };
     assetRaf = requestAnimationFrame(step);
+  }
+
+  /**
+   * 自己补**一帧**（`syncCamera` + `drawOnce`）。
+   *
+   * 为什么要它：这一层唯一的驱动是地图的 `render` 事件 —— 相机不动、瓦片也下完时**没有帧**。
+   * 而"资产包到齐"这种异步事件不改变地图 ⇒ 没人在它之后画一帧，档位就永远停在"加载中"
+   * （实测：`?z=19` 进页面后静静等 15 秒，`diag.asset` 一直是 `fade=0 / blocked=资产加载中`，
+   * 而 `pack` 已经到位、`loadMs=1396`）。补这一帧，档位/建层/过渡才会真的发生。
+   */
+  function kickDrawOnce(): void {
+    try {
+      requestAnimationFrame(() => {
+        if (state !== "running" || !renderer || !scene || !camera) return;
+        syncCamera();
+        drawOnce();
+      });
+    } catch { /* 补帧失败不影响后续 */ }
+  }
+
+  /**
+   * 过渡看门狗（**兜底，低频**）。
+   *
+   * `requestAnimationFrame` 链是唯一能把透明度推到 1（或 0）的东西，但它可能被外部打断：
+   * `pause()`、重建路径、页面切后台、或某次 `cancelAnimationFrame` 的清理。
+   * 链一断 `assetFade` 就冻在中间值 —— 而**下一次**让 `updateAssets` 跑起来的机会同样依赖
+   * 地图出帧 ⇒ 地图一旦静止就是"永远半透明"。这里每 `ASSET_WATCHDOG_MS` 自己补一帧，
+   * 直到 `assetFade === assetFadeTarget` 为止（过渡结束就自己停，不留常驻定时器）。
+   */
+  function armAssetWatchdog(): void {
+    if (assetWatchdog) return;
+    assetWatchdog = window.setTimeout(() => {
+      assetWatchdog = 0;
+      if (state !== "running") return;
+      if (assetFade === assetFadeTarget) return;
+      syncCamera();
+      drawOnce();                       /* 推进一帧（`updateAssets` 会顺手再武装/收工） */
+      if (state === "running" && assetFade !== assetFadeTarget) armAssetWatchdog();
+    }, ASSET_WATCHDOG_MS);
+  }
+
+  function disarmAssetWatchdog(): void {
+    if (assetWatchdog) window.clearTimeout(assetWatchdog);
+    assetWatchdog = 0;
   }
 
   /**
@@ -1880,6 +1957,7 @@ export function createOverlayBackend(): WsRenderBackend {
         cancelAnimationFrame(assetRaf);
         assetRaf = 0;
       }
+      disarmAssetWatchdog();
       state = "paused";
       ledgerMark(instance, "paused");
     },
@@ -1889,6 +1967,11 @@ export function createOverlayBackend(): WsRenderBackend {
       state = "running";
       ledgerMark(instance, "running");
       attachDrive();
+      /* 暂停期间过渡可能停在中间（`pause` 会把补帧链停掉）⇒ 回来先把链续上 */
+      if (assetFade !== assetFadeTarget) {
+        kickAssetFade();
+        armAssetWatchdog();
+      }
     },
 
     destroy(): void {
@@ -1896,6 +1979,11 @@ export function createOverlayBackend(): WsRenderBackend {
       probe.dispose();
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = 0;
+      if (assetRaf) {
+        try { cancelAnimationFrame(assetRaf); } catch { /* ignore */ }
+        assetRaf = 0;
+      }
+      disarmAssetWatchdog();
       try { labelObs?.disconnect(); } catch { /* ignore */ }
       try { wsDrawnBld.set(null); } catch { /* ignore */ }
       labelObs = null;
@@ -1971,6 +2059,8 @@ export function createOverlayBackend(): WsRenderBackend {
       asset: {
         on: boolean;
         state: number;
+        /** 过渡目标（0 = 程序化，1 = 资产）；`fade` 与它相等到 1 才说明过渡真的跑完了 */
+        target: number;
         fade: number;
         /** 楼记录总数 / 视野内可进资产层的栋数（判断"有没有楼被漏在资产层外"） */
         places: number;
@@ -1999,6 +2089,7 @@ export function createOverlayBackend(): WsRenderBackend {
         asset: {
           on: assetOn,
           state: assetState,
+          target: assetFadeTarget,
           fade: Math.round(assetFade * 1000) / 1000,
           places: data ? Math.floor(data.places.length / 8) : 0,
           visible: assetLayer ? assetLayer.visible() : 0,

@@ -289,13 +289,9 @@ const NIGHT: WsMapTheme = {
       maxzoom: 16,
       attribution: "Sources: Esri, HERE, Garmin, © OpenStreetMap contributors",
     },
-    hi: {
-      tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      ],
-      maxzoom: 19,
-      attribution: "Sources: Esri, Maxar, Earthstar Geographics",
-    },
+    /* 2026-10-24 机主：**不要卫星图，地图只要 map 瓦片** ⇒ 暗色主题不再挂 World_Imagery。
+       要恢复卫星层，把这里和下面 `raster.hi` 一起还原即可（两处必须同时非 null，否则图层/源会缺一半）。 */
+    hi: null,
     ref: {
       tiles: [
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
@@ -305,7 +301,9 @@ const NIGHT: WsMapTheme = {
   },
   raster: {
     base: {
-      "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0.92, 16.2, 0],
+      /* 2026-10-24：以前 16.2 处淡到 0 是让位给卫星层；卫星层已按机主要求移除 ⇒ 底图全程可见
+       （高 zoom 是 z16 瓦片放大，会糊，但这是"只要 map 瓦片"的直接结果）。 */
+      "raster-opacity": 0.92,
       "raster-saturation": -0.25,
       "raster-contrast": 0.04,
       "raster-brightness-max": 0.74,
@@ -316,13 +314,7 @@ const NIGHT: WsMapTheme = {
        按用户"太暗"的反馈提到 **0.56**（任务书给的 0.5~0.6 区间中部），
        saturation 从 -0.4 收到 **-0.22**（压暗本来就在掉色，再抽饱和就成灰泥了）。
        算出来的地面：0.362 →(对比度 0.10)→ 0.347 →(×0.56)→ **0.194**。 */
-    hi: {
-      "raster-opacity": ["interpolate", ["linear"], ["zoom"], 14.5, 0, 16.2, 0.95],
-      "raster-saturation": -0.22,
-      "raster-contrast": 0.1,
-      "raster-brightness-min": 0.0,
-      "raster-brightness-max": 0.56,
-    },
+    hi: null,
     ref: { "raster-opacity": 0.9 },
   },
   tint: null,
@@ -378,7 +370,7 @@ const NIGHT: WsMapTheme = {
   verticalGradient: true,
   extrudOpacity: ["interpolate", ["linear"], ["zoom"], 12.8, 0.72, 15, 0.86, 17, 0.97],
   low: { dropSky: true, outlineWidth: null, dropTint: true },
-  measuredLuma: { base: 0.287, hi: 0.362 },
+  measuredLuma: { base: 0.287, hi: null },
   minGroundContrast: 1.35,
 };
 

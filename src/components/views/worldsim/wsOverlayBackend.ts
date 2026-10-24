@@ -570,6 +570,8 @@ export function createOverlayBackend(): WsRenderBackend {
           toLocal: toLocalForBuild,
           themeId,
           cap: BLD_CAP,
+          /* S7：几何变体（三种立面节奏/顶部/角部）；远景档由 LOD 自己挡掉 */
+          variant: true,
         })
       : null;
     if (!THREE || !scene || !next || !next.triangles) {

@@ -23,7 +23,8 @@
  *    调用方自己包成它那套引擎认识的缓冲。
  */
 
-import { atlasUvOf, cellOf, repeatOf, PLAIN_CELL_INDEX, ROOF_CELL_INDEX } from "./wsBldFacade";
+import { atlasUvOf, cellOf, hashId, repeatOf, PLAIN_CELL_INDEX, ROOF_CELL_INDEX } from "./wsBldFacade";
+import { pickBldVariant, variantCostOf, variantGeoOf, VARIANT_PER_BUILDING_VERTS, VARIANT_VERTS_MAX, type BldVariantPick } from "./wsBldVariants";
 import { ROOF_MUL, bandsForBase, toonBandOf, toonMulOf } from "./wsToon";
 import { HEIGHT_COLOR_RAMP, renderHeight } from "./wsBuildingLook";
 import { wsMapTheme } from "./wsMapTheme";
@@ -45,6 +46,15 @@ export const BLD_CAP = 3500;
 function urlModelOn(): boolean {
   try {
     return /[?&]model=1\b/.test(typeof location !== "undefined" ? location.search : "");
+  } catch {
+    return false;
+  }
+}
+
+/** `?variants=1`：几何变体（三套立面/顶部/角部）。显式 `variant` 输入优先。 */
+function urlVariantOn(): boolean {
+  try {
+    return /[?&]variants=1\b/.test(typeof location !== "undefined" ? location.search : "");
   } catch {
     return false;
   }
@@ -247,6 +257,10 @@ export interface BldMeshInput {
   /** S2/S3 建模开关：true = 用 `__parts` 的体块/女儿墙/设备/天线；
    *  不传时读 `?model=1`；显式 false = 影子路（输出与旧版逐字节相同，`model=0` 回证用）。 */
   model?: boolean;
+  /** S7 几何变体：true = 每栋按 id + 建筑类型出三种立面节奏/顶部/角部（远景不加，近景才加）。
+   *  不传时读 `?variants=1`；显式 false = 旧几何（对拍/回退用）。
+   *  ⚠️ 变体只在 `model` 打开时生效（它建在体块之上）。 */
+  variant?: boolean;
   /** S3 LOD：mpp（米/CSS 像素，缺省 `?mpp=` / `?z=` / z16.4）/ 垂直压缩 /
    *  细节顶点预算 / 滞回状态（缺省共享）/ 自检强制档。 */
   lod?: {
@@ -315,6 +329,16 @@ export interface BldMeshStats {
   detailPerBuildingCap: number;
   detailPerBuildingCapLandmark: number;
   roofCapBuildings: number;
+  /** S7：几何变体 —— 实际画出的栋数 / 顶点 / 预算预留 / 三档计数 / 因预算丢掉 / 预算 */
+  variantBuildings: number;
+  variantVerts: number;
+  variantVertsPlanned: number;
+  variantKinds: [number, number, number];
+  variantTops: [number, number, number];
+  variantCorners: [number, number, number];
+  variantDropped: number;
+  variantCap: number;
+  variantPerBuildingCap: number;
 }
 
 export interface BldMeshData {
@@ -341,14 +365,41 @@ export interface BldMeshData {
   triangles: number;
 }
 
+/** 最高体块：变体只挂在这一块上（立面构件不随体块数翻倍） */
+function tallestPartOf(parts: readonly BldPartLike[]): BldPartLike | null {
+  let best: BldPartLike | null = null;
+  let bestH = -Infinity;
+  for (const p of parts) {
+    const h = Number(p.h);
+    if (Number.isFinite(h) && h > bestH) {
+      bestH = h;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/** 局部米环的面积（变体只给最大的那个环加构件，控制顶点账） */
+function localRingArea(pts: readonly Pt2[]): number {
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % pts.length]!;
+    s += a[0] * b[1] - b[0] * a[1];
+  }
+  return Math.abs(s) / 2;
+}
+
 /**
  * 把一份 `bld` 要素变成顶点数据。**纯几何**：不读时钟、不碰引擎；
- * 例外只有三个 URL 开关（`?model=1` / `?mpp=` / `?z=`）与可注入的 LOD 状态。
+ * 例外只有 URL 开关（`?model=1` / `?variants=1` / `?mpp=` / `?z=`）与可注入的 LOD 状态。
  */
 export function buildBldMeshData(input: BldMeshInput): BldMeshData {
   const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   const { toLocal, themeId, cap } = input;
   const modelOn = input.model === true || (input.model === undefined && urlModelOn());
+  /* S7：变体是**建模之上**的一层；模型关掉时它没有体块可依附，规划阶段也不会跑。 */
+  const variantOn = modelOn && (input.variant === true || (input.variant === undefined && urlVariantOn()));
   const lodMpp = (() => {
     const v = Number(input.lod?.mpp);
     if (Number.isFinite(v) && v > 0) return v;
@@ -376,6 +427,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     roofs: 0, roofVerts: 0, roofCap: 0, roofDropped: 0, roofTypes: { gable: 0, hip: 0, pyramid: 0 },
     modelCpuMs: 0, detailMaxVerts: 0, detailMaxOrdinary: 0, detailMaxLandmark: 0,
     detailPerBuildingCap: 0, detailPerBuildingCapLandmark: 0, roofCapBuildings: 0,
+    variantBuildings: 0, variantVerts: 0, variantVertsPlanned: 0,
+    variantKinds: [0, 0, 0], variantTops: [0, 0, 0], variantCorners: [0, 0, 0],
+    variantDropped: 0, variantCap: 0, variantPerBuildingCap: 0,
   };
   const pos: number[] = [];
   const col: number[] = [];
@@ -435,6 +489,11 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
     selected: 0 | 1 | 2;
     roof: RoofPlan | null;
     roofSelected: boolean;
+    /** S7：变体选择 / 最大环点数（退台按 n 记账）/ 是否拿到变体预算 / 预留顶点 */
+    pick: BldVariantPick | null;
+    ringN: number;
+    variantGranted: boolean;
+    variantCost: number;
   };
   const planByKey = new Map<string, DetailPlan>();
   if (modelOn) {
@@ -464,11 +523,21 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const hpx = (hTop / lodMpp) * pitchCos;
       const tier = forceTier !== undefined ? forceTier : lodState.tierOf(key, hpx);
       stats.lodTiers[tier] += 1;
+      /* S7：变体选择只跟 id/类型/最高点有关；环点数只用于退台的顶点账 */
+      let vpick: BldVariantPick | null = null;
+      let vringN = 0;
+      if (variantOn && tier > 0) {
+        vpick = pickBldVariant(key, props, hTop);
+        const vpart = tallestPartOf(massing);
+        const vr = outerRingsOf(vpart?.geometry ?? f.geometry);
+        for (const r of vr.rings) if (r.length > vringN) vringN = r.length;
+      }
       const plan: DetailPlan = {
         key, tier, hpx, h: hTop, massing,
         parapet: [], equip: [], antenna: [],
         wallCost: 0, fullCost: 0, selected: 0,
         roof: null, roofSelected: false,
+        pick: vpick, ringN: vringN, variantGranted: false, variantCost: 0,
       };
       /* S4：没有体块的低层住宅才算坡屋顶；远景也要（轮廓），不受 LOD 门控 */
       const roofForce = input.roof?.force ?? "auto";
@@ -521,7 +590,37 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       b.h - a.h ||
       (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
     );
-    let remaining = detailCap;
+    /* ── S7：几何变体先分预算 ───────────────────────────────────────────────
+       变体与细节**共用** `DETAIL_VERTS_MAX` 这一本总账（先到先得，排序与细节同一优先级）：
+       三角总数不涨，代价是变体分走的那部分女儿墙/设备会按原有优先级让出预算。
+       远景（tier 0）在这里就出局；有坡屋顶候选的楼也不叠（坡屋顶本身就是顶部）。 */
+    const variantCap = Math.min(VARIANT_VERTS_MAX, detailCap);
+    let variantLeft = variantCap;
+    let variantPlanned = 0;
+    if (variantOn) {
+      for (const plan of plans) {
+        if (!plan.pick || plan.tier <= 0) continue;
+        if (plan.roof) {
+          stats.variantDropped += 1;
+          continue;
+        }
+        const cost = variantCostOf(plan.pick, plan.tier, plan.ringN, plan.equip.length > 0);
+        if (cost <= 0 || cost > VARIANT_PER_BUILDING_VERTS || cost > variantLeft) {
+          stats.variantDropped += 1;
+          continue;
+        }
+        plan.variantGranted = true;
+        plan.variantCost = cost;
+        variantLeft -= cost;
+        variantPlanned += cost;
+      }
+    }
+    stats.variantVertsPlanned = variantPlanned;
+    stats.variantCap = variantCap;
+    stats.variantPerBuildingCap = VARIANT_PER_BUILDING_VERTS;
+    /* 细节账从总额里扣掉变体预留；`detailVerts` 只记**细节那一本**（变体在 `variantVerts`） */
+    let remaining = Math.max(0, detailCap - variantPlanned);
+    const detailStart = remaining;
     let detailMax = 0;
     let detailMaxOrdinary = 0;
     let detailMaxLandmark = 0;
@@ -561,7 +660,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         }
       }
     }
-    stats.detailVerts = detailCap - remaining;
+    stats.detailVerts = detailStart - remaining;
     stats.detailCap = detailCap;
     stats.detailMaxVerts = detailMax;
     stats.detailMaxOrdinary = detailMaxOrdinary;
@@ -621,6 +720,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const antennaParts = plan?.antenna ?? [];
       const selectedTier = plan?.selected ?? 0;
       const roofPlan = plan?.roofSelected && plan.roof ? plan.roof : null;
+      /* S7：变体与细节分开记账（变体预算已在规划阶段划好；这里只决定画不画） */
+      const variantPick = plan?.variantGranted && plan.pick ? plan.pick : null;
       let metaTop = top;
       let metaBase = base;
       if (modelOn && massing.length) {
@@ -659,6 +760,8 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       const oneRep: UvRep = { uRep: 1, vRep: 1 };
       let added = false;
       let modeled = false;
+      /** S7：本栋是否真的画出了变体（统计只在画成时 +1） */
+      let variantDrawn = false;
       const box = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
       const grow = (x: number, z: number): void => {
         if (x < box[0]) box[0] = x;
@@ -703,7 +806,49 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         }
         triTo.push(fi, fi);          // 四边形 = 2 个三角形 ⇒ 2 个槽
       };
-      const drawSolid = (part: BldPartLike, wallRect: UvRect = massCellRect): boolean => {
+      /** 三档明暗 + 暖冷分色的最终顶点色（墙面，按面法线吃一次 Lambert） */
+      const faceColor = (baseHex: string, baseRgb: Rgb3, bands: Bands, nx: number, ny: number, nz: number): Rgb3 => {
+        const tk = toonK(baseHex, shadeOf(nx, ny, nz), bands);
+        const tm = toonMulOf(tk.band, tk.idx);
+        const mixW = bands.mix[tk.idx]!;
+        return [
+          baseRgb[0] * tm[0] * (1 - mixW) + mixW,
+          baseRgb[1] * tm[1] * (1 - mixW) + mixW,
+          baseRgb[2] * tm[2] * (1 - mixW) + mixW,
+        ];
+      };
+      /**
+       * S7：把变体构件推到当前要素的顶点流里。**只在拿到变体预算时调用**；
+       * 所有面都用素墙图集格（`plainRect`）—— 小构件的窗格没有意义，色阶/明暗才是它的语言。
+       */
+      const drawVariant = (ring: readonly Pt2[], y0: number, y1: number, pick: BldVariantPick, baseHex: string, baseRgb: Rgb3, bands: Bands): boolean => {
+        if (!variantPick) return false;
+        const geo = variantGeoOf({
+          pick,
+          tier: plan?.tier ?? 2,
+          ring,
+          base: y0,
+          top: y1,
+          seed: hashId("v:geom:" + fId),
+          hasEquip: (plan?.equip.length ?? 0) > 0,
+          allowTop: !roofPlan,
+        });
+        if (!geo.tris.length) return false;
+        for (const t of geo.tris) {
+          const c: Rgb3 = t.roof
+            ? [baseRgb[0] * ROOF_MUL[0], baseRgb[1] * ROOF_MUL[1], baseRgb[2] * ROOF_MUL[2]]
+            : faceColor(baseHex, baseRgb, bands, t.n[0], t.n[1], t.n[2]);
+          for (const p of [t.a, t.b, t.c]) {
+            pushV(p[0], p[1], p[2], c[0], c[1], c[2], 0.5, 0.5, plainRect, oneRep);
+            grow(p[0], p[2]);
+          }
+          triTo.push(fi);
+        }
+        stats.variantVerts += geo.verts;
+        variantDrawn = true;
+        return true;
+      };
+      const drawSolid = (part: BldPartLike, wallRect: UvRect = massCellRect, variant: BldVariantPick | null = null): boolean => {
         const t = Number(part.h);
         const b = Number(part.hb);
         if (!Number.isFinite(t) || !Number.isFinite(b)) return false;
@@ -716,6 +861,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         const prgb = hexToLinearRgb(phex);
         const pbands = bandsOf(phex);
         let any = false;
+        /* S7：变体只挂到**最大的那个外环**（MultiPolygon 里可能有一栋楼好几片） */
+        let bestRing: Pt2[] | null = null;
+        let bestArea = -1;
         for (const ring of prings) {
           if (ring.length < 3) continue;
           const pts = ring.map(([lng, lat]) => toLocal(lng, lat));
@@ -723,6 +871,13 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           const tris = triangulateRing(pts);
           if (!tris.length) continue;
           any = true;
+          if (variant) {
+            const ar = localRingArea(pts);
+            if (ar > bestArea) {
+              bestArea = ar;
+              bestRing = pts;
+            }
+          }
           const capRgb: Rgb3 = [prgb[0] * ROOF_MUL[0], prgb[1] * ROOF_MUL[1], prgb[2] * ROOF_MUL[2]];
           for (let i = 0; i < tris.length; i += 3) {
             pushCapTri(pts[tris[i]!]!, pts[tris[i + 1]!]!, pts[tris[i + 2]!]!, pTop, capRgb, roofRect);
@@ -736,6 +891,7 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
             pushWall(a, b2, pBase, pTop, phex, prgb, pbands, wallRect, rep, 1);
           }
         }
+        if (variant && bestRing) drawVariant(bestRing, pBase, pTop, variant, phex, prgb, pbands);
         return any;
       };
       const drawBand = (part: BldPartLike, full = true): boolean => {
@@ -777,8 +933,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       /* S2：有体块就画体块（替代单块主体）；一个体块都画不出来才回退主体并计数 */
       let massDrawn = false;
       if (modelOn && massing.length) {
+        const vPart = variantPick ? tallestPartOf(massing) : null;
         for (const part of massing) {
-          if (drawSolid(part)) {
+          if (drawSolid(part, massCellRect, variantPick && part === vPart ? variantPick : null)) {
             massDrawn = true;
             stats.massingParts += 1;
           }
@@ -792,12 +949,22 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
         }
       }
       if (!massDrawn) {
+        /* S7：回退主体也吃变体；只挂最大的那个环（与体块那条路同一取舍） */
+        let vRing: Pt2[] | null = null;
+        let vArea = -1;
         for (const ring of rings) {
         if (ring.length < 3) continue;
         const pts = ring.map(([lng, lat]) => toLocal(lng, lat));
         for (const p of pts) grow(p[0], p[1]);
         const tris = triangulateRing(pts);
         if (!tris.length) continue;
+        if (variantPick) {
+          const ar = localRingArea(pts);
+          if (ar > vArea) {
+            vArea = ar;
+            vRing = pts;
+          }
+        }
         added = true;
         /* 立面图集：**每栋取一次**（id → 格；不在这里算抖动，抖动走顶点色） */
         const wallTop = roofPlan ? roofPlan.eave : top;
@@ -879,6 +1046,9 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
           modeled = true;
         }
       }
+      if (variantPick && vRing) {
+        drawVariant(vRing, base, roofPlan ? roofPlan.eave : top, variantPick, hex, rgb, bandsOf(hex));
+      }
       }
       /* S3：细节按预算选出的档画。tier1 = 女儿墙外圈墙；tier2 = 全带 + 设备 + 天线。 */
       if (modelOn && !roofPlan && selectedTier >= 1) {
@@ -911,6 +1081,13 @@ export function buildBldMeshData(input: BldMeshInput): BldMeshData {
       if (modeled) stats.modeledBuildings += 1;
       if (added) {
         stats.buildings++;
+        /* S7：变体计数只在**真的画进这批顶点**时累加（预算没批到的不算） */
+        if (variantDrawn && variantPick) {
+          stats.variantBuildings += 1;
+          stats.variantKinds[variantPick.rhythm] += 1;
+          stats.variantTops[variantPick.top] += 1;
+          stats.variantCorners[variantPick.corner] += 1;
+        }
         featBox.push(box[0], box[1], box[2], box[3]);
       } else {
         /* 没画成的那一栋要**从名单里退掉**，否则 `centerPick` 会指到一栋画不出来的楼上 */

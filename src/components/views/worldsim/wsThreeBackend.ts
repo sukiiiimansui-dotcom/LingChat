@@ -185,10 +185,11 @@ function modelHudNote(): string {
     modeledBuildings?: number; massingParts?: number; parapetBands?: number;
     roofs?: number; roofDropped?: number; detailDropped?: number;
     lodTiers?: number[]; modelCpuMs?: number;
+    variantBuildings?: number; variantVerts?: number;
   } | null;
   if (!mf) return "";
   const tiers = Array.isArray(mf.lodTiers) ? mf.lodTiers.join("/") : "?";
-  return ` / 建模 ${mf.modeledBuildings ?? 0} 栋 · 体块 ${mf.massingParts ?? 0} · 女儿墙 ${mf.parapetBands ?? 0} · 坡屋顶 ${mf.roofs ?? 0} · 屋顶丢 ${mf.roofDropped ?? 0} · 细节丢 ${mf.detailDropped ?? 0} · LOD ${tiers} · ${mf.modelCpuMs ?? 0}ms`;
+  return ` / 建模 ${mf.modeledBuildings ?? 0} 栋 · 体块 ${mf.massingParts ?? 0} · 女儿墙 ${mf.parapetBands ?? 0} · 变体 ${mf.variantBuildings ?? 0} 栋/${mf.variantVerts ?? 0}v · 坡屋顶 ${mf.roofs ?? 0} · 屋顶丢 ${mf.roofDropped ?? 0} · 细节丢 ${mf.detailDropped ?? 0} · LOD ${tiers} · ${mf.modelCpuMs ?? 0}ms`;
 }
 
 export function createThreeBackend(): WsRenderBackend {
@@ -324,6 +325,8 @@ export function createThreeBackend(): WsRenderBackend {
       toLocal: (lng, lat) => toLocal(frame as Frame, lng, lat),
       themeId,
       cap: BLD_CAP,
+      /* S7：几何变体（三种立面节奏/顶部/角部）；远景档由 LOD 自己挡掉 */
+      variant: true,
       /* S5：three 这条路的相机帧已经算出真实 mpp（512px 瓦片口径），直接喂 LOD */
       lod: lastMpp > 0 ? { mpp: lastMpp } : undefined,
     });

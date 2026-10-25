@@ -1,5 +1,6 @@
 Kenney City Kit Commercial 2.1
 Source: https://kenney.nl/assets/city-kit-commercial
 License: CC0-1.0（公共领域；可商用、署名非必需）
-本目录只保留运行时需要的几何（pack.bin）与共享贴图（colormap.png），
-由 scripts/build-bld-assets.mjs 从原始 GLB 生成。
+本目录只保留运行时需要的几何（pack.bin）与共享贴图（colormap.png）。
+基础模型与 detail-* 细节件由 scripts/build-bld-assets.mjs 解析后程序化派生变体
+（基座加宽 / 雨棚 / 挑檐 / 退台 / 屋顶设备箱 / 遮阳伞），派生结果仍属 CC0 衍生作品。

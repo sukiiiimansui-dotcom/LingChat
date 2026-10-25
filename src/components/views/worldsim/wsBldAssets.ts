@@ -130,11 +130,25 @@ export function assetFadeStep(cur: number, target: 0 | 1, dtMs: number, durMs: n
 }
 
 /**
+ * 候选带宽度（评分单位）：`best` 到这个距离以内的资产都算"一样像"，
+ * 再由楼 id 的哈希在**候选集里**挑一个。
+ *
+ * 为什么要这一层（2026-10-25 实测 `?blddiag=1`）：原来直接取 argmin，评分里
+ * "高宽比接近"那项（权重最大）会把选择压到**最像的那一两个资产**上 —— 屏上
+ * 80 栋只用到 **10 个**不同模型，加多少变体都没用。改成"先取像的一档、再按 id 散开"后，
+ * 同一栋楼依然永远挑同一个资产（哈希只依赖 id），只是把"像它"的那一档均匀用满。
+ * 0.34 ≈ 高宽比相差 40% 以内都算一档（非均匀缩放本来就把横向形变夹在
+ * `ASSET_MAX_STRETCH` 里，这一档之内不会出现"纸片楼"）。
+ */
+export const ASSET_PICK_SPREAD = 0.34;
+
+/**
  * 给一栋楼挑资产：**先按高度分池**（高楼用摩天楼），再按"楼体高宽比 vs 资产高宽比"打分，
- * 最后叠一点 id 哈希的抖动 —— 同一栋楼永远挑同一个资产（可复算），不同的楼会散开。
+ * 最后在**最像的那一档候选**里按 id 哈希定一个 —— 同一栋楼永远挑同一个资产（可复算），
+ * 不同的楼会散开。
  *
  * 为什么要对高宽比：资产是按楼的包围盒**非均匀缩放**上去的；高宽比差太远，
- * 窗户会被拉成横条/竖条（比"重复"更难看）。所以宁可选一个"像它"的模型。
+ * 窗户会被拉成横条/竖条（比"重复"更难看）。所以候选只取"像它"的那一档。
  */
 export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: number, w: number, d: number): number {
   if (!meta.length) return -1;
@@ -143,25 +157,27 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
   /* 三档池子（2026-10-25 扩池）：矮楼用 low-detail、中楼用商业、高楼用摩天楼。
      池子空了会退回全池（见下面的兜底），所以不会因为缺某档而没模型。 */
   const cls = h >= 45 ? "tall" : h < 14 ? "low" : "mid";
+  /* ① 先把本档所有资产的形状分算出来（一次遍历，105 个资产也就一万次乘加） */
+  const scores: number[] = [];
   let best = -1;
   let bestScore = Infinity;
   for (let i = 0; i < meta.length; i++) {
     const m = meta[i]!;
-    if (m.class !== cls) continue;
+    if (m.class !== cls) { scores.push(Infinity); continue; }
     const a = Math.max(0.05, m.size[1]) / Math.max(0.05, Math.sqrt(Math.max(0.04, m.size[0] * m.size[2])));
     /* 占地长宽比也要像（2026-10-25）：只按"高/底面积"挑，会给长条楼配方盒子，
        再被非均匀缩放压成"纸片楼"。这里用 max(r,1/r) 比较，避免方向偏差。 */
     const fr = Math.max(0.05, w) / Math.max(0.05, d);
     const ar = Math.max(0.05, m.size[0]) / Math.max(0.05, m.size[2]);
     const footScore = Math.abs(Math.log(Math.max(fr, 1 / fr) / Math.max(ar, 1 / ar)));
-    const jitter = unitOf(hashId(id + "|" + m.name));
-    const score = Math.abs(Math.log(aspect / a)) + 0.45 * footScore + 0.22 * jitter;
+    const score = Math.abs(Math.log(aspect / a)) + 0.45 * footScore;
+    scores.push(score);
     if (score < bestScore) {
       bestScore = score;
       best = i;
     }
   }
-  /* 池子空了（不该发生：两档都有资产）⇒ 退回全池里挑最像的 */
+  /* 池子空了（不该发生：三档都有资产）⇒ 退回全池里挑最像的 */
   if (best < 0) {
     for (let i = 0; i < meta.length; i++) {
       const m = meta[i]!;
@@ -172,6 +188,17 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
         best = i;
       }
     }
+    return best;
+  }
+  /* ② 把"一样像"的那一档收成候选集；③ 由 id 哈希定一个（同 id 恒等，跨会话一致） */
+  let n = 0;
+  for (let i = 0; i < scores.length; i++) if (scores[i]! <= bestScore + ASSET_PICK_SPREAD) n += 1;
+  if (n <= 1) return best;
+  let k = hashId("pick|" + id) % n;
+  for (let i = 0; i < scores.length; i++) {
+    if (scores[i]! > bestScore + ASSET_PICK_SPREAD) continue;
+    if (k === 0) return i;
+    k -= 1;
   }
   return best;
 }

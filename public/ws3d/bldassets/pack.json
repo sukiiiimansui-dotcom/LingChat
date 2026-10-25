@@ -9,11 +9,13 @@
     512
   ],
   "bin": "pack.bin",
-  "binBytes": 1458424,
+  "binBytes": 2228928,
   "counts": {
-    "assets": 35,
-    "verts": 70167,
-    "tris": 44258
+    "assets": 105,
+    "verts": 245925,
+    "blockVerts": 81975,
+    "blocks": 35,
+    "tris": 139218
   },
   "layout": {
     "pos": "f32x3",
@@ -21,16 +23,159 @@
     "shade": "u8",
     "idx": "u16"
   },
+  "blocks": [
+    {
+      "family": "building-a",
+      "verts": 2450
+    },
+    {
+      "family": "building-b",
+      "verts": 2418
+    },
+    {
+      "family": "building-c",
+      "verts": 2353
+    },
+    {
+      "family": "building-d",
+      "verts": 2158
+    },
+    {
+      "family": "building-e",
+      "verts": 2819
+    },
+    {
+      "family": "building-f",
+      "verts": 3194
+    },
+    {
+      "family": "building-g",
+      "verts": 3528
+    },
+    {
+      "family": "building-h",
+      "verts": 2828
+    },
+    {
+      "family": "building-i",
+      "verts": 4364
+    },
+    {
+      "family": "building-j",
+      "verts": 8837
+    },
+    {
+      "family": "building-k",
+      "verts": 5112
+    },
+    {
+      "family": "building-l",
+      "verts": 5926
+    },
+    {
+      "family": "building-m",
+      "verts": 6116
+    },
+    {
+      "family": "building-n",
+      "verts": 6926
+    },
+    {
+      "family": "building-skyscraper-a",
+      "verts": 2390
+    },
+    {
+      "family": "building-skyscraper-b",
+      "verts": 2918
+    },
+    {
+      "family": "building-skyscraper-c",
+      "verts": 3134
+    },
+    {
+      "family": "building-skyscraper-d",
+      "verts": 3478
+    },
+    {
+      "family": "building-skyscraper-e",
+      "verts": 2210
+    },
+    {
+      "family": "low-detail-building-a",
+      "verts": 532
+    },
+    {
+      "family": "low-detail-building-b",
+      "verts": 696
+    },
+    {
+      "family": "low-detail-building-c",
+      "verts": 466
+    },
+    {
+      "family": "low-detail-building-d",
+      "verts": 556
+    },
+    {
+      "family": "low-detail-building-e",
+      "verts": 408
+    },
+    {
+      "family": "low-detail-building-f",
+      "verts": 520
+    },
+    {
+      "family": "low-detail-building-g",
+      "verts": 512
+    },
+    {
+      "family": "low-detail-building-h",
+      "verts": 892
+    },
+    {
+      "family": "low-detail-building-i",
+      "verts": 480
+    },
+    {
+      "family": "low-detail-building-j",
+      "verts": 650
+    },
+    {
+      "family": "low-detail-building-k",
+      "verts": 348
+    },
+    {
+      "family": "low-detail-building-l",
+      "verts": 624
+    },
+    {
+      "family": "low-detail-building-m",
+      "verts": 512
+    },
+    {
+      "family": "low-detail-building-n",
+      "verts": 452
+    },
+    {
+      "family": "low-detail-building-wide-a",
+      "verts": 452
+    },
+    {
+      "family": "low-detail-building-wide-b",
+      "verts": 716
+    }
+  ],
   "assets": [
     {
       "name": "building-a",
       "class": "mid",
-      "verts": 2074,
+      "family": "building-a",
+      "verts": 2450,
       "tris": 1252,
       "pos": 0,
-      "uv": 842004,
-      "shade": 1122672,
-      "idx": 1192872,
+      "uv": 983700,
+      "shade": 1311600,
+      "idx": 1393608,
       "idxCount": 3756,
       "bbox": [
         -0.442,
@@ -48,14 +193,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-a@awning",
+      "class": "mid",
+      "family": "building-a",
+      "verts": 2450,
+      "tris": 1424,
+      "pos": 0,
+      "uv": 983700,
+      "shade": 1311600,
+      "idx": 1401120,
+      "idxCount": 4272,
+      "bbox": [
+        -0.638,
+        0,
+        -0.532,
+        0.638,
+        1.293,
+        0.532
+      ],
+      "size": [
+        1.275,
+        1.293,
+        1.064
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-a@roofbox",
+      "class": "mid",
+      "family": "building-a",
+      "verts": 2450,
+      "tris": 1276,
+      "pos": 0,
+      "uv": 983700,
+      "shade": 1311600,
+      "idx": 1409664,
+      "idxCount": 3828,
+      "bbox": [
+        -0.442,
+        0,
+        -0.47,
+        0.442,
+        1.382,
+        0.47
+      ],
+      "size": [
+        0.884,
+        1.382,
+        0.94
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-b",
       "class": "mid",
-      "verts": 2018,
+      "family": "building-b",
+      "verts": 2418,
       "tris": 1276,
-      "pos": 24888,
-      "uv": 850300,
-      "shade": 1124748,
-      "idx": 1200384,
+      "pos": 29400,
+      "uv": 993500,
+      "shade": 1314052,
+      "idx": 1417320,
       "idxCount": 3828,
       "bbox": [
         -0.485,
@@ -73,14 +271,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-b@awning",
+      "class": "mid",
+      "family": "building-b",
+      "verts": 2418,
+      "tris": 1448,
+      "pos": 29400,
+      "uv": 993500,
+      "shade": 1314052,
+      "idx": 1424976,
+      "idxCount": 4344,
+      "bbox": [
+        -0.551,
+        0,
+        -0.67,
+        0.551,
+        1.293,
+        0.67
+      ],
+      "size": [
+        1.102,
+        1.293,
+        1.339
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-b@roofbox",
+      "class": "mid",
+      "family": "building-b",
+      "verts": 2418,
+      "tris": 1312,
+      "pos": 29400,
+      "uv": 993500,
+      "shade": 1314052,
+      "idx": 1433664,
+      "idxCount": 3936,
+      "bbox": [
+        -0.485,
+        0,
+        -0.47,
+        0.485,
+        1.391,
+        0.47
+      ],
+      "size": [
+        0.97,
+        1.391,
+        0.94
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-c",
       "class": "mid",
-      "verts": 1953,
+      "family": "building-c",
+      "verts": 2353,
       "tris": 1195,
-      "pos": 49104,
-      "uv": 858372,
-      "shade": 1126768,
-      "idx": 1208040,
+      "pos": 58416,
+      "uv": 1003172,
+      "shade": 1316472,
+      "idx": 1441536,
       "idxCount": 3585,
       "bbox": [
         -0.442,
@@ -98,14 +349,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-c@awning",
+      "class": "mid",
+      "family": "building-c",
+      "verts": 2353,
+      "tris": 1367,
+      "pos": 58416,
+      "uv": 1003172,
+      "shade": 1316472,
+      "idx": 1448708,
+      "idxCount": 4101,
+      "bbox": [
+        -0.596,
+        0,
+        -0.607,
+        0.596,
+        0.893,
+        0.607
+      ],
+      "size": [
+        1.192,
+        0.893,
+        1.214
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-c@roofbox",
+      "class": "mid",
+      "family": "building-c",
+      "verts": 2353,
+      "tris": 1231,
+      "pos": 58416,
+      "uv": 1003172,
+      "shade": 1316472,
+      "idx": 1456912,
+      "idxCount": 3693,
+      "bbox": [
+        -0.442,
+        0,
+        -0.545,
+        0.442,
+        0.959,
+        0.545
+      ],
+      "size": [
+        0.884,
+        0.959,
+        1.09
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-d",
       "class": "mid",
-      "verts": 1806,
+      "family": "building-d",
+      "verts": 2158,
       "tris": 1100,
-      "pos": 72540,
-      "uv": 866184,
-      "shade": 1128724,
-      "idx": 1215212,
+      "pos": 86652,
+      "uv": 1012584,
+      "shade": 1318828,
+      "idx": 1464300,
       "idxCount": 3300,
       "bbox": [
         -0.42,
@@ -123,14 +427,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-d@awning",
+      "class": "mid",
+      "family": "building-d",
+      "verts": 2158,
+      "tris": 1272,
+      "pos": 86652,
+      "uv": 1012584,
+      "shade": 1318828,
+      "idx": 1470900,
+      "idxCount": 3816,
+      "bbox": [
+        -0.612,
+        0,
+        -0.509,
+        0.612,
+        1.293,
+        0.509
+      ],
+      "size": [
+        1.224,
+        1.293,
+        1.018
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-d@roofbox",
+      "class": "mid",
+      "family": "building-d",
+      "verts": 2158,
+      "tris": 1112,
+      "pos": 86652,
+      "uv": 1012584,
+      "shade": 1318828,
+      "idx": 1478532,
+      "idxCount": 3336,
+      "bbox": [
+        -0.42,
+        0,
+        -0.45,
+        0.42,
+        1.383,
+        0.45
+      ],
+      "size": [
+        0.84,
+        1.383,
+        0.9
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-e",
       "class": "mid",
-      "verts": 2443,
+      "family": "building-e",
+      "verts": 2819,
       "tris": 1509,
-      "pos": 94212,
-      "uv": 873408,
-      "shade": 1130532,
-      "idx": 1221812,
+      "pos": 112548,
+      "uv": 1021216,
+      "shade": 1320988,
+      "idx": 1485204,
       "idxCount": 4527,
       "bbox": [
         -0.82,
@@ -148,14 +505,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-e@awning",
+      "class": "mid",
+      "family": "building-e",
+      "verts": 2819,
+      "tris": 1681,
+      "pos": 112548,
+      "uv": 1021216,
+      "shade": 1320988,
+      "idx": 1494260,
+      "idxCount": 5043,
+      "bbox": [
+        -0.891,
+        0,
+        -0.667,
+        0.891,
+        0.893,
+        0.667
+      ],
+      "size": [
+        1.781,
+        0.893,
+        1.334
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-e@roofbox",
+      "class": "mid",
+      "family": "building-e",
+      "verts": 2819,
+      "tris": 1533,
+      "pos": 112548,
+      "uv": 1021216,
+      "shade": 1320988,
+      "idx": 1504348,
+      "idxCount": 4599,
+      "bbox": [
+        -0.82,
+        0,
+        -0.504,
+        0.82,
+        0.973,
+        0.504
+      ],
+      "size": [
+        1.64,
+        0.973,
+        1.008
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-f",
       "class": "mid",
-      "verts": 2842,
+      "family": "building-f",
+      "verts": 3194,
       "tris": 1794,
-      "pos": 123528,
-      "uv": 883180,
-      "shade": 1132976,
-      "idx": 1230868,
+      "pos": 146376,
+      "uv": 1032492,
+      "shade": 1323808,
+      "idx": 1513548,
       "idxCount": 5382,
       "bbox": [
         -0.42,
@@ -173,14 +583,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-f@awning",
+      "class": "mid",
+      "family": "building-f",
+      "verts": 3194,
+      "tris": 1966,
+      "pos": 146376,
+      "uv": 1032492,
+      "shade": 1323808,
+      "idx": 1524312,
+      "idxCount": 5898,
+      "bbox": [
+        -0.631,
+        0,
+        -0.574,
+        0.631,
+        1.693,
+        0.574
+      ],
+      "size": [
+        1.262,
+        1.693,
+        1.148
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-f@roofbox",
+      "class": "mid",
+      "family": "building-f",
+      "verts": 3194,
+      "tris": 1806,
+      "pos": 146376,
+      "uv": 1032492,
+      "shade": 1323808,
+      "idx": 1536108,
+      "idxCount": 5418,
+      "bbox": [
+        -0.42,
+        0,
+        -0.515,
+        0.42,
+        1.845,
+        0.515
+      ],
+      "size": [
+        0.84,
+        1.845,
+        1.03
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-g",
       "class": "mid",
-      "verts": 3176,
+      "family": "building-g",
+      "verts": 3528,
       "tris": 2006,
-      "pos": 157632,
-      "uv": 894548,
-      "shade": 1135820,
-      "idx": 1241632,
+      "pos": 184704,
+      "uv": 1045268,
+      "shade": 1327004,
+      "idx": 1546944,
       "idxCount": 6018,
       "bbox": [
         -0.485,
@@ -198,14 +661,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-g@awning",
+      "class": "mid",
+      "family": "building-g",
+      "verts": 3528,
+      "tris": 2178,
+      "pos": 184704,
+      "uv": 1045268,
+      "shade": 1327004,
+      "idx": 1558980,
+      "idxCount": 6534,
+      "bbox": [
+        -0.55,
+        0,
+        -0.669,
+        0.55,
+        1.693,
+        0.669
+      ],
+      "size": [
+        1.099,
+        1.693,
+        1.338
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-g@roofbox",
+      "class": "mid",
+      "family": "building-g",
+      "verts": 3528,
+      "tris": 2018,
+      "pos": 184704,
+      "uv": 1045268,
+      "shade": 1327004,
+      "idx": 1572048,
+      "idxCount": 6054,
+      "bbox": [
+        -0.485,
+        0,
+        -0.461,
+        0.485,
+        1.791,
+        0.461
+      ],
+      "size": [
+        0.97,
+        1.791,
+        0.922
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-h",
       "class": "mid",
-      "verts": 2428,
+      "family": "building-h",
+      "verts": 2828,
       "tris": 1512,
-      "pos": 195744,
-      "uv": 907252,
-      "shade": 1138996,
-      "idx": 1253668,
+      "pos": 227040,
+      "uv": 1059380,
+      "shade": 1330532,
+      "idx": 1584156,
       "idxCount": 4536,
       "bbox": [
         -0.442,
@@ -223,14 +739,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-h@awning",
+      "class": "mid",
+      "family": "building-h",
+      "verts": 2828,
+      "tris": 1684,
+      "pos": 227040,
+      "uv": 1059380,
+      "shade": 1330532,
+      "idx": 1593228,
+      "idxCount": 5052,
+      "bbox": [
+        -0.638,
+        0,
+        -0.566,
+        0.638,
+        1.293,
+        0.566
+      ],
+      "size": [
+        1.275,
+        1.293,
+        1.132
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-h@roofbox",
+      "class": "mid",
+      "family": "building-h",
+      "verts": 2828,
+      "tris": 1548,
+      "pos": 227040,
+      "uv": 1059380,
+      "shade": 1330532,
+      "idx": 1603332,
+      "idxCount": 4644,
+      "bbox": [
+        -0.442,
+        0,
+        -0.504,
+        0.442,
+        1.365,
+        0.504
+      ],
+      "size": [
+        0.884,
+        1.365,
+        1.008
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-i",
       "class": "mid",
-      "verts": 4012,
+      "family": "building-i",
+      "verts": 4364,
       "tris": 2544,
-      "pos": 224880,
-      "uv": 916964,
-      "shade": 1141424,
-      "idx": 1262740,
+      "pos": 260976,
+      "uv": 1070692,
+      "shade": 1333360,
+      "idx": 1612620,
       "idxCount": 7632,
       "bbox": [
         -0.62,
@@ -248,14 +817,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-i@awning",
+      "class": "mid",
+      "family": "building-i",
+      "verts": 4364,
+      "tris": 2716,
+      "pos": 260976,
+      "uv": 1070692,
+      "shade": 1333360,
+      "idx": 1627884,
+      "idxCount": 8148,
+      "bbox": [
+        -0.803,
+        0,
+        -0.738,
+        0.803,
+        1.68,
+        0.738
+      ],
+      "size": [
+        1.606,
+        1.68,
+        1.476
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-i@roofbox",
+      "class": "mid",
+      "family": "building-i",
+      "verts": 4364,
+      "tris": 2556,
+      "pos": 260976,
+      "uv": 1070692,
+      "shade": 1333360,
+      "idx": 1644180,
+      "idxCount": 7668,
+      "bbox": [
+        -0.62,
+        0,
+        -0.651,
+        0.62,
+        1.793,
+        0.651
+      ],
+      "size": [
+        1.24,
+        1.793,
+        1.302
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-j",
       "class": "mid",
-      "verts": 8485,
+      "family": "building-j",
+      "verts": 8837,
       "tris": 5246,
-      "pos": 273024,
-      "uv": 933012,
-      "shade": 1145436,
-      "idx": 1278004,
+      "pos": 313344,
+      "uv": 1088148,
+      "shade": 1337724,
+      "idx": 1659516,
       "idxCount": 15738,
       "bbox": [
         -1.042,
@@ -273,14 +895,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-j@awning",
+      "class": "mid",
+      "family": "building-j",
+      "verts": 8837,
+      "tris": 5418,
+      "pos": 313344,
+      "uv": 1088148,
+      "shade": 1337724,
+      "idx": 1690992,
+      "idxCount": 16254,
+      "bbox": [
+        -1.136,
+        0,
+        -0.918,
+        1.136,
+        1.693,
+        0.918
+      ],
+      "size": [
+        2.271,
+        1.693,
+        1.836
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-j@roofbox",
+      "class": "mid",
+      "family": "building-j",
+      "verts": 8837,
+      "tris": 5258,
+      "pos": 313344,
+      "uv": 1088148,
+      "shade": 1337724,
+      "idx": 1723500,
+      "idxCount": 15774,
+      "bbox": [
+        -1.042,
+        0,
+        -0.67,
+        1.042,
+        1.824,
+        0.67
+      ],
+      "size": [
+        2.084,
+        1.824,
+        1.34
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-k",
       "class": "mid",
-      "verts": 4736,
+      "family": "building-k",
+      "verts": 5112,
       "tris": 2960,
-      "pos": 374844,
-      "uv": 966952,
-      "shade": 1153924,
-      "idx": 1309480,
+      "pos": 419388,
+      "uv": 1123496,
+      "shade": 1346564,
+      "idx": 1755048,
       "idxCount": 8880,
       "bbox": [
         -1.042,
@@ -298,14 +973,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-k@awning",
+      "class": "mid",
+      "family": "building-k",
+      "verts": 5112,
+      "tris": 3132,
+      "pos": 419388,
+      "uv": 1123496,
+      "shade": 1346564,
+      "idx": 1772808,
+      "idxCount": 9396,
+      "bbox": [
+        -1.108,
+        0,
+        -0.689,
+        1.108,
+        1.47,
+        0.689
+      ],
+      "size": [
+        2.215,
+        1.47,
+        1.378
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-k@roofbox",
+      "class": "mid",
+      "family": "building-k",
+      "verts": 5112,
+      "tris": 2984,
+      "pos": 419388,
+      "uv": 1123496,
+      "shade": 1346564,
+      "idx": 1791600,
+      "idxCount": 8952,
+      "bbox": [
+        -1.042,
+        0,
+        -0.471,
+        1.042,
+        1.596,
+        0.471
+      ],
+      "size": [
+        2.084,
+        1.596,
+        0.942
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-l",
       "class": "mid",
-      "verts": 5574,
+      "family": "building-l",
+      "verts": 5926,
       "tris": 3512,
-      "pos": 431676,
-      "uv": 985896,
-      "shade": 1158660,
-      "idx": 1327240,
+      "pos": 480732,
+      "uv": 1143944,
+      "shade": 1351676,
+      "idx": 1809504,
       "idxCount": 10536,
       "bbox": [
         -0.685,
@@ -323,14 +1051,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-l@awning",
+      "class": "mid",
+      "family": "building-l",
+      "verts": 5926,
+      "tris": 3684,
+      "pos": 480732,
+      "uv": 1143944,
+      "shade": 1351676,
+      "idx": 1830576,
+      "idxCount": 11052,
+      "bbox": [
+        -0.885,
+        0,
+        -0.797,
+        0.885,
+        2.27,
+        0.797
+      ],
+      "size": [
+        1.769,
+        2.27,
+        1.594
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-l@roofbox",
+      "class": "mid",
+      "family": "building-l",
+      "verts": 5926,
+      "tris": 3524,
+      "pos": 480732,
+      "uv": 1143944,
+      "shade": 1351676,
+      "idx": 1852680,
+      "idxCount": 10572,
+      "bbox": [
+        -0.685,
+        0,
+        -0.701,
+        0.685,
+        2.425,
+        0.701
+      ],
+      "size": [
+        1.37,
+        2.425,
+        1.402
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-m",
       "class": "mid",
-      "verts": 5764,
+      "family": "building-m",
+      "verts": 6116,
       "tris": 3740,
-      "pos": 498564,
-      "uv": 1008192,
-      "shade": 1164236,
-      "idx": 1348312,
+      "pos": 551844,
+      "uv": 1167648,
+      "shade": 1357604,
+      "idx": 1873824,
       "idxCount": 11220,
       "bbox": [
         -0.62,
@@ -348,14 +1129,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-m@awning",
+      "class": "mid",
+      "family": "building-m",
+      "verts": 6116,
+      "tris": 3912,
+      "pos": 551844,
+      "uv": 1167648,
+      "shade": 1357604,
+      "idx": 1896264,
+      "idxCount": 11736,
+      "bbox": [
+        -0.89,
+        0,
+        -0.708,
+        0.89,
+        3.15,
+        0.708
+      ],
+      "size": [
+        1.781,
+        3.15,
+        1.416
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-m@roofbox",
+      "class": "mid",
+      "family": "building-m",
+      "verts": 6116,
+      "tris": 3752,
+      "pos": 551844,
+      "uv": 1167648,
+      "shade": 1357604,
+      "idx": 1919736,
+      "idxCount": 11256,
+      "bbox": [
+        -0.62,
+        0,
+        -0.621,
+        0.62,
+        3.39,
+        0.621
+      ],
+      "size": [
+        1.24,
+        3.39,
+        1.242
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-n",
       "class": "mid",
-      "verts": 6526,
+      "family": "building-n",
+      "verts": 6926,
       "tris": 4350,
-      "pos": 567732,
-      "uv": 1031248,
-      "shade": 1170000,
-      "idx": 1370752,
+      "pos": 625236,
+      "uv": 1192112,
+      "shade": 1363720,
+      "idx": 1942248,
       "idxCount": 13050,
       "bbox": [
         -1.16,
@@ -373,14 +1207,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-n@awning",
+      "class": "mid",
+      "family": "building-n",
+      "verts": 6926,
+      "tris": 4522,
+      "pos": 625236,
+      "uv": 1192112,
+      "shade": 1363720,
+      "idx": 1968348,
+      "idxCount": 13566,
+      "bbox": [
+        -1.287,
+        0,
+        -1.209,
+        1.287,
+        2.48,
+        1.209
+      ],
+      "size": [
+        2.575,
+        2.48,
+        2.418
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-n@roofbox",
+      "class": "mid",
+      "family": "building-n",
+      "verts": 6926,
+      "tris": 4386,
+      "pos": 625236,
+      "uv": 1192112,
+      "shade": 1363720,
+      "idx": 1995480,
+      "idxCount": 13158,
+      "bbox": [
+        -1.16,
+        0,
+        -0.91,
+        1.16,
+        2.622,
+        0.91
+      ],
+      "size": [
+        2.32,
+        2.622,
+        1.82
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-skyscraper-a",
       "class": "tall",
-      "verts": 2118,
+      "family": "building-skyscraper-a",
+      "verts": 2390,
       "tris": 1292,
-      "pos": 646044,
-      "uv": 1057352,
-      "shade": 1176528,
-      "idx": 1396852,
+      "pos": 708348,
+      "uv": 1219816,
+      "shade": 1370648,
+      "idx": 2021796,
       "idxCount": 3876,
       "bbox": [
         -0.68,
@@ -398,14 +1285,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-skyscraper-a@overhang",
+      "class": "tall",
+      "family": "building-skyscraper-a",
+      "verts": 2390,
+      "tris": 1432,
+      "pos": 708348,
+      "uv": 1219816,
+      "shade": 1370648,
+      "idx": 2029548,
+      "idxCount": 4296,
+      "bbox": [
+        -0.93,
+        0,
+        -0.728,
+        0.93,
+        2.92,
+        0.728
+      ],
+      "size": [
+        1.86,
+        2.92,
+        1.455
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-skyscraper-a@setback",
+      "class": "tall",
+      "family": "building-skyscraper-a",
+      "verts": 2390,
+      "tris": 1316,
+      "pos": 708348,
+      "uv": 1219816,
+      "shade": 1370648,
+      "idx": 2038140,
+      "idxCount": 3948,
+      "bbox": [
+        -0.721,
+        0,
+        -0.721,
+        0.721,
+        3.318,
+        0.721
+      ],
+      "size": [
+        1.442,
+        3.318,
+        1.442
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-skyscraper-b",
       "class": "tall",
-      "verts": 2646,
+      "family": "building-skyscraper-b",
+      "verts": 2918,
       "tris": 1592,
-      "pos": 671460,
-      "uv": 1065824,
-      "shade": 1178648,
-      "idx": 1404604,
+      "pos": 737028,
+      "uv": 1229376,
+      "shade": 1373040,
+      "idx": 2046036,
       "idxCount": 4776,
       "bbox": [
         -0.68,
@@ -423,14 +1363,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-skyscraper-b@overhang",
+      "class": "tall",
+      "family": "building-skyscraper-b",
+      "verts": 2918,
+      "tris": 1732,
+      "pos": 737028,
+      "uv": 1229376,
+      "shade": 1373040,
+      "idx": 2055588,
+      "idxCount": 5196,
+      "bbox": [
+        -0.93,
+        0,
+        -0.728,
+        0.93,
+        4.543,
+        0.728
+      ],
+      "size": [
+        1.86,
+        4.543,
+        1.455
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-skyscraper-b@setback",
+      "class": "tall",
+      "family": "building-skyscraper-b",
+      "verts": 2918,
+      "tris": 1616,
+      "pos": 737028,
+      "uv": 1229376,
+      "shade": 1373040,
+      "idx": 2065980,
+      "idxCount": 4848,
+      "bbox": [
+        -0.721,
+        0,
+        -0.721,
+        0.721,
+        5.161,
+        0.721
+      ],
+      "size": [
+        1.442,
+        5.161,
+        1.442
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-skyscraper-c",
       "class": "tall",
-      "verts": 2862,
+      "family": "building-skyscraper-c",
+      "verts": 3134,
       "tris": 1704,
-      "pos": 703212,
-      "uv": 1076408,
-      "shade": 1181296,
-      "idx": 1414156,
+      "pos": 772044,
+      "uv": 1241048,
+      "shade": 1375960,
+      "idx": 2075676,
       "idxCount": 5112,
       "bbox": [
         -0.64,
@@ -448,14 +1441,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-skyscraper-c@overhang",
+      "class": "tall",
+      "family": "building-skyscraper-c",
+      "verts": 3134,
+      "tris": 1844,
+      "pos": 772044,
+      "uv": 1241048,
+      "shade": 1375960,
+      "idx": 2085900,
+      "idxCount": 5532,
+      "bbox": [
+        -0.895,
+        0,
+        -0.743,
+        0.895,
+        4.137,
+        0.743
+      ],
+      "size": [
+        1.791,
+        4.137,
+        1.485
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-skyscraper-c@setback",
+      "class": "tall",
+      "family": "building-skyscraper-c",
+      "verts": 3134,
+      "tris": 1728,
+      "pos": 772044,
+      "uv": 1241048,
+      "shade": 1375960,
+      "idx": 2096964,
+      "idxCount": 5184,
+      "bbox": [
+        -0.678,
+        0,
+        -0.736,
+        0.678,
+        4.7,
+        0.736
+      ],
+      "size": [
+        1.357,
+        4.7,
+        1.471
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-skyscraper-d",
       "class": "tall",
-      "verts": 3206,
+      "family": "building-skyscraper-d",
+      "verts": 3478,
       "tris": 1892,
-      "pos": 737556,
-      "uv": 1087856,
-      "shade": 1184160,
-      "idx": 1424380,
+      "pos": 809652,
+      "uv": 1253584,
+      "shade": 1379096,
+      "idx": 2107332,
       "idxCount": 5676,
       "bbox": [
         -0.64,
@@ -473,14 +1519,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-skyscraper-d@overhang",
+      "class": "tall",
+      "family": "building-skyscraper-d",
+      "verts": 3478,
+      "tris": 2032,
+      "pos": 809652,
+      "uv": 1253584,
+      "shade": 1379096,
+      "idx": 2118684,
+      "idxCount": 6096,
+      "bbox": [
+        -0.895,
+        0,
+        -0.743,
+        0.895,
+        5.547,
+        0.743
+      ],
+      "size": [
+        1.791,
+        5.547,
+        1.485
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-skyscraper-d@setback",
+      "class": "tall",
+      "family": "building-skyscraper-d",
+      "verts": 3478,
+      "tris": 1916,
+      "pos": 809652,
+      "uv": 1253584,
+      "shade": 1379096,
+      "idx": 2130876,
+      "idxCount": 5748,
+      "bbox": [
+        -0.678,
+        0,
+        -0.736,
+        0.678,
+        6.301,
+        0.736
+      ],
+      "size": [
+        1.357,
+        6.301,
+        1.471
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "building-skyscraper-e",
       "class": "tall",
-      "verts": 1938,
+      "family": "building-skyscraper-e",
+      "verts": 2210,
       "tris": 1156,
-      "pos": 776028,
-      "uv": 1100680,
-      "shade": 1187368,
-      "idx": 1435732,
+      "pos": 851388,
+      "uv": 1267496,
+      "shade": 1382576,
+      "idx": 2142372,
       "idxCount": 3468,
       "bbox": [
         -0.647,
@@ -498,14 +1597,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "building-skyscraper-e@overhang",
+      "class": "tall",
+      "family": "building-skyscraper-e",
+      "verts": 2210,
+      "tris": 1296,
+      "pos": 851388,
+      "uv": 1267496,
+      "shade": 1382576,
+      "idx": 2149308,
+      "idxCount": 3888,
+      "bbox": [
+        -0.693,
+        0,
+        -0.859,
+        0.693,
+        4.137,
+        0.859
+      ],
+      "size": [
+        1.386,
+        4.137,
+        1.719
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "building-skyscraper-e@setback",
+      "class": "tall",
+      "family": "building-skyscraper-e",
+      "verts": 2210,
+      "tris": 1180,
+      "pos": 851388,
+      "uv": 1267496,
+      "shade": 1382576,
+      "idx": 2157084,
+      "idxCount": 3540,
+      "bbox": [
+        -0.686,
+        0,
+        -0.658,
+        0.686,
+        4.7,
+        0.658
+      ],
+      "size": [
+        1.373,
+        4.7,
+        1.317
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-a",
       "class": "low",
-      "verts": 252,
+      "family": "low-detail-building-a",
+      "verts": 532,
       "tris": 188,
-      "pos": 799284,
-      "uv": 1108432,
-      "shade": 1189308,
-      "idx": 1442668,
+      "pos": 877908,
+      "uv": 1276336,
+      "shade": 1384788,
+      "idx": 2164164,
       "idxCount": 564,
       "bbox": [
         -0.25,
@@ -523,14 +1675,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-a@parasol",
+      "class": "low",
+      "family": "low-detail-building-a",
+      "verts": 532,
+      "tris": 308,
+      "pos": 877908,
+      "uv": 1276336,
+      "shade": 1384788,
+      "idx": 2165292,
+      "idxCount": 924,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2,
+        0.458
+      ],
+      "size": [
+        0.5,
+        2,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-a@roofbox",
+      "class": "low",
+      "family": "low-detail-building-a",
+      "verts": 532,
+      "tris": 224,
+      "pos": 877908,
+      "uv": 1276336,
+      "shade": 1384788,
+      "idx": 2167140,
+      "idxCount": 672,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.103,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.103,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-b",
       "class": "low",
-      "verts": 280,
+      "family": "low-detail-building-b",
+      "verts": 696,
       "tris": 200,
-      "pos": 802308,
-      "uv": 1109440,
-      "shade": 1189560,
-      "idx": 1443796,
+      "pos": 884292,
+      "uv": 1278464,
+      "shade": 1385320,
+      "idx": 2168484,
       "idxCount": 600,
       "bbox": [
         -0.25,
@@ -548,14 +1753,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-b@parasol",
+      "class": "low",
+      "family": "low-detail-building-b",
+      "verts": 696,
+      "tris": 392,
+      "pos": 884292,
+      "uv": 1278464,
+      "shade": 1385320,
+      "idx": 2169684,
+      "idxCount": 1176,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.225,
+        0.458
+      ],
+      "size": [
+        0.5,
+        2.225,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-b@roofbox",
+      "class": "low",
+      "family": "low-detail-building-b",
+      "verts": 696,
+      "tris": 236,
+      "pos": 884292,
+      "uv": 1278464,
+      "shade": 1385320,
+      "idx": 2172036,
+      "idxCount": 708,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.417,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.417,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-c",
       "class": "low",
-      "verts": 210,
+      "family": "low-detail-building-c",
+      "verts": 466,
       "tris": 142,
-      "pos": 805668,
-      "uv": 1110560,
-      "shade": 1189840,
-      "idx": 1444996,
+      "pos": 892644,
+      "uv": 1281248,
+      "shade": 1386016,
+      "idx": 2173452,
       "idxCount": 426,
       "bbox": [
         -0.25,
@@ -573,14 +1831,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-c@parasol",
+      "class": "low",
+      "family": "low-detail-building-c",
+      "verts": 466,
+      "tris": 262,
+      "pos": 892644,
+      "uv": 1281248,
+      "shade": 1386016,
+      "idx": 2174304,
+      "idxCount": 786,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.25,
+        0.458
+      ],
+      "size": [
+        0.5,
+        2.25,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-c@roofbox",
+      "class": "low",
+      "family": "low-detail-building-c",
+      "verts": 466,
+      "tris": 166,
+      "pos": 892644,
+      "uv": 1281248,
+      "shade": 1386016,
+      "idx": 2175876,
+      "idxCount": 498,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.402,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.402,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-d",
       "class": "low",
-      "verts": 140,
+      "family": "low-detail-building-d",
+      "verts": 556,
       "tris": 106,
-      "pos": 808188,
-      "uv": 1111400,
-      "shade": 1190052,
-      "idx": 1445848,
+      "pos": 898236,
+      "uv": 1283112,
+      "shade": 1386484,
+      "idx": 2176872,
       "idxCount": 318,
       "bbox": [
         -0.25,
@@ -598,14 +1909,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-d@parasol",
+      "class": "low",
+      "family": "low-detail-building-d",
+      "verts": 556,
+      "tris": 298,
+      "pos": 898236,
+      "uv": 1283112,
+      "shade": 1386484,
+      "idx": 2177508,
+      "idxCount": 894,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.75,
+        0.458
+      ],
+      "size": [
+        0.5,
+        1.75,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-d@roofbox",
+      "class": "low",
+      "family": "low-detail-building-d",
+      "verts": 556,
+      "tris": 142,
+      "pos": 898236,
+      "uv": 1283112,
+      "shade": 1386484,
+      "idx": 2179296,
+      "idxCount": 426,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.902,
+        0.25
+      ],
+      "size": [
+        0.5,
+        1.902,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-e",
       "class": "low",
-      "verts": 128,
+      "family": "low-detail-building-e",
+      "verts": 408,
       "tris": 96,
-      "pos": 809868,
-      "uv": 1111960,
-      "shade": 1190192,
-      "idx": 1446484,
+      "pos": 904908,
+      "uv": 1285336,
+      "shade": 1387040,
+      "idx": 2180148,
       "idxCount": 288,
       "bbox": [
         -0.25,
@@ -623,14 +1987,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-e@parasol",
+      "class": "low",
+      "family": "low-detail-building-e",
+      "verts": 408,
+      "tris": 216,
+      "pos": 904908,
+      "uv": 1285336,
+      "shade": 1387040,
+      "idx": 2180724,
+      "idxCount": 648,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.8,
+        0.458
+      ],
+      "size": [
+        0.5,
+        1.8,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-e@roofbox",
+      "class": "low",
+      "family": "low-detail-building-e",
+      "verts": 408,
+      "tris": 132,
+      "pos": 904908,
+      "uv": 1285336,
+      "shade": 1387040,
+      "idx": 2182020,
+      "idxCount": 396,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.917,
+        0.25
+      ],
+      "size": [
+        0.5,
+        1.917,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-f",
       "class": "low",
-      "verts": 104,
+      "family": "low-detail-building-f",
+      "verts": 520,
       "tris": 88,
-      "pos": 811404,
-      "uv": 1112472,
-      "shade": 1190320,
-      "idx": 1447060,
+      "pos": 909804,
+      "uv": 1286968,
+      "shade": 1387448,
+      "idx": 2182812,
       "idxCount": 264,
       "bbox": [
         -0.25,
@@ -648,14 +2065,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-f@parasol",
+      "class": "low",
+      "family": "low-detail-building-f",
+      "verts": 520,
+      "tris": 280,
+      "pos": 909804,
+      "uv": 1286968,
+      "shade": 1387448,
+      "idx": 2183340,
+      "idxCount": 840,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2,
+        0.458
+      ],
+      "size": [
+        0.5,
+        2,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-f@roofbox",
+      "class": "low",
+      "family": "low-detail-building-f",
+      "verts": 520,
+      "tris": 124,
+      "pos": 909804,
+      "uv": 1286968,
+      "shade": 1387448,
+      "idx": 2185020,
+      "idxCount": 372,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.15,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.15,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-g",
       "class": "low",
-      "verts": 280,
+      "family": "low-detail-building-g",
+      "verts": 512,
       "tris": 200,
-      "pos": 812652,
-      "uv": 1112888,
-      "shade": 1190424,
-      "idx": 1447588,
+      "pos": 916044,
+      "uv": 1289048,
+      "shade": 1387968,
+      "idx": 2185764,
       "idxCount": 600,
       "bbox": [
         -0.25,
@@ -673,14 +2143,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-g@parasol",
+      "class": "low",
+      "family": "low-detail-building-g",
+      "verts": 512,
+      "tris": 320,
+      "pos": 916044,
+      "uv": 1289048,
+      "shade": 1387968,
+      "idx": 2186964,
+      "idxCount": 960,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2,
+        0.458
+      ],
+      "size": [
+        0.5,
+        2,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-g@roofbox",
+      "class": "low",
+      "family": "low-detail-building-g",
+      "verts": 512,
+      "tris": 212,
+      "pos": 916044,
+      "uv": 1289048,
+      "shade": 1387968,
+      "idx": 2188884,
+      "idxCount": 636,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.109,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.109,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-h",
       "class": "low",
-      "verts": 476,
+      "family": "low-detail-building-h",
+      "verts": 892,
       "tris": 378,
-      "pos": 816012,
-      "uv": 1114008,
-      "shade": 1190704,
-      "idx": 1448788,
+      "pos": 922188,
+      "uv": 1291096,
+      "shade": 1388480,
+      "idx": 2190156,
       "idxCount": 1134,
       "bbox": [
         -0.25,
@@ -698,14 +2221,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-h@parasol",
+      "class": "low",
+      "family": "low-detail-building-h",
+      "verts": 892,
+      "tris": 570,
+      "pos": 922188,
+      "uv": 1291096,
+      "shade": 1388480,
+      "idx": 2192424,
+      "idxCount": 1710,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.1,
+        0.458
+      ],
+      "size": [
+        0.5,
+        2.1,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-h@roofbox",
+      "class": "low",
+      "family": "low-detail-building-h",
+      "verts": 892,
+      "tris": 414,
+      "pos": 922188,
+      "uv": 1291096,
+      "shade": 1388480,
+      "idx": 2195844,
+      "idxCount": 1242,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.289,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.289,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-i",
       "class": "low",
-      "verts": 200,
+      "family": "low-detail-building-i",
+      "verts": 480,
       "tris": 152,
-      "pos": 821724,
-      "uv": 1115912,
-      "shade": 1191180,
-      "idx": 1451056,
+      "pos": 932892,
+      "uv": 1294664,
+      "shade": 1389372,
+      "idx": 2198328,
       "idxCount": 456,
       "bbox": [
         -0.25,
@@ -723,14 +2299,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-i@parasol",
+      "class": "low",
+      "family": "low-detail-building-i",
+      "verts": 480,
+      "tris": 272,
+      "pos": 932892,
+      "uv": 1294664,
+      "shade": 1389372,
+      "idx": 2199240,
+      "idxCount": 816,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.775,
+        0.458
+      ],
+      "size": [
+        0.5,
+        1.775,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-i@roofbox",
+      "class": "low",
+      "family": "low-detail-building-i",
+      "verts": 480,
+      "tris": 188,
+      "pos": 932892,
+      "uv": 1294664,
+      "shade": 1389372,
+      "idx": 2200872,
+      "idxCount": 564,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.891,
+        0.25
+      ],
+      "size": [
+        0.5,
+        1.891,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-j",
       "class": "low",
-      "verts": 282,
+      "family": "low-detail-building-j",
+      "verts": 650,
       "tris": 188,
-      "pos": 824124,
-      "uv": 1116712,
-      "shade": 1191380,
-      "idx": 1451968,
+      "pos": 938652,
+      "uv": 1296584,
+      "shade": 1389852,
+      "idx": 2202000,
       "idxCount": 564,
       "bbox": [
         -0.25,
@@ -748,14 +2377,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-j@parasol",
+      "class": "low",
+      "family": "low-detail-building-j",
+      "verts": 650,
+      "tris": 380,
+      "pos": 938652,
+      "uv": 1296584,
+      "shade": 1389852,
+      "idx": 2203128,
+      "idxCount": 1140,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.458,
+        1.75,
+        0.25
+      ],
+      "size": [
+        0.708,
+        1.75,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-j@roofbox",
+      "class": "low",
+      "family": "low-detail-building-j",
+      "verts": 650,
+      "tris": 200,
+      "pos": 938652,
+      "uv": 1296584,
+      "shade": 1389852,
+      "idx": 2205408,
+      "idxCount": 600,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.854,
+        0.25
+      ],
+      "size": [
+        0.5,
+        1.854,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-k",
       "class": "low",
-      "verts": 116,
+      "family": "low-detail-building-k",
+      "verts": 348,
       "tris": 86,
-      "pos": 827508,
-      "uv": 1117840,
-      "shade": 1191664,
-      "idx": 1453096,
+      "pos": 946452,
+      "uv": 1299184,
+      "shade": 1390504,
+      "idx": 2206608,
       "idxCount": 258,
       "bbox": [
         -0.25,
@@ -773,14 +2455,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-k@parasol",
+      "class": "low",
+      "family": "low-detail-building-k",
+      "verts": 348,
+      "tris": 206,
+      "pos": 946452,
+      "uv": 1299184,
+      "shade": 1390504,
+      "idx": 2207124,
+      "idxCount": 618,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.55,
+        0.458
+      ],
+      "size": [
+        0.5,
+        1.55,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-k@roofbox",
+      "class": "low",
+      "family": "low-detail-building-k",
+      "verts": 348,
+      "tris": 98,
+      "pos": 946452,
+      "uv": 1299184,
+      "shade": 1390504,
+      "idx": 2208360,
+      "idxCount": 294,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.647,
+        0.25
+      ],
+      "size": [
+        0.5,
+        1.647,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-l",
       "class": "low",
-      "verts": 208,
+      "family": "low-detail-building-l",
+      "verts": 624,
       "tris": 150,
-      "pos": 828900,
-      "uv": 1118304,
-      "shade": 1191780,
-      "idx": 1453612,
+      "pos": 950628,
+      "uv": 1300576,
+      "shade": 1390852,
+      "idx": 2208948,
       "idxCount": 450,
       "bbox": [
         -0.25,
@@ -798,14 +2533,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-l@parasol",
+      "class": "low",
+      "family": "low-detail-building-l",
+      "verts": 624,
+      "tris": 342,
+      "pos": 950628,
+      "uv": 1300576,
+      "shade": 1390852,
+      "idx": 2209848,
+      "idxCount": 1026,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.85,
+        0.458
+      ],
+      "size": [
+        0.5,
+        1.85,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-l@roofbox",
+      "class": "low",
+      "family": "low-detail-building-l",
+      "verts": 624,
+      "tris": 186,
+      "pos": 950628,
+      "uv": 1300576,
+      "shade": 1390852,
+      "idx": 2211900,
+      "idxCount": 558,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.988,
+        0.25
+      ],
+      "size": [
+        0.5,
+        1.988,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-m",
       "class": "low",
-      "verts": 256,
+      "family": "low-detail-building-m",
+      "verts": 512,
       "tris": 188,
-      "pos": 831396,
-      "uv": 1119136,
-      "shade": 1191988,
-      "idx": 1454512,
+      "pos": 958116,
+      "uv": 1303072,
+      "shade": 1391476,
+      "idx": 2213016,
       "idxCount": 564,
       "bbox": [
         -0.25,
@@ -823,14 +2611,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-m@parasol",
+      "class": "low",
+      "family": "low-detail-building-m",
+      "verts": 512,
+      "tris": 308,
+      "pos": 958116,
+      "uv": 1303072,
+      "shade": 1391476,
+      "idx": 2214144,
+      "idxCount": 924,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        1.975,
+        0.458
+      ],
+      "size": [
+        0.5,
+        1.975,
+        0.708
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-m@roofbox",
+      "class": "low",
+      "family": "low-detail-building-m",
+      "verts": 512,
+      "tris": 212,
+      "pos": 958116,
+      "uv": 1303072,
+      "shade": 1391476,
+      "idx": 2215992,
+      "idxCount": 636,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        2.087,
+        0.25
+      ],
+      "size": [
+        0.5,
+        2.087,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-n",
       "class": "low",
-      "verts": 84,
+      "family": "low-detail-building-n",
+      "verts": 452,
       "tris": 62,
-      "pos": 834468,
-      "uv": 1120160,
-      "shade": 1192244,
-      "idx": 1455640,
+      "pos": 964260,
+      "uv": 1305120,
+      "shade": 1391988,
+      "idx": 2217264,
       "idxCount": 186,
       "bbox": [
         -0.25,
@@ -848,14 +2689,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-n@parasol",
+      "class": "low",
+      "family": "low-detail-building-n",
+      "verts": 452,
+      "tris": 254,
+      "pos": 964260,
+      "uv": 1305120,
+      "shade": 1391988,
+      "idx": 2217636,
+      "idxCount": 762,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        0.7,
+        0.404
+      ],
+      "size": [
+        0.5,
+        0.7,
+        0.654
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-n@roofbox",
+      "class": "low",
+      "family": "low-detail-building-n",
+      "verts": 452,
+      "tris": 74,
+      "pos": 964260,
+      "uv": 1305120,
+      "shade": 1391988,
+      "idx": 2219160,
+      "idxCount": 222,
+      "bbox": [
+        -0.25,
+        0,
+        -0.25,
+        0.25,
+        0.75,
+        0.25
+      ],
+      "size": [
+        0.5,
+        0.75,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-wide-a",
       "class": "low",
-      "verts": 220,
+      "family": "low-detail-building-wide-a",
+      "verts": 452,
       "tris": 156,
-      "pos": 835476,
-      "uv": 1120496,
-      "shade": 1192328,
-      "idx": 1456012,
+      "pos": 969684,
+      "uv": 1306928,
+      "shade": 1392440,
+      "idx": 2219604,
       "idxCount": 468,
       "bbox": [
         -0.5,
@@ -873,14 +2767,67 @@
       "tex": "colormap.png"
     },
     {
+      "name": "low-detail-building-wide-a@parasol",
+      "class": "low",
+      "family": "low-detail-building-wide-a",
+      "verts": 452,
+      "tris": 276,
+      "pos": 969684,
+      "uv": 1306928,
+      "shade": 1392440,
+      "idx": 2220540,
+      "idxCount": 828,
+      "bbox": [
+        -0.5,
+        0,
+        -0.25,
+        0.5,
+        1.1,
+        0.492
+      ],
+      "size": [
+        1,
+        1.1,
+        0.742
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-wide-a@roofbox",
+      "class": "low",
+      "family": "low-detail-building-wide-a",
+      "verts": 452,
+      "tris": 168,
+      "pos": 969684,
+      "uv": 1306928,
+      "shade": 1392440,
+      "idx": 2222196,
+      "idxCount": 504,
+      "bbox": [
+        -0.5,
+        0,
+        -0.25,
+        0.5,
+        1.192,
+        0.25
+      ],
+      "size": [
+        1,
+        1.192,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
       "name": "low-detail-building-wide-b",
       "class": "low",
-      "verts": 324,
+      "family": "low-detail-building-wide-b",
+      "verts": 716,
       "tris": 246,
-      "pos": 838116,
-      "uv": 1121376,
-      "shade": 1192548,
-      "idx": 1456948,
+      "pos": 975108,
+      "uv": 1308736,
+      "shade": 1392892,
+      "idx": 2223204,
       "idxCount": 738,
       "bbox": [
         -0.5,
@@ -893,6 +2840,58 @@
       "size": [
         1,
         1.15,
+        0.5
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-wide-b@parasol",
+      "class": "low",
+      "family": "low-detail-building-wide-b",
+      "verts": 716,
+      "tris": 438,
+      "pos": 975108,
+      "uv": 1308736,
+      "shade": 1392892,
+      "idx": 2224680,
+      "idxCount": 1314,
+      "bbox": [
+        -0.5,
+        0,
+        -0.25,
+        0.5,
+        1.15,
+        0.502
+      ],
+      "size": [
+        1,
+        1.15,
+        0.752
+      ],
+      "tex": "colormap.png"
+    },
+    {
+      "name": "low-detail-building-wide-b@roofbox",
+      "class": "low",
+      "family": "low-detail-building-wide-b",
+      "verts": 716,
+      "tris": 270,
+      "pos": 975108,
+      "uv": 1308736,
+      "shade": 1392892,
+      "idx": 2227308,
+      "idxCount": 810,
+      "bbox": [
+        -0.5,
+        0,
+        -0.25,
+        0.5,
+        1.24,
+        0.25
+      ],
+      "size": [
+        1,
+        1.24,
         0.5
       ],
       "tex": "colormap.png"

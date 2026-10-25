@@ -144,8 +144,13 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
     const m = meta[i]!;
     if ((m.class === "tall") !== tall) continue;
     const a = Math.max(0.05, m.size[1]) / Math.max(0.05, Math.sqrt(Math.max(0.04, m.size[0] * m.size[2])));
+    /* 占地长宽比也要像（2026-10-25）：只按"高/底面积"挑，会给长条楼配方盒子，
+       再被非均匀缩放压成"纸片楼"。这里用 max(r,1/r) 比较，避免方向偏差。 */
+    const fr = Math.max(0.05, w) / Math.max(0.05, d);
+    const ar = Math.max(0.05, m.size[0]) / Math.max(0.05, m.size[2]);
+    const footScore = Math.abs(Math.log(Math.max(fr, 1 / fr) / Math.max(ar, 1 / ar)));
     const jitter = unitOf(hashId(id + "|" + m.name));
-    const score = Math.abs(Math.log(aspect / a)) + 0.22 * jitter;
+    const score = Math.abs(Math.log(aspect / a)) + 0.45 * footScore + 0.22 * jitter;
     if (score < bestScore) {
       bestScore = score;
       best = i;
@@ -177,8 +182,13 @@ export function assetScaleOf(
   const aw = Math.max(1e-3, asset.size[0]);
   const ad = Math.max(1e-3, asset.size[2]);
   const sy = Math.max(0.01, h) / ah;
-  const sx = Math.min(Math.max(0.01, w) / aw, sy * ASSET_MAX_STRETCH);
-  const sz = Math.min(Math.max(0.01, d) / ad, sy * ASSET_MAX_STRETCH);
+  /* 每个轴单独按目标占地缩放会让"长条楼"变成纸片（2026-10-25 实测"有的非常细"）。
+     以 `sy` 为基准给横向形变设上下限：允许拉宽/压窄，但不许细成针。 */
+  const lo = sy * 0.45;
+  const hi = sy * ASSET_MAX_STRETCH;
+  const clampX = (v: number): number => Math.min(Math.max(v, lo), Math.max(hi, lo));
+  const sx = clampX(Math.max(0.01, w) / aw);
+  const sz = clampX(Math.max(0.01, d) / ad);
   return { sx, sy, sz };
 }
 
@@ -429,11 +439,13 @@ export function buildBldAssetLayer(
       const im = meshes[ai]!;
       for (let k = 0; k < list.length; k++) {
         const p = list[k]! * PLACE_STRIDE;
-        const h = places[p + 7]!;
+        /* 用顶高（places[p+3] = metaTop）而不是净高，并且**落地在 y=0**：
+           以前用 `metaBase` 当 y、净高当高度，遇到 h_base>0 的楼资产就悬空（2026-10-25 实测）。 */
+        const h = places[p + 3]!;
         const w = places[p + 4]!;
         const d = places[p + 5]!;
         const sc = assetScaleOf(meta[ai]!, h, w, d);
-        v3.set(places[p]!, places[p + 2]!, places[p + 1]!);
+        v3.set(places[p]!, 0, places[p + 1]!);
         q.setFromAxisAngle(UP, places[p + 6]!);
         s3.set(sc.sx, sc.sy, sc.sz);
         m4.compose(v3, q, s3);

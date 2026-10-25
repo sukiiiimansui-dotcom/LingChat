@@ -137,12 +137,14 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
   if (!meta.length) return -1;
   const foot = Math.max(0.5, Math.sqrt(Math.max(0.25, w * d)));
   const aspect = Math.max(0.05, h) / foot;
-  const tall = h >= 45;
+  /* 三档池子（2026-10-25 扩池）：矮楼用 low-detail、中楼用商业、高楼用摩天楼。
+     池子空了会退回全池（见下面的兜底），所以不会因为缺某档而没模型。 */
+  const cls = h >= 45 ? "tall" : h < 14 ? "low" : "mid";
   let best = -1;
   let bestScore = Infinity;
   for (let i = 0; i < meta.length; i++) {
     const m = meta[i]!;
-    if ((m.class === "tall") !== tall) continue;
+    if (m.class !== cls) continue;
     const a = Math.max(0.05, m.size[1]) / Math.max(0.05, Math.sqrt(Math.max(0.04, m.size[0] * m.size[2])));
     /* 占地长宽比也要像（2026-10-25）：只按"高/底面积"挑，会给长条楼配方盒子，
        再被非均匀缩放压成"纸片楼"。这里用 max(r,1/r) 比较，避免方向偏差。 */
@@ -387,6 +389,7 @@ export function buildBldAssetLayer(
   let lastR = NaN;
   const buckets: number[][] = meta.map(() => []);
   const m4 = new THREE.Matrix4();
+  const tintColor = new THREE.Color(1, 1, 1);
   const q = new THREE.Quaternion();
   const v3 = new THREE.Vector3();
   const s3 = new THREE.Vector3();
@@ -450,6 +453,15 @@ export function buildBldAssetLayer(
         s3.set(sc.sx, sc.sy, sc.sz);
         m4.compose(v3, q, s3);
         im.setMatrixAt(k, m4);
+        /* 同模型多栋要能区分（2026-10-25 "太太太重复"）：按楼 id 给每实例一点**明度/冷暖**抖动。
+           InstancedMesh 的 instanceColor 会乘到 diffuse 上；老 three 没有就跳过（不影响几何）。 */
+        if (typeof im.setColorAt === "function") {
+          const u = unitOf(hashId("tint|" + String(ids[list[k]!] ?? "")));
+          const b = 0.90 + 0.20 * u;          // 明度 0.90~1.10
+          const warm = 0.03 * (u - 0.5);      // 冷/暖偏移 ±1.5%
+          tintColor.setRGB(b * (1 + warm), b, b * (1 - warm));
+          im.setColorAt(k, tintColor);
+        }
       }
       im.count = list.length;
       im.visible = list.length > 0;

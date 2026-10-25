@@ -42,18 +42,30 @@ const SUN_DIR = (() => {
   return [v[0] / l, v[1] / l, v[2] / l];
 })();
 
-/** 主资产：14 栋商业 + 5 栋摩天楼（Kenney 命名固定；只列名字，不猜顺序） */
+/**
+ * 主资产（2026-10-25 扩池：原来只有 14 商业 + 5 摩天楼，街区看着太重复）。
+ * 加入 Kenney 的 **low-detail** 系列（8 栋 + 2 栋 wide，单栋 150~190 三角）：
+ * 它们面数更低、轮廓更不同 ⇒ 变体多、总三角数反而不涨。
+ */
 const MAIN_ASSETS = [
   "building-a", "building-b", "building-c", "building-d", "building-e",
   "building-f", "building-g", "building-h", "building-i", "building-j",
   "building-k", "building-l", "building-m", "building-n",
   "building-skyscraper-a", "building-skyscraper-b", "building-skyscraper-c",
   "building-skyscraper-d", "building-skyscraper-e",
+  "low-detail-building-a", "low-detail-building-b", "low-detail-building-c",
+  "low-detail-building-d", "low-detail-building-e", "low-detail-building-f",
+  "low-detail-building-g", "low-detail-building-h", "low-detail-building-i",
+  "low-detail-building-j", "low-detail-building-k", "low-detail-building-l",
+  "low-detail-building-m", "low-detail-building-n",
+  "low-detail-building-wide-a", "low-detail-building-wide-b",
 ];
 
-/** 名字 → 运行时挑资产的粗分类（只影响"高楼用摩天楼"这类，不参与模型本身） */
+/** 名字 → 运行时挑资产的粗分类：矮/中/高，三档让同高的楼也能落到不同池子 */
 function classOf(name) {
-  return name.includes("skyscraper") ? "tall" : "mid";
+  if (name.includes("skyscraper")) return "tall";
+  if (name.startsWith("low-detail")) return "low";
+  return "mid";
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

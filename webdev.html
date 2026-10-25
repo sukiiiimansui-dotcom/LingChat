@@ -15,6 +15,28 @@
       带 ?b=<stamp> 重载一次（只重载一次，靠 sessionStorage 防循环）。
       对新包没有影响；老包没有这段脚本，需要手动清一次缓存才会进入自动更新。
     -->
+    <!-- 🏷 版本角标（2026-10-25）：右下角常驻显示 **当前页面加载到的构建哈希**，
+         用来一眼分辨"页面到底是不是新包"（截图里也能读到）。 -->
+    <script>
+      (function () {
+        function paint(stamp) {
+          try {
+            var d = document.createElement("div");
+            d.id = "ws-ver-badge";
+            d.textContent = "build " + stamp;
+            d.style.cssText = "position:fixed;right:6px;bottom:6px;z-index:99998;padding:2px 6px;" +
+              "border-radius:6px;background:rgba(0,0,0,.62);color:#9fe;font:11px/1.3 monospace;pointer-events:none";
+            document.body.appendChild(d);
+          } catch (e) {}
+        }
+        document.addEventListener("DOMContentLoaded", function () {
+          fetch("/build.json?t=" + Date.now(), { cache: "no-store" })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { if (j && j.stamp) paint(j.stamp); })
+            .catch(function () {});
+        });
+      })();
+    </script>
     <script>
       (function () {
         try {

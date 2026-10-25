@@ -795,6 +795,7 @@
               `asset on=${a.on} state=${a.state} target=${a.target} fade=${a.fade}\n` +
               `drawn=${a.drawn} draws=${a.draws} tris=${a.tris} places=${a.places}\n` +
               `mpp=${a.mpp} blocked=${a.blocked || "-"} err=${a.error || "-"}\n` +
+              `proc visible=${a.proc?.visible} transparent=${a.proc?.transparent} opacity=${a.proc?.opacity}\n` +
               `bld=${d.buildings} tris=${d.triangles}`;
           } catch { /* 读不到就空着 */ }
           window.setTimeout(tick, 500);

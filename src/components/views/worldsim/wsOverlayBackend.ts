@@ -2089,6 +2089,7 @@ export function createOverlayBackend(): WsRenderBackend {
         blocked: string;
         syncMs: number;
         syncMsMax: number;
+        proc?: { visible: boolean; transparent: boolean; opacity: number | null };
       };
     } {
       const ids = data?.featureIds ?? [];
@@ -2100,6 +2101,17 @@ export function createOverlayBackend(): WsRenderBackend {
         source: lastSource,
         asset: {
           on: assetOn,
+          /* 程序化那层材质状态（2026-10-25）：真机"玻璃楼"排查用 —— transparent=true 且 opacity<1
+             就是半透明路径没退回去，跟资产无关。 */
+          proc: (() => {
+            const m = (bldMesh as unknown as { material?: { transparent?: boolean; opacity?: number } } | null)?.material;
+            const v = (bldMesh as unknown as { visible?: boolean } | null)?.visible;
+            return {
+              visible: !!v,
+              transparent: !!m?.transparent,
+              opacity: typeof m?.opacity === "number" ? Math.round(m.opacity * 1000) / 1000 : null,
+            };
+          })(),
           state: assetState,
           target: assetFadeTarget,
           fade: Math.round(assetFade * 1000) / 1000,

@@ -22,9 +22,9 @@ import { BLD_CAP, buildBldMeshData, outerRingsOf, urlLodMpp, type BldMeshData } 
 import {
   ASSET_CAP,
   ASSET_FADE_MS,
-  BLD_ASSET_BASE,
   assetFadeStep,
   assetTierStep,
+  bldAssetBase,
   buildBldAssetLayer,
   loadBldAssetPack,
   loadBldAssetTexture,
@@ -188,6 +188,9 @@ export function createOverlayBackend(): WsRenderBackend {
     try {
       const q = location.search || "";
       if (/[?&]bldassets=1\b/.test(q)) return true;
+      /* `?bldassets=2` / `?godotbld=1` 是**显式点名**的取证件：切到 v2 顶点色包并强制开层
+         （触屏设备也一样；命令行的开关本来就优先于"默认关"）。 */
+      if (/[?&](?:bldassets=2|godotbld=1)\b/.test(q)) return true;
       if (/[?&]bldassets=0\b/.test(q)) return false;
       /* 没显式指定：触屏设备默认关（真机上资产层已验证会导致整层不可见），桌面默认开 */
       const touch = (navigator.maxTouchPoints || 0) > 0;
@@ -619,11 +622,13 @@ export function createOverlayBackend(): WsRenderBackend {
     const t0 = performance.now();
     void (async () => {
       try {
-        const pack = await loadBldAssetPack(BLD_ASSET_BASE);
-        const tex = await loadBldAssetTexture(
-          THREE as Record<string, any>,
-          runtimeUrl(BLD_ASSET_BASE + pack.texture)
-        );
+        /* 包代次由 URL 决定（`?bldassets=2` / `?godotbld=1` → v2 顶点色包，默认 v1） */
+        const base = bldAssetBase();
+        const pack = await loadBldAssetPack(base);
+        /* v2 没有贴图（`texture === null`）；v1 取共享 colormap */
+        const tex = pack.texture
+          ? await loadBldAssetTexture(THREE as Record<string, any>, runtimeUrl(base + pack.texture))
+          : null;
         assetPack = pack;
         assetTex = tex;
         assetLoadMs = Math.round(performance.now() - t0);
@@ -643,7 +648,8 @@ export function createOverlayBackend(): WsRenderBackend {
   /** 建资产层（几何只建一次；`data.places` 变了就重建实例） */
   function ensureAssetLayer(): boolean {
     if (assetLayer) return true;
-    if (!assetPack || !assetTex || !data || !data.places || !data.places.length) return false;
+    /* v2 包没有贴图（`texture === null`）⇒ 不要求 `assetTex`；v1 仍要求贴图到齐 */
+    if (!assetPack || (assetPack.texture && !assetTex) || !data || !data.places || !data.places.length) return false;
     if (!THREE || !scene) return false;
     try {
       const layer = buildBldAssetLayer(THREE as Record<string, any>, assetPack, assetTex, data.places, {

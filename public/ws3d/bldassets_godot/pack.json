@@ -1,0 +1,451 @@
+{
+  "v": 2,
+  "generator": "scripts/build-bld-assets-godot.mjs",
+  "source": "Godot 4.7.2 GLTFDocument export（程序化建筑模型，6 类 × 3 变体）",
+  "bin": "pack.bin",
+  "binBytes": 215604,
+  "counts": {
+    "assets": 18,
+    "verts": 6058,
+    "tris": 10392
+  },
+  "layout": {
+    "pos": "f32x3",
+    "color": "u8x3 sRGB",
+    "idx": "u32"
+  },
+  "assets": [
+    {
+      "name": "bank_0",
+      "class": "bank",
+      "pool": "mid",
+      "verts": 930,
+      "tris": 1800,
+      "pos": 0,
+      "color": 11160,
+      "idx": 13952,
+      "idxCount": 5400,
+      "bbox": [
+        -8.15,
+        0,
+        -6.875,
+        8.15,
+        8.6,
+        6.875
+      ],
+      "size": [
+        16.3,
+        8.6,
+        13.75
+      ]
+    },
+    {
+      "name": "bank_1",
+      "class": "bank",
+      "pool": "mid",
+      "verts": 270,
+      "tris": 468,
+      "pos": 35552,
+      "color": 38792,
+      "idx": 39604,
+      "idxCount": 1404,
+      "bbox": [
+        -8.15,
+        0,
+        -6.278,
+        8.15,
+        8.6,
+        6.278
+      ],
+      "size": [
+        16.3,
+        8.6,
+        12.555
+      ]
+    },
+    {
+      "name": "bank_2",
+      "class": "bank",
+      "pool": "mid",
+      "verts": 270,
+      "tris": 468,
+      "pos": 45220,
+      "color": 48460,
+      "idx": 49272,
+      "idxCount": 1404,
+      "bbox": [
+        -8.15,
+        0,
+        -6.278,
+        8.15,
+        8.6,
+        6.278
+      ],
+      "size": [
+        16.3,
+        8.6,
+        12.555
+      ]
+    },
+    {
+      "name": "cafe_0",
+      "class": "cafe",
+      "pool": "low",
+      "verts": 342,
+      "tris": 576,
+      "pos": 54888,
+      "color": 58992,
+      "idx": 60020,
+      "idxCount": 1728,
+      "bbox": [
+        -4.741,
+        0,
+        -4.205,
+        4.741,
+        4.75,
+        4.205
+      ],
+      "size": [
+        9.481,
+        4.75,
+        8.41
+      ]
+    },
+    {
+      "name": "cafe_1",
+      "class": "cafe",
+      "pool": "low",
+      "verts": 342,
+      "tris": 576,
+      "pos": 66932,
+      "color": 71036,
+      "idx": 72064,
+      "idxCount": 1728,
+      "bbox": [
+        -4.741,
+        0,
+        -4.205,
+        4.741,
+        4.75,
+        4.205
+      ],
+      "size": [
+        9.481,
+        4.75,
+        8.41
+      ]
+    },
+    {
+      "name": "cafe_2",
+      "class": "cafe",
+      "pool": "low",
+      "verts": 342,
+      "tris": 576,
+      "pos": 78976,
+      "color": 83080,
+      "idx": 84108,
+      "idxCount": 1728,
+      "bbox": [
+        -4.741,
+        0,
+        -4.205,
+        4.741,
+        4.75,
+        4.205
+      ],
+      "size": [
+        9.481,
+        4.75,
+        8.41
+      ]
+    },
+    {
+      "name": "conv_0",
+      "class": "conv",
+      "pool": "low",
+      "verts": 374,
+      "tris": 624,
+      "pos": 91020,
+      "color": 95508,
+      "idx": 96632,
+      "idxCount": 1872,
+      "bbox": [
+        -6.2,
+        0,
+        -4.705,
+        6.2,
+        5.3,
+        4.705
+      ],
+      "size": [
+        12.4,
+        5.3,
+        9.41
+      ]
+    },
+    {
+      "name": "conv_1",
+      "class": "conv",
+      "pool": "low",
+      "verts": 374,
+      "tris": 624,
+      "pos": 104120,
+      "color": 108608,
+      "idx": 109732,
+      "idxCount": 1872,
+      "bbox": [
+        -6.2,
+        0,
+        -4.705,
+        6.2,
+        5.3,
+        4.705
+      ],
+      "size": [
+        12.4,
+        5.3,
+        9.41
+      ]
+    },
+    {
+      "name": "conv_2",
+      "class": "conv",
+      "pool": "low",
+      "verts": 374,
+      "tris": 624,
+      "pos": 117220,
+      "color": 121708,
+      "idx": 122832,
+      "idxCount": 1872,
+      "bbox": [
+        -6.2,
+        0,
+        -4.705,
+        6.2,
+        5.3,
+        4.705
+      ],
+      "size": [
+        12.4,
+        5.3,
+        9.41
+      ]
+    },
+    {
+      "name": "house_0",
+      "class": "house",
+      "pool": "low",
+      "verts": 76,
+      "tris": 120,
+      "pos": 130320,
+      "color": 131232,
+      "idx": 131460,
+      "idxCount": 360,
+      "bbox": [
+        -4.3,
+        0,
+        -3.8,
+        4.3,
+        3.5,
+        3.8
+      ],
+      "size": [
+        8.6,
+        3.5,
+        7.6
+      ]
+    },
+    {
+      "name": "house_1",
+      "class": "house",
+      "pool": "low",
+      "verts": 140,
+      "tris": 216,
+      "pos": 132900,
+      "color": 134580,
+      "idx": 135000,
+      "idxCount": 648,
+      "bbox": [
+        -4.3,
+        0,
+        -3.8,
+        4.3,
+        6.3,
+        3.8
+      ],
+      "size": [
+        8.6,
+        6.3,
+        7.6
+      ]
+    },
+    {
+      "name": "house_2",
+      "class": "house",
+      "pool": "low",
+      "verts": 76,
+      "tris": 120,
+      "pos": 137592,
+      "color": 138504,
+      "idx": 138732,
+      "idxCount": 360,
+      "bbox": [
+        -4.3,
+        0,
+        -3.8,
+        4.3,
+        4.5,
+        3.8
+      ],
+      "size": [
+        8.6,
+        4.5,
+        7.6
+      ]
+    },
+    {
+      "name": "pharm_0",
+      "class": "pharm",
+      "pool": "low",
+      "verts": 326,
+      "tris": 552,
+      "pos": 140172,
+      "color": 144084,
+      "idx": 145064,
+      "idxCount": 1656,
+      "bbox": [
+        -5.15,
+        0,
+        -3.753,
+        5.15,
+        6.15,
+        3.753
+      ],
+      "size": [
+        10.3,
+        6.15,
+        7.505
+      ]
+    },
+    {
+      "name": "pharm_1",
+      "class": "pharm",
+      "pool": "low",
+      "verts": 326,
+      "tris": 552,
+      "pos": 151688,
+      "color": 155600,
+      "idx": 156580,
+      "idxCount": 1656,
+      "bbox": [
+        -5.15,
+        0,
+        -3.753,
+        5.15,
+        6.15,
+        3.753
+      ],
+      "size": [
+        10.3,
+        6.15,
+        7.505
+      ]
+    },
+    {
+      "name": "pharm_2",
+      "class": "pharm",
+      "pool": "low",
+      "verts": 326,
+      "tris": 552,
+      "pos": 163204,
+      "color": 167116,
+      "idx": 168096,
+      "idxCount": 1656,
+      "bbox": [
+        -5.15,
+        0,
+        -3.753,
+        5.15,
+        6.15,
+        3.753
+      ],
+      "size": [
+        10.3,
+        6.15,
+        7.505
+      ]
+    },
+    {
+      "name": "rest_0",
+      "class": "rest",
+      "pool": "low",
+      "verts": 390,
+      "tris": 648,
+      "pos": 174720,
+      "color": 179400,
+      "idx": 180572,
+      "idxCount": 1944,
+      "bbox": [
+        -7.2,
+        0,
+        -5.705,
+        7.2,
+        6.85,
+        5.705
+      ],
+      "size": [
+        14.4,
+        6.85,
+        11.41
+      ]
+    },
+    {
+      "name": "rest_1",
+      "class": "rest",
+      "pool": "low",
+      "verts": 390,
+      "tris": 648,
+      "pos": 188348,
+      "color": 193028,
+      "idx": 194200,
+      "idxCount": 1944,
+      "bbox": [
+        -7.2,
+        0,
+        -5.705,
+        7.2,
+        6.85,
+        5.705
+      ],
+      "size": [
+        14.4,
+        6.85,
+        11.41
+      ]
+    },
+    {
+      "name": "rest_2",
+      "class": "rest",
+      "pool": "low",
+      "verts": 390,
+      "tris": 648,
+      "pos": 201976,
+      "color": 206656,
+      "idx": 207828,
+      "idxCount": 1944,
+      "bbox": [
+        -7.2,
+        0,
+        -5.705,
+        7.2,
+        6.85,
+        5.705
+      ],
+      "size": [
+        14.4,
+        6.85,
+        11.41
+      ]
+    }
+  ]
+}

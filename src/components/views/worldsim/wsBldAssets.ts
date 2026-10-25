@@ -17,6 +17,17 @@
  * ## 资产包的来源与许可
  * Kenney City Kit Commercial 2.1，CC0-1.0。构建脚本 `scripts/build-bld-assets.mjs`，
  * 产物在 `public/ws3d/bldassets/`（`LICENSE.txt` 一并带上来源）。
+ *
+ * ## 两代包（v1 贴图调色板 / v2 顶点色）
+ * v1 = Kenney 那批（105 个程序化派生变体）：每顶点 uv(u16) + shade(u8)，共享一张
+ *   colormap.png，材质 `MeshBasicMaterial({ map, vertexColors })`。
+ * v2 = Godot 导出的建筑模型（6 类 × 3 变体）：每个 primitive 的 baseColorFactor 烘成
+ *   逐顶点 sRGB u8×3，不存 uv / 贴图 / 法线，材质 `MeshBasicMaterial({ vertexColors })`。
+ *   构建脚本 `scripts/build-bld-assets-godot.mjs`，产物在 `public/ws3d/bldassets_godot/`。
+ *
+ * 版本由 URL 选：`?bldassets=2` 或 `?godotbld=1` 走 v2，**默认仍是 v1**（线上验收口径不变，
+ * 也方便同一机位对比两代资产）。v2 的顶点色在磁盘上是 sRGB 编码，进 GPU 前解码回线性
+ * 工作空间（渲染器会把输出再编码成 sRGB，不解码会整体偏亮一档）。
  */
 
 import { hashId } from "./wsBldFacade";
@@ -24,6 +35,31 @@ import { PLACE_STRIDE } from "./wsBldMesh";
 
 /** 资产包目录（运行时从 public 取，与 `vendor/three.min.js` 同一套静态路径口径） */
 export const BLD_ASSET_BASE = "/ws3d/bldassets/";
+/** v2 资产包目录（Godot 建筑模型：顶点色、无贴图） */
+export const BLD_ASSET_BASE_V2 = "/ws3d/bldassets_godot/";
+
+export type BldAssetPackVersion = 1 | 2;
+
+/**
+ * 当前用哪一代资产包：`?bldassets=2` 或 `?godotbld=1` → v2；其余（含 `?bldassets=1`）→ v1。
+ * 参数可注入（便于单测），默认读 `location.search`；没有 location 时按 v1。
+ */
+export function bldAssetVersion(search?: string): BldAssetPackVersion {
+  let q = search;
+  if (q == null) {
+    try {
+      q = typeof location !== "undefined" ? location.search : "";
+    } catch {
+      q = "";
+    }
+  }
+  return /[?&](?:bldassets=2|godotbld=1)\b/.test(q) ? 2 : 1;
+}
+
+/** 版本 → 包目录 */
+export function bldAssetBase(version: BldAssetPackVersion = bldAssetVersion()): string {
+  return version === 2 ? BLD_ASSET_BASE_V2 : BLD_ASSET_BASE;
+}
 
 /* ── 双档阈值（米/CSS 像素） ─────────────────────────────────────────────────
  * `mpp` 是"一米在屏幕上占几个 CSS 像素"的倒数（与 `wsBldLod` 同一把尺子）。
@@ -56,50 +92,83 @@ export const ASSET_MAX_STRETCH = 2.8;
 
 export interface BldAssetMeta {
   name: string;
-  class: "mid" | "tall";
+  /**
+   * 建筑类别。v1 是挑池的分类（`low` / `mid` / `tall`），v2 是模型类别
+   * （`conv` / `cafe` / `rest` / `pharm` / `bank` / `house`）。
+   */
+  class: string;
+  /** v2 才有的**挑池**分类（`low` / `mid` / `tall`）；缺省时退回 `class`（v1 的老口径） */
+  pool?: string;
   verts: number;
   tris: number;
   /** pack.bin 内的字节偏移（段首 4 字节对齐） */
   pos: number;
-  uv: number;
-  shade: number;
+  /** 顶点色的段偏移（仅 v2：u8×3 sRGB） */
+  color?: number;
+  /** v1：uv 段偏移（u16×2 归一化） */
+  uv?: number;
+  /** v1：明暗段偏移（u8，单分量明度） */
+  shade?: number;
   idx: number;
   idxCount: number;
   /** [minX, minY, minZ, maxX, maxY, maxZ]（已平移到占地中心、底面 y=0） */
   bbox: number[];
   /** [宽, 高, 深]（资产单位） */
   size: number[];
-  tex: string | null;
+  tex?: string | null;
+}
+
+/** pack.json 的段布局（v2 明确写出；v1 也有一份） */
+export interface BldAssetLayout {
+  pos: string;
+  color?: string;
+  uv?: string;
+  shade?: string;
+  idx: string;
 }
 
 export interface BldAssetPack {
+  /** 包代次：1 = 贴图调色板（Kenney），2 = 顶点色（Godot）。按 `layout.color` 也能认出来 */
+  v: BldAssetPackVersion;
+  layout?: BldAssetLayout;
   meta: BldAssetMeta[];
-  /** 所有资产拼成的一个 ArrayBuffer（位置 f32 / uv u16 归一化 / 明暗 u8 / 索引 u16） */
+  /** 所有资产拼成的一个 ArrayBuffer（v1：pos f32 / uv u16 / shade u8 / idx u16；
+   *  v2：pos f32 / color u8×3 / idx u32） */
   bin: ArrayBuffer;
-  texture: string;
+  /** v2 没有贴图（`null`）；v1 是共享 colormap 的文件名 */
+  texture: string | null;
   counts: { assets: number; verts: number; tris: number };
   binBytes: number;
 }
 
-/** `ArrayBuffer` + JSON 清单（构建期产物，见 `scripts/build-bld-assets.mjs`） */
+/** `ArrayBuffer` + JSON 清单（构建期产物；v1 见 `scripts/build-bld-assets.mjs`，
+ *  v2 见 `scripts/build-bld-assets-godot.mjs`） */
 export async function loadBldAssetPack(
-  base: string = BLD_ASSET_BASE,
+  base: string = bldAssetBase(),
   fetchImpl: typeof fetch | null = (typeof fetch !== "undefined" ? fetch : null)
 ): Promise<BldAssetPack> {
   if (!fetchImpl) throw new Error("没有 fetch：取不了资产包");
-  const jr = await fetchImpl(base + "pack.json", { cache: "force-cache" } as RequestInit);
+  const jr = await fetchImpl(base + "pack.json", { cache: "no-store" } as RequestInit);
   if (!jr.ok) throw new Error("pack.json HTTP " + jr.status);
-  const json = (await jr.json()) as Partial<BldAssetPack> & { assets?: BldAssetMeta[] };
+  const json = (await jr.json()) as Partial<BldAssetPack> & {
+    assets?: BldAssetMeta[];
+    v?: number;
+    layout?: BldAssetLayout;
+  };
   if (!Array.isArray(json.assets) || !json.assets.length) throw new Error("pack.json 里没有 assets");
-  const br = await fetchImpl(base + (json.bin || "pack.bin"), { cache: "force-cache" } as RequestInit);
+  const br = await fetchImpl(base + (json.bin || "pack.bin"), { cache: "no-store" } as RequestInit);
   if (!br.ok) throw new Error("pack.bin HTTP " + br.status);
   const bin = await br.arrayBuffer();
   const need = Number(json.binBytes || 0);
   if (need > 0 && bin.byteLength < need) throw new Error("pack.bin 长度不对（" + bin.byteLength + " < " + need + "）");
+  /* v2 的判据是清单里写了顶点色段（`v` 只是冗余标记；两者任一命中即按 v2 读） */
+  const isV2 = Number(json.v) >= 2 || !!(json.layout && json.layout.color);
   return {
+    v: isV2 ? 2 : 1,
+    layout: json.layout,
     meta: json.assets,
     bin,
-    texture: json.texture || "colormap.png",
+    texture: isV2 ? null : json.texture || "colormap.png",
     counts: json.counts || { assets: json.assets.length, verts: 0, tris: 0 },
     binBytes: bin.byteLength,
   };
@@ -163,7 +232,8 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
   let bestScore = Infinity;
   for (let i = 0; i < meta.length; i++) {
     const m = meta[i]!;
-    if (m.class !== cls) { scores.push(Infinity); continue; }
+    /* v1 的 `class` 本身就是池名；v2 的 `class` 是商店类别，池名另写在 `pool` */
+    if ((m.pool || m.class) !== cls) { scores.push(Infinity); continue; }
     const a = Math.max(0.05, m.size[1]) / Math.max(0.05, Math.sqrt(Math.max(0.04, m.size[0] * m.size[2])));
     /* 占地长宽比也要像（2026-10-25）：只按"高/底面积"挑，会给长条楼配方盒子，
        再被非均匀缩放压成"纸片楼"。这里用 max(r,1/r) 比较，避免方向偏差。 */
@@ -177,16 +247,29 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
       best = i;
     }
   }
-  /* 池子空了（不该发生：三档都有资产）⇒ 退回全池里挑最像的 */
+  /* 池子空了 ⇒ 退回全池。v1 三档都有人，走不到这里；v2 只有低层商店/住宅，
+     中楼/高楼一定走这条。所以这里也要"取像的一档 + 按 id 散开"，
+     否则整屏中楼会全落到同一个最像的模型上（v1 当初就是这个毛病）。 */
   if (best < 0) {
+    const allScores: number[] = [];
     for (let i = 0; i < meta.length; i++) {
       const m = meta[i]!;
       const a = Math.max(0.05, m.size[1]) / Math.max(0.05, Math.sqrt(Math.max(0.04, m.size[0] * m.size[2])));
       const score = Math.abs(Math.log(aspect / a));
+      allScores.push(score);
       if (score < bestScore) {
         bestScore = score;
         best = i;
       }
+    }
+    let nAll = 0;
+    for (const s of allScores) if (s <= bestScore + ASSET_PICK_SPREAD) nAll += 1;
+    if (nAll <= 1) return best;
+    let kAll = hashId("pick|" + id) % nAll;
+    for (let i = 0; i < allScores.length; i++) {
+      if (allScores[i]! > bestScore + ASSET_PICK_SPREAD) continue;
+      if (kAll === 0) return i;
+      kAll -= 1;
     }
     return best;
   }
@@ -204,6 +287,22 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
 }
 
 /** 一栋楼 → 实例矩阵的缩放（纯算术；`stretch` 上限把横向拉伸夹住） */
+/**
+ * v2（Godot 单层/低层建筑）的等比缩放：**保持模型自身比例**，只按占地适配，
+ * 并把比例夹在 0.45~1.8 —— 否则一栋 60m 的楼会把 4.8m 高的便利店纵向拉成 12 倍（2026-10-25 实测）。
+ */
+export function assetScaleUniform(
+  asset: BldAssetMeta,
+  w: number,
+  d: number
+): { sx: number; sy: number; sz: number } {
+  const aw = Math.max(1e-3, asset.size[0]);
+  const ad = Math.max(1e-3, asset.size[2]);
+  const fit = Math.min(Math.max(0.01, w) / aw, Math.max(0.01, d) / ad);
+  const s = Math.min(Math.max(fit, 0.45), 1.8);
+  return { sx: s, sy: s, sz: s };
+}
+
 export function assetScaleOf(
   asset: BldAssetMeta,
   h: number,
@@ -225,8 +324,25 @@ export function assetScaleOf(
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- * 二、纹理（调用方给 THREE；这份 three 是裁剪构建，只认 TextureLoader）
+ * 二、纹理与顶点色（调用方给 THREE；这份 three 是裁剪构建，只认 TextureLoader）
  * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * sRGB 字节 → 线性字节（255 项查表，u8 精度足够：颜色本身已经是 8 位量化过的）。
+ *
+ * 为什么需要：v2 包的顶点色按构建口径存的是 **sRGB**（与人眼看图一致），而 three 的
+ * 顶点色直接进线性工作空间；渲染器最后会把线性再编码成 sRGB 输出。不在进 GPU 前解码，
+ * 就等于把 sRGB 值当线性用 ⇒ 整体亮一档、深色（玻璃/招牌）发灰。
+ */
+const SRGB8_TO_LINEAR8: Uint8Array = (() => {
+  const t = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) {
+    const s = i / 255;
+    const lin = s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    t[i] = Math.round(lin * 255);
+  }
+  return t;
+})();
 
 /** 取共享 colormap（512×512，11 KB）。glTF 的 UV 原点在左上 ⇒ `flipY = false`。 */
 export function loadBldAssetTexture(
@@ -321,12 +437,30 @@ export function buildBldAssetLayer(
   const meta = pack.meta;
 
   /* ── ① 几何：每种资产一份（位置/uv/明暗/索引都从同一个 ArrayBuffer 里切视图，不复制） ── */
+  /* v2 判据与 `loadBldAssetPack` 同口径：清单写了 `layout.color` 就是顶点色包。
+     v2 的每个 primitive 已经把材质基色烘成顶点色，所以**没有 uv / 贴图**可用。 */
+  const isV2 = pack.v === 2 || !!(pack.layout && pack.layout.color);
   const geoms: any[] = [];
   for (const m of meta) {
     const g = new THREE.BufferGeometry();
     const pos = new Float32Array(pack.bin, m.pos, m.verts * 3);
-    const uv = new Uint16Array(pack.bin, m.uv, m.verts * 2);
-    const shade = new Uint8Array(pack.bin, m.shade, m.verts);
+    if (isV2) {
+      if (m.color == null) throw new Error("v2 资产缺 color 段偏移：" + m.name);
+      /* 磁盘上是 sRGB 编码的 u8×3；three 的顶点色按**线性**工作空间参与着色，
+         这里先解码（查表），渲染器最后统一编码回 sRGB 输出。 */
+      const src = new Uint8Array(pack.bin, m.color, m.verts * 3);
+      const col = new Uint8Array(m.verts * 3);
+      for (let i = 0; i < col.length; i++) col[i] = SRGB8_TO_LINEAR8[src[i]!]!;
+      const vidx = new Uint32Array(pack.bin, m.idx, m.idxCount);
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      g.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
+      g.setIndex(new THREE.BufferAttribute(vidx, 1));
+      g.computeBoundingSphere();
+      geoms.push(g);
+      continue;
+    }
+    const uv = new Uint16Array(pack.bin, m.uv!, m.verts * 2);
+    const shade = new Uint8Array(pack.bin, m.shade!, m.verts);
     /* `color` 要 3 个分量：把 1 字节明暗摊成 r=g=b（只在内存里，磁盘上仍是 1 字节/顶点） */
     const col = new Uint8Array(m.verts * 3);
     for (let i = 0; i < m.verts; i++) {
@@ -344,9 +478,9 @@ export function buildBldAssetLayer(
     geoms.push(g);
   }
 
-  /* ── ② 材质：一个共享（同贴图、同明暗口径） ── */
+  /* ── ② 材质：一个共享（同贴图、同明暗口径；v2 是顶点色、无贴图） ── */
   const material = new THREE.MeshBasicMaterial({
-    map: texture,
+    map: isV2 ? null : texture,
     vertexColors: true,
     side: THREE.DoubleSide,
     transparent: false,
@@ -360,23 +494,26 @@ export function buildBldAssetLayer(
      直接画会比主题色阶暗一档 —— 所以补一次**提亮**。
      用"乘 + 加"而不是单乘：单乘（`material.color` = 1.8）会把浅色墙直接顶到 1 而**失去明暗**
      （屋顶/墙面糊成一片白）；加一个底噪能把暗墙抬起来、又留住面与面的差。
-     锚点缺失（换了 three 版本）⇒ 退回单乘 1.35，并在 `liftApplied` 里如实记一笔。 */
-  material.color.setRGB(1.35, 1.35, 1.35);
+     锚点缺失（换了 three 版本）⇒ 退回单乘 1.35，并在 `liftApplied` 里如实记一笔。
+     v2 不补：顶点色就是导出时的反照率，再提亮会整体发白。 */
   let liftApplied = 0;
-  material.onBeforeCompile = (sh: { fragmentShader: string }) => {
-    try {
-      const anchor = "#include <map_fragment>";
-      if (!sh.fragmentShader.includes(anchor)) return;
-      sh.fragmentShader = sh.fragmentShader.replace(
-        anchor,
-        anchor + "\n  diffuseColor.rgb = diffuseColor.rgb * 1.02 + 0.16;"
-      );
-      material.color.setRGB(1, 1, 1);
-      liftApplied = 1;
-    } catch {
-      /* 补丁失败：保持 1.35 的单乘（暗一点，但不会白屏） */
-    }
-  };
+  if (!isV2) {
+    material.color.setRGB(1.35, 1.35, 1.35);
+    material.onBeforeCompile = (sh: { fragmentShader: string }) => {
+      try {
+        const anchor = "#include <map_fragment>";
+        if (!sh.fragmentShader.includes(anchor)) return;
+        sh.fragmentShader = sh.fragmentShader.replace(
+          anchor,
+          anchor + "\n  diffuseColor.rgb = diffuseColor.rgb * 1.02 + 0.16;"
+        );
+        material.color.setRGB(1, 1, 1);
+        liftApplied = 1;
+      } catch {
+        /* 补丁失败：保持 1.35 的单乘（暗一点，但不会白屏） */
+      }
+    };
+  }
 
   /* ── ③ 每种资产一个 InstancedMesh（容量 = min(楼数, 预算)） ── */
   const group = new THREE.Group();
@@ -477,7 +614,7 @@ export function buildBldAssetLayer(
         const h = places[p + 3]!;
         const w = places[p + 4]!;
         const d = places[p + 5]!;
-        const sc = assetScaleOf(meta[ai]!, h, w, d);
+        const sc = pack.v === 2 ? assetScaleUniform(meta[ai]!, w, d) : assetScaleOf(meta[ai]!, h, w, d);
         v3.set(places[p]!, 0, places[p + 1]!);
         q.setFromAxisAngle(UP, places[p + 6]!);
         s3.set(sc.sx, sc.sy, sc.sz);

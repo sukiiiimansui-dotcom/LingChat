@@ -776,6 +776,40 @@
         requestAnimationFrame(tick);
       }
     } catch { /* 调试层失败不影响页面 */ }
+    /* 📮 `?bldreport=1`：把渲染诊断 POST 到预览服务的 /__report（落 ~/chk/_devreport.jsonl）。
+       手机上看不到楼 / 楼透明这类问题，靠截图猜太慢，直接读机器上报的数据。 */
+    try {
+      if (/[?&]bldreport=1\b/.test(location.search)) {
+        const send = (tag: string): void => {
+          try {
+            const R = (window as unknown as {
+              __WSRENDER__?: { diagJson?: () => string; viewJson?: () => string; canvasGlJson?: () => string };
+            }).__WSRENDER__;
+            const parse = (f?: () => string): unknown => {
+              try { const v = f ? f() : ""; return v ? JSON.parse(v) : null; } catch { return null; }
+            };
+            const body = {
+              tag,
+              href: location.href.slice(0, 240),
+              ua: navigator.userAgent.slice(0, 200),
+              dpr: window.devicePixelRatio,
+              vw: window.innerWidth,
+              vh: window.innerHeight,
+              diag: parse(R?.diagJson),
+              view: parse(R?.viewJson),
+              gl: parse(R?.canvasGlJson),
+            };
+            void fetch("/__report", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }).catch(() => {});
+          } catch { /* 上报失败不影响页面 */ }
+        };
+        window.setTimeout(() => send("t8"), 8000);
+        window.setTimeout(() => send("t25"), 25000);
+      }
+    } catch { /* 上报失败不影响页面 */ }
     /* 🩺 `?blddiag=1`：把资产档状态直接打在左上角（真机取证用；不带参数零开销）。 */
     try {
       if (/[?&]blddiag=1\b/.test(location.search)) {

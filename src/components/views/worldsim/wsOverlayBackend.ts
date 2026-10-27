@@ -1892,7 +1892,7 @@ export function createOverlayBackend(): WsRenderBackend {
           if (THREE.ACESFilmicToneMapping !== undefined) renderer.toneMapping = THREE.ACESFilmicToneMapping;
           const q = new URLSearchParams(location.search);
           const exp = Number(q.get("ovlexp"));
-          renderer.toneMappingExposure = Number.isFinite(exp) && exp > 0 && exp <= 4 ? exp : 1.0;
+          renderer.toneMappingExposure = Number.isFinite(exp) && exp > 0 && exp <= 4 ? exp : 1.1;
         } catch { /* 这份 three 裁剪构建不认就保持默认 */ }
         /* 名字层的 DOM 写入计数（只读观察，不改它的行为）：
            `?fpshud=1` 那条 fps 采样按标签分桶，但"拖动时标签到底写了多少次"要有个数。 */
@@ -1925,9 +1925,9 @@ export function createOverlayBackend(): WsRenderBackend {
           const q2 = new URLSearchParams(location.search);
           const hq = Number(q2.get("ovlhemi"));
           const sq = Number(q2.get("ovlsun"));
-          const hemi = new THREE.HemisphereLight(0xdff0ff, 0x8a7a66, Number.isFinite(hq) && hq > 0 ? hq : 0.7);
+          const hemi = new THREE.HemisphereLight(0xdff0ff, 0x8a7a66, Number.isFinite(hq) && hq > 0 ? hq : 1.1);
           scene.add(hemi);
-          const sun = new THREE.DirectionalLight(0xfff2e0, Number.isFinite(sq) && sq > 0 ? sq : 1.2);
+          const sun = new THREE.DirectionalLight(0xfff2e0, Number.isFinite(sq) && sq > 0 ? sq : 2.0);
           sun.position.set(0.35, 1, 0.36);
           scene.add(sun);
         } catch { /* 灯加不上就保持无光 */ }

@@ -287,9 +287,10 @@ export interface BldAllDetail {
   stretched: number;
   /** 本帧 update 抛的异常（空 = 正常） */
   err: string;
-  /** 调试：合成填充撒点总数 / 本帧进入视野的候选数 */
+  /** 调试：合成填充撒点总数 / 本帧进入视野的候选数 / 前 3 个点与 accept 结果 */
   infillPlaced: number;
   infillSeen: number;
+  infillProbe: { x: number; z: number; d2: number; ok: boolean }[];
 }
 
 export interface BldAllLayer extends BldAssetLayer {
@@ -304,6 +305,8 @@ export interface BldAllOpts {
   heightPx?: number;
   capProps?: number;
   capVehicles?: number;
+  /** 平面着色（A/B 用；默认开） */
+  flatShading?: boolean;
 }
 
 const clamp = (x: number, lo: number, hi: number): number => (x < lo ? lo : x > hi ? hi : x);
@@ -389,6 +392,7 @@ export function buildBldAllLayer(
   const capProps = Math.max(1, opts.capProps ?? PROP_CAP);
   const capVeh = Math.max(1, opts.capVehicles ?? VEH_CAP);
   const viewportH = Math.max(1, Number(opts.heightPx) || 633);
+  const flat = opts.flatShading !== false;
 
   const bldAssets: BldAssetMeta[] = pack.meta.filter((m) => (m.category || "bld") === "bld");
   if (!bldAssets.length) throw new Error("v3 包里没有 category=bld 的资产");
@@ -419,7 +423,7 @@ export function buildBldAllLayer(
     vertexColors: true,
     roughness: 0.92,
     metalness: 0,
-    flatShading: true,
+    flatShading: flat,
     side: THREE.DoubleSide,
     transparent: false,
     opacity: 1,
@@ -432,7 +436,7 @@ export function buildBldAllLayer(
     vertexColors: true,
     roughness: 0.92,
     metalness: 0,
-    flatShading: true,
+    flatShading: flat,
     side: THREE.DoubleSide,
     transparent: false,
     opacity: 1,
@@ -623,6 +627,7 @@ export function buildBldAllLayer(
   let infTris = 0;
   let infTotal = 0;
   let infillSeen = 0;
+  let infillProbe: { x: number; z: number; d2: number; ok: boolean }[] = [];
   let lastT0: number[] = [];
   let lastT1: number[] = [];
   const vehCounts = new Int32Array(vehGroups.length);
@@ -836,11 +841,14 @@ export function buildBldAllLayer(
     infCount.fill(0);
     if (tier < 2) {
       const infVis: { p: Infill; d2: number }[] = [];
+      infillProbe = [];
       for (const p of infill) {
         const dx = p.x - cx, dz = p.z - cz;
         const d2 = dx * dx + dz * dz;
         if (d2 > maxD2) continue;
-        if (accept && !accept(p.x, p.z)) continue;
+        const okAcc = accept ? accept(p.x, p.z) : true;
+        if (infillProbe.length < 3) infillProbe.push({ x: Math.round(p.x), z: Math.round(p.z), d2: Math.round(d2), ok: !!(okAcc) });
+        if (accept && !okAcc) continue;
         infVis.push({ p, d2 });
       }
       infillSeen = infVis.length;
@@ -993,6 +1001,7 @@ export function buildBldAllLayer(
       err: updateError,
       infillPlaced: infill.length,
       infillSeen,
+      infillProbe,
       stretched: (() => {
         let k = 0;
         for (const i of lastT0) {

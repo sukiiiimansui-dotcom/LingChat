@@ -287,6 +287,9 @@ export interface BldAllDetail {
   stretched: number;
   /** 本帧 update 抛的异常（空 = 正常） */
   err: string;
+  /** 调试：合成填充撒点总数 / 本帧进入视野的候选数 */
+  infillPlaced: number;
+  infillSeen: number;
 }
 
 export interface BldAllLayer extends BldAssetLayer {
@@ -315,6 +318,7 @@ function geometryOf(THREE: Record<string, any>, pack: BldAssetPack, m: BldAssetM
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   g.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.computeVertexNormals();
   g.computeBoundingSphere();
   return g;
 }
@@ -364,6 +368,7 @@ function unitBox(THREE: Record<string, any>): any {
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   g.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
   g.setIndex(new THREE.BufferAttribute(Uint32Array.from(f), 1));
+  g.computeVertexNormals();
   g.computeBoundingSphere();
   return g;
 }
@@ -410,8 +415,11 @@ export function buildBldAllLayer(
   const vehGeoms = vehGroups.map((g) => geometryOf(THREE, pack, g.m));
   const boxGeom = unitBox(THREE);
 
-  const mat = new THREE.MeshBasicMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
+    roughness: 0.92,
+    metalness: 0,
+    flatShading: true,
     side: THREE.DoubleSide,
     transparent: false,
     opacity: 1,
@@ -420,8 +428,11 @@ export function buildBldAllLayer(
   });
   mat.name = "ws-bld-all";
   /* T1 的盒子卡：同一个材质 + instanceColor；单独一份是为了让淡化只改一份透明度 */
-  const t1Mat = new THREE.MeshBasicMaterial({
+  const t1Mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
+    roughness: 0.92,
+    metalness: 0,
+    flatShading: true,
     side: THREE.DoubleSide,
     transparent: false,
     opacity: 1,
@@ -611,6 +622,7 @@ export function buildBldAllLayer(
   const infCount = new Int32Array(2);
   let infTris = 0;
   let infTotal = 0;
+  let infillSeen = 0;
   let lastT0: number[] = [];
   let lastT1: number[] = [];
   const vehCounts = new Int32Array(vehGroups.length);
@@ -831,6 +843,7 @@ export function buildBldAllLayer(
         if (accept && !accept(p.x, p.z)) continue;
         infVis.push({ p, d2 });
       }
+      infillSeen = infVis.length;
       infVis.sort((a, b) => a.d2 - b.d2);
       const canTint2 = typeof infillMeshes[0].setColorAt === "function";
       for (const it of infVis) {
@@ -978,6 +991,8 @@ export function buildBldAllLayer(
       infillTris: infTris,
       unmatched: forcedN,
       err: updateError,
+      infillPlaced: infill.length,
+      infillSeen,
       stretched: (() => {
         let k = 0;
         for (const i of lastT0) {

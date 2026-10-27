@@ -1875,7 +1875,7 @@ export function createOverlayBackend(): WsRenderBackend {
         /* 🔴 不接管输入：这一条就是那一条（详见文件头） */
         cv.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none";
         h.appendChild(cv);
-        renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: false, alpha: true, powerPreference: "high-performance" });
+        renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, powerPreference: "high-performance" });
         ovlCtxCreated++;
         /* 自己这块画布的生死也记账：真机上"划着划着掉回 2D"必须能看出掉的是哪一个上下文 */
         try {
@@ -1885,6 +1885,12 @@ export function createOverlayBackend(): WsRenderBackend {
           /* 挂不上监听不影响渲染（计数少一个而已） */
         }
         renderer.setClearAlpha(0);
+        /* 2026-10-28：与 Blender（AgX）对齐的显示设置 —— sRGB 输出 + ACES 色调映射 + 曝光 1.0 */
+        try {
+          if (THREE.SRGBColorSpace !== undefined) renderer.outputColorSpace = THREE.SRGBColorSpace;
+          if (THREE.ACESFilmicToneMapping !== undefined) renderer.toneMapping = THREE.ACESFilmicToneMapping;
+          renderer.toneMappingExposure = 1.0;
+        } catch { /* 这份 three 裁剪构建不认就保持默认 */ }
         /* 名字层的 DOM 写入计数（只读观察，不改它的行为）：
            `?fpshud=1` 那条 fps 采样按标签分桶，但"拖动时标签到底写了多少次"要有个数。 */
         try {
@@ -1911,6 +1917,14 @@ export function createOverlayBackend(): WsRenderBackend {
         renderer.setPixelRatio(Math.min(dprCapOf(), window.devicePixelRatio || 1));
         renderer.setSize(w, hh, false);
         scene = new THREE.Scene();
+        /* Lambert 材质要有灯：半球光（天空/地面）+ 方向光（与烘焙时的 0.62/0.38 同一方向） */
+        try {
+          const hemi = new THREE.HemisphereLight(0xdff0ff, 0x8a7a66, 0.7);
+          scene.add(hemi);
+          const sun = new THREE.DirectionalLight(0xfff2e0, 1.2);
+          sun.position.set(0.35, 1, 0.36);
+          scene.add(sun);
+        } catch { /* 灯加不上就保持无光 */ }
         camera = new THREE.PerspectiveCamera(fovYDeg(), w / hh, NEAR_M, 8000);
         anchor = { lat: s.center.lat, lng: s.center.lng, cos: Math.cos((s.center.lat * Math.PI) / 180) };
         curThemeId = s.theme || contractTheme.value.theme || "anime";

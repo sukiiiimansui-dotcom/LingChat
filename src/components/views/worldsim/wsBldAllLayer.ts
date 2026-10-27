@@ -47,9 +47,17 @@ export const BUD_PROP_TRIS = 30_000;
 export const BUD_VEH_TRIS = 8_000;
 export const BUD_T0_ITEM = 8000;
 /** 合成填充（沿街底商条 + 内院低层）：盒子的三角预算 */
-export const BUD_INFILL_TRIS = 12_000;
+export const BUD_INFILL_TRIS = 30_000;
 /** 填充实例上限（每类） */
-export const INFILL_CAP = 500;
+export const INFILL_CAP = 1000;
+/** 填充沿街采样间距（米）：太稀则栋/ha 上不去，太密则底商互相穿插 */
+export const INFILL_STEP_M = 14;
+/** 填充候选总量上限（生成侧，与单帧可见数无关；打散线序后截断即随机抽样） */
+export const INFILL_MAX = 9000;
+
+/** 远处剔除的细杆类（>60 m 只剩一根像素宽的线，画出来就是闪烁的"细棍子"） */
+export const PROP_FAR_DROP_M = 60;
+export const PROP_FAR_DROP_KINDS = ["prop_streetlamp", "prop_sign", "prop_bench", "prop_bollard"];
 /** 单类设施/车辆的实例上限 */
 export const PROP_CAP = 300;
 export const VEH_CAP = 240;
@@ -59,6 +67,31 @@ export const VEH_LANES = [-5.25, -1.75, 1.75, 5.25];
 /** 撒点间距（米） */
 export const PROP_STEP_M = 26;
 export const VEH_STEP_M = 38;
+
+/**
+ * `hashId` 的**无符号**取位：返回 `(h >>> shift) % mod`。
+ *
+ * 为什么要它：`hashId` 是 uint32，而 JS 的 `>>` 是**有符号**移位 —— 最高位为 1 时结果是负数，
+ * `%(取模)` 于是也是负数，`PAL[-3]` 取到 undefined，`setRGB(undefined[0])` 抛 TypeError。
+ * 这个异常被 `update` 的 try/catch 吞掉后整段填充写入都没执行（实测 `infill=0`、`err` 里
+ * 是 `can't access property 0, ...color is undefined`）。凡是从哈希里取尺寸/下标都要走这里。
+ */
+export function ub(h: number, shift: number, mod: number): number {
+  const m = mod > 0 ? mod : 1;
+  return (h >>> shift) % m;
+}
+
+/** 填充调色板（sRGB → 线性；instanceColor 走线性工作空间） */
+const INFILL_PAL: [number, number, number][] = [
+  [232, 220, 200], [214, 198, 174], [230, 224, 212],
+  [200, 214, 208], [206, 172, 142], [176, 190, 204],
+].map((c) => {
+  const srgb = (v: number): number => {
+    const x = v / 255;
+    return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+  };
+  return [srgb(c[0]!), srgb(c[1]!), srgb(c[2]!)] as [number, number, number];
+});
 
 export type LodTier = 0 | 1 | 2;
 
@@ -291,6 +324,12 @@ export interface BldAllDetail {
   infillPlaced: number;
   infillSeen: number;
   infillProbe: { x: number; z: number; d2: number; ok: boolean }[];
+  /** 调试：路网折线条数 / 填充候选总数（与 `infillPlaced` 比能看出上限是否截断） */
+  infillLines: number;
+  infillCand: number;
+  /** 调试：视野内的设施候选数（预算前）/ 被">60m 细杆剔除"去掉的个数 */
+  propsSeen: number;
+  propsFarDrop: number;
 }
 
 export interface BldAllLayer extends BldAssetLayer {
@@ -534,15 +573,23 @@ export function buildBldAllLayer(
     color: [number, number, number];
   }
   const infill: Infill[] = [];
+  /** 本帧之前生成过的填充候选总数（诊断：与 `infill.length` 对比能看出是否被上限截断） */
+  let infillCand = 0;
+  let infillLines = 0;
 
   const propsByKind: Place[][] = propGroups.map(() => []);
   const vehByKind: Place[][] = vehGroups.map(() => []);
+  const thinGroup = propGroups.map((g) => PROP_FAR_DROP_KINDS.indexOf(g.kind) >= 0);
   const toLocal = opts.toLocal || null;
   if (toLocal && opts.roads) {
     const lines = roadLinesOf(opts.roads, toLocal);
+    infillLines = lines.length;
+    /* **线序按 hash 打散**：填充有全局上限，按原序迭代时上限一满就只剩"前几条路"有填充
+       ⇒ 换到别的机位看到 0 栋（曾经的病征）。打散后截断落在随机子集上，空间上是均匀的。 */
+    const order = lines.map((_, li) => li).sort((a, b) => (hashId("lo|" + a) - hashId("lo|" + b)) || (a - b));
     let propBudget = capProps * propGroups.length * 4;
     let vehBudget = capVeh * vehGroups.length * 4;
-    for (let li = 0; li < lines.length; li++) {
+    for (const li of order) {
       const line = lines[li]!;
       const phaseP = (hashId("p|" + li) % 17) * 1.3;
       const phaseV = (hashId("v|" + li) % 13) * 2.1;
@@ -553,42 +600,56 @@ export function buildBldAllLayer(
         const gi = h % propGroups.length;
         const list = propsByKind[gi]!;
         if (list.length >= capProps) continue;
-        const side = (h >> 3) & 1 ? 1 : -1;
-        const off = PROP_SIDE_M + ((h >> 5) % 3);
+        const side = (h >>> 3) & 1 ? 1 : -1;
+        const off = PROP_SIDE_M + ub(h, 5, 3);
         const nx = Math.cos(s.rot), nz = -Math.sin(s.rot);
         list.push({ x: s.x + nx * off * side, z: s.z + nz * off * side, rot: s.rot + (side > 0 ? Math.PI / 2 : -Math.PI / 2) });
         propBudget -= 1;
       }
-      /* 合成填充：直接复用同一条线的采样（props 能撒出来，这里一定也会执行） */
-      const ip = sampleAlong(line, 22, (hashId("inf|" + li) % 11) * 2);
+      /* 合成填充：同一条线的采样点，**沿街底商条 + 内院低层两层**。
+         两层各用自己的哈希（同一个哈希拆位会让两者的尺寸强相关）。 */
+      const ip = sampleAlong(line, INFILL_STEP_M, ub(hashId("inf|" + li), 0, 11) * 2);
+      infillCand += ip.length;
       for (let si = 0; si < ip.length; si++) {
-        if (infill.length >= INFILL_CAP * 2) break;
+        if (infill.length >= INFILL_MAX) break;
         const sp = ip[si]!;
-        const hh2 = hashId("infk|" + li + "|" + si);
-        const kind: 0 | 1 = (hh2 & 1) === 0 ? 0 : 1;
-        const side2 = (hh2 >> 2) & 1 ? 1 : -1;
         const nx2 = Math.cos(sp.rot), nz2 = -Math.sin(sp.rot);
-        const sRGB = (v: number): number => {
-          const x = v / 255;
-          return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-        };
-        const PAL: [number, number, number][] = [
-          [232, 220, 200], [214, 198, 174], [230, 224, 212],
-          [200, 214, 208], [206, 172, 142], [176, 190, 204],
-        ].map((c) => [sRGB(c[0]!), sRGB(c[1]!), sRGB(c[2]!)] as [number, number, number]);
-        if (kind === 0) {
-          const w = 8 + ((hh2 >> 4) % 6);
-          const d = 4.5 + ((hh2 >> 7) % 2);
-          const h2 = 3.2 + ((hh2 >> 9) % 3) * 0.4;
-          const off = 10.5 + ((hh2 >> 11) % 3);
-          infill.push({ x: sp.x + nx2 * off * side2, z: sp.z + nz2 * off * side2, rot: sp.rot, w, d, h: h2, kind, color: PAL[hh2 % PAL.length]! });
-        } else {
-          const w = 6 + ((hh2 >> 4) % 6);
-          const d = 6 + ((hh2 >> 8) % 5);
-          const h2 = 6 + ((hh2 >> 12) % 4) * 3;
-          const off = 20 + ((hh2 >> 11) % 9);
-          infill.push({ x: sp.x + nx2 * off * side2, z: sp.z + nz2 * off * side2, rot: sp.rot, w, d, h: h2, kind, color: PAL[(hh2 >> 3) % PAL.length]! });
-        }
+        const hs = hashId("infs|" + li + "|" + si);
+        const side2 = (hs >>> 2) & 1 ? 1 : -1;
+        /* ① 底商条：贴人行道外侧，进深 4~6 m、高 3.2~4.2 m —— 每个采样点都有 */
+        const sw = 8 + ub(hs, 4, 6);
+        const sd = 4.5 + ub(hs, 7, 2);
+        const sh = 3.2 + ub(hs, 9, 3) * 0.4;
+        const soff = 10.5 + ub(hs, 11, 3);
+        infill.push({
+          x: sp.x + nx2 * soff * side2,
+          z: sp.z + nz2 * soff * side2,
+          rot: sp.rot,
+          w: sw,
+          d: sd,
+          h: sh,
+          kind: 0,
+          color: INFILL_PAL[hs % INFILL_PAL.length]!,
+        });
+        /* ② 内院低层：再退 20~28 m，2~5 层；约六成采样点有（留出院子/空地的不均匀感） */
+        if (infill.length >= INFILL_MAX) break;
+        const hc = hashId("infc|" + li + "|" + si);
+        if (ub(hc, 20, 100) >= 60) continue;
+        const cw = 6 + ub(hc, 4, 6);
+        const cd = 6 + ub(hc, 8, 5);
+        const ch = 6 + ub(hc, 12, 4) * 3;
+        const coff = 20 + ub(hc, 11, 9);
+        const cside = (hc >>> 3) & 1 ? 1 : -1;
+        infill.push({
+          x: sp.x + nx2 * coff * cside,
+          z: sp.z + nz2 * coff * cside,
+          rot: sp.rot,
+          w: cw,
+          d: cd,
+          h: ch,
+          kind: 1,
+          color: INFILL_PAL[ub(hc, 5, INFILL_PAL.length)]!,
+        });
       }
 
       const vp = sampleAlong(line, VEH_STEP_M, phaseV);
@@ -628,6 +689,8 @@ export function buildBldAllLayer(
   let infTotal = 0;
   let infillSeen = 0;
   let infillProbe: { x: number; z: number; d2: number; ok: boolean }[] = [];
+  let propsSeen = 0;
+  let propsFarDrop = 0;
   let lastT0: number[] = [];
   let lastT1: number[] = [];
   const vehCounts = new Int32Array(vehGroups.length);
@@ -753,16 +816,24 @@ export function buildBldAllLayer(
     live += t1List.length;
     liveTris += t1List.length * 12;
 
-    /* ② 设施 / 车辆：按距离筛（近处优先花预算），单类 cap；T2 远景整层不画 */
+    /* ② 设施 / 车辆：按距离筛（近处优先花预算），单类 cap；T2 远景整层不画。
+       细杆类（路灯/路牌/长椅/护柱）超过 60 m 直接不画：这个尺度下它们只有一两个像素宽，
+       画出来是一根抖动/闪烁的"细棍子"，比不画更难看。信号灯/站台/公交站保留（体块明显）。 */
     const propVis: { gi: number; p: Place; d2: number }[] = [];
     const vehVis: { gi: number; p: Place; d2: number }[] = [];
+    propsSeen = 0;
+    propsFarDrop = 0;
     if (tier < 2) {
+      const farDrop2 = PROP_FAR_DROP_M * PROP_FAR_DROP_M;
       for (let gi = 0; gi < propsByKind.length; gi++) {
+        const thin = thinGroup[gi]!;
         for (const p of propsByKind[gi]!) {
           const dx = p.x - cx, dz = p.z - cz;
           const d2 = dx * dx + dz * dz;
           if (d2 > maxD2) continue;
           if (accept && !accept(p.x, p.z)) continue;
+          propsSeen += 1;
+          if (thin && d2 > farDrop2) { propsFarDrop += 1; continue; }
           propVis.push({ gi, p, d2 });
         }
       }
@@ -1002,6 +1073,10 @@ export function buildBldAllLayer(
       infillPlaced: infill.length,
       infillSeen,
       infillProbe,
+      infillLines,
+      infillCand,
+      propsSeen,
+      propsFarDrop,
       stretched: (() => {
         let k = 0;
         for (const i of lastT0) {

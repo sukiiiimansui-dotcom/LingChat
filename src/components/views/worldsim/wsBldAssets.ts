@@ -37,11 +37,15 @@ import { PLACE_STRIDE } from "./wsBldMesh";
 export const BLD_ASSET_BASE = "/ws3d/bldassets/";
 /** v2 资产包目录（Godot 建筑模型：顶点色、无贴图） */
 export const BLD_ASSET_BASE_V2 = "/ws3d/bldassets_godot/";
+/** v3 资产包目录（Blender 全量：楼 / 设施 / 车辆 / 道路块，顶点色、无贴图） */
+export const BLD_ASSET_BASE_ALL = "/ws3d/bldassets_all/";
 
-export type BldAssetPackVersion = 1 | 2;
+export type BldAssetPackVersion = 1 | 2 | 3;
 
 /**
- * 当前用哪一代资产包：`?bldassets=2` 或 `?godotbld=1` → v2；其余（含 `?bldassets=1`）→ v1。
+ * 当前用哪一代资产包：
+ *   `?bldassets=1` → v1（Kenney 贴图包）；`?bldassets=2` / `?godotbld=1` → v2（Godot）；
+ *   `?bldassets=3` / `?assets=all` → v3（Blender 全量：楼 + 设施 + 车辆）；其余 → v1。
  * 参数可注入（便于单测），默认读 `location.search`；没有 location 时按 v1。
  */
 export function bldAssetVersion(search?: string): BldAssetPackVersion {
@@ -53,11 +57,14 @@ export function bldAssetVersion(search?: string): BldAssetPackVersion {
       q = "";
     }
   }
-  return /[?&](?:bldassets=2|godotbld=1)\b/.test(q) ? 2 : 1;
+  if (/[?&](?:bldassets=3|assets=all)\b/.test(q)) return 3;
+  if (/[?&](?:bldassets=2|godotbld=1)\b/.test(q)) return 2;
+  return 1;
 }
 
 /** 版本 → 包目录 */
 export function bldAssetBase(version: BldAssetPackVersion = bldAssetVersion()): string {
+  if (version === 3) return BLD_ASSET_BASE_ALL;
   return version === 2 ? BLD_ASSET_BASE_V2 : BLD_ASSET_BASE;
 }
 
@@ -99,6 +106,17 @@ export interface BldAssetMeta {
   class: string;
   /** v2 才有的**挑池**分类（`low` / `mid` / `tall`）；缺省时退回 `class`（v1 的老口径） */
   pool?: string;
+  /** v3：资产类别（bld / prop / vehicle / road） */
+  category?: "bld" | "prop" | "vehicle" | "road" | string;
+  /** v3：细分类（cafe / retail / prop_tree / veh_car …），设施/车辆按它分 InstancedMesh */
+  kind?: string;
+  /** v3：同类的第几个变体（0..n；设施/车辆每类只画 variant 0，draw 预算有限） */
+  variant?: number;
+  /** v3：真实楼高（米）。挑模型按它取最接近的，**不做等比拉高** */
+  height_m?: number;
+  footprint_w_m?: number;
+  footprint_d_m?: number;
+  floors?: number;
   verts: number;
   tris: number;
   /** pack.bin 内的字节偏移（段首 4 字节对齐） */
@@ -118,7 +136,7 @@ export interface BldAssetMeta {
   tex?: string | null;
 }
 
-/** pack.json 的段布局（v2 明确写出；v1 也有一份） */
+/** pack.json 的段布局（v2/v3 明确写出；v1 也有一份） */
 export interface BldAssetLayout {
   pos: string;
   color?: string;
@@ -128,21 +146,21 @@ export interface BldAssetLayout {
 }
 
 export interface BldAssetPack {
-  /** 包代次：1 = 贴图调色板（Kenney），2 = 顶点色（Godot）。按 `layout.color` 也能认出来 */
+  /** 包代次：1 = 贴图调色板（Kenney），2 = 顶点色（Godot），3 = 顶点色（Blender 全量 + 元数据） */
   v: BldAssetPackVersion;
   layout?: BldAssetLayout;
   meta: BldAssetMeta[];
   /** 所有资产拼成的一个 ArrayBuffer（v1：pos f32 / uv u16 / shade u8 / idx u16；
    *  v2：pos f32 / color u8×3 / idx u32） */
   bin: ArrayBuffer;
-  /** v2 没有贴图（`null`）；v1 是共享 colormap 的文件名 */
+  /** v2/v3 没有贴图（`null`）；v1 是共享 colormap 的文件名 */
   texture: string | null;
   counts: { assets: number; verts: number; tris: number };
   binBytes: number;
 }
 
 /** `ArrayBuffer` + JSON 清单（构建期产物；v1 见 `scripts/build-bld-assets.mjs`，
- *  v2 见 `scripts/build-bld-assets-godot.mjs`） */
+ *  v2 见 `scripts/build-bld-assets-godot.mjs`，v3 见 `scripts/build-bld-assets-all.mjs`） */
 export async function loadBldAssetPack(
   base: string = bldAssetBase(),
   fetchImpl: typeof fetch | null = (typeof fetch !== "undefined" ? fetch : null)
@@ -161,14 +179,15 @@ export async function loadBldAssetPack(
   const bin = await br.arrayBuffer();
   const need = Number(json.binBytes || 0);
   if (need > 0 && bin.byteLength < need) throw new Error("pack.bin 长度不对（" + bin.byteLength + " < " + need + "）");
-  /* v2 的判据是清单里写了顶点色段（`v` 只是冗余标记；两者任一命中即按 v2 读） */
-  const isV2 = Number(json.v) >= 2 || !!(json.layout && json.layout.color);
+  /* 顶点色包（v2/v3）的判据是清单里写了顶点色段；`v` 只用来区分 v2/v3（v3 多一份类别元数据） */
+  const hasColor = Number(json.v) >= 2 || !!(json.layout && json.layout.color);
+  const v: BldAssetPackVersion = Number(json.v) >= 3 ? 3 : hasColor ? 2 : 1;
   return {
-    v: isV2 ? 2 : 1,
+    v,
     layout: json.layout,
     meta: json.assets,
     bin,
-    texture: isV2 ? null : json.texture || "colormap.png",
+    texture: v === 1 ? json.texture || "colormap.png" : null,
     counts: json.counts || { assets: json.assets.length, verts: 0, tris: 0 },
     binBytes: bin.byteLength,
   };
@@ -286,6 +305,90 @@ export function pickAssetIndex(meta: readonly BldAssetMeta[], id: string, h: num
   return best;
 }
 
+/**
+ * v3 挑楼模型：按**真实楼高**取最接近的那一个（对数距离，高楼差 10 m 与矮楼差 1 m 一样"远"）。
+ * 同一栋楼永远挑同一个（只看高度），高度相同再按 id 哈希散开，避免整条街同一个模型。
+ *
+ * 为什么不用 v1/v2 的"高宽比"：v3 的模型自带真实尺寸（height_m / footprint_*），
+ * 楼高按 1:1 落上去就对了；再按高宽比拉伸会把真实的 8 m 店拉成 30 m 的纸片。
+ */
+export function pickAssetByHeight(
+  blds: readonly BldAssetMeta[],
+  id: string,
+  h: number,
+  w?: number,
+  d?: number
+): number {
+  if (!blds.length) return -1;
+  const H = Math.max(0.5, Number(h) || 0);
+  /* 占地长宽比也参与：长宽比 >2.5 的楼不能靠"拉伸"硬套方盒子模型 ⇒ 换一个长宽比更像的。
+     这一项权重比高度小（高度是主导），只在两个模型差不多高时起作用。 */
+  const wantAspect = w && d && w > 0 && d > 0 ? Math.max(w / d, d / w) : 1;
+  const scores: number[] = [];
+  let best = -1;
+  let bestScore = Infinity;
+  for (let i = 0; i < blds.length; i++) {
+    const m = blds[i]!;
+    const mh = Math.max(0.3, Number(m.height_m) || m.size[1] || 1);
+    const aw = Math.max(0.2, Number(m.footprint_w_m) || m.size[0] || 1);
+    const ad = Math.max(0.2, Number(m.footprint_d_m) || m.size[2] || 1);
+    const mAspect = Math.max(aw / ad, ad / aw);
+    const s = Math.abs(Math.log(H / mh)) + 0.45 * Math.abs(Math.log(wantAspect / mAspect));
+    scores.push(s);
+    if (s < bestScore) {
+      bestScore = s;
+      best = i;
+    }
+  }
+  /* 高度差 ±40% 以内都算"可用"（0.4 的对数 ≈ 1.5 倍高差），再由 id 哈希在候选里定一个。
+     候选带宽太窄（原来 0.08）时，同一片街区同高的楼会**全落到同一个模型**上 —— 换多少
+     资产都没用；放宽到 0.4 后，竖向仍由 `wsBldAllLayer` 的限幅保证不变成"纸片楼"。 */
+  let n = 0;
+  for (const s of scores) if (s <= bestScore + 0.4) n += 1;
+  if (n <= 1) return best;
+  let k = hashId("vh|" + id) % n;
+  for (let i = 0; i < scores.length; i++) {
+    if (scores[i]! > bestScore + 0.4) continue;
+    if (k === 0) return i;
+    k -= 1;
+  }
+  return best;
+}
+
+/**
+ * v3 严格匹配：高度差 ≤30%（按 `|mh−H|/H`）**且**长宽比差 ≤0.35，才允许拿这个模型。
+ * 找不到就返回 -1（调用方用 T1 立面卡兜底）——**不把 8 m 宽的店拉到 20 m**。
+ */
+export function pickAssetFit(
+  blds: readonly BldAssetMeta[],
+  id: string,
+  h: number,
+  w: number,
+  d: number
+): number {
+  if (!blds.length) return -1;
+  const H = Math.max(0.5, Number(h) || 0);
+  const aR = Math.max(0.2, w) / Math.max(0.2, d);
+  const aRn = Math.max(aR, 1 / aR);
+  const cand: { i: number; s: number }[] = [];
+  for (let i = 0; i < blds.length; i++) {
+    const m = blds[i]!;
+    const mh = Math.max(0.3, Number(m.height_m) || m.size[1] || 1);
+    if (Math.abs(mh - H) / H > 0.29) continue;
+    const aw = Math.max(0.2, Number(m.footprint_w_m) || m.size[0] || 1);
+    const ad = Math.max(0.2, Number(m.footprint_d_m) || m.size[2] || 1);
+    const am = Math.max(aw / ad, ad / aw);
+    if (Math.abs(am - aRn) > 0.35) continue;
+    cand.push({ i, s: Math.abs(Math.log(H / mh)) });
+  }
+  if (!cand.length) return -1;
+  cand.sort((a, b) => a.s - b.s || a.i - b.i);
+  /* 前几名高度差不多时按 id 散开，避免同高的楼全用同一个模型 */
+  const band = cand.filter((c) => c.s <= cand[0]!.s + 0.12);
+  if (band.length <= 1) return cand[0]!.i;
+  return band[hashId("fit|" + id) % band.length]!.i;
+}
+
 /** 一栋楼 → 实例矩阵的缩放（纯算术；`stretch` 上限把横向拉伸夹住） */
 /**
  * v2（Godot 单层/低层建筑）的等比缩放：**保持模型自身比例**，只按占地适配，
@@ -343,6 +446,13 @@ const SRGB8_TO_LINEAR8: Uint8Array = (() => {
   }
   return t;
 })();
+
+/** sRGB u8 顶点色 → 线性 u8（v2/v3 包进 GPU 前统一走这里，理由见上面的查表注释） */
+export function decodeVertexColors(src: Uint8Array): Uint8Array {
+  const out = new Uint8Array(src.length);
+  for (let i = 0; i < src.length; i++) out[i] = SRGB8_TO_LINEAR8[src[i]!]!;
+  return out;
+}
 
 /** 取共享 colormap（512×512，11 KB）。glTF 的 UV 原点在左上 ⇒ `flipY = false`。 */
 export function loadBldAssetTexture(

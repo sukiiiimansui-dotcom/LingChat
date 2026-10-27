@@ -31,6 +31,7 @@ import {
   type BldAssetLayer,
   type BldAssetPack,
 } from "./wsBldAssets";
+import { assetOnStep, buildBldAllLayer } from "./wsBldAllLayer";
 import { ringCenter } from "./wsBuildingHint";
 import {
   contractTheme,
@@ -150,6 +151,8 @@ export function createOverlayBackend(): WsRenderBackend {
   let map: OverlayMapLike | null = null;
   let bldMesh: any = null;
   let data: BldMeshData | null = null;
+  /** 最近一份路网（设施/车辆沿它撒点；`init` 从舞台交接里取，没有就自己去 `roads` 源捞） */
+  let roadsFc: WsRenderFc | null = null;
 
   /* ── 近景资产（S8：Kenney CC0）─────────────────────────────────────────────
      两套几何**同 id / 同高 / 同占地**（`data.places` 与程序化那栋用同一批外环点）：
@@ -191,6 +194,8 @@ export function createOverlayBackend(): WsRenderBackend {
       /* `?bldassets=2` / `?godotbld=1` 是**显式点名**的取证件：切到 v2 顶点色包并强制开层
          （触屏设备也一样；命令行的开关本来就优先于"默认关"）。 */
       if (/[?&](?:bldassets=2|godotbld=1)\b/.test(q)) return true;
+      /* `?bldassets=3` / `?assets=all`：Blender 全量包（楼 + 设施 + 车辆），同样强制开层 */
+      if (/[?&](?:bldassets=3|assets=all)\b/.test(q)) return true;
       if (/[?&]bldassets=0\b/.test(q)) return false;
       /* 没显式指定：触屏设备默认关（真机上资产层已验证会导致整层不可见），桌面默认开 */
       const touch = (navigator.maxTouchPoints || 0) > 0;
@@ -528,11 +533,15 @@ export function createOverlayBackend(): WsRenderBackend {
       setLayoutProperty?: (id: string, k: string, v: unknown) => void;
     } | null;
     if (!m?.setLayoutProperty || state === "destroyed") return;
-    /* 🔴 硬要求：**只有叠加层真的在画楼才允许藏**；否则立刻把地图那套还原（不许把画面弄空）。 */
+    /* 🔴 硬要求：**只有叠加层真的在画楼才允许藏**；否则立刻把地图那套还原（不许把画面弄空）。
+       2026-10-27：资产档把程序化那层藏掉之后，`meshDrawingOk` 会判"我们的楼没在画" ⇒
+       地图那套平铺的楼脚印（灰房子）又回来了、和 3D 资产叠在一起。资产层真的画出实例
+       同样算"我们在画楼"，这条闸因此把两种画法都认。 */
     const gate = probe.meshDrawingOk(false);
-    hideGateOk = gate.ok;
-    hideGateWhy = gate.why;
-    if (!gate.ok) {
+    const assetsLive = !!assetLayer && assetFade > 0 && assetDrawn > 0;
+    hideGateOk = gate.ok || assetsLive;
+    hideGateWhy = gate.ok ? gate.why : assetsLive ? "asset-layer" : gate.why;
+    if (!hideGateOk) {
       restoreMapBuildings("guard:" + gate.why);
       return;
     }
@@ -652,10 +661,19 @@ export function createOverlayBackend(): WsRenderBackend {
     if (!assetPack || (assetPack.texture && !assetTex) || !data || !data.places || !data.places.length) return false;
     if (!THREE || !scene) return false;
     try {
-      const layer = buildBldAssetLayer(THREE as Record<string, any>, assetPack, assetTex, data.places, {
-        ids: data.featureIds,
-        cap: ASSET_CAP,
-      });
+      const size = sizeOf();
+      const layer =
+        assetPack.v === 3
+          ? buildBldAllLayer(THREE as Record<string, any>, assetPack, data.places, {
+              ids: data.featureIds,
+              roads: roadsFc,
+              toLocal,
+              heightPx: size.h,
+            })
+          : buildBldAssetLayer(THREE as Record<string, any>, assetPack, assetTex, data.places, {
+              ids: data.featureIds,
+              cap: ASSET_CAP,
+            });
       scene.add(layer.group);
       assetLayer = layer;
       /* 新建的层先按**当前**透明度摆好（重建时可能正处在全资产档） */
@@ -715,7 +733,9 @@ export function createOverlayBackend(): WsRenderBackend {
     /* `?z=`/`?mpp=` 是既有排查口（与程序化 LOD 同一口径）；否则用真机视野 */
     const mppRaw = urlLodMpp() ?? (v.radius * 2) / Math.max(1, h);
     assetMpp = mppRaw;
-    assetState = assetTierStep(assetState, mppRaw);
+    /* v3 的 T1 撑到 mpp 2.6（与 `ws-lod-tiers` 一致）：资产层总开关跟着换阈值；
+       v1/v2 仍用老的 1.9/2.4（不改线上验收口径）。 */
+    assetState = assetPack?.v === 3 ? assetOnStep(assetState, mppRaw) : assetTierStep(assetState, mppRaw);
 
     let target: 0 | 1 = 0;
     if (assetState === 1) {
@@ -1180,6 +1200,19 @@ export function createOverlayBackend(): WsRenderBackend {
     }
   }
 
+  /** 取路网 GeoJSON（`roads` 源）；拿不到就 null（设施/车辆这帧不画，别报错） */
+  async function grabRoads(): Promise<WsRenderFc | null> {
+    try {
+      const src = map?.getSource?.("roads");
+      if (!src?.getData) return null;
+      const d = (await src.getData()) as WsRenderFc | null;
+      if (!d || !Array.isArray(d.features)) return null;
+      return { type: "FeatureCollection", features: d.features };
+    } catch {
+      return null;
+    }
+  }
+
   /** 后到的数据自己补上（`bld` 落图 ⇒ 重建）；防抖，别在一次落图里重建十遍 */
   function scheduleRefresh(): void {
     refreshScheduled += 1;
@@ -1198,6 +1231,15 @@ export function createOverlayBackend(): WsRenderBackend {
   }
 
   const onSourceData = (e: { sourceId?: string }): void => {
+    if (e?.sourceId === "roads") {
+      /* 路网晚到：捞一份，然后让资产层按新路网重建（设施/车辆的位置来自路网） */
+      void grabRoads().then((fc) => {
+        if (!fc) return;
+        roadsFc = fc;
+        if (state === "running" && assetLayer) disposeAssets();
+      });
+      return;
+    }
     if (e?.sourceId !== "bld") return;
     srcDataEvents += 1;
     if (!tlLandingAt) tlLandingAt = Math.round(performance.now() - T0);
@@ -1877,6 +1919,8 @@ export function createOverlayBackend(): WsRenderBackend {
         /* `grabBld` 自己记这次的来路（`world` / `mvt` / `source` / `none`）；只有舞台真的交了
            世界数据时才盖成 `world`。原写法 `fc ? "source"` 会把矢量源标成 `source`（假读数）。 */
         if (world?.buildings) lastSource = "world";
+        roadsFc = world?.roads ?? null;
+        if (!roadsFc) roadsFc = await grabRoads();
         syncCamera();
         if (fc) rebuild(world?.themeId || curThemeId, fc);
         map?.on?.("sourcedata", onSourceData);
@@ -2089,7 +2133,9 @@ export function createOverlayBackend(): WsRenderBackend {
         drawn: number;
         draws: number;
         tris: number;
-        pack: { assets: number; verts: number; tris: number; binBytes: number } | null;
+        pack: { v?: number; assets: number; verts: number; tris: number; binBytes: number } | null;
+        /** v3 的 LOD/预算读数（v1/v2 为 null） */
+        lod: unknown;
         loadMs: number;
         error: string;
         blocked: string;
@@ -2130,12 +2176,22 @@ export function createOverlayBackend(): WsRenderBackend {
           tris: assetDrawnTris,
           pack: assetPack
             ? {
+                v: assetPack.v,
                 assets: assetPack.counts.assets,
                 verts: assetPack.counts.verts,
                 tris: assetPack.counts.tris,
                 binBytes: assetPack.binBytes,
               }
             : null,
+          /* v3 的三档 / 分类实例数 / 预算读数（v1/v2 没有 `detail()` ⇒ null） */
+          lod: (() => {
+            try {
+              const l = assetLayer as unknown as { detail?: () => unknown } | null;
+              return l?.detail ? l.detail() : null;
+            } catch {
+              return null;
+            }
+          })(),
           loadMs: assetLoadMs,
           error: assetError,
           blocked: assetBlocked,

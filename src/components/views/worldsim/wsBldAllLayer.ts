@@ -33,6 +33,7 @@ import {
   type BldAssetMeta,
   type BldAssetPack,
 } from "./wsBldAssets";
+import { facadeKeyOf, facadeRectOf, type FacadeUvRect } from "./wsBldFacadeAtlas";
 
 /* ── 纯规则常量（可单测） ───────────────────────────────────────────────── */
 export const LOD_T0_MPP = 1.2;
@@ -330,6 +331,8 @@ export interface BldAllDetail {
   /** 调试：视野内的设施候选数（预算前）/ 被">60m 细杆剔除"去掉的个数 */
   propsSeen: number;
   propsFarDrop: number;
+  /** 立面图集是否真的挂上了（1 = 挂上；0 = 没纹理，T1 是纯色盒） */
+  facade: number;
 }
 
 export interface BldAllLayer extends BldAssetLayer {
@@ -344,6 +347,10 @@ export interface BldAllOpts {
   heightPx?: number;
   capProps?: number;
   capVehicles?: number;
+  /** T1 立面图集纹理（不传 = 纯色盒，行为与之前完全一致） */
+  facadeTexture?: any;
+  /** `false` = 强制关掉立面图集（A/B 用；默认开） */
+  facadeOn?: boolean;
   /** 平面着色（A/B 用；默认开） */
   flatShading?: boolean;
 }
@@ -416,6 +423,71 @@ function unitBox(THREE: Record<string, any>): any {
 }
 
 /**
+ * 带 UV + 侧/顶两个材质组的单位盒子（与 `unitBox` 同一个占位：x/z −0.5..0.5，y 0..1）。
+ *
+ * 为什么要另建一份：立面图集要**每个面自己的 uv**（相邻面不能共用顶点），而且顶面
+ * 不能取立面（否则"屋顶上开窗"），所以顶/底单独一个材质组（materialIndex=1）。
+ * 另附 per-instance 的 `aUvRect`（u0,v0,du,dv）—— 各立面在图集里的矩形宽窄不一致。
+ */
+function uvBox(THREE: Record<string, any>, cap: number): any {
+  const g = new THREE.BufferGeometry();
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  const groups: [number, number, number][] = [];
+  /** 一个面：4 个角按「左下、右下、左上、右上」给（从外面看逆时针） */
+  const face = (
+    n: [number, number, number],
+    bl: [number, number, number],
+    br: [number, number, number],
+    tl: [number, number, number],
+    tr: [number, number, number],
+    mi: number
+  ): void => {
+    const base = pos.length / 3;
+    /* ⚠️ addGroup 的 start 是**索引缓冲里的偏移**，不是顶点号：这里必须先取 idx.length */
+    const start = idx.length;
+    for (const v of [bl, br, tl, tr]) {
+      pos.push(v[0], v[1], v[2]);
+      nor.push(n[0], n[1], n[2]);
+    }
+    uv.push(0, 0, 1, 0, 0, 1, 1, 1);
+    idx.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+    groups.push([start, 6, mi]);
+  };
+  // 侧面（材质组 0）
+  face([1, 0, 0], [0.5, 0, 0.5], [0.5, 0, -0.5], [0.5, 1, 0.5], [0.5, 1, -0.5], 0);
+  face([-1, 0, 0], [-0.5, 0, -0.5], [-0.5, 0, 0.5], [-0.5, 1, -0.5], [-0.5, 1, 0.5], 0);
+  face([0, 0, 1], [-0.5, 0, 0.5], [0.5, 0, 0.5], [-0.5, 1, 0.5], [0.5, 1, 0.5], 0);
+  face([0, 0, -1], [0.5, 0, -0.5], [-0.5, 0, -0.5], [0.5, 1, -0.5], [-0.5, 1, -0.5], 0);
+  // 顶 / 底（材质组 1）
+  face([0, 1, 0], [-0.5, 1, 0.5], [0.5, 1, 0.5], [-0.5, 1, -0.5], [0.5, 1, -0.5], 1);
+  face([0, -1, 0], [-0.5, 0, -0.5], [0.5, 0, -0.5], [-0.5, 0, 0.5], [0.5, 0, 0.5], 1);
+  g.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(pos), 3));
+  g.setAttribute("normal", new THREE.BufferAttribute(Float32Array.from(nor), 3));
+  g.setAttribute("uv", new THREE.BufferAttribute(Float32Array.from(uv), 2));
+  /* ⚠️ 白色顶点色**必须给**：材质开了 `vertexColors`，缺 `color` 属性时 WebGL 给它 (0,0,0)
+     ⇒ 整个立面取样完再乘 0，楼变成纯黑（实测就栽在这里：黑墙 + 正常屋面）。 */
+  const col = new Uint8Array((pos.length / 3) * 3);
+  col.fill(255);
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
+  g.setIndex(new THREE.BufferAttribute(Uint32Array.from(idx), 1));
+  for (const [start, count, mi] of groups) g.addGroup(start, count, mi);
+  g.setAttribute("aUvRect", new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, cap) * 4), 4));
+  g.computeBoundingSphere();
+  return g;
+}
+
+/** 把一类立面的图集矩形填满某个盒子的实例属性（填充层整条不变，建层时填一次） */
+function fillUvRect(geom: any, r: FacadeUvRect, cap: number): void {
+  const attr = geom?.getAttribute?.("aUvRect");
+  if (!attr) return;
+  for (let k = 0; k < cap; k++) attr.setXYZW(k, r.u, r.v, r.du, r.dv);
+  attr.needsUpdate = true;
+}
+
+/**
  * 建 v3 资产层。几何只建一次；每帧只重摆实例。
  * 楼记录 `places` 与 v1/v2 同一份（[中心X, 中心Z, 底, 顶, 宽, 深, 旋转, 高]，stride 8）。
  */
@@ -457,6 +529,14 @@ export function buildBldAllLayer(
   const propGeoms = propGroups.map((g) => geometryOf(THREE, pack, g.m));
   const vehGeoms = vehGroups.map((g) => geometryOf(THREE, pack, g.m));
   const boxGeom = unitBox(THREE);
+  /* 立面图集（可选）：有纹理时 T1/填充的盒子换成带 UV 的盒子，侧面取样该类立面、顶面走屋面材质 */
+  const facadeTex = opts.facadeTexture || null;
+  const facadeOn = !!facadeTex && opts.facadeOn !== false;
+  /** 每份 bld 资产的图集矩形（没有该类立面 ⇒ null，用兜底矩形） */
+  const bldRect: (FacadeUvRect | null)[] = facadeOn
+    ? bldAssets.map((m) => facadeRectOf(facadeKeyOf(m.name)))
+    : [];
+  const fallbackRect: FacadeUvRect = facadeRectOf("house") || { u: 0, v: 0, du: 1, dv: 1 };
 
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
@@ -483,6 +563,48 @@ export function buildBldAllLayer(
     depthTest: true,
   });
   t1Mat.name = "ws-bld-all-t1";
+  /* 立面图集挂在 T1 材质上：顶点着色器把盒子侧面的 uv 映射到**该实例**的图集矩形。
+     `aUvRect` 是 per-instance 属性（每类立面的宽高比不同，矩形宽窄不一致 ⇒ 不能只传格号）。 */
+  if (facadeOn) {
+    t1Mat.map = facadeTex;
+    t1Mat.onBeforeCompile = (shader: any): void => {
+      shader.vertexShader = "attribute vec4 aUvRect;\n" + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <uv_vertex>",
+        "#include <uv_vertex>\n#ifdef USE_MAP\n  vMapUv = aUvRect.xy + vMapUv * aUvRect.zw;\n#endif"
+      );
+    };
+    t1Mat.customProgramCacheKey = (): string => "ws-facade-atlas";
+  }
+  /* 屋面材质（图集模式下盒子的顶/底两个材质组）：素色 + instanceColor，不参与立面取样 */
+  const roofMat = new THREE.MeshStandardMaterial({
+    vertexColors: false,
+    /* 屋面：浅暖灰（比立面暗一档，俯视时不会抢立面） */
+    color: 0xc2bdb2,
+    roughness: 0.96,
+    metalness: 0,
+    flatShading: flat,
+    side: THREE.DoubleSide,
+    transparent: false,
+    opacity: 1,
+    depthWrite: true,
+    depthTest: true,
+  });
+  roofMat.name = "ws-bld-all-roof";
+  /** 图集模式下盒子是"侧面 + 顶/底"两个材质组 ⇒ 每个 mesh 两个 draw */
+  const t1Mats = facadeOn ? [t1Mat, roofMat] : t1Mat;
+  /** 淡化/不透明要一起改的材质（图集模式下屋面是第二份材质） */
+  const fadeMats = facadeOn ? [mat, t1Mat, roofMat] : [mat, t1Mat];
+  const bldCountDraws = facadeOn ? 2 : 1;
+  const boxT1 = facadeOn ? uvBox(THREE, Math.max(1, n)) : boxGeom;
+  const boxInf = facadeOn
+    ? [uvBox(THREE, INFILL_CAP), uvBox(THREE, INFILL_CAP)]
+    : [boxGeom, boxGeom];
+  if (facadeOn) {
+    /* 填充：底商条取底商立面，内院低层取住宅立面（整条实例缓冲一次填满，之后不变） */
+    fillUvRect(boxInf[0]!, facadeRectOf("cafe") || fallbackRect, INFILL_CAP);
+    fillUvRect(boxInf[1]!, facadeRectOf("house") || fallbackRect, INFILL_CAP);
+  }
 
   const group = new THREE.Group();
   group.name = "ws-bld-all";
@@ -498,7 +620,7 @@ export function buildBldAllLayer(
     group.add(im);
     return im;
   });
-  const t1Mesh = new THREE.InstancedMesh(boxGeom, t1Mat, Math.max(1, n));
+  const t1Mesh = new THREE.InstancedMesh(boxT1, t1Mats, Math.max(1, n));
   t1Mesh.name = "ws-bld-all:t1";
   t1Mesh.frustumCulled = false;
   t1Mesh.count = 0;
@@ -528,7 +650,7 @@ export function buildBldAllLayer(
      位置来自路网采样（与设施/车辆同一套确定性规则），只为把"视野内栋数密度"拉到真值区间；
      它们不是真实楼，diag 里单独记 `infill`，不混进 bld 资产的重复度统计。 */
   const infillMeshes = [0, 1].map((k) => {
-    const im = new THREE.InstancedMesh(boxGeom, t1Mat, INFILL_CAP);
+    const im = new THREE.InstancedMesh(boxInf[k]!, t1Mats, INFILL_CAP);
     im.name = "ws-infill:" + (k === 0 ? "shop-strip" : "courtyard");
     im.frustumCulled = false;
     im.count = 0;
@@ -571,6 +693,8 @@ export function buildBldAllLayer(
     h: number;
     kind: 0 | 1;
     color: [number, number, number];
+    /** 立面图集模式下的中性明度抖动（0.94~1.04）：贴图自带颜色，不能再乘调色板色 */
+    tint: number;
   }
   const infill: Infill[] = [];
   /** 本帧之前生成过的填充候选总数（诊断：与 `infill.length` 对比能看出是否被上限截断） */
@@ -630,6 +754,7 @@ export function buildBldAllLayer(
           h: sh,
           kind: 0,
           color: INFILL_PAL[hs % INFILL_PAL.length]!,
+          tint: 0.94 + ub(hs, 7, 100) / 1000,
         });
         /* ② 内院低层：再退 20~28 m，2~5 层；约六成采样点有（留出院子/空地的不均匀感） */
         if (infill.length >= INFILL_MAX) break;
@@ -649,6 +774,7 @@ export function buildBldAllLayer(
           h: ch,
           kind: 1,
           color: INFILL_PAL[ub(hc, 5, INFILL_PAL.length)]!,
+          tint: 0.94 + ub(hc, 7, 100) / 1000,
         });
       }
 
@@ -790,9 +916,11 @@ export function buildBldAllLayer(
         liveTris += list.length * bldAssets[ai]!.tris;
       }
     }
+    const t1Uv = facadeOn ? boxT1.getAttribute("aUvRect") : null;
     for (let k = 0; k < t1List.length; k++) {
       const i = t1List[k]!;
       const p = i * PLACE_STRIDE;
+      const ai0 = bldPick[i]!;
       v3.set(places[p]!, 0, places[p + 1]!);
       q.setFromAxisAngle(UP, places[p + 6]!);
       const h = places[p + 7]!;
@@ -801,15 +929,28 @@ export function buildBldAllLayer(
       s3.set(w, h, d);
       m4.compose(v3, q, s3);
       t1Mesh.setMatrixAt(k, m4);
+      if (t1Uv) {
+        const r = (ai0 >= 0 ? bldRect[ai0] : null) || fallbackRect;
+        t1Uv.setXYZW(k, r.u, r.v, r.du, r.dv);
+      }
       if (canTint) {
-        /* 匹配不上（bldPick = -1）的楼只有 T1 卡：给个中性墙色，别访问不存在的模型色 */
-        const ai = bldPick[i]!;
-        const c = ai >= 0 ? bldColors[ai]! : [0.74, 0.72, 0.67];
-        c3.setRGB(c[0]!, c[1]!, c[2]!);
+        /* 图集模式：贴图本身已经是该类资产的颜色，**不再乘模型平均色**（会变成平方变暗），
+           只给一点中性抖动让同类的几栋不完全一样 */
+        const ai2 = ai0 >= 0 ? ai0 : 0;
+        if (facadeOn) {
+          const u2 = (hashId("t1tint|" + String(ids[i] ?? "")) % 1000) / 1000;
+          const b2 = 0.92 + 0.14 * u2;
+          c3.setRGB(b2, b2, b2);
+        } else {
+          /* 匹配不上（bldPick = -1）的楼只有 T1 卡：给个中性墙色，别访问不存在的模型色 */
+          const c = ai0 >= 0 ? bldColors[ai2]! : [0.74, 0.72, 0.67];
+          c3.setRGB(c[0]!, c[1]!, c[2]!);
+        }
         t1Mesh.setColorAt(k, c3);
         if (t1Mesh.instanceColor) t1Mesh.instanceColor.needsUpdate = true;
       }
     }
+    if (t1Uv) t1Uv.needsUpdate = true;
     t1Mesh.count = t1List.length;
     t1Mesh.visible = t1List.length > 0;
     if (t1Mesh.instanceMatrix) t1Mesh.instanceMatrix.needsUpdate = true;
@@ -936,7 +1077,12 @@ export function buildBldAllLayer(
         m4.compose(v3, q, s3);
         im.setMatrixAt(infCount[k]!, m4);
         if (canTint2) {
-          c3.setRGB(it.p.color[0], it.p.color[1], it.p.color[2]);
+          if (facadeOn) {
+            const t = it.p.tint;
+            c3.setRGB(t, t, t);
+          } else {
+            c3.setRGB(it.p.color[0], it.p.color[1], it.p.color[2]);
+          }
           im.setColorAt(infCount[k]!, c3);
         }
         infCount[k] = infCount[k]! + 1;
@@ -963,7 +1109,7 @@ export function buildBldAllLayer(
     fade = clamp(f, 0, 1);
     group.visible = fade > 0;
     const opaque = toAssets || fade >= 1;
-    for (const m of [mat, t1Mat]) {
+    for (const m of fadeMats) {
       if (opaque) {
         m.transparent = false;
         m.opacity = 1;
@@ -1077,6 +1223,7 @@ export function buildBldAllLayer(
       infillCand,
       propsSeen,
       propsFarDrop,
+      facade: facadeOn ? 1 : 0,
       stretched: (() => {
         let k = 0;
         for (const i of lastT0) {
@@ -1094,10 +1241,10 @@ export function buildBldAllLayer(
   function draws(): number {
     let k = 0;
     for (const im of bldMeshes) if (im.visible && im.count > 0) k += 1;
-    if (t1Mesh.visible && t1Mesh.count > 0) k += 1;
+    if (t1Mesh.visible && t1Mesh.count > 0) k += bldCountDraws;
     for (const im of propMeshes) if (im.visible && im.count > 0) k += 1;
     for (const im of vehMeshes) if (im.visible && im.count > 0) k += 1;
-    for (const im of infillMeshes) if (im.visible && im.count > 0) k += 1;
+    for (const im of infillMeshes) if (im.visible && im.count > 0) k += bldCountDraws;
     return k;
   }
 
@@ -1128,7 +1275,7 @@ export function buildBldAllLayer(
     detail,
     dispose(): void {
       try {
-        for (const g of [...bldGeoms, ...propGeoms, ...vehGeoms, boxGeom]) g.dispose?.();
+        for (const g of [...bldGeoms, ...propGeoms, ...vehGeoms, boxGeom, boxT1, ...boxInf]) g.dispose?.();
         for (const im of [...bldMeshes, t1Mesh, ...propMeshes, ...vehMeshes, ...infillMeshes]) {
           im.dispose?.();
           if (im.parent) im.parent.remove(im);

@@ -32,6 +32,7 @@ import {
   type BldAssetPack,
 } from "./wsBldAssets";
 import { assetOnStep, buildBldAllLayer } from "./wsBldAllLayer";
+import { FACADE_ATLAS_URL, loadFacadeAtlas } from "./wsBldFacadeAtlas";
 import { ringCenter } from "./wsBuildingHint";
 import {
   contractTheme,
@@ -160,6 +161,8 @@ export function createOverlayBackend(): WsRenderBackend {
      透明度此消彼长（`ASSET_FADE_MS`），资产懒加载，加载好之前一直画程序化。 */
   let assetPack: BldAssetPack | null = null;
   let assetTex: unknown = null;
+  /** v3 的 T1 立面图集纹理（烤图 PNG；加载失败 = null ⇒ T1 退回纯色盒） */
+  let assetFacadeTex: unknown = null;
   let assetLayer: BldAssetLayer | null = null;
   /** 迟滞后的档位（0 = 程序化，1 = 资产）——**不是**当前透明度 */
   let assetState: 0 | 1 = 0;
@@ -640,6 +643,8 @@ export function createOverlayBackend(): WsRenderBackend {
           : null;
         assetPack = pack;
         assetTex = tex;
+        /* v3 才需要立面图集；失败**不阻塞**建层（T1 退回纯色盒），只记在 diag 里 */
+        if (pack.v === 3) assetFacadeTex = await loadFacadeAtlas(THREE as Record<string, any>, runtimeUrl(FACADE_ATLAS_URL));
         assetLoadMs = Math.round(performance.now() - t0);
         assetError = "";
         /* 包到齐这一刻地图可能已经**静止**了（没有 render 事件 ⇒ `drawOnce` 不再被调用，
@@ -670,6 +675,9 @@ export function createOverlayBackend(): WsRenderBackend {
               toLocal,
               heightPx: size.h,
               flatShading: (() => { try { return new URLSearchParams(location.search).get("ovlflat") !== "0"; } catch { return true; } })(),
+              facadeTexture: assetFacadeTex,
+              /* `?facade=0` 关掉立面图集（A/B 用；默认开） */
+              facadeOn: (() => { try { return new URLSearchParams(location.search).get("facade") !== "0"; } catch { return true; } })(),
             })
           : buildBldAssetLayer(THREE as Record<string, any>, assetPack, assetTex, data.places, {
               ids: data.featureIds,

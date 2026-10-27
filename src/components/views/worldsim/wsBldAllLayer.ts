@@ -511,6 +511,15 @@ export function buildBldAllLayer(
     z: number;
     rot: number;
   }
+  interface Infill extends Place {
+    w: number;
+    d: number;
+    h: number;
+    kind: 0 | 1;
+    color: [number, number, number];
+  }
+  const infill: Infill[] = [];
+
   const propsByKind: Place[][] = propGroups.map(() => []);
   const vehByKind: Place[][] = vehGroups.map(() => []);
   const toLocal = opts.toLocal || null;
@@ -535,6 +544,38 @@ export function buildBldAllLayer(
         list.push({ x: s.x + nx * off * side, z: s.z + nz * off * side, rot: s.rot + (side > 0 ? Math.PI / 2 : -Math.PI / 2) });
         propBudget -= 1;
       }
+      /* 合成填充：直接复用同一条线的采样（props 能撒出来，这里一定也会执行） */
+      const ip = sampleAlong(line, 22, (hashId("inf|" + li) % 11) * 2);
+      for (let si = 0; si < ip.length; si++) {
+        if (infill.length >= INFILL_CAP * 2) break;
+        const sp = ip[si]!;
+        const hh2 = hashId("infk|" + li + "|" + si);
+        const kind: 0 | 1 = (hh2 & 1) === 0 ? 0 : 1;
+        const side2 = (hh2 >> 2) & 1 ? 1 : -1;
+        const nx2 = Math.cos(sp.rot), nz2 = -Math.sin(sp.rot);
+        const sRGB = (v: number): number => {
+          const x = v / 255;
+          return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+        };
+        const PAL: [number, number, number][] = [
+          [232, 220, 200], [214, 198, 174], [230, 224, 212],
+          [200, 214, 208], [206, 172, 142], [176, 190, 204],
+        ].map((c) => [sRGB(c[0]!), sRGB(c[1]!), sRGB(c[2]!)] as [number, number, number]);
+        if (kind === 0) {
+          const w = 8 + ((hh2 >> 4) % 6);
+          const d = 4.5 + ((hh2 >> 7) % 2);
+          const h2 = 3.2 + ((hh2 >> 9) % 3) * 0.4;
+          const off = 10.5 + ((hh2 >> 11) % 3);
+          infill.push({ x: sp.x + nx2 * off * side2, z: sp.z + nz2 * off * side2, rot: sp.rot, w, d, h: h2, kind, color: PAL[hh2 % PAL.length]! });
+        } else {
+          const w = 6 + ((hh2 >> 4) % 6);
+          const d = 6 + ((hh2 >> 8) % 5);
+          const h2 = 6 + ((hh2 >> 12) % 4) * 3;
+          const off = 20 + ((hh2 >> 11) % 9);
+          infill.push({ x: sp.x + nx2 * off * side2, z: sp.z + nz2 * off * side2, rot: sp.rot, w, d, h: h2, kind, color: PAL[(hh2 >> 3) % PAL.length]! });
+        }
+      }
+
       const vp = sampleAlong(line, VEH_STEP_M, phaseV);
       for (let si = 0; si < vp.length && vehBudget > 0; si++) {
         const s = vp[si]!;
@@ -552,56 +593,6 @@ export function buildBldAllLayer(
   }
 
   /* ── 合成填充：沿路采样，路边一条底商、更外侧一栋内院低层 ── */
-  interface Infill extends Place {
-    w: number;
-    d: number;
-    h: number;
-    kind: 0 | 1;
-    color: [number, number, number];
-  }
-  const infill: Infill[] = [];
-  if (toLocal && opts.roads) {
-    const lines = roadLinesOf(opts.roads, toLocal);
-    /* sRGB 调色板 → 线性（instanceColor 走线性工作空间） */
-    const srgb = (r: number, g: number, b: number): [number, number, number] => {
-      const f = (v: number): number => {
-        const x = v / 255;
-        return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-      };
-      return [f(r), f(g), f(b)];
-    };
-    const PALETTE: [number, number, number][] = [
-      srgb(232, 220, 200), srgb(214, 198, 174), srgb(230, 224, 212),
-      srgb(200, 214, 208), srgb(206, 172, 142), srgb(176, 190, 204),
-    ];
-    for (let li = 0; li < lines.length; li++) {
-      const pts = sampleAlong(lines[li]!, 22, (hashId("inf|" + li) % 11) * 2);
-      for (let si = 0; si < pts.length; si++) {
-        if (infill.length >= INFILL_CAP * 2) break;
-        const s = pts[si]!;
-        const h = hashId("infk|" + li + "|" + si);
-        const kind: 0 | 1 = (h & 1) === 0 ? 0 : 1;
-        const side = (h >> 2) & 1 ? 1 : -1;
-        const nx = Math.cos(s.rot), nz = -Math.sin(s.rot);
-        if (kind === 0) {
-          /* 底商条：贴人行道外侧，进深 4~6 m、高 3.2~4.2 m */
-          const w = 8 + ((h >> 4) % 6);
-          const d = 4.5 + ((h >> 7) % 2);
-          const hh = 3.2 + ((h >> 9) % 3) * 0.4;
-          const off = 10.5 + ((h >> 11) % 3);
-          infill.push({ x: s.x + nx * off * side, z: s.z + nz * off * side, rot: s.rot, w, d, h: hh, kind, color: PALETTE[h % PALETTE.length]! });
-        } else {
-          /* 内院低层：再退 8~20 m，2~4 层 */
-          const w = 6 + ((h >> 4) % 6);
-          const d = 6 + ((h >> 8) % 5);
-          const hh = 6 + ((h >> 12) % 4) * 3;
-          const off = 20 + ((h >> 11) % 9);
-          infill.push({ x: s.x + nx * off * side, z: s.z + nz * off * side, rot: s.rot, w, d, h: hh, kind, color: PALETTE[(h >> 3) % PALETTE.length]! });
-        }
-      }
-    }
-  }
-
   /* ── 每帧状态 ── */
   let count = 0;
   let drawnTris = 0;
@@ -955,7 +946,7 @@ export function buildBldAllLayer(
       t0,
       t1,
       t2: Math.max(0, visCount - real),
-      trisT0: drawnTris - t1 * 12 - propTris - vehTris - infTris,
+      trisT0: trisNow() - t1 * 12 - propTris - vehTris - infTris,
       trisT1: t1 * 12,
       trisProps: propTris,
       trisVeh: vehTris,

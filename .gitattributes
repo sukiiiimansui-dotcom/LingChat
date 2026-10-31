@@ -71,3 +71,10 @@ public/ws3d/ws3dgl/assets/** binary -filter
 # 📸 世界模拟的演示图（`docs/worldsim/*.jpg`）：同上，故意不进 LFS（同一类"本机无 lfs + CI 期待指针"的冲突）。
 # ⚠️ 必须写在 `*.jpg filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
 docs/worldsim/*.jpg binary -filter
+
+# 🧱 世界模拟建筑资产图集（`public/ws3d/bldfacades/`、`public/ws3d/bldassets/` 的 png）：**故意不进 LFS**。
+# 原因同上面几条：本机无 git-lfs、直接提交普通 blob；有 lfs 的 CI 会判「should have been pointers」，
+# 进而让「代码量徽章」里的 `git pull --rebase` 因工作树变脏而连续失败（run 41167819382 就是这种形状）。
+# ⚠️ 必须写在 `*.png filter=lfs` **之后**：gitattributes 是"后面的规则赢"。
+public/ws3d/bldfacades/*.png binary -filter
+public/ws3d/bldassets/*.png binary -filter

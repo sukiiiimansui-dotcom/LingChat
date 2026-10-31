@@ -7,6 +7,67 @@ export default {
     pageOf: "Page {current} / {total}",
     pageOfTotal: "Page {current} of {total}",
   },
+  identity: {
+    title: "My Identity",
+    hint: 'Decides who "I" am: name, subtitle, the identity prompt injected into chat, and your relationship with each character (how you see them). You can switch identity at any time; the conversation history is kept (except while a scenario is running).',
+    scriptBlocked:
+      "A scenario is running, so the identity cannot be changed. Finish the scenario first.",
+    newGame: "New chat with this identity",
+    newGameConfirm:
+      'Start a new conversation as "{name}"? The current conversation\'s memory will be cleared and the game restarts with the new identity (existing saves are unaffected). Save the current playthrough first if you want to keep it.',
+    newGameDoneTitle: "New conversation started",
+    newGameDoneMsg: 'You are now "{name}"',
+    newGameFailTitle: "Failed to switch identity",
+    switch: "Switch",
+    switchConfirm:
+      'Set "{name}" as your current identity? The dialogue history is kept; onstage characters will get a switch narration.',
+    switchDoneTitle: "Identity switched",
+    switchDoneMsg: 'Now continuing as "{name}".',
+    switchFailTitle: "Failed to switch identity",
+    transition: {
+      title: 'Switch to "{name}"',
+      hint: 'Optionally describe how they exit and enter (both fields may be left blank; a blank field generates no description narration). The standard "left / joined the conversation" lines and the departure notes are always added, and they only affect the current save.',
+      exitLabel: "Exit style (optional)",
+      exitPlaceholder: "e.g. walked away in the rain without looking back",
+      enterLabel: "Entrance style (optional)",
+      enterPlaceholder: 'e.g. kicked the door open shouting "I\'m back"',
+      cancel: "Cancel",
+      skip: "Skip (use default)",
+      confirm: "Confirm switch",
+    },
+    saveConfirm:
+      'This save updates the identity card: if you edited the identity currently in use (name / subtitle / identity prompt / relationship with each party), the current save "{save}" will change accordingly; editing other identities does not affect the current save. Save now?',
+    saveConfirmNoSave:
+      "This save updates the identity card: there is no ongoing save, so only the card itself will be updated. Save now?",
+    empty: "No identity cards yet. Create one below — or just keep using the default identity.",
+    current: "In use",
+    edit: "Edit",
+    delete: "Delete",
+    create: "New identity",
+    editorTitle: "Edit identity card",
+    editorCreateTitle: "New identity card",
+    editorSubtitle: "Name and subtitle decide how characters address you",
+    cancel: "Cancel",
+    save: "Save",
+    addRelation: "+ Add impression",
+    fieldName: "Name",
+    fieldSubtitle: "Subtitle",
+    fieldPrompt: 'Identity prompt (injected into chat; describes who "I" am)',
+    fieldRelations: "Relationship / how you see them",
+    relationsHint:
+      'Describe how "I" see each party (relationship) — write a full sentence with the other person as "them": e.g. "They are my childhood friend." Each identity is separate; in-game changes are stored in the save and never modify the identity card.',
+    targetAi: "AI character",
+    targetMe: "My identity",
+    relationCount: "{n} impression(s)",
+    msg: {
+      nameRequired: "Please enter a name first",
+      savedTitle: "Identity saved",
+      savedMsg: "The identity card has been updated",
+      saveFailTitle: "Failed to save identity",
+      deleteConfirm: 'Delete identity "{name}"? Identities in use by a save cannot be deleted.',
+      deleteFailTitle: "Failed to delete identity",
+    },
+  },
   history: {
     title: "Chat History",
     empty: "No chat history yet — go say hi! (*^▽^*)",
@@ -122,6 +183,10 @@ export default {
       placeholder: "Enter a save name",
       creating: "Creating...",
       button: "Create",
+      identityLabel: "Identity of this playthrough",
+      identityUnknown: "Unnamed identity",
+      identityHint:
+        'A save records the current identity and restores it on load. To change identity, use "New chat with this identity" under Character → My Identity.',
     },
     list: {
       title: "Save List",
@@ -131,6 +196,7 @@ export default {
       editTitleTip: "Double-click to edit the save title",
       untitled: "Untitled Save",
       noMessage: "No dialogue recorded yet",
+      identityLabel: "Identity: {name}",
       current: "Current",
     },
     action: {
@@ -337,6 +403,9 @@ export default {
     envHint: "Environment variables (read from the process):",
     envFromProcess: "from process env",
     saveConfig: "Save",
+    reload: "Rescan plugins",
+    reloadHint:
+      "After editing a plugin's manifest or swapping files in data/plugins, reload here — no app restart needed.",
     empty: "No plugins found. Put a plugin folder in data/plugins/",
     delete: "Delete",
     deleteConfirm: 'Delete plugin "{name}"? This removes the plugin folder and cannot be undone.',
@@ -391,8 +460,13 @@ export default {
   characterInfo: {
     header: {
       title: "{title} - Edit Config",
+      untitled: "Character",
       subtitle: "Edit the character's detailed settings",
     },
+    saveConfirm:
+      'This save updates the character card: if your edits include "persona & address terms", "relationship / how they see you", or "initial affection", the corresponding content in the current save "{save}" will change as well; edits to visuals, voice, title, bio, etc. only update the card itself. Save now?',
+    saveConfirmNoSave:
+      "This save updates the character card: there is no ongoing save, so only the card itself will be updated. Save now?",
     tabs: {
       basic: "Basic Info",
       prompts: "Prompts",
@@ -403,11 +477,27 @@ export default {
       pet: "Desktop Pet",
       voice: "Voice Settings",
     },
+    relations: {
+      title: "Relationship / how they see them",
+      hint: 'Describe how this character sees each party (relationship) — write a full sentence with the other person as "them": e.g. "They are my childhood friend." Each character keeps an independent view; changes are stored in the save and never modify the character card.',
+      missing: "Target no longer exists ({key})",
+      affectionPlaceholder: "Affection",
+      affectionHint:
+        "The number on a My Identity row is this character's starting affection for that identity (-100..100). Leave it empty to follow the character card default.",
+      msg: {
+        savedTitle: "Impression saved",
+        savedMsg: "This character's impression (relationship) has been updated",
+        loadFailTitle: "Failed to load relationships",
+      },
+    },
     fields: {
       aiName: "AI Name",
       aiSubtitle: "AI Subtitle",
-      userName: "User Name",
-      userSubtitle: "User Subtitle",
+      userName: 'Name this character calls "me"',
+      userSubtitle: 'Subtitle this character uses for "me"',
+      initialAffection: "Default starting affection",
+      initialAffectionHint:
+        "Starting affection for new conversations (-100..100). Once the database has a value for an identity, that value wins; leave empty to leave it unset.",
       title: "Character Title",
       info: "Character Bio",
       systemPrompt: "System Prompt",
@@ -593,8 +683,8 @@ export default {
       aiNamePlaceholder: "Name used in conversations",
       aiSubtitle: "AI Subtitle",
       aiSubtitlePlaceholder: "e.g. Night Watcher / School Idol",
-      userName: "User Name",
-      userSubtitle: "User Subtitle",
+      userName: 'How this character addresses "me"',
+      userSubtitle: 'Subtitle this character uses for "me"',
       info: "Character Bio",
       infoPlaceholder: "Optional: shown in the character introduction",
     },

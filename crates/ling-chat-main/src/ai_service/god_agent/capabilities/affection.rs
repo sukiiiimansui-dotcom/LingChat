@@ -1,15 +1,24 @@
 //! 好感度评估能力：状态快照 + 评估 prompt + 结果日志。
 //!
 //! 情感维度的调整、存档落点、事件广播与旁白台词由
-//! `tools::god_agent::UpdateAffection` 在执行时完成。
+//! `tools::builtin::god_agent::UpdateAffection` 在执行时完成。
+
+use std::collections::HashMap;
 
 use anyhow::Result;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
+use crate::AppState;
 use crate::ai_service::game_system::game_status::GameStatus;
+use crate::ai_service::game_system::player_identity::{
+    RelationEndpoint, resolve_relation, runtime_relations,
+};
+use crate::ai_service::game_system::status_ops::{RecentMemory, RecentMemoryAnchor};
 use crate::ai_service::tools::agent::{AgentOutput, AgentTask};
-use crate::ai_service::tools::god_agent::UPDATE_AFFECTION;
+use crate::ai_service::tools::builtin::god_agent::UPDATE_AFFECTION;
+use crate::ai_service::tools::game_status_handle;
 use crate::ai_service::types::{AffectionVector, GameLine, NegativeVector};
+use crate::utils::prompt::PromptRole;
 
 use crate::ai_service::god_agent::core::{GodAgentCore, tail_lines};
 
@@ -26,6 +35,8 @@ pub struct NpcAffectionView {
     pub current: AffectionVector,
     /// 当前负面情绪六维强度（评估参考：安抚后应减回去）。
     pub negative: NegativeVector,
+    /// 该角色对玩家身份的认知（说话者侧关系，可为空）。
+    pub player_relation: Option<String>,
 }
 
 impl NpcAffectionView {
@@ -41,6 +52,15 @@ impl NpcAffectionView {
             .filter_map(|&id| gs.role_manager.get_loaded(id))
             .filter_map(|r| {
                 let role_id = r.role_id?;
+                let folder = r.settings.character_folder.clone();
+                let player_relation = resolve_relation(
+                    &RelationEndpoint::Ai(folder.clone()),
+                    &RelationEndpoint::Me(gs.player.identity_id.clone().unwrap_or_default()),
+                    &runtime_relations::load_effective(&crate::api::data_dir(), &folder, gs),
+                    &HashMap::new(),
+                    None,
+                )
+                .map(|view| view.text);
                 Some(NpcAffectionView {
                     role_id,
                     name: r
@@ -51,6 +71,7 @@ impl NpcAffectionView {
                     info: r.settings.info.clone().unwrap_or_default(),
                     current: r.affection,
                     negative: r.negative,
+                    player_relation,
                 })
             })
             .collect();
@@ -65,12 +86,13 @@ impl NpcAffectionView {
 
 /// 评估最近对话对在场 NPC 好感度的影响。
 ///
-/// 调整、落档、广播与旁白台词均由 `update_affection` 工具在评估过程中就地完成，
-/// 这里只负责组装请求并记录结果。
+/// 调整、落档与广播由 `update_affection` 工具完成；工具返回的旁白文本交给近期
+/// 记忆队列，锚定到 `anchor` 指向的那一轮。
 pub async fn evaluate_affection(
     core: &GodAgentCore,
     npcs: &[NpcAffectionView],
     lines: &[GameLine],
+    anchor: Option<RecentMemoryAnchor>,
     app: &AppHandle,
 ) -> Result<()> {
     if npcs.is_empty() {
@@ -79,8 +101,54 @@ pub async fn evaluate_affection(
 
     let task = build_task(npcs, lines);
     let output = core.run_task(&task, app).await?;
+    queue_recent_memories(&output, anchor, app).await;
     log_output(&output);
     Ok(())
+}
+
+/// 把评估产出的好感度旁白交给近期记忆队列，等生成锁空闲再落位。
+async fn queue_recent_memories(
+    output: &AgentOutput,
+    anchor: Option<RecentMemoryAnchor>,
+    app: &AppHandle,
+) {
+    let memories: Vec<RecentMemory> = output
+        .calls
+        .iter()
+        .filter(|call| call.name == UPDATE_AFFECTION && call.ok)
+        .filter_map(|call| {
+            let line_text = serde_json::from_str::<serde_json::Value>(&call.result)
+                .ok()?
+                .get("line_text")
+                .and_then(|text| text.as_str())
+                .map(str::to_string)?;
+            Some(RecentMemory {
+                text: line_text,
+                role: PromptRole::Narrator,
+                anchor: anchor.clone(),
+            })
+        })
+        .collect();
+    if memories.is_empty() {
+        return;
+    }
+
+    {
+        let game_status = game_status_handle(app).await;
+        let mut gs = game_status.lock().await;
+        for memory in memories {
+            gs.queue_recent_memory(memory);
+        }
+    }
+
+    // 锁被占时（下一轮正在生成）等这一轮结束再落位，位置仍是上一轮 user 块。
+    let state = app.state::<AppState>();
+    let gen_lock = state.generation_lock.clone();
+    let _guard = gen_lock.lock().await;
+    let db = state.db.clone();
+    let game_status = game_status_handle(app).await;
+    let mut gs = game_status.lock().await;
+    gs.flush_recent_memories(&db).await;
 }
 
 // ============================================================
@@ -117,6 +185,9 @@ fn build_task(npcs: &[NpcAffectionView], lines: &[GameLine]) -> AgentTask {
             dims,
             neg_dims,
         ));
+        if let Some(relation) = &npc.player_relation {
+            npc_block.push_str(&format!("  对玩家的认知（关系）: {}\n", relation));
+        }
     }
 
     let mut dialog_block = String::from("【最近对话记录（由旧到新）】\n");

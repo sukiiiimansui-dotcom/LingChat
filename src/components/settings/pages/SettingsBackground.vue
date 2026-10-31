@@ -350,10 +350,11 @@ import {
   CloudSnow,
   Snowflake,
   CloudFog,
-} from "lucide-vue-next";
+} from "@lucide/vue";
 import { PARTICLE_EFFECTS, WEATHER_EFFECTS } from "@/components/game/standard/particles";
 import {
   selectBackgroundEffect,
+  selectWeatherEffect,
   getWeatherSyncConfig,
   setWeatherCity,
   setWeatherAutoSync,
@@ -374,7 +375,7 @@ import {
   getActiveGpu,
   type GpuInfo,
 } from "../../../api/services/gpu-perf";
-import { Settings, Cpu } from "lucide-vue-next";
+import { Settings, Cpu } from "@lucide/vue";
 import SceneManageSection from "../background/SceneManageSection.vue";
 
 const uiStore = useUIStore();
@@ -576,6 +577,8 @@ function updateParticle(value: string): void {
 // 而设置页正是要允许两层并存的地方
 function updateWeather(value: string): void {
   uiStore.setWeatherEffect(value);
+  // 同步后端天气层状态，下一轮对话据此判断是否需要天气旁白
+  selectWeatherEffect(value).catch((e) => console.warn("selectWeatherEffect 失败:", e));
   // 手动选了天气特效 → 天气同步自动关闭
   if (weatherAutoSync.value) {
     weatherAutoSync.value = false;

@@ -6,6 +6,67 @@ export default {
     pageOf: "{current} / {total} ページ",
     pageOfTotal: "{current} ページ / 全 {total} ページ",
   },
+  identity: {
+    title: "わたしの身分",
+    hint: "「わたし」が誰かを決めます：名前・サブタイトル・チャットに注入される身分プロンプト・各キャラとの関係／相手への認識。いつでも途中で切り替えでき、会話履歴は保持されます（シナリオ進行中を除く）。",
+    scriptBlocked: "シナリオ進行中は身分を変更できません。先にシナリオを終了してください。",
+    newGame: "この身分で新しい会話",
+    newGameConfirm:
+      "「{name}」で新しい会話を始めますか？現在の会話の記憶は消去され、新しい身分で最初からやり直しになります（保存済みのセーブは影響を受けません）。今のプレイを残したい場合は、先にセーブページで保存してください。",
+    newGameDoneTitle: "新しい会話を開始しました",
+    newGameDoneMsg: "これから「わたし」は「{name}」です",
+    newGameFailTitle: "身分の変更に失敗しました",
+    switch: "身分を切り替え",
+    switchConfirm:
+      "「{name}」を現在の身分にしますか？ 会話履歴は保持され、その場のキャラに切り替えのナレーションが届きます。",
+    switchDoneTitle: "身分を切り替えました",
+    switchDoneMsg: "これから「{name}」の身分で会話を続けます。",
+    switchFailTitle: "身分の切り替えに失敗しました",
+    transition: {
+      title: "「{name}」に切り替え",
+      hint: "今回の退場・登場の様子を任意で描写できます（どちらも空欄可。空欄の項目は描写ナレーションを生成しません）。「会話から去った / 会話に加わった」のナレーションと離場注記は常に生成され、現在のセーブにのみ影響します。",
+      exitLabel: "退場の様子（空欄可）",
+      exitPlaceholder: "例：雨の中を振り返らずに去っていった",
+      enterLabel: "登場の様子（空欄可）",
+      enterPlaceholder: "例：ドアを蹴って「ただいま」と叫びながら入ってきた",
+      cancel: "キャンセル",
+      skip: "スキップ（デフォルト）",
+      confirm: "切り替えを確定",
+    },
+    saveConfirm:
+      "保存すると身分カードが更新されます：現在使用中の身分（名前 / サブタイトル / 身分プロンプト / 関係／認識）を変更した場合、現在のセーブ「{save}」も同期して変わります。他の身分の変更は現在のセーブに影響しません。保存しますか？",
+    saveConfirmNoSave:
+      "保存すると身分カードが更新されます：進行中のセーブがないため、カード自体のみ更新されます。保存しますか？",
+    empty:
+      "身分カードがまだありません。下のボタンで作成できます。作成しなくても既定の身分で動きます。",
+    current: "使用中",
+    edit: "編集",
+    delete: "削除",
+    create: "身分を作成",
+    editorTitle: "身分カードを編集",
+    editorCreateTitle: "身分カードを作成",
+    editorSubtitle: "名前とサブタイトルが、キャラがあなたをどう呼ぶかを決めます",
+    cancel: "キャンセル",
+    save: "保存",
+    addRelation: "+ 認識を追加",
+    fieldName: "名前",
+    fieldSubtitle: "サブタイトル",
+    fieldPrompt: "身分プロンプト（チャットに注入され、「わたし」の設定を説明します）",
+    fieldRelations: "関係／相手への認識",
+    relationsHint:
+      "「わたし」が各相手をどう見ているか（関係）を書きます。相手は「ta」と書いて、文として完結させてください：例「相手は私の幼なじみ」。身分ごとに独立しています。ゲーム中の変化はセーブに記録され、身分カードは変更されません。",
+    targetAi: "AI キャラ",
+    targetMe: "わたしの身分",
+    relationCount: "{n} 件の認識",
+    msg: {
+      nameRequired: "名前を入力してください",
+      savedTitle: "身分を保存しました",
+      savedMsg: "身分カードを更新しました",
+      saveFailTitle: "身分の保存に失敗しました",
+      deleteConfirm: "身分「{name}」を削除しますか？ 使用中のセーブがあると削除できません。",
+      deleteFailTitle: "身分の削除に失敗しました",
+    },
+  },
   history: {
     title: "会話履歴",
     empty: "会話履歴はまだありません。あの子とおしゃべりしてみよう(*^▽^*)",
@@ -111,6 +172,10 @@ export default {
       placeholder: "セーブ名を入力",
       creating: "作成中...",
       button: "作成",
+      identityLabel: "このプレイの身分",
+      identityUnknown: "名前のない身分",
+      identityHint:
+        "セーブには現在の身分が記録され、ロード時に身分も一緒に復元されます。身分を変えたい場合は「キャラクター → わたしの身分」で「この身分で新しい会話」を選んでください。",
     },
     list: {
       title: "セーブ一覧",
@@ -120,6 +185,7 @@ export default {
       editTitleTip: "ダブルクリックでセーブのタイトルを変更",
       untitled: "無題のセーブ",
       noMessage: "会話セリフの記録なし",
+      identityLabel: "身分：{name}",
       current: "今回のセーブ",
     },
     action: {
@@ -317,6 +383,9 @@ export default {
     envHint: "環境変数（プロセスから読取）：",
     envFromProcess: "プロセス環境から",
     saveConfig: "保存",
+    reload: "プラグインを再読み込み",
+    reloadHint:
+      "プラグインの manifest を編集したり data/plugins のファイルを入れ替えた後は、ここから再読み込みできます。アプリの再起動は不要です。",
     empty: "プラグインが見つかりません。data/plugins/ にプラグインフォルダを置いてください",
     delete: "削除",
     deleteConfirm:
@@ -372,8 +441,13 @@ export default {
   characterInfo: {
     header: {
       title: "{title} - 設定編集",
+      untitled: "キャラクター",
       subtitle: "キャラクターの詳細設定を変更します",
     },
+    saveConfirm:
+      "保存するとキャラカードが更新されます：「人物設定と呼称」「関係／認識」「初期好感度」の変更は、現在のセーブ「{save}」の対応内容も同期して変わります。立ち絵・ボイス・称号・紹介文などのみの変更はカード自体のみ更新されます。保存しますか？",
+    saveConfirmNoSave:
+      "保存するとキャラカードが更新されます：進行中のセーブがないため、カード自体のみ更新されます。保存しますか？",
     tabs: {
       basic: "基本情報",
       prompts: "プロンプト",
@@ -384,11 +458,27 @@ export default {
       pet: "デスクトップペット",
       voice: "音声設定",
     },
+    relations: {
+      title: "関係／相手への認識",
+      hint: "ここにはこのキャラが各相手をどう見ているか（関係）を書きます。相手は「ta」と書いて、文として完結させてください：例「相手は私の幼なじみ」。キャラ同士の認識は互いに影響しません。ゲーム中の変化はセーブに記録され、キャラカードは変更されません。",
+      missing: "対象は既に存在しません（{key}）",
+      affectionPlaceholder: "初期好感度",
+      affectionHint:
+        "「わたしの身分」の行にある数字は、このキャラがその身分に対する初期好感度です（-100〜100）。空欄ならキャラカードの既定値に従います。",
+      msg: {
+        savedTitle: "認識を保存しました",
+        savedMsg: "このキャラの認識（関係）を更新しました",
+        loadFailTitle: "関係の読み込みに失敗しました",
+      },
+    },
     fields: {
       aiName: "AI 名",
       aiSubtitle: "AI サブタイトル",
-      userName: "ユーザー名",
-      userSubtitle: "ユーザーサブタイトル",
+      userName: "このキャラクターが「私」を呼ぶ既定の名前",
+      userSubtitle: "このキャラクターが「私」に使う既定の副題",
+      initialAffection: "既定の初期好感度",
+      initialAffectionHint:
+        "新しい会話を始めるときの初期好感度（-100〜100）。データベースに身分ごとの値がある場合はそちらが優先されます。空欄なら未設定になります。",
       title: "キャラクタータイトル",
       info: "キャラクター紹介",
       systemPrompt: "システムプロンプト",
@@ -575,8 +665,8 @@ export default {
       aiNamePlaceholder: "キャラクターの会話名",
       aiSubtitle: "AI サブタイトル",
       aiSubtitlePlaceholder: "例: 夜の番人 / スクールアイドル",
-      userName: "ユーザー名",
-      userSubtitle: "ユーザーサブタイトル",
+      userName: "このキャラが「わたし」を呼ぶ名前",
+      userSubtitle: "このキャラが「わたし」に使うサブタイトル",
       info: "キャラクター紹介",
       infoPlaceholder: "任意：キャラクター紹介の表示に使用",
     },

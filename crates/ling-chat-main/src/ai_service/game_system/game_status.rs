@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ai_service::game_system::role_manager::GameRoleManager;
-use crate::ai_service::types::{
-    GameLine, GameRole, LineAttributeExt, LineBase, Player, ScriptStatus,
-};
+use crate::ai_service::game_system::status_ops::{Pending, PromptLine, RequestScoped};
+use crate::ai_service::types::{GameLine, GameRole, LineBase, Player, ScriptStatus};
 use crate::db::entities::line::LineAttribute;
 use crate::utils::prompt::{PromptRole, REPLY_LENGTH_VAR_KEY, ReplyLengthMode};
 
@@ -37,12 +36,17 @@ pub struct GameStatus {
     pub background: String,
     pub present_pic: String,
     pub background_music: String,
+    /// 氛围层粒子特效
     pub background_effect: String,
+    /// 天气层粒子特效（由天气同步写入；与氛围层互不覆盖）
+    pub weather_effect: String,
 
     /// 当前用户选择的场景 ID（对应 scenes.json 中的场景）
     pub current_scene_id: Option<String>,
     /// 上一次 process_message 处理时的场景 ID，用于检测场景切换
     pub last_processed_scene_id: Option<String>,
+    /// 上一次对话时的天气层特效，用于在下一轮对话检测天气变化并生成旁白
+    pub last_processed_weather_effect: String,
 
     pub global_variables: HashMap<String, Value>,
     pub completed_scripts: HashSet<String>,
@@ -53,11 +57,7 @@ pub struct GameStatus {
     /// 当前激活的存档 ID（用于 MemoryBank 持久化/载入/自动压缩）
     pub active_save_id: Option<i32>,
 
-    /// 试玩会话代号。每次试玩「进来备份 / 走时还原」都会递增；
-    /// 消息生成管线在写入台词前比对捕获值与当前值，不一致即视为已过期
-    /// （试玩任务被中止后，游离的流式任务可能仍在写）——直接丢弃，保证
-    /// 试玩内容不会漏进已还原的自由对话会话。自由对话本身不递增，恒等比对，
-    /// 行为不受影响。
+    /// 试玩会话代号。
     pub preview_generation: u64,
 
     /// 本会话是否已触发过入场问候（内存标记，重启/清档重置）。
@@ -70,6 +70,12 @@ pub struct GameStatus {
 
     /// 场景感知开关（关闭后切换场景不再触发旁白）
     pub scene_awareness_enabled: bool,
+
+    /// 等下一轮落位的暂存：插件旁白与近期记忆（见 `status_ops`）。
+    pub pending: Pending,
+
+    /// 下一次请求取走的暂存：临时记忆与工具推荐名字（见 `status_ops`）。
+    pub request: RequestScoped,
 }
 
 impl GameStatus {
@@ -86,8 +92,10 @@ impl GameStatus {
             present_pic: String::new(),
             background_music: String::new(),
             background_effect: String::new(),
+            weather_effect: "None".into(),
             current_scene_id: None,
             last_processed_scene_id: None,
+            last_processed_weather_effect: "None".into(),
             global_variables: HashMap::new(),
             completed_scripts: HashSet::new(),
             last_dialog_time: None,
@@ -97,6 +105,8 @@ impl GameStatus {
             entry_greeting_done: false,
             affection_eval_cursor: 0,
             scene_awareness_enabled: true,
+            pending: Pending::default(),
+            request: RequestScoped::default(),
         }
     }
 
@@ -105,11 +115,12 @@ impl GameStatus {
         db: &DatabaseConnection,
         role_id: i32,
     ) -> Result<&'a mut GameRole> {
-        // 存档全局变量里的好感度覆盖角色加载时的默认值
-        let var = self
-            .global_variables
-            .get(&crate::ai_service::affection::var_key(role_id))
-            .cloned();
+        let var = crate::ai_service::affection::resolve_var(
+            &self.global_variables,
+            role_id,
+            self.player.identity_id.as_deref(),
+        )
+        .cloned();
         let role = self.role_manager.get_role(db, role_id).await?;
         if let Some(state) = var
             .as_ref()
@@ -121,37 +132,52 @@ impl GameStatus {
         Ok(role)
     }
 
-    /// 追加台词，记录当前在场者为感知列表，并刷新相关角色的记忆。
-    pub async fn add_line(&mut self, db: &DatabaseConnection, line: LineBase) -> Result<()> {
-        let perceived: Vec<i32> = self.present_role_ids.iter().copied().collect();
-        let game_line = GameLine::from_base(line, perceived);
-        self.line_list.push(game_line);
-        self.refresh_memories(db).await?;
-        Ok(())
+    /// 已绑档时把内存台词表同步落库一次；失败只告警。
+    pub async fn persist_lines_if_bound(&self, db: &DatabaseConnection) {
+        let Some(save_id) = self.active_save_id else {
+            return;
+        };
+        if let Err(e) = crate::db::managers::save_repo::SaveRepo::sync_lines(
+            db,
+            save_id,
+            &self.line_list,
+            false,
+        )
+        .await
+        {
+            tracing::warn!("同步存档失败: {e}");
+        }
     }
 
-    /// 把台词插入到第 `index` 条之前（下标基于 `line_list`，越界夹到末尾），
-    /// 用于把内容挂到「较近但非最新」的位置
-    pub async fn insert_line(
+    /// 追加台词，记录当前在场者为感知列表，并刷新相关角色的记忆。
+    pub async fn add_line(&mut self, db: &DatabaseConnection, mut line: LineBase) -> Result<()> {
+        // 玩家台词行自动归属当前身份；旁白/系统行不归属（换身份后旧行保留原名）。
+        if matches!(line.attribute.inner(), LineAttribute::User)
+            && line.sender_role_id == Some(0)
+            && line.identity_id.is_none()
+            && !matches!(line.display_name.as_deref(), Some("旁白") | Some("系统"))
+        {
+            line.identity_id = self.player.identity_id.clone();
+        }
+        let perceived: Vec<i32> = self.present_role_ids.iter().copied().collect();
+        self.add_line_perceived(db, line, perceived).await
+    }
+
+    pub async fn add_line_perceived(
         &mut self,
         db: &DatabaseConnection,
-        index: usize,
         line: LineBase,
+        perceived_role_ids: Vec<i32>,
     ) -> Result<()> {
-        let perceived: Vec<i32> = self.present_role_ids.iter().copied().collect();
-        let game_line = GameLine::from_base(line, perceived);
-        // 中段插入会平移其后的下标，先让进行中的后台摘要作废，避免过期结果落库
-        //（与工具消息回填、edit_context_lines 的处理一致）。
-        self.role_manager.invalidate_memory_history();
-        self.line_list
-            .insert(index.min(self.line_list.len()), game_line);
+        let game_line = GameLine::from_base(line, perceived_role_ids);
+        self.line_list.push(game_line);
         self.refresh_memories(db).await?;
         Ok(())
     }
 
     pub async fn refresh_memories(&mut self, db: &DatabaseConnection) -> Result<()> {
         self.role_manager
-            .sync_memories(db, &self.line_list, None, false)
+            .sync_memories(db, &self.line_list, None, false, &self.player)
             .await
     }
 
@@ -162,24 +188,11 @@ impl GameStatus {
         db: &DatabaseConnection,
     ) -> Result<()> {
         self.role_manager
-            .sync_memories(db, &self.line_list, None, true)
+            .sync_memories(db, &self.line_list, None, true, &self.player)
             .await
     }
 
-    // ── 台词历史（上下文源）的区间查看 / 编辑 ──
-    //
-    // 「第 start~end 条」一律指 `line_list` 的下标：**从 1 开始、闭区间**，第 1 条
-    // 通常就是 role system 的人设行；越界会被夹到可用范围。这里操作的是台词行
-    // （`GameLine`，全字段），**不是**渲染后发给 LLM 的 `LlmMessage`——渲染会按角色
-    // 合并/过滤，两者不是同一套下标空间。
-    //
-    // 参数名用 `start`/`end` 而非 `from`/`to`：与插件侧同名 API 对齐（Python 里
-    // `from` 是关键字，用不了）。
-
-    /// 读取第 `start`~`end` 条台词（含两端，1 起）的完整运行时行。
-    ///
-    /// 返回的 `GameLine` 携带全部字段（情绪、动作、TTS、音频、thinking、tool_call、
-    /// 感知集合等），可改后原样回传给 [`Self::edit_context_lines`]；只读，无副作用。
+    // ── 台词历史（上下文源）的区间查看 / 编辑，下标 1 开始，左开右闭 ──
     pub fn read_context_lines(&self, start: usize, end: usize) -> Vec<GameLine> {
         match Self::clamp_line_range(self.line_list.len(), start, end) {
             Some((lo, hi)) => self.line_list[lo..hi].to_vec(),
@@ -189,19 +202,6 @@ impl GameStatus {
 
     /// 用 `replacement` 替换第 `start`~`end` 条台词（含两端，1 起），并让改动真正
     /// 落进上下文。`replacement` 条数不限：空 = 删除该区间，多条 = 展开。
-    ///
-    /// 依次做：
-    /// - 生成进行中直接拒绝（`generation_lock` 被占），避免改历史与流式写入打架；
-    /// - System 人设行可编辑/删除：删掉后相应角色的上下文失去 system 前缀，只记
-    ///   一条 warn，不拦截；
-    /// - `replacement` 中未带 id 的行按位置继承被替换行的 id，保住存档链锚点
-    ///   （否则 `SaveRepo::sync_lines` 可能因「首行分歧」拒绝覆盖）；
-    /// - 回拨所有角色的压缩指针到编辑起点（仅当指针在其之后），使被编辑的早期
-    ///   内容重新进入窗口、下次压缩重新摘要；
-    /// - `invalidate_memory_history` + `refresh_memories`。
-    ///
-    /// 返回被替换掉的条数。**落库不在这里**，由调用方走正常存盘流程
-    /// （`SaveRepo::sync_lines`）持久化。
     pub async fn edit_context_lines(
         &mut self,
         db: &DatabaseConnection,
@@ -336,16 +336,8 @@ impl GameStatus {
         role: PromptRole,
         text: &str,
     ) -> Result<usize> {
-        self.add_line(
-            db,
-            LineBase {
-                content: role.build_prompt(text),
-                attribute: LineAttributeExt(LineAttribute::User),
-                display_name: Some(role.display_name().to_string()),
-                ..Default::default()
-            },
-        )
-        .await?;
+        self.add_line(db, PromptLine::new(role, text).into_base())
+            .await?;
         Ok(self.line_list.len())
     }
 
@@ -382,78 +374,6 @@ impl GameStatus {
         self.present_role_ids.remove(&role_id);
     }
 
-    pub async fn add_character_clothes_change_line(
-        &mut self,
-        db: &DatabaseConnection,
-        role_id: i32,
-        clothes_name: &str,
-    ) -> Result<()> {
-        let role = self
-            .role_manager
-            .get_loaded_mut(role_id)
-            .ok_or_else(|| anyhow::anyhow!("角色 {} 未加载", role_id))?;
-
-        role.current_clothes = clothes_name.to_string();
-
-        let ai_name = role.settings.ai_name.clone();
-        let clothes_prompt = role
-            .settings
-            .clothes
-            .as_ref()
-            .and_then(|list| {
-                list.iter().find_map(|item| {
-                    if item.get("name").map(|s| s.as_str()) == Some(clothes_name) {
-                        item.get("prompt").cloned()
-                    } else {
-                        None
-                    }
-                })
-            })
-            .unwrap_or_default();
-
-        let prompt = format!(
-            "{}换上了新服装：{}，{}",
-            ai_name, clothes_name, clothes_prompt
-        );
-
-        self.add_line(
-            db,
-            LineBase {
-                content: PromptRole::Narrator.build_prompt(&prompt),
-                attribute: LineAttributeExt(LineAttribute::User),
-                display_name: Some("旁白".to_string()),
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("添加换装台词失败: {}", e))?;
-
-        Ok(())
-    }
-
-    /// 切换角色服装并生成旁白台词。
-    /// 若已是目标服装则跳过。返回是否实际切换。
-    pub async fn on_character_change_clothes(
-        &mut self,
-        db: &DatabaseConnection,
-        role_id: i32,
-        clothes_name: &str,
-    ) -> Result<bool> {
-        let role = self
-            .role_manager
-            .get_loaded_mut(role_id)
-            .ok_or_else(|| anyhow::anyhow!("角色 {} 未加载", role_id))?;
-
-        if role.current_clothes == clothes_name {
-            return Ok(false);
-        }
-
-        self.add_character_clothes_change_line(db, role_id, clothes_name)
-            .await?;
-
-        Ok(true)
-    }
-
     pub fn reactivate_all_voice_makers(&self) {
         self.role_manager.reactivate_all_voice_makers();
     }
@@ -471,6 +391,7 @@ impl GameStatus {
             background: self.background.clone(),
             background_music: self.background_music.clone(),
             background_effect: self.background_effect.clone(),
+            weather_effect: self.weather_effect.clone(),
             current_scene_id: self.current_scene_id.clone(),
             global_variables: self.global_variables.clone(),
             completed_scripts: self.completed_scripts.iter().cloned().collect(),
@@ -488,6 +409,8 @@ impl GameStatus {
         self.background = snapshot.background.clone();
         self.background_music = snapshot.background_music.clone();
         self.background_effect = snapshot.background_effect.clone();
+        self.weather_effect = snapshot.weather_effect.clone();
+        self.last_processed_weather_effect = snapshot.weather_effect.clone();
         self.current_scene_id = snapshot.current_scene_id.clone();
         self.global_variables = snapshot.global_variables.clone();
         self.completed_scripts = snapshot.completed_scripts.iter().cloned().collect();
@@ -501,8 +424,11 @@ impl GameStatus {
         self.onstage_role_ids = snapshot.present_role_ids.clone();
         self.scene_awareness_enabled = snapshot.scene_awareness_enabled;
         // 好感度跟随存档：快照里的全局变量覆盖已加载角色的内存值
-        self.role_manager
-            .overlay_affections_from_vars(&self.global_variables);
+        // （upstream 起增加 identity 维度，调用点必须带当前身份 id）
+        self.role_manager.overlay_affections_from_vars(
+            &self.global_variables,
+            self.player.identity_id.as_deref(),
+        );
         // 世界模拟：书签（我的位置/收藏）跟随存档恢复
         crate::world_map::state::restore_bookmark(snapshot.world_map.as_ref());
     }
@@ -520,6 +446,8 @@ pub struct GameStatusSnapshot {
     pub background_music: String,
     #[serde(default = "default_background_effect")]
     pub background_effect: String,
+    #[serde(default = "default_weather_effect")]
+    pub weather_effect: String,
     #[serde(default)]
     pub current_scene_id: Option<String>,
     #[serde(default)]
@@ -548,4 +476,7 @@ fn default_background_music() -> String {
 }
 fn default_background_effect() -> String {
     "none".into()
+}
+fn default_weather_effect() -> String {
+    "None".into()
 }

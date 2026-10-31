@@ -288,7 +288,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ChevronDown, CloudRain } from "lucide-vue-next";
+import { ChevronDown, CloudRain } from "@lucide/vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import Button from "../base/widget/Button.vue";
@@ -521,11 +521,9 @@ watch(
   },
 );
 
-// 展开时若当前角色还没有好感度数据（如 character:switch 临时建档的角色），
-// 兜底全量拉一次（init / select_character 数据一般已携带）
+// 展开时全量拉一次：设置页改初始值等路径只更新后端，展开即取最新
 watch(enabled, async (v) => {
   if (!v) return;
-  if (gameStore.currentInteractRole?.affection) return;
   try {
     const all = await getAffection();
     for (const [roleId, values] of Object.entries(all)) {

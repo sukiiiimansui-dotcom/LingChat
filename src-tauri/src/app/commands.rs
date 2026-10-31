@@ -7,6 +7,7 @@ use ling_chat_plugins as plugins;
 pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     // 注册所有 API 命令
     builder.invoke_handler(tauri::generate_handler![
+
         // ══════════ 世界模拟（地图系统）══════════
         // ⚠️ 前缀不是装饰：`#[tauri::command]` 除了函数本体，还会在**定义它的模块里**
         // 生成 `pub use {__cmd__xxx, __tauri_command_name_xxx}`，
@@ -71,12 +72,17 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         // 与 `world_map_geo_svg`（行政区划总览）是两件事，不互相替代。
         world_map::stitch_cmd::world_map_bigmap_svg,
         world_map::stitch_cmd::world_map_bigmap_plan,
+        // ── upstream 新增：角色世界书读取/预览 ──
+        api::character::editor::read_character_worldbook,
+        api::character::editor::preview_character_worldbook,
+
         utils::log_bridge::get_log_history,
         utils::log_bridge::open_log_window,
         utils::log_bridge::is_log_window_open,
         plugins::commands::plugin_list,
         plugins::commands::plugin_set_enabled,
         plugins::commands::plugin_save_config,
+        plugins::commands::plugin_voice_playback_active,
         plugins::commands::plugin_line_shown,
         plugins::commands::plugin_reload,
         plugins::commands::plugin_delete,
@@ -84,8 +90,8 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         plugins::commands::plugin_resource_hide,
         plugins::commands::plugin_resource_restore,
         plugins::commands::plugin_resource_keep,
-        plugins::commands::import_plugin_from_path,
-        plugins::commands::cancel_plugin_import,
+        plugins::commands::import::import_plugin_from_path,
+        plugins::commands::import::cancel_plugin_import,
         api::settings::get_settings_tree,
         api::settings::save_settings,
         api::settings::get_setting_by_key,
@@ -126,6 +132,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::character::voice::preview_character_voice,
         api::character::select_clothes,
         api::character::update_role_settings,
+        api::character::set_role_avatar_static,
         api::character::delete_character,
         api::character::open_characters_folder,
         api::live2d::import_live2d,
@@ -145,6 +152,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::scene::delete_scene,
         api::scene::select_scene,
         api::scene::select_background_effect,
+        api::scene::select_weather_effect,
         api::scene::set_scene_awareness,
         api::scene::set_scene_location_type,
         api::scene::get_weather_sync_config,
@@ -201,6 +209,17 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::save::update_save_title,
         api::save::save_screenshot,
         api::save::capture_main_window_screenshot,
+        // ── 我的身份 ──
+        api::player_identity::list_player_identities,
+        api::player_identity::get_player_identity,
+        api::player_identity::get_current_player_identity,
+        api::player_identity::save_player_identity,
+        api::player_identity::delete_player_identity,
+        api::player_identity::set_current_player_identity,
+        api::player_identity::start_new_game_with_identity,
+        api::player_identity::get_role_relations,
+        api::player_identity::save_role_relations,
+        api::player_identity::check_relation_ready,
         api::script::list_scripts,
         api::script::list_standalone_scripts,
         api::script::start_script,
@@ -265,6 +284,8 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         api::tool_settings::get_tool_runtime_info,
         api::tool_settings::save_tool_settings,
         api::tool_settings::test_web_search,
+        api::tool_settings::test_embedding,
+        api::tool_settings::rebuild_embeddings,
         api::tool_settings::get_tool_elevation_status,
         api::tool_settings::restart_tool_process_as_admin,
         api::tool_settings::resolve_command_approval,

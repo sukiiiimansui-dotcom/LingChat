@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use crate::ai_service::config::AIServiceConfig;
 use crate::ai_service::game_system::game_status::GameStatus;
 use crate::ai_service::game_system::persistent_memory_system::MemorySectionLimits;
+use crate::ai_service::game_system::player_identity::bootstrap::resolve_player_bootstrap;
 use crate::ai_service::game_system::role_manager::GameRoleManager;
 use crate::ai_service::game_system::script_engine::ScriptManager;
 use crate::ai_service::llm::LlmSlot;
@@ -16,7 +17,7 @@ use crate::ai_service::tts::local::LocalTtsRuntime;
 use crate::ai_service::types::{CharacterSettings, GameLine, LineAttributeExt, LineBase};
 use crate::config::tts::TtsConfig;
 use crate::db::entities::line::LineAttribute;
-use crate::utils::prompt::{PromptOptions, sys_prompt_builder};
+use crate::utils::prompt::{PromptOptions, sys_prompt_builder_with_player};
 
 /// AI 服务：承载 `GameStatus` 与会话级配置。
 pub struct AIService {
@@ -109,16 +110,19 @@ impl AIService {
             .settings
             .clone();
 
-        let ai_prompt = sys_prompt_builder(
-            &settings.user_name.clone(),
+        let boot = resolve_player_bootstrap(&self.data_dir, &gs, &settings);
+
+        let ai_prompt = sys_prompt_builder_with_player(
+            &boot.alias,
             &settings.ai_name.clone(),
+            &boot.player_block,
             &settings.system_prompt.clone().unwrap_or(default_prompt),
             settings.system_prompt_example.clone().as_deref(),
             settings.system_prompt_example_old.clone().as_deref(),
             prompt_options,
         );
-        gs.player.user_name = settings.user_name.clone();
-        gs.player.user_subtitle = settings.user_subtitle.clone().unwrap_or_default();
+
+        boot.apply_to(&mut gs);
 
         // 此处是初始角色被注册的地方
         let _ = gs.get_role(&self.db, cid).await?;
@@ -134,7 +138,6 @@ impl AIService {
             .unwrap_or_default();
         tracing::info!("外部获取的当前服装是: {:?}", clothes);
         if clothes != "default" && !clothes.is_empty() {
-            // 不是你个傻逼 AI 角色服装已经换过了你再他妈比较那台词表能变吗我草你的？，已修复
             let _ = gs
                 .add_character_clothes_change_line(&self.db, cid, &clothes)
                 .await;
@@ -162,6 +165,15 @@ impl AIService {
         Ok(())
     }
 
+    /// 播种初始好感
+    pub async fn seed_initial_affection(&mut self, cid: i32) -> Result<()> {
+        let mut gs = self.game_status.lock().await;
+        let identity_id = gs.player.identity_id.clone();
+        gs.seed_identity_affection(&self.db, cid, identity_id.as_deref())
+            .await?;
+        Ok(())
+    }
+
     pub async fn reset_game_status(&mut self) -> Result<()> {
         self.clear_game_status().await;
         let prompt_options = match self.prompt_options {
@@ -173,6 +185,9 @@ impl AIService {
         };
         self.init_game_intro_character(self.init_character_id, prompt_options)
             .await?;
+        if let Some(cid) = self.init_character_id {
+            self.seed_initial_affection(cid).await?;
+        }
         Ok(())
     }
 
@@ -184,10 +199,14 @@ impl AIService {
         gs.onstage_role_ids.clear();
         gs.present_role_ids.clear();
         gs.entry_greeting_done = false;
+        gs.player = Default::default();
         gs.active_save_id = None;
         // 好感度会话边界：存档全局变量里的 `affection.{role_id}` 是「上一个会话/存档」
         gs.global_variables.clear();
         gs.affection_eval_cursor = 0;
+        gs.clear_pending_recent_memories();
+        gs.clear_pending_temporary_memories();
+        gs.clear_pending_tool_hint();
         // 会话边界代号：切换角色 / 读档 / 清空对话都会清空 GameStatus 并重建，
         gs.preview_generation = gs.preview_generation.wrapping_add(1);
     }
@@ -206,6 +225,9 @@ impl AIService {
         {
             let mut gs = self.game_status.lock().await;
             gs.role_manager.invalidate_memory_history();
+            gs.clear_pending_recent_memories();
+            gs.clear_pending_temporary_memories();
+            gs.clear_pending_tool_hint();
             gs.line_list = lines;
             if let Some(sid) = save_id {
                 gs.active_save_id = Some(sid);
@@ -218,8 +240,6 @@ impl AIService {
         Ok(())
     }
 
-    /// 将当前所有已加载角色的 `GameMemoryBank` 持久化到 DB。
-    /// 委托给 `GameRoleManager` 以确保后台压缩结果先同步再写入。
     pub async fn persist_memory_banks(&mut self, save_id: i32) -> Result<()> {
         self.game_status
             .lock()
@@ -239,7 +259,6 @@ impl AIService {
             .await
     }
 
-    /// 辅助函数，用于快速获取人物的设定
     pub async fn get_role_settings_by_id(&self, role_id: i32) -> Result<CharacterSettings> {
         Ok(self
             .game_status

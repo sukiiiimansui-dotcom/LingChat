@@ -53,6 +53,13 @@
         {{ title }}
       </h4>
       <PluginTag :source="source" />
+      <!-- 关系未就绪角标 -->
+      <span
+        v-if="!relationReady"
+        class="mt-1 rounded-full border border-amber-300/40 bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-100"
+      >
+        {{ $t("game.relationGuard.badge") }}
+      </span>
     </div>
 
     <div class="flex h-full min-h-36 flex-1 flex-col justify-between pl-4">
@@ -229,7 +236,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { onActivated, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../../base";
@@ -244,8 +251,9 @@ import { useGameStore } from "@/stores/modules/game";
 import { applyWebInitData } from "@/stores/modules/game/actions";
 import { eventQueue } from "@/core/events/event-queue";
 import { useDialogStore } from "@/stores/modules/ui/dialog";
-import { Settings, Star } from "lucide-vue-next";
-import { Cat, Check } from "lucide-vue-next";
+import { useUIStore } from "@/stores/modules/ui/ui";
+import { Settings, Star } from "@lucide/vue";
+import { Cat, Check } from "@lucide/vue";
 import type { Clothes } from "@/types";
 
 interface CharacterProps {
@@ -273,7 +281,6 @@ const props = withDefaults(defineProps<CharacterProps>(), {
 
 const emit = defineEmits(["saved", "favoredChange"]);
 
-// 状态管理
 const isDetailVisible = ref(false);
 const avatarFailed = ref(false);
 watch(
@@ -290,8 +297,8 @@ function handleToggleFavored(): void {
 const { t } = useI18n();
 const gameStore = useGameStore();
 const dialogStore = useDialogStore();
+const uiStore = useUIStore();
 
-// 逻辑函数
 const isSelected = () => gameStore.mainRoleId === props.id;
 const isClothesSelected = (role_id: number, clothes_name: string) =>
   gameStore.getGameRole(role_id)?.clothesName === clothes_name;
@@ -306,7 +313,6 @@ const selectCharacter = async () => {
   try {
     const data = await selectCharacterApi(props.id);
     applyWebInitData(gameStore.$state, data);
-    // 切换角色后丢弃旧角色残留事件队列（防止未说完的回复串进新角色对话，issue #796）
     eventQueue.clear();
     eventQueue.resume();
   } catch (error) {
@@ -316,11 +322,9 @@ const selectCharacter = async () => {
 
 const selectClothes = async (role_id: number, clothes_name: string) => {
   try {
-    // 调用后端API选择衣服
     const response = await selectClothesApi(role_id, clothes_name);
 
     if (response.success) {
-      // 更新本地状态
       const role = gameStore.getGameRole(role_id);
       if (role) {
         role.clothesName = clothes_name;
@@ -328,7 +332,6 @@ const selectClothes = async (role_id: number, clothes_name: string) => {
     }
   } catch (error) {
     console.error("选择衣服失败:", error);
-    // 可选：显示错误提示
   }
 };
 
@@ -344,7 +347,6 @@ const joinScene = async () => {
     };
     if (result.success) {
       gameStore.presentRoleIds.push(props.id);
-      // 确保角色信息已加载
       await gameStore.getOrCreateGameRole(props.id);
     }
     console.log("[CharacterCard] 角色加入场景:", result.message);
@@ -372,7 +374,37 @@ const leaveScene = async () => {
 
 const openSettingsModal = () => (isSettingsModalVisible.value = true);
 const closeSettingsModal = () => (isSettingsModalVisible.value = false);
-const handleSettingsSaved = () => emit("saved");
+const handleSettingsSaved = () => {
+  emit("saved");
+  void checkRelationReady();
+};
+
+// 关系就绪角标：与对话前的门用同一个后端判定。设置页保存关系后卡片会被复用，
+// 只在 onMounted 查一次会一直显示旧角标，所以在下面几个时点重查。
+const relationReady = ref(true);
+async function checkRelationReady() {
+  try {
+    const status = await invoke<{ ready: boolean }>("check_relation_ready", { roleId: props.id });
+    relationReady.value = status.ready;
+  } catch (error) {
+    console.error("[CharacterCard] 检查关系就绪失败:", error);
+  }
+}
+onMounted(() => void checkRelationReady());
+// KeepAlive 缓存页重新激活
+onActivated(() => void checkRelationReady());
+// 设置面板从打开变为关闭：用户可能刚补完关系
+watch(
+  () => uiStore.showSettings,
+  (open, wasOpen) => {
+    if (wasOpen && !open) void checkRelationReady();
+  },
+);
+// 切换当前玩家身份后判定结果会变
+watch(
+  () => gameStore.playerIdentityId,
+  () => void checkRelationReady(),
+);
 </script>
 
 <style scoped>
@@ -393,7 +425,6 @@ const handleSettingsSaved = () => emit("saved");
   display: none;
 }
 
-/* 服装横向列表保留可见滚动条，方便拖动查看后续服装。 */
 .clothes-scroll {
   padding-bottom: 8px;
   scrollbar-width: thin;

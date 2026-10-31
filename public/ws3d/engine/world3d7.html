@@ -1,0 +1,1671 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>三渲二 · 日式动漫城市 v6.7</title>
+<style>
+html,body{margin:0;height:100%;background:#cfe6f7;font:13px/1.45 system-ui,sans-serif;overflow:hidden}
+canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+#hud{position:fixed;left:10px;top:10px;background:rgba(22,28,44,.80);color:#eaf6ff;padding:9px 12px;
+     border-radius:10px;white-space:pre;line-height:1.55;font-variant-numeric:tabular-nums;pointer-events:none;max-width:97vw}
+#hud b{color:#ffe9a8}
+#hud .k{color:#9fe6ff}
+</style></head><body><canvas id="c"></canvas>
+<div id="hud"><b>三渲二 · 日式动漫城市 v6.7</b>　1 鸟瞰 / 2 近景 / M 面板
+<span id="stat">加载…</span></div>
+<script>window.__errs=[];
+window.addEventListener('error',e=>{window.__errs.push(String(e.message||e));});
+window.addEventListener('unhandledrejection',e=>{const r=e.reason;window.__errs.push(String(r&&(r.stack||r.message)||r));
+  const s=document.getElementById('stat');if(s)s.textContent='模块异常: '+(r&&(r.message||r)||r);});</script>
+<script type="module">
+/* ═════════════════════════════════════════════════════════════════════════════
+ * world3d7.html · 自研 three.js 城市引擎 v6.7（P1-a：方向光阴影 + ACES）
+ * 目标：三渲二（3 档硬边 + 蓝紫暗部 + 可见描边）+ 饱和配色 + 浓渐变天空 +
+ *       手写 Bloom + 路网可见 + 无灰面 + 性能达标（≤300k tri / ≤30 draw / ≥15fps）
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 0. 诊断结论（来自 road_min.html 的 15 组排除矩阵 + world3d5 现场消融实测）
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A) "路网不可见" **不是** 材质 / 绕序 / culling / 深度 / z-fighting：
+ *    - 同一份路面几何（41,322 tri，绕序修正后朝上 41322/41322，退化 0），
+ *      在 road_min 里 15 组配置下"可见红色像素"完全一致（7.92% → 7.92%）：
+ *        无地面 / 纯色地面 / 画布地面 / 地面 y=-0.5 / 路面 y=0.6 / y=3.0 /
+ *        polygonOffset -2,-8 / near 30,100 / depthTest=false / 不裁剪 / 单双面，
+ *      逐项差异 ≤1.6%。⇒ 共面深度不是成因（DEPTH_BITS=24，500m 处 1 步 ≈ 0.025m，
+ *      0.14m 抬升有 5 步余量）。
+ *    - 现场消融（world3d5，隐藏单个网格后数"红色路面像素"）：基线 18,314；
+ *      隐藏地面 18,352（+0.2%，地面无辜）；隐藏其余 64 个网格 → 65,212（3.56×）。
+ *      最大单项遮挡是 **人行道网格 5,615**、模型实例 4,759、建筑体块 2,622。
+ *      ⇒ 路面在屏幕上的"理论面积"只有 65,212 px = 5.7%，本来就不多：
+ *        pitch 0.25（地面入射角仅 14°）时，一栋 20m 的楼会遮住身后 80m 地面，
+ *        街区内部的路面本来就被楼挡住；剩下的又被雾洗掉。
+ *    - 真正的三个成因（按贡献排序）：
+ *      ① 雾 near=800 / 颜色 #DCEEFF ≈ 地面色 ⇒ 800–2600m 的路面直接退化成地面色
+ *         （实测：路面命中像素的底图色 = #607080 近处 / #C0D0D8 中距；
+ *          中距 #C0D0D8 与地面 #B8C0D0 只差 8 级 ⇒ 肉眼即"没有路"）；
+ *      ② 路面/地面/人行道明度太接近（#5F6879 / #B9C5D6 / #F2ECDC）+ 路面只占 5.7% 画面；
+ *      ③ 机位落在空地上，画面下 1/3 没有任何路网（见 B）。
+ * B) "下半屏灰色巨面" 有三层来源：
+ *      ① 一整块 6.5×7.4km 的 PlaneGeometry 纯 #B9C5D6（离屏 2048² 画布贴图的底），
+ *         无细节、无纹理、覆盖下 1/3；
+ *      ② 大地块建筑的屋顶：数据里最大单栋 footprint 67,861 m²（386×339m，81 顶点），
+ *         按 v5 的 h=5.5+sqrt(A)*0.26 会算成 **73m 高的巨型平板**；>20,000 m² 的还有 4 栋；
+ *      ③ 水面/绿地贴着地面画（-1.2 / +0.06）且没有边，远看就是一块同色平地。
+ *    ⇒ v6 的对策：地面改成"暖米色 + 地块网格"的程序化着色，水/绿抬到地面之上并加边线，
+ *       大地块按面积压高度，路面用深沥青 + 亮人行道 + 车道虚线的强对比，
+ *       机位改成"下 1/3 必须有路网"（见 §7 的镜头搜索）。
+ *
+ * 参数：?view=aerial|near &bloom=0|1 &hud=0|1 &pitch= &dist= &yaw= &camsearch=1
+ *       &fx=shadows=0,aces=0（§15 P1-a 效果开关，逗号分隔，缺省全开）
+ *       &overlay=1（透明叠加：画布 alpha=0、不画天空/地面）&fxover=alpha|opaque|legacy
+ *         alpha（默认）= 场景先渲到 RT，再在合成 pass 里过 ACES 并保留 alpha；
+ *         opaque = 合成 pass 但 alpha 写 1（对照：会盖住底图）；
+ *         legacy = 直接画到画布、跳过 ACES（本文件旧叠加路径，对照用）。
+ *       &models=0（本版不加载 allmodels.json）&dpr=1 &w= &h=
+ * ═════════════════════════════════════════════════════════════════════════════ */
+const T0=performance.now();
+const T = await import('./vendor/three.min.js');
+const stat=document.getElementById('stat');
+const Q=new URLSearchParams(location.search);
+const qs=(k,d)=>Q.has(k)?Q.get(k):d;
+const qn=(k,d)=>{const v=parseFloat(Q.get(k));return Number.isFinite(v)?v:d;};
+const qb=(k,d)=>{const v=Q.get(k);return v===null?d:(v==='1'||v==='true');};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. 数据
+// ═══════════════════════════════════════════════════════════════════════════
+const TR={};
+const mark=k=>{TR[k]=+(performance.now()-T0).toFixed(0);};
+mark('import');
+const timedJson=async(name,url)=>{
+  const s0=performance.now();
+  const j=await fetch(url,{cache:'no-store'}).then(r=>r.json());
+  TR['json_'+name]=+(performance.now()-s0).toFixed(0); return j;
+};
+const [bldPack,roadPack,gwPack]=await Promise.all([
+  timedJson('bld','./data/bld.json'),
+  timedJson('roads','./data/roads.json'),
+  timedJson('gw','./data/gw.json')
+]);
+mark('jsonAll');
+const blds=bldPack.bld||[], roads=roadPack.roads||[], gw=gwPack.f||[];
+
+// 投影：格中心为原点（米）；x 东，z 南
+const LON0=106.55, LAT0=29.55;
+const KX=111320*Math.cos(LAT0*Math.PI/180), KZ=110540;
+const P=(lon,lat)=>[(lon-LON0)*KX, -(lat-LAT0)*KZ];
+
+function hash32(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h>>>0;}
+const rnd01=id=>hash32(String(id))/4294967296;
+
+// sRGB hex → linear（THREE.Color 自带 sRGB→linear，ColorManagement 默认开）
+const C=new T.Color();
+const lin=hex=>new T.Color(hex);
+
+// ── 调色板（ART-DIRECTION §2.2 / §2.3，sRGB hex，运行时转线性）──────────────
+// 街区配色家族：暖 4 / 冷 6，按 120m 格聚类（同街区 3–5 栋一个家族，避免"单侧全蓝"）
+const FAM=[
+  {w:[0xFFF2D8,0xFFE8BE,0xFFF8E8], r:0xD84B3E},   // 暖 奶油（提亮）
+  {w:[0xFFE2CC,0xFFD2B8,0xFFF0E2], r:0xB5623F},   // 暖 蜜桃
+  {w:[0xFFF7C8,0xFFEDA8,0xFFFCE0], r:0xE0A03A},   // 暖 柠檬
+  {w:[0xFFDCE6,0xFFC9D8,0xFFEEF2], r:0x9C3B5A},   // 粉（暖侧）
+  {w:[0xCFF5E2,0xB6EBD4,0xE2FBF0], r:0x2C6B57},   // 冷 薄荷
+  {w:[0xD3E9FF,0xBBDCFF,0xE8F4FF], r:0x2E3E72},   // 冷 天蓝
+  {w:[0xE4DBFF,0xD2C6FF,0xF1EBFF], r:0x6B4A96},   // 冷 丁香
+  {w:[0xC9E8F5,0xAFD9EC,0xE0F4FB], r:0x2E5F7A}    // 冷 雾青
+].map(f=>({w:f.w.map(lin), r:lin(f.r)}));
+function famOf(f){
+  const key=Math.floor(f.cx/120)+','+Math.floor(f.cz/120);
+  const h=hash32(key);
+  const warm=(h%20)<9;
+  const list=warm?[0,1,2,3]:[4,5,6,7];
+  const fam=FAM[list[(h>>>5)%list.length]];
+  fam.warm=warm;
+  return fam;
+}
+const C_ASPH =[0x4F5867,0x4F5867,0x4F5867,0x4F5867].map(lin);   // §9.7 裁定：沥青 #4F5867（H218/S0.23）
+const C_SIDE =lin(0xEDE6D6), C_CURB=lin(0xD5CDBE), C_DASH=lin(0xFFF7E0);
+const C_GRASS=[0x63C86A,0x57C060,0x6ED275,0x5CC766].map(lin);
+const C_WATER=[0x3FA9E8,0x4FB4EC].map(lin);
+const C_GROUND_A=lin(0xCFC3AB), C_GROUND_B=lin(0xBEAE90), C_PARCEL=lin(0xAA9B80);
+const FOGHEX=0xC9E3FA, FOGCOL=lin(FOGHEX);
+const OUTLINE=lin(0x14101F);
+const SUN=new T.Vector3(-0.624,0.469,0.624).normalize();   // §3.1 方位 225° / 仰角 28°（P1-b）
+// §15 P1-a 效果开关：?fx=shadows=0,aces=0（逗号分隔，缺省全开）
+const FXOPTS=(()=>{const o={};for(const s of qs('fx','').split(',')){
+  const m=s.trim().split('=');if(m[0])o[m[0]]=!(m[1]==='0'||m[1]==='false');}return o;})();
+const FXSHADOW=FXOPTS.shadows!==false;
+const FXACES=FXOPTS.aces!==false;
+// §15 P1-a②：环境光减半。地面/路/水/绿没有光照模型（颜色即"全环境"），
+// 这些平面层按同一比例压；toon 的 dark/mid 档另外 ×0.5。
+const AMB=qn('amb',0.55);
+const U_AMB={uAmb:{value:AMB}};
+// 旧调色板是 display-referred；进 ACES 前做线性化标定（见 FS_COMP）
+const SCENE=qn('scene',0.62);
+// 天空渐变必须按"实际可见天空高度"排布：pitch=0.20、FOV=44 时相机是俯视的，
+// 画面上沿只到地平线上方约 10.5° ⇒ 可见 h 只有 0.500–0.598。若按 §5.1 的
+// 0.50–0.81 排布，整片天空只会取到最浅两档（实测顶部发白、sat_mean 只有 0.136）。
+// h=0.500 必须等于雾色（地平线接缝）；暖带 0.508–0.522（约 9px）保持"窄"。
+const SKY_STOPS=[
+  [0.5000,0xC9E3FA],   // 地平线 = 雾色（接缝）
+  [0.5060,0xF6DFB8],   // 暖带（窄、压亮，避免糊成白团）
+  [0.5180,0xB2DCFB],
+  [0.5480,0x74B8F2],
+  [0.6060,0x3D84DC],
+  [0.7000,0x1E51B8]    // 天顶（近景才看得到）
+].map(([h,c])=>[h,lin(c)]);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. 几何工具
+// ═══════════════════════════════════════════════════════════════════════════
+function signedArea(pts){let a=0;const n=pts.length;for(let i=0;i<n;i++){const p=pts[i],q=pts[(i+1)%n];a+=p[0]*q[1]-q[0]*p[1];}return a/2;}
+function ptInTri(p,a,b,c){
+  const d1=(p[0]-b[0])*(a[1]-b[1])-(a[0]-b[0])*(p[1]-b[1]);
+  const d2=(p[0]-c[0])*(b[1]-c[1])-(b[0]-c[0])*(p[1]-c[1]);
+  const d3=(p[0]-a[0])*(c[1]-a[1])-(c[0]-a[0])*(p[1]-a[1]);
+  return !(((d1<-1e-12)||(d2<-1e-12)||(d3<-1e-12))&&((d1>1e-12)||(d2>1e-12)||(d3>1e-12)));
+}
+// 耳切：三角形在 (x,z) 上 CCW ⇒ 法线 +y。返回 {idx,ok}
+function earcutRing(pts){
+  const n=pts.length; if(n<3) return {idx:[],ok:false};
+  let Pp=pts; if(signedArea(pts)<0) Pp=pts.slice().reverse();
+  const V=[]; for(let i=0;i<n;i++)V.push(i);
+  const out=[]; let guard=n*n*2+16;
+  while(V.length>3&&guard-->0){
+    let found=false;
+    for(let i=0;i<V.length;i++){
+      const ia=V[(i+V.length-1)%V.length], ib=V[i], ic=V[(i+1)%V.length];
+      const A=Pp[ia],B=Pp[ib],C2=Pp[ic];
+      if((B[0]-A[0])*(C2[1]-A[1])-(B[1]-A[1])*(C2[0]-A[0])<=1e-9) continue;
+      let ok=true;
+      for(let j=0;j<V.length;j++){const jv=V[j];if(jv===ia||jv===ib||jv===ic)continue;
+        if(ptInTri(Pp[jv],A,B,C2)){ok=false;break;}}
+      if(!ok) continue;
+      out.push(ia,ib,ic); V.splice(i,1); found=true; break;
+    }
+    if(!found) break;
+  }
+  if(V.length===3) out.push(V[0],V[1],V[2]);
+  const ok=(out.length===3*(n-2))&&V.length===3;
+  return {idx:(Pp===pts)?out:out.map(i=>n-1-i),ok};
+}
+// 环自交检测（非相邻边）
+function selfIntersects(pts){
+  const n=pts.length;
+  if(n<4) return false;
+  const ori=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  for(let i=0;i<n;i++){
+    const a1=pts[i],a2=pts[(i+1)%n];
+    for(let j=i+2;j<n;j++){
+      if(i===0&&j===n-1) continue;
+      const b1=pts[j],b2=pts[(j+1)%n];
+      const d1=ori(b1,b2,a1),d2=ori(b1,b2,a2),d3=ori(a1,a2,b1),d4=ori(a1,a2,b2);
+      if(((d1>0)!==(d2>0))&&((d3>0)!==(d4>0))) return true;
+    }
+  }
+  return false;
+}
+
+// ── 累加器 ────────────────────────────────────────────────────────────────
+function BAcc(){return {p:[],c:[],n:[],w:[],i:[],v:0};}       // w = (u, v, kind)
+function FAcc(){return {p:[],c:[],n:[],i:[],v:0};}            // 平面：水/绿/岸
+function RAcc(){return {p:[],c:[],r:[],o:[],i:[],v:0};}       // 路面：r=(u,s,hw,rank), o=outer
+function bTriDot(p0,p1,p2,n){ // 面法线与给定法线的同向性
+  const ux=p1[0]-p0[0],uy=p1[1]-p0[1],uz=p1[2]-p0[2];
+  const vx=p2[0]-p0[0],vy=p2[1]-p0[1],vz=p2[2]-p0[2];
+  return (uy*vz-uz*vy)*n[0]+(uz*vx-ux*vz)*n[1]+(ux*vy-uy*vx)*n[2];
+}
+function pushB(A,p,c,ww,n){
+  const b=A.v;
+  for(let k=0;k<4;k++){
+    A.p.push(p[k][0],p[k][1],p[k][2]);
+    A.c.push(c.r,c.g,c.b);
+    A.n.push(n[0],n[1],n[2]);
+    A.w.push(ww[k][0],ww[k][1],ww[k][2]);
+  }
+  if(bTriDot(p[0],p[1],p[2],n)>=0) A.i.push(b,b+1,b+2,b,b+2,b+3);
+  else A.i.push(b,b+2,b+1,b,b+3,b+2);
+  A.v+=4;
+}
+function pushTri(A,p,c,n,ww){
+  const b=A.v;
+  for(let k=0;k<3;k++){
+    A.p.push(p[k][0],p[k][1],p[k][2]);
+    A.c.push(c.r,c.g,c.b);
+    A.n.push(n[0],n[1],n[2]);
+    A.w.push(ww[0],ww[1],ww[2]);
+  }
+  if(bTriDot(p[0],p[1],p[2],n)>=0) A.i.push(b,b+1,b+2);
+  else A.i.push(b,b+2,b+1);
+  A.v+=3;
+}
+function pushF(A,p,c,n){
+  const b=A.v;
+  for(let k=0;k<3;k++){A.p.push(p[k][0],p[k][1],p[k][2]);A.c.push(c.r,c.g,c.b);A.n.push(n[0],n[1],n[2]);}
+  if(bTriDot(p[0],p[1],p[2],n)>=0) A.i.push(b,b+1,b+2);
+  else A.i.push(b,b+2,b+1);
+  A.v+=3;
+}
+function liftNormals(A){                      // 同位置法线取平均（描边用的"圆角"法线）
+  const p=A.p,n=A.n,m=new Map();
+  const key=i=>Math.round(p[i*3]*20)+','+Math.round(p[i*3+1]*20)+','+Math.round(p[i*3+2]*20);
+  for(let i=0;i<A.v;i++){
+    const k=key(i);let a=m.get(k);
+    if(!a){a=[0,0,0];m.set(k,a);}
+    a[0]+=n[i*3];a[1]+=n[i*3+1];a[2]+=n[i*3+2];
+  }
+  for(let i=0;i<A.v;i++){
+    const a=m.get(key(i));
+    const l=Math.hypot(a[0],a[1],a[2])||1;
+    n[i*3]=a[0]/l;n[i*3+1]=a[1]/l;n[i*3+2]=a[2]/l;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. 建筑轮廓 / 高度 / 颜色（含异常环过滤）
+// ═══════════════════════════════════════════════════════════════════════════
+const RING_STATS={total:0,rejArea:0,rejSelf:0,rejSpike:0,rejVerts:0,earcutFail:0};
+const fp=[];
+for(const b of blds){
+  const ring=b.p&&b.p[0];
+  if(!ring||ring.length<4){RING_STATS.rejVerts++;continue;}
+  const pts=[];
+  for(let i=0;i<ring.length-1;i++)pts.push(P(ring[i][0],ring[i][1]));
+  if(pts.length<3||pts.length>200){RING_STATS.rejVerts++;continue;}
+  RING_STATS.total++;
+  const a0=signedArea(pts), ar=Math.abs(a0);
+  // 面积异常：<4 m² 视为退化；>40000 m² 视为体育场/园区轮廓（不是楼）
+  if(ar<4||ar>40000){RING_STATS.rejArea++;continue;}
+  if(pts.length>=5&&selfIntersects(pts)){RING_STATS.rejSelf++;continue;}
+  // 超长边（尖刺）：边长 > 3*sqrt(area) 视为异常尖刺
+  let spike=false;
+  for(let i=0;i<pts.length;i++){
+    const q=pts[(i+1)%pts.length];
+    if(Math.hypot(q[0]-pts[i][0],q[1]-pts[i][1])>3*Math.sqrt(ar)){spike=true;break;}
+  }
+  if(spike){RING_STATS.rejSpike++;continue;}
+  if(a0<0) pts.reverse();
+  let minx=1e18,maxx=-1e18,minz=1e18,maxz=-1e18,sx=0,sz=0,lenMax=0,ang=0;
+  for(let i=0;i<pts.length;i++){
+    const p=pts[i];sx+=p[0];sz+=p[1];
+    if(p[0]<minx)minx=p[0];if(p[0]>maxx)maxx=p[0];
+    if(p[1]<minz)minz=p[1];if(p[1]>maxz)maxz=p[1];
+    const q=pts[(i+1)%pts.length],dx=q[0]-p[0],dz=q[1]-p[1],L=dx*dx+dz*dz;
+    if(L>lenMax){lenMax=L;ang=Math.atan2(dz,dx);}
+  }
+  const cx=sx/pts.length, cz=sz/pts.length;
+  const ec=earcutRing(pts);
+  if(!ec.ok) RING_STATS.earcutFail++;
+  fp.push({id:b.i,pts,cx,cz,area:ar,ang,minx,maxx,minz,maxz,roof:ec.idx,roofOk:ec.ok});
+}
+mark('footprints+earcut');
+// 旋转框尺寸（沿最长边）
+for(const f of fp){
+  const ca=Math.cos(f.ang),sa=Math.sin(f.ang);
+  let wmin=1e18,wmax=-1e18,dmin=1e18,dmax=-1e18;
+  for(const p of f.pts){
+    const u=(p[0]-f.cx)*ca+(p[1]-f.cz)*sa, v=-(p[0]-f.cx)*sa+(p[1]-f.cz)*ca;
+    if(u<wmin)wmin=u;if(u>wmax)wmax=u;if(v<dmin)dmin=v;if(v>dmax)dmax=v;
+  }
+  f.w=Math.max(2,wmax-wmin);f.d=Math.max(2,dmax-dmin);
+}
+// 局部密度（200m 网格 3×3）
+const densG=new Map();
+for(const f of fp){const k=Math.floor(f.cx/200)+','+Math.floor(f.cz/200);densG.set(k,(densG.get(k)||0)+1);}
+function densityAt(f){
+  let n=0;const gx=Math.floor(f.cx/200),gz=Math.floor(f.cz/200);
+  for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)n+=(densG.get((gx+i)+','+(gz+j))||0);
+  return Math.min(1,n/90);
+}
+for(const f of fp){
+  const u=rnd01(f.id+'h'),u2=rnd01(f.id+'t'),u3=rnd01(f.id+'u');
+  const dm=densityAt(f);
+  let h=5.5+Math.sqrt(Math.max(f.area,9))*0.26;
+  h*=0.62+1.15*u;
+  h*=0.80+0.55*dm;
+  if(u2<0.02)h*=1.6+1.5*u3;                 // 零星塔楼（§7.2 高塔要少）
+  if(dm>0.85&&u3<0.05)h*=1.4;
+  h=Math.max(3.6,Math.min(120,h));
+  // 大地块压高度：是商场/厂区而不是塔，别让它变成"巨型平板"
+  if(f.area>18000) h=Math.min(h,20);
+  else if(f.area>8000) h=Math.min(h,34);
+  f.h=h;
+  const fam=famOf(f); f.warm=fam.warm;
+  const wi=Math.floor(rnd01(f.id+'c')*fam.w.length)%fam.w.length;
+  f.wall=fam.w[wi].clone().multiplyScalar(0.94+0.10*rnd01(f.id+'s'));
+  // 屋顶从墙色派生（§2.3：屋顶是压住画面的块，不能比墙亮）；12% 才用强调屋顶
+  f.roofC=fam.r.clone().multiplyScalar(0.80+0.16*rnd01(f.id+'rr'));
+  f.winSeed=rnd01(f.id+'w');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. 镜头：中心 = 建筑密度中位；机位用"渲染结果打分"搜索（下 1/3 必须有路网）
+// ═══════════════════════════════════════════════════════════════════════════
+const gridCells=new Map();
+for(const f of fp){const k=Math.floor(f.cx/150)+','+Math.floor(f.cz/150);gridCells.set(k,(gridCells.get(k)||0)+1);}
+const cellPts=[];
+for(const [k,c] of gridCells){
+  const [a,b]=k.split(',').map(Number);
+  cellPts.push({c,tx:(a+0.5)*150,tz:(b+0.5)*150});
+}
+const counts=cellPts.map(o=>o.c).sort((a,b)=>a-b);
+const MED=counts[Math.floor(counts.length/2)]||10;
+// 取"密度中位"附近的格子，再按周围 900m 建筑/道路量排序（要铺满画面的那种街区）
+const medCells=cellPts.filter(o=>Math.abs(o.c-MED)<=Math.max(2,Math.floor(MED*0.45)));
+const cand=(medCells.length?medCells:cellPts.slice(0,40))
+  .slice().sort((a,b)=>b.c-a.c).slice(0,400);
+// 只给候选格算质心（原来对全部格子 × 全部楼 → 3000×10852 次 hypot）
+for(const o of cand){
+  let sx=0,sz=0,n2=0;
+  for(const f of fp){if((f.cx-o.tx)**2+(f.cz-o.tz)**2<220*220){sx+=f.cx;sz+=f.cz;n2++;}}
+  if(n2){o.tx=sx/n2;o.tz=sz/n2;}
+}
+function areaScore(tx,tz){
+  let nb=0,nr=0;
+  for(const f of fp) if((f.cx-tx)**2+(f.cz-tz)**2<900*900) nb++;
+  for(const rd of roads){
+    const q=P(rd.p[0][0],rd.p[0][1]);
+    if((q[0]-tx)**2+(q[1]-tz)**2<900*900) nr+=rd.p.length;
+  }
+  return nb+nr*0.08;
+}
+{ // 先算一次分数再排序（原实现在比较器里反复全量扫描 → 5s+）
+  const scored=cand.map(o=>{o._s=areaScore(o.tx,o.tz);return o;});
+  scored.sort((a,b)=>b._s-a._s);
+  var TARGETS=scored.slice(0,4).map(o=>[o.tx,o.tz]);
+}
+let TX=qn('cx',TARGETS[0][0]), TZ=qn('cz',TARGETS[0][1]);   // 提前：水/绿/路构建要用（?r=）
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. 几何构建
+// ═══════════════════════════════════════════════════════════════════════════
+const FOV=44;
+const RCUT=qn('r',0);        // >0 时只画以视图中心为圆心 RCUT 米内的楼/路/水绿（叠加层 2km 用）
+const NEAR_FULL=1600, FAR_CUT=3800;      // 1600m 内全几何；1600–3800m 只画剪影板
+const OUT_R=700;                          // 描边只做 700m 内（§4 距离策略）
+
+// ── 5.1 建筑（全几何 + 近处描边 + 远处剪影板）─────────────────────────────
+function emitBuilding(A,f){
+  const pts=f.pts,h=f.h,wall=f.wall,n=[0,0,0];
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i],b=pts[(i+1)%pts.length];
+    let dx=b[0]-a[0],dz=b[1]-a[1];const L=Math.hypot(dx,dz)||1;dx/=L;dz/=L;
+    n[0]=dz;n[1]=0;n[2]=-dx;
+    // 顶点顺序：(a,0)(a,h)(b,h)(b,0)；w 属性 = 墙面坐标 (u, y, 0)
+    pushB(A,[[a[0],0,a[1]],[a[0],h,a[1]],[b[0],h,b[1]],[b[0],0,b[1]]],
+          wall,[[0,0,0],[0,h,0],[L,h,0],[L,0,0]],n);
+  }
+  if(f.roof.length){
+    for(let i=0;i<f.roof.length;i+=3){
+      const p0=pts[f.roof[i]],p1=pts[f.roof[i+1]],p2=pts[f.roof[i+2]];
+      pushTri(A,[[p0[0],h,p0[1]],[p1[0],h,p1[1]],[p2[0],h,p2[1]]],f.roofC,[0,1,0],[0,0,1]);
+    }
+  }
+}
+
+// ── 5.2 路面：每段一个 quad，沥青 / 人行道 / 路缘 / 虚线全在片元里画 ────────
+const RW=[15,13,9,8,7];     // 路宽（米）
+const SIDEW=2.4;
+const ROAD_STATS={segs:0,tri:0,lenMax:0};
+function buildRoads(){
+  const A=RAcc();
+  for(let ri=0;ri<roads.length;ri++){
+    const rd=roads[ri];
+    const rank=Math.min(rd.r??2,4), hw=RW[rank]/2;
+    const hasSide=rank<=2, outer=hw+(hasSide?SIDEW:0);
+    const asph=C_ASPH[rank].clone().multiplyScalar(0.94+0.12*rnd01(rd.i||('r'+ri)));
+    const pl=(rd.p||[]).map(q=>P(q[0],q[1]));
+    if(pl.length<2) continue;
+    if(RCUT){ // 只留中点在半径内的路段
+      let ok=false;
+      for(let k=0;k<pl.length-1;k++){
+        if(Math.hypot((pl[k][0]+pl[k+1][0])/2-TX,(pl[k][1]+pl[k+1][1])/2-TZ)<=RCUT){ok=true;break;}
+      }
+      if(!ok) continue;
+    }
+    let s=0;
+    for(let i=0;i<pl.length-1;i++){
+      const a=pl[i],b=pl[i+1];
+      let dx=b[0]-a[0],dz=b[1]-a[1];const L=Math.hypot(dx,dz);
+      if(L<1e-4) continue;
+      dx/=L;dz/=L;
+      const nx=-dz,nz=dx;
+      // 两端沿切线外扩 hw，补转角缺口（同色重叠不会看出接缝）
+      const ax=a[0]-dx*hw,az=a[1]-dz*hw,bx=b[0]+dx*hw,bz=b[1]+dz*hw;
+      const s0=s,s1=s+L;
+      const c0=[ax+nx*outer,0.14,az+nz*outer], c1=[ax-nx*outer,0.14,az-nz*outer];
+      const c2=[bx-nx*outer,0.14,bz-nz*outer], c3=[bx+nx*outer,0.14,bz+nz*outer];
+      const base=A.v;
+      const U=[outer,-outer,-outer,outer], S=[s0,s0,s1,s1];
+      const P4=[c0,c1,c2,c3];
+      for(let k=0;k<4;k++){
+        A.p.push(P4[k][0],P4[k][1],P4[k][2]);
+        A.c.push(asph.r,asph.g,asph.b);
+        A.r.push(U[k],S[k],hw,rank);
+        A.o.push(outer);
+      }
+      if(bTriDot(c0,c1,c2,[0,1,0])>=0) A.i.push(base,base+1,base+2,base,base+2,base+3);
+      else A.i.push(base,base+2,base+1,base,base+3,base+2);
+      A.v+=4;
+      if(L>ROAD_STATS.lenMax)ROAD_STATS.lenMax=L;
+      ROAD_STATS.segs++;
+      s+=L;
+    }
+  }
+  ROAD_STATS.tri=A.i.length/3;
+  return A;
+}
+
+// ── 5.3 水 / 绿（抬到地面之上，加边线）────────────────────────────────────
+const GW_STATS={water:0,green:0,rej:0,tri:0};
+function buildWater() {
+  const A=FAcc();
+  for(const f of gw){
+    if(f.k!=='water') continue;
+    for(const r of (f.r||[])){
+      if(!r||r.length<4){GW_STATS.rej++;continue;}
+      const pts=[];for(let i=0;i<r.length-1;i++)pts.push(P(r[i][0],r[i][1]));
+      if(pts.length<3){GW_STATS.rej++;continue;}
+      const ar=Math.abs(signedArea(pts));
+      if(ar>1.2e6||ar<30){GW_STATS.rej++;continue;}
+      if(RCUT){
+        let cx0=0,cz0=0;for(const q of pts){cx0+=q[0];cz0+=q[1];}
+        cx0/=pts.length;cz0/=pts.length;
+        if(Math.hypot(cx0-TX,cz0-TZ)>RCUT) continue;
+      }
+      if(pts.length>=5&&selfIntersects(pts)){GW_STATS.rej++;continue;}
+      let ok=false;
+      const ec=earcutRing(pts);
+      const cc=C_WATER[Math.floor(rnd01(f.n||'w')*C_WATER.length)%C_WATER.length].clone();
+      let idx=ec.idx;
+      if(!ec.ok){
+        // 耳切失败 → 用质心扇形兜底（形状可能略有溢出，但不留洞）
+        idx=[];const n0=pts.length;
+        // 质心作为一个额外顶点：这里退化处理，直接用索引 0 三角带
+        for(let i=1;i<n0-1;i++)idx.push(0,i,i+1);
+      }
+      for(let i=0;i<idx.length;i+=3){
+        const p0=pts[idx[i]],p1=pts[idx[i+1]],p2=pts[idx[i+2]];
+        pushF(A,[[p0[0],0.06,p0[1]],[p1[0],0.06,p1[1]],[p2[0],0.06,p2[1]]],cc,[0,1,0]);
+        ok=true;
+      }
+      if(ok) GW_STATS.water++;
+      // 岸线（窄条，避免"水面和地面对齐成一块平地"）
+      const sc=lin(0x9FC6D8);
+      for(let i=0;i<pts.length;i++){
+        const a2=pts[i],b2=pts[(i+1)%pts.length];
+        let dx=b2[0]-a2[0],dz=b2[1]-a2[1];const L=Math.hypot(dx,dz)||1;dx/=L;dz/=L;
+        const nx=-dz,nz=dx, wvn=1.1;
+        pushF(A,[[a2[0]+nx*wvn,0.03,a2[1]+nz*wvn],[a2[0]-nx*wvn,0.03,a2[1]-nz*wvn],
+                 [b2[0]-nx*wvn,0.03,b2[1]-nz*wvn]],sc,[0,1,0]);
+        pushF(A,[[a2[0]+nx*wvn,0.03,a2[1]+nz*wvn],[b2[0]-nx*wvn,0.03,b2[1]-nz*wvn],
+                 [b2[0]+nx*wvn,0.03,b2[1]+nz*wvn]],sc,[0,1,0]);
+      }
+    }
+  }
+  GW_STATS.tri+=A.i.length/3;
+  return A;
+}
+function buildGreen(waterRings){
+  const A=FAcc();
+  const boxes=waterRings.map(wr=>{
+    let x0=1e18,x1=-1e18,z0=1e18,z1=-1e18;
+    for(const p of wr){if(p[0]<x0)x0=p[0];if(p[0]>x1)x1=p[0];if(p[1]<z0)z0=p[1];if(p[1]>z1)z1=p[1];}
+    return [x0,x1,z0,z1];
+  });
+  const inRing=(x,z,ring)=>{
+    let ins=false;
+    for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+      const xi=ring[i][0],zi=ring[i][1],xj=ring[j][0],zj=ring[j][1];
+      if(((zi>z)!==(zj>z))&&(x<(xj-xi)*(z-zi)/(zj-zi)+xi))ins=!ins;
+    }
+    return ins;
+  };
+  for(const f of gw){
+    if(f.k==='water') continue;
+    for(const r of (f.r||[])){
+      if(!r||r.length<4){GW_STATS.rej++;continue;}
+      const pts=[];for(let i=0;i<r.length-1;i++)pts.push(P(r[i][0],r[i][1]));
+      if(pts.length<3){GW_STATS.rej++;continue;}
+      const ar=Math.abs(signedArea(pts));
+      if(ar<20||ar>1.2e6){GW_STATS.rej++;continue;}
+      if(RCUT){
+        let cx0=0,cz0=0;for(const q of pts){cx0+=q[0];cz0+=q[1];}
+        cx0/=pts.length;cz0/=pts.length;
+        if(Math.hypot(cx0-TX,cz0-TZ)>RCUT) continue;
+      }
+      if(pts.length>=5&&selfIntersects(pts)){GW_STATS.rej++;continue;}
+      const ec=earcutRing(pts);
+      let idx=ec.idx;
+      if(!ec.ok){idx=[];for(let i=1;i<pts.length-1;i++)idx.push(0,i,i+1);}
+      const cc=C_GRASS[Math.floor(rnd01(f.n||f.k||String(ar))*C_GRASS.length)%C_GRASS.length].clone();
+      let drew=false;
+      for(let i=0;i<idx.length;i+=3){
+        const p0=pts[idx[i]],p1=pts[idx[i+1]],p2=pts[idx[i+2]];
+        const gx=(p0[0]+p1[0]+p2[0])/3,gz=(p0[1]+p1[1]+p2[1])/3;
+        let onWater=false;
+        for(let wi=0;wi<waterRings.length;wi++){
+          const bb=boxes[wi];
+          if(gx<bb[0]||gx>bb[1]||gz<bb[2]||gz>bb[3])continue;
+          if(inRing(gx,gz,waterRings[wi])){onWater=true;break;}
+        }
+        if(onWater)continue;
+        pushF(A,[[p0[0],0.10,p0[1]],[p1[0],0.10,p1[1]],[p2[0],0.10,p2[1]]],cc,[0,1,0]);
+        drew=true;
+      }
+      if(drew)GW_STATS.green++;
+    }
+  }
+  GW_STATS.tri+=A.i.length/3;
+  return A;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. 着色器
+// ═══════════════════════════════════════════════════════════════════════════
+const U={
+  uSun:{value:SUN.clone()},
+  uSunCol:{value:lin(0xFFF4E0)},
+  uSkyCol:{value:lin(0xBFE4FF)},
+  uGroundCol:{value:lin(0xD9CBAF)},
+  uFogCol:{value:FOGCOL.clone()},
+  uFogNear:{value:1200},
+  uFogFar:{value:4000},
+  uWinDark:{value:lin(0x46596C)},   // §9.7 裁定：暗窗 #2A3A66 → #46596C（H~212/S0.35/V0.42）
+  uWinLit:{value:lin(0xFFE9B8)},
+  uWinMix:{value:0.62},          // 窗在墙面上的覆盖率系数（0=无窗）
+  uSg0:{value:lin(0xFF3D9A)},uSg1:{value:lin(0xFF8A3D)},
+  uSg2:{value:lin(0x33D6E0)},uSg3:{value:lin(0xFFD23F)},
+  uRim:{value:0.55},
+  uSat:{value:1.90},             // 线性空间饱和度增益（先降雾再评饱和）
+  uPx:{value:2.4},
+  uRes:{value:new T.Vector2(1,1)},
+  uTime:{value:0}
+};
+const COLSPACE='#include <colorspace_fragment>';   // 渲染目标→线性恒等；画布→sRGB（只转一次）
+
+// ── §15 P1-a 方向光阴影：裁剪版 three 未导出 DepthTexture（只有内部类）──────────
+// ⇒ 用 RGBA 打包 gl_FragCoord.z（24 bit），Nearest 采样，不参与任何色彩空间转换。
+const SHADOW_SIZE=2048;
+const U_SHADOW={
+  uShadowMap:{value:null},
+  uLightVP:{value:new T.Matrix4()},
+  uShadowOn:{value:FXSHADOW?1:0}
+};
+const SHADOW_GLSL=`
+uniform sampler2D uShadowMap;
+uniform mat4 uLightVP;
+uniform float uShadowOn;
+float shadowUnpack(vec4 rgba){
+  return dot(rgba,vec4(1.0,1.0/255.0,1.0/65025.0,1.0/16581375.0));
+}
+// 3×3 PCF，bias 0.0015（§15）——只返回"直接光可见度"，环境项由调用方保留
+float shadowAt(vec3 wp){
+  if(uShadowOn<0.5)return 1.0;
+  vec4 lp=uLightVP*vec4(wp,1.0);
+  vec3 sc=lp.xyz/lp.w*0.5+0.5;
+  if(sc.x<0.002||sc.x>0.998||sc.y<0.002||sc.y>0.998||sc.z>1.0)return 1.0;
+  vec2 tx=vec2(1.0/${SHADOW_SIZE}.0);
+  float lit=0.0;
+  for(int j=-1;j<=1;j++){
+    for(int i=-1;i<=1;i++){
+      float d=shadowUnpack(texture2D(uShadowMap,sc.xy+vec2(float(i),float(j))*tx));
+      lit+=step(sc.z-0.0015,d);
+    }
+  }
+  return lit/9.0;
+}`;
+// 投影 pass 专用：只写打包深度，不跑任何光照
+const VS_SHADOW=`
+void main(){
+  vec4 p=vec4(position,1.0);
+  #ifdef USE_INSTANCING
+    p=instanceMatrix*p;
+  #endif
+  gl_Position=projectionMatrix*viewMatrix*modelMatrix*p;
+}`;
+const FS_SHADOW=`
+precision highp float;
+vec4 shadowPack(float v){
+  vec4 enc=vec4(1.0,255.0,65025.0,16581375.0)*v;
+  enc=fract(enc);
+  enc-=enc.yzww*vec4(1.0/255.0,1.0/255.0,1.0/255.0,0.0);
+  return enc;
+}
+void main(){ gl_FragColor=shadowPack(gl_FragCoord.z); }`;
+
+// 建筑/模型：三档硬边 + 蓝紫暗部 + 程序化窗 + 接触阴影 + 雾
+const VS_TOON_REAL=`
+attribute vec3 color;      // ShaderMaterial 不会自动声明（内建材质才走 color_pars_vertex）
+attribute vec3 aW;
+varying vec3 vC; varying vec3 vN; varying vec3 vW; varying vec3 vM;
+void main(){
+  vec4 p=vec4(position,1.0);
+  vec3 n=normal;
+  #ifdef USE_INSTANCING
+    p=instanceMatrix*p; n=mat3(instanceMatrix)*n;
+  #endif
+  vec4 w=modelMatrix*p;
+  vW=w.xyz; vC=color; vM=aW;
+  vN=normalize(mat3(modelMatrix)*n);
+  gl_Position=projectionMatrix*viewMatrix*w;
+}`;
+const FS_TOON=`
+precision highp float;
+varying vec3 vC; varying vec3 vN; varying vec3 vW; varying vec3 vM;
+uniform vec3 uSun,uSunCol,uSkyCol,uGroundCol,uFogCol,uWinDark,uWinLit;
+uniform vec3 uSg0,uSg1,uSg2,uSg3;
+uniform float uFogNear,uFogFar,uWinMix,uRim,uSat,uOpa;
+${SHADOW_GLSL}
+void main(){
+  vec3 n=normalize(vN);
+  float ndl=dot(n,normalize(uSun))*0.5+0.5;
+  // §3.2：两处硬边，过渡带 0.014（约 1–2 屏幕像素）
+  float b1=smoothstep(0.413,0.427,ndl);
+  float b2=smoothstep(0.623,0.637,ndl);
+  // §2.3：三档由基色生成（暗部偏蓝紫，不是灰黑）
+  // §15 P1-a②：环境光减半 ⇒ dark/mid 整体 ×0.5（light 档不动，只压环境模拟档）
+  vec3 dark =(vC*vec3(0.085,0.132,0.215)+vec3(0.010,0.020,0.030))*0.5;   // P1-b：暗部青蓝（≈H207/S0.24）
+  vec3 mid  =(vC*vec3(0.430,0.400,0.740)+vec3(0.006,0.008,0.028))*0.5;
+  vec3 light=vC*vec3(0.90,0.87,0.81)+vec3(0.000,0.000,0.008);
+  vec3 col=mix(dark,mid,b1);
+  col=mix(col,light,b2);
+  // 天光补一点点冷色（只在亮档，压到 0.02 让暗部沉下去）
+  col+=uSkyCol*0.02*b2*(0.5+0.5*n.y);
+  float dist=distance(cameraPosition,vW);
+  // ── 程序化窗（§3.3）：只在墙面、<320m 可见 ──
+  float glow=0.0;
+  if(vM.z<0.5){
+    float nf=1.0-smoothstep(190.0,330.0,dist);
+    if(nf>0.001){
+      float u=vM.x/3.4, v=vM.y/3.6;
+      vec2 f=vec2(fract(u),fract(v));
+      float win=step(0.14,f.x)*step(f.x,0.86)*step(0.22,f.y)*step(f.y,0.78);
+      // 逐窗随机：亮窗 14%，其余暗窗。用便宜 hash（sin 在软件光栅上太贵）
+      float h=fract((floor(u)*17.13+floor(v)*57.31+vC.r*37.0)*0.6180339887);
+      float lit=step(0.86,h);
+      vec3 wc=mix(uWinDark,uWinLit,lit);
+      wc=mix(wc,uSkyCol*0.55,step(0.66,f.y)*0.6);      // 窗上 1/3 反光
+      col=mix(col,wc,win*nf*uWinMix);
+      glow+=win*nf*lit*1.0;
+      // §2.4 强调色：店面招牌带（y 3.3–4.7m），40% 的楼有，高彩 + 进 bloom
+      float sh=fract(vC.r*91.3+vC.g*37.1+vC.b*13.7);
+      float band=step(3.4,vM.y)*step(vM.y,4.2)*step(sh,0.28);
+      vec3 sg=sh<0.10?uSg0:(sh<0.20?uSg1:(sh<0.30?uSg2:uSg3));
+      // 只画在相邻 1.2m 高的横带里，且别盖满整面墙
+      float sMask=band*step(0.18,fract(vM.x/5.5+vM.y*0.07));
+      col=mix(col,sg,sMask*nf*0.74);
+      glow+=sMask*nf*0.55;
+    }
+  }
+  // ── §15 P1-a：方向光阴影。只压直接光档（mid/light），dark 档与环境项不动 ──
+  if(uShadowOn>0.5){
+    float sh=shadowAt(vW);
+    col-=max(col-dark,vec3(0.0))*(1.0-sh);   // 受光时严格不变（不抬高暗窗）
+  }
+  // ── 楼底接触阴影（§3.2，y∈[0,0.8] 乘 0.72）──
+  col*=mix(0.72,1.0,clamp(vW.y/0.9,0.0,1.0));
+  // ── 边缘光（只补轮廓，不破坏硬边）──
+  vec3 V=normalize(cameraPosition-vW);
+  float rim=pow(1.0-clamp(dot(n,V),0.0,1.0),3.0);
+  col+=uSunCol*rim*uRim*(0.35+0.65*b2);
+  glow+=rim*0.9*(0.3+0.7*b2);                 // 轮廓光进 bloom：描边外的发光
+  // ── 饱和度提升（线性空间，朝远离亮度的方向推）──
+  float lum=dot(col,vec3(0.2126,0.7152,0.0722));
+  col=mix(vec3(lum),col,mix(0.60,uSat,b2));   // 暗部降饱和（P1-b）
+  // ── 雾：先去饱和 35% 再混（§5.2）──
+  float f=smoothstep(uFogNear,uFogFar,dist);
+  float g=dot(col,vec3(0.299,0.587,0.114));
+  col=mix(col,mix(vec3(g),col,0.80),f*0.25);
+  col=mix(col,uFogCol,f);
+  gl_FragColor=vec4(col,mix(glow*(1.0-f),1.0,uOpa));
+  ${COLSPACE}
+}`;
+
+// 描边：沿法线外扩（反向外壳），屏幕空间固定像素宽 + 距离衰减
+const VS_OUT=`
+varying float vD; varying float vK;
+uniform float uPx; uniform vec2 uRes; uniform float uTanHalf;
+void main(){
+  vec4 p=vec4(position,1.0);
+  vec3 n=normal;
+  #ifdef USE_INSTANCING
+    p=instanceMatrix*p; n=mat3(instanceMatrix)*n;
+  #endif
+  vec4 w=modelMatrix*p;
+  vec3 wn=normalize(mat3(modelMatrix)*n);
+  float dx=distance(cameraPosition,w.xyz);
+  float k=1.0-smoothstep(250.0,700.0,dx);          // §4：>700m 关描边
+  // 世界空间外扩：屏幕空间外扩对凸盒无效（背面轮廓永远缩在近面里面 2px 以外）
+  float wpp=2.0*dx*uTanHalf/max(uRes.y,1.0);       // 该深度上 1 设备像素的世界尺寸
+  w.xyz+=wn*(uPx*k*wpp);
+  gl_Position=projectionMatrix*viewMatrix*w;
+  vD=dx; vK=k;
+}`;
+const FS_OUT=`
+precision highp float;
+uniform vec3 uColor,uFogCol; uniform float uFogNear,uFogFar,uOpa;
+varying float vD; varying float vK;
+void main(){
+  if(vK<0.04) discard;                       // 远景不描：避免与本体共面 z-fight
+  float f=smoothstep(uFogNear,uFogFar,vD);
+  vec3 c=mix(uColor,uFogCol,f*0.85);
+  gl_FragColor=vec4(c,1.0);
+  ${COLSPACE}
+}`;
+
+// 路面：横向分区（沥青/路缘/人行道）+ 车道虚线
+const VS_ROAD=`
+attribute vec3 color;
+attribute vec4 aR; attribute float aO;
+varying vec3 vP; varying vec4 vR; varying float vO; varying vec3 vC;
+void main(){
+  vec4 w=modelMatrix*vec4(position,1.0);
+  vP=w.xyz; vR=aR; vO=aO; vC=color;
+  gl_Position=projectionMatrix*viewMatrix*w;
+}`;
+const FS_ROAD=`
+precision highp float;
+varying vec3 vP; varying vec4 vR; varying float vO; varying vec3 vC;
+uniform vec3 uSide,uCurb,uDash,uVerge,uVerge2,uFogCol;
+uniform float uFogNear,uFogFar,uOpa,uAmb;
+${SHADOW_GLSL}
+void main(){
+  float au=abs(vR.x), hw=vR.z, rank=vR.w;
+  if(au>vO+0.001) discard;
+  vec3 col;
+  if(au<hw){
+    col=vC;
+    // 车道线：rank0 双向双线，rank1 单线
+    float hwid=0.16;
+    if(rank<1.5){
+      float off=(rank<0.5)?hw*0.16:0.0;
+      float onL=0.0;
+      if(rank<0.5){
+        onL=max(step(abs(au-off),hwid),step(abs(au+off),hwid));
+      }else{
+        onL=step(abs(au),hwid);
+      }
+      float t=vR.y;
+      float dash=step(0.35,fract(t/7.0))*step(fract(t/7.0),0.80);
+      col=mix(col,uDash,onL*dash);
+      // 斑马线：沿路每 40m 一条，仅近处可见（附录 I 近景第 2 条）
+      float dc=distance(cameraPosition,vP);
+      float nf=1.0-smoothstep(60.0,140.0,dc);
+      float band=step(fract(t/40.0),0.14);
+      float stripe=step(0.45,fract((au+hw)/1.35));
+      col=mix(col,uDash,band*stripe*nf*0.92);
+    }
+    // 沥青轻微条纹，避免一整片死色
+    col*=0.97+0.06*step(0.5,fract(vR.y*0.21));
+  } else if(au<vO-0.001){
+    col=uSide;
+    col=mix(uCurb,col,step(hw+0.30,au));      // 路缘石（比人行道暗一档）
+    // 街边绿带：只画 4–8m 段（不要一条亮线贯穿），内侧再压一条深灌木
+    float vgRun=step(0.42,fract(vR.y/6.0+0.13));
+    float vgOuter=step(vO-0.95,au)*vgRun;
+    float vgInner=step(vO-1.40,au)*step(au,vO-0.95)*vgRun;
+    col=mix(col,uVerge,vgOuter*0.90);
+    col=mix(col,uVerge2,vgInner*0.85);
+  } else {
+    discard;
+  }
+  float dist=distance(cameraPosition,vP);
+  float f=smoothstep(uFogNear,uFogFar,dist);
+  float g=dot(col,vec3(0.299,0.587,0.114));
+  col=mix(col,mix(vec3(g),col,0.80),f*0.25);
+  if(uShadowOn>0.5)col*=mix(0.60,1.0,shadowAt(vP));
+  col*=uAmb;
+  col=mix(col,uFogCol,f);
+  gl_FragColor=vec4(col,uOpa);
+  ${COLSPACE}
+}`;
+
+// 地面：暖米色 + 程序化地块网格（远处淡出，避免摩尔纹）
+const VS_GROUND=`
+varying vec3 vW;
+void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz;
+  gl_Position=projectionMatrix*viewMatrix*w; }`;
+const FS_GROUND=`
+precision highp float;
+varying vec3 vW;
+uniform vec3 uA,uB,uParcel,uC,uD,uFogCol;
+uniform float uFogNear,uFogFar,uOpa,uAmb;
+${SHADOW_GLSL}
+float h21(vec2 p){ p=fract(p*vec2(0.1031,0.1731)); p+=dot(p,p+33.33); return fract(p.x*p.y); }
+void main(){
+  vec2 cell=vW.xz/vec2(58.0,42.0);
+  vec2 ip=floor(cell), fp=fract(cell);
+  float rnd=h21(ip);
+  vec3 col=mix(uA,uB,rnd);
+  // 200m 分区：3 档明度 + 冷暖斑块（避免一整片米色空块）
+  vec2 zc=floor(vW.xz/200.0);
+  float zr=h21(zc+7.7), zr2=h21(zc*0.73+13.1);
+  col=mix(col,uParcel,step(0.58,zr)*0.48);
+  col=mix(col,uC,step(0.74,zr2)*0.52);
+  col=mix(col,uD,step(0.88,h21(zc*1.31+3.1))*0.42);
+  col*=0.84+0.24*h21(zc*1.7+9.3);
+  // 地块边界（窄暗线）
+  float edge=min(min(fp.x,1.0-fp.x),min(fp.y,1.0-fp.y));
+  col=mix(uParcel,col,smoothstep(0.0,0.022,edge));
+  // 空地铺装/停车位：200m 格内 18% 的块画细白线（近处可见，远处淡出）
+  float lot=step(0.82,h21(zc*1.9+5.5));
+  vec2 pk=vW.xz/vec2(3.2,5.6);
+  float pline=max(step(0.90,fract(pk.x)),step(0.92,fract(pk.y)));
+  float lotFade=1.0-smoothstep(140.0,420.0,distance(cameraPosition,vW));
+  col=mix(col,min(vec3(1.0),col*1.15+0.05),lot*pline*lotFade*0.55);
+  // 远处淡出纹理，避免摩尔纹
+  float dist=distance(cameraPosition,vW);
+  float fade=smoothstep(560.0,1200.0,dist);
+  col=mix(col,mix(uA,uB,0.5),fade*0.85);
+  if(uShadowOn>0.5)col*=mix(0.52,1.0,shadowAt(vW));
+  col*=uAmb;
+  float f=smoothstep(uFogNear,uFogFar,dist);
+  col=mix(col,uFogCol,f);
+  gl_FragColor=vec4(col,uOpa);
+  ${COLSPACE}
+}`;
+
+// 天空：5 停靠强渐变 + 太阳盘 + 地平暖带
+// 平面层（水/绿）：顶点色 + 雾 + glow 掩码（水的高光要发光，草不要）
+const VS_FLAT=`
+attribute vec3 color;
+varying vec3 vC; varying vec3 vW;
+void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz; vC=color;
+  gl_Position=projectionMatrix*viewMatrix*w; }`;
+const FS_FLAT=`
+precision highp float;
+varying vec3 vC; varying vec3 vW;
+uniform vec3 uFogCol; uniform float uFogNear,uFogFar,uGlow,uSat,uOpa,uAmb;
+void main(){
+  vec3 col=vC;
+  float lum=dot(col,vec3(0.2126,0.7152,0.0722));
+  col=mix(vec3(lum),col,uSat);
+  float d=distance(cameraPosition,vW);
+  col*=uAmb;
+  float f=smoothstep(uFogNear,uFogFar,d);
+  col=mix(col,uFogCol,f);
+  gl_FragColor=vec4(col,mix(uGlow*(1.0-f),1.0,uOpa));
+  ${COLSPACE}
+}`;
+
+const skyUni={
+  uS0:{value:SKY_STOPS[0][1]},uS1:{value:SKY_STOPS[1][1]},uS2:{value:SKY_STOPS[2][1]},
+  uS3:{value:SKY_STOPS[3][1]},uS4:{value:SKY_STOPS[4][1]},uS5:{value:SKY_STOPS[5][1]},
+  uSun:{value:SUN.clone()}
+};
+const VS_SKY=`varying vec3 vD;
+void main(){ vD=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`;
+const FS_SKY=`
+precision highp float;
+varying vec3 vD;
+uniform vec3 uS0,uS1,uS2,uS3,uS4,uS5,uSun;
+void main(){
+  float h=clamp(vD.y*0.5+0.5,0.0,1.0);
+  vec3 c;
+  if(h<0.5060)      c=mix(uS0,uS1,clamp((h-0.5000)/0.0060,0.0,1.0));
+  else if(h<0.5180) c=mix(uS1,uS2,(h-0.5060)/0.0120);
+  else if(h<0.5480) c=mix(uS2,uS3,(h-0.5180)/0.0300);
+  else if(h<0.6060) c=mix(uS3,uS4,(h-0.5480)/0.0580);
+  else              c=mix(uS4,uS5,clamp((h-0.6060)/0.0940,0.0,1.0));
+  // 太阳盘 → bloom 掩码；地平暖带只留一点点，避免糊成白团
+  float s=smoothstep(0.9965,0.9995,dot(normalize(vD),normalize(uSun)));
+  c=mix(c,vec3(1.0,0.98,0.92),s);
+  float warmGlow=(1.0-smoothstep(0.003,0.010,abs(h-0.5060)))*0.14;
+  gl_FragColor=vec4(c,max(s,warmGlow));
+  ${COLSPACE}
+}`;
+
+// ── Bloom：阈值+水平模糊 → 垂直模糊 → 合成 ────────────────────────────────
+const VS_QUAD=`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }`;
+const FS_DOWN=`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tSrc; uniform vec2 uTexel; uniform float uThresh,uKnee,uRad;
+vec3 thr(vec2 uv){
+  vec4 t=texture2D(tSrc,uv);
+  return t.rgb*smoothstep(uThresh,uThresh+uKnee,t.a);   // alpha = 发光掩码
+}
+void main(){
+  vec3 s=thr(vUv)*0.2270270;
+  s+=thr(vUv+vec2(uTexel.x*1.0*uRad,0.0))*0.3162162;
+  s+=thr(vUv-vec2(uTexel.x*1.0*uRad,0.0))*0.3162162;
+  s+=thr(vUv+vec2(uTexel.x*2.25*uRad,0.0))*0.0702703;
+  s+=thr(vUv-vec2(uTexel.x*2.25*uRad,0.0))*0.0702703;
+  gl_FragColor=vec4(s,1.0);
+}`;
+const FS_BLURV=`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tSrc; uniform vec2 uTexel; uniform float uRad;
+void main(){
+  vec3 s=texture2D(tSrc,vUv).rgb*0.2270270;
+  s+=texture2D(tSrc,vUv+vec2(0.0,uTexel.y*1.0*uRad)).rgb*0.3162162;
+  s+=texture2D(tSrc,vUv-vec2(0.0,uTexel.y*1.0*uRad)).rgb*0.3162162;
+  s+=texture2D(tSrc,vUv+vec2(0.0,uTexel.y*2.25*uRad)).rgb*0.0702703;
+  s+=texture2D(tSrc,vUv-vec2(0.0,uTexel.y*2.25*uRad)).rgb*0.0702703;
+  gl_FragColor=vec4(s,1.0);
+}`;
+const FS_COMP=`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tScene,tBloom; uniform float uStrength,uExposure,uAces,uSceneScale,uKeepAlpha;
+void main(){
+  vec4 s=texture2D(tScene,vUv);
+  vec3 c=s.rgb;
+  vec3 b=texture2D(tBloom,vUv).rgb;
+  c+=b*uStrength;
+  if(uAces>0.5){
+    // §15 P1-a②：ACES filmic 近似，只在最终输出 pass 做一次（场景 RT / bloom 都还是线性）。
+    // 旧调色板是 display-referred（NoToneMapping 时代按屏显调色），直接进 ACES 会把中间调整体提亮；
+    // 先乘 uSceneScale 做线性化标定，再按 §15 的 exposure=1.1 走 ACES。
+    c*=uSceneScale*uExposure;
+    c=clamp((c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14),0.0,1.0);
+  }else{
+    c=c/(1.0+max(c-0.90,0.0));        // §5.3 柔和压高光（aces=0 的对照路径）
+  }
+  // 叠加层：alpha 必须从场景 RT 带出来（合成 pass 不能自己写 1.0，否则底图被整块盖住）
+  gl_FragColor=vec4(c,mix(1.0,s.a,uKeepAlpha));
+  ${COLSPACE}
+}`;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. 场景装配
+// ═══════════════════════════════════════════════════════════════════════════
+const canvas=document.getElementById('c');
+const DPR=qn('dpr',Math.min(devicePixelRatio||1,2));
+const OVER=qb('overlay',false);   // 叠加到 MapLibre：透明画布 + 不画地面/天空，bloom 关   // 真机 DPR3：用 2x 缓冲（3x 填充率×2.25）
+/* 叠加模式的合成策略（见文件头）：alpha 默认；opaque / legacy 只用于对照实验。
+ * 透明到底依赖什么：旧叠加路径把场景直接画到画布、完全跳过合成 pass —— 所以"透明"依赖的是
+ * **跳过合成**，不是"跳过 ACES"。合成 pass 原来把 alpha 硬写成 1.0，直接拿来用会把整块
+ * 画布变成不透明 => 底图被盖死。这里把 alpha 从场景 RT 里带出来，颜色照旧过 ACES。 */
+const FXOVER=OVER?(Q.get('fxover')||'alpha'):'alpha';
+const OVER_COMP=!OVER||FXOVER!=='legacy';       // 是否走合成 pass（legacy = 旧叠加路径）
+const renderer=new T.WebGLRenderer({canvas,antialias:!OVER,alpha:OVER,powerPreference:'high-performance',stencil:false});
+renderer.setPixelRatio(DPR);
+renderer.outputColorSpace=T.SRGBColorSpace;
+if(OVER)renderer.setClearColor(0x000000,0);
+renderer.toneMapping=T.NoToneMapping;
+if(!OVER)renderer.setClearColor(FOGHEX,1);      // 叠加模式必须保留 alpha=0（旧代码在这里把透明冲掉）
+renderer.info.autoReset=false;
+let REN='(unknown)';
+try{const gl=renderer.getContext();const ex=gl.getExtension('WEBGL_debug_renderer_info');
+  REN=ex?gl.getParameter(ex.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);}catch(e){}
+const scene=new T.Scene();
+scene.fog=new T.Fog(FOGHEX,1200,4000);   // 内建材质（水/绿）用
+const cam=new T.PerspectiveCamera(FOV,1,8,6000);
+
+const U_FOG={uFogCol:{value:FOGCOL},uFogNear:{value:1200},uFogFar:{value:4000}};
+const U_COL={uSide:{value:C_SIDE},uCurb:{value:C_CURB},uDash:{value:C_DASH},uVerge:{value:lin(0x57A878)},uVerge2:{value:lin(0x4A8782)}};
+const U_GRD={uA:{value:C_GROUND_A},uB:{value:C_GROUND_B},uParcel:{value:C_PARCEL},
+  uC:{value:lin(0xBFC3A6)},uD:{value:lin(0xD7B69A)}};
+
+// 天空
+const sky=new T.Mesh(new T.SphereGeometry(5000,32,16),new T.ShaderMaterial({
+  side:T.BackSide,depthWrite:false,depthTest:true,uniforms:skyUni,vertexShader:VS_SKY,fragmentShader:FS_SKY}));
+// 天空最后画：只跑"深度还是初始值"的像素（约 30% 画面），省掉一整屏天空片元的填充成本
+sky.frustumCulled=false;sky.renderOrder=6;sky.userData.cat='sky';scene.add(sky);
+if(OVER)sky.visible=false;
+let groundDisc=null;
+if(OVER){
+  groundDisc=new T.Mesh(new T.CircleGeometry(1,48),new T.MeshBasicMaterial({color:lin(0xDCD2BE),transparent:true,opacity:0.0}));
+  groundDisc.rotation.x=-Math.PI/2; groundDisc.position.y=-0.02; groundDisc.userData.cat='ground';
+  scene.add(groundDisc);
+}
+/* 叠加模式：底图就是"地面"，3D 地面不画（ground.visible=false）。但楼影得能落在地面上 ——
+ * 用一个**只输出阴影暗度**的透明平面：黑色 + alpha=阴影强度，深度测试让它被楼/路面正确遮挡，
+ * 透明画布再把这块暗度合到底图上（画布 alpha=0 处保持透空）。 */
+let shadowGround=null;
+if(OVER){
+  const VS_SHGROUND=`varying vec3 vW;
+  void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz;
+    gl_Position=projectionMatrix*viewMatrix*w; }`;
+  const FS_SHGROUND=`precision highp float;
+  varying vec3 vW;
+  uniform vec2 uCtr; uniform float uOpacity;
+  ${SHADOW_GLSL}
+  void main(){
+    float sh=shadowAt(vW);                         // 1=受光 0=阴影
+    float dc=distance(vW.xz,uCtr);
+    float fade=1.0-smoothstep(250.0,300.0,dc);     // 阴影图只覆盖目标点 ±300m
+    float a=(1.0-sh)*uOpacity*fade;
+    if(a<0.004) discard;
+    gl_FragColor=vec4(0.0,0.0,0.0,a);
+  }`;
+  const m=new T.ShaderMaterial({
+    uniforms:{uShadowMap:U_SHADOW.uShadowMap,uLightVP:U_SHADOW.uLightVP,uShadowOn:U_SHADOW.uShadowOn,
+      uCtr:{value:new T.Vector2()},uOpacity:{value:0.46}},
+    vertexShader:VS_SHGROUND,fragmentShader:FS_SHGROUND,
+    transparent:true,depthWrite:false,side:T.FrontSide});
+  shadowGround=new T.Mesh(new T.PlaneGeometry(1400,1400),m);
+  shadowGround.rotation.x=-Math.PI/2;
+  shadowGround.position.y=0.02;
+  shadowGround.frustumCulled=false;
+  shadowGround.renderOrder=1;                     // transparent 一律在 opaque 之后；这里只做同组排序兜底
+  shadowGround.userData.cat='shground';
+  scene.add(shadowGround);
+}
+
+// 地面
+const GX0=-2600,GX1=6600,GZ0=-7800,GZ1=2400;
+const gndMat=new T.ShaderMaterial({polygonOffset:true,polygonOffsetFactor:1,polygonOffsetUnits:1,uniforms:Object.assign({},U_FOG,U_GRD,U_SHADOW,U_AMB,{uFogCol:{value:FOGCOL}}),
+  vertexShader:VS_GROUND,fragmentShader:FS_GROUND});
+const ground=new T.Mesh(new T.PlaneGeometry(GX1-GX0,GZ1-GZ0),gndMat);
+ground.rotation.x=-Math.PI/2;
+ground.position.set((GX0+GX1)/2,0,(GZ0+GZ1)/2);
+ground.frustumCulled=false;ground.renderOrder=5;ground.userData.cat='ground';scene.add(ground);
+if(OVER)ground.visible=false;
+
+const FLAT_ORDER={water:3,green:4};
+function flatMesh(A,cat){
+  const g=new T.BufferGeometry();
+  g.setAttribute('position',new T.BufferAttribute(new Float32Array(A.p),3));
+  g.setAttribute('color',new T.BufferAttribute(new Float32Array(A.c),3));
+  g.setAttribute('normal',new T.BufferAttribute(new Float32Array(A.n),3));
+  g.setIndex(new T.BufferAttribute(new Uint32Array(A.i),1));
+  g.computeBoundingSphere();
+  const mat=new T.ShaderMaterial({uniforms:{uFogCol:{value:FOGCOL},uFogNear:{value:1200},
+    uFogFar:{value:4000},uGlow:{value:cat==='water'?0.30:0.0},uSat:{value:1.6},uAmb:{value:AMB}},
+    vertexShader:VS_FLAT,fragmentShader:FS_FLAT,side:T.FrontSide});
+  const m=new T.Mesh(g,mat);
+  m.renderOrder=FLAT_ORDER[cat]||3;
+  m.userData.cat=cat;scene.add(m);return m;
+}
+const waterA=buildWater();mark('water');
+const waterRings=[];
+for(const f of gw){
+  if(f.k!=='water') continue;            // 只收水面：否则绿地图斑会被自己的环判成"在水上"
+  for(const r of (f.r||[])){
+  if(!r||r.length<4)continue;
+  const pts=[];for(let i=0;i<r.length-1;i++)pts.push(P(r[i][0],r[i][1]));
+  if(pts.length>=3)waterRings.push(pts);
+}}
+const greenA=buildGreen(waterRings);mark('green');
+const waterMesh=flatMesh(waterA,'water');
+const greenMesh=flatMesh(greenA,'green');
+mark('waterGreen');
+
+// 路面
+const roadA=buildRoads();mark('roads');
+const roadGeo=new T.BufferGeometry();
+roadGeo.setAttribute('position',new T.BufferAttribute(new Float32Array(roadA.p),3));
+roadGeo.setAttribute('color',new T.BufferAttribute(new Float32Array(roadA.c),3));
+roadGeo.setAttribute('aR',new T.BufferAttribute(new Float32Array(roadA.r),4));
+roadGeo.setAttribute('aO',new T.BufferAttribute(new Float32Array(roadA.o),1));
+roadGeo.setIndex(new T.BufferAttribute(new Uint32Array(roadA.i),1));
+roadGeo.computeBoundingSphere();
+const roadMat=new T.ShaderMaterial({uniforms:Object.assign({},U_FOG,U_COL,U_SHADOW,U_AMB,{uFogCol:{value:FOGCOL}}),
+  vertexShader:VS_ROAD,fragmentShader:FS_ROAD});
+const roadMesh=new T.Mesh(roadGeo,roadMat);
+roadMesh.renderOrder=2;roadMesh.userData.cat='road';scene.add(roadMesh);
+
+// 建筑：按距离三档（全几何 / 剪影板 / 丢弃）+ 近处描边
+const bA=BAcc(), oA=BAcc();
+const bDist=[];
+for(const f of fp){
+  const d=Math.hypot(f.cx-TX,f.cz-TZ);
+  if(d<FAR_CUT&&(!RCUT||d<=RCUT)) bDist.push([d,f]);
+}
+bDist.sort((a,b)=>a[0]-b[0]);
+let nFull=0,nSlab=0;
+const bRec=[];
+for(const [d,f] of bDist){
+  if(d<=NEAR_FULL){
+    const v0=bA.v; emitBuilding(bA,f); bRec.push({f,v0,v1:bA.v}); nFull++;
+    if(d<=OUT_R) emitBuilding(oA,f);       // 描边只用到 700m 内
+  }else{
+    // 远景剪影：只要 2 个三角的竖直板（沿最长边）
+    const ca=Math.cos(f.ang),sa=Math.sin(f.ang);
+    const hw=f.w*0.5,h=f.h;
+    const px=f.cx-ca*hw, pz=f.cz-sa*hw;
+    const qx=f.cx+ca*hw, qz=f.cz+sa*hw;
+    const N=[-sa,0,ca];
+    pushTri(bA,[[px,0,pz],[qx,0,qz],[qx,h,qz]],f.wall,N,[0,0,0]);
+    pushTri(bA,[[px,0,pz],[qx,h,qz],[px,h,pz]],f.wall,N,[0,0,0]);
+    nSlab++;
+  }
+}
+liftNormals(oA);      // 描边用"圆角"法线
+mark('buildings');
+function geomFromB(A){
+  const g=new T.BufferGeometry();
+  g.setAttribute('position',new T.BufferAttribute(new Float32Array(A.p),3));
+  g.setAttribute('color',new T.BufferAttribute(new Float32Array(A.c),3));
+  g.setAttribute('normal',new T.BufferAttribute(new Float32Array(A.n),3));
+  g.setAttribute('aW',new T.BufferAttribute(new Float32Array(A.w),3));
+  g.setIndex(new T.BufferAttribute(new Uint32Array(A.i),1));
+  g.computeBoundingSphere();
+  return g;
+}
+const toonMat=new T.ShaderMaterial({
+  uniforms:Object.assign({},U_FOG,U,U_SHADOW,{uFogCol:{value:FOGCOL}}),
+  vertexShader:VS_TOON_REAL,fragmentShader:FS_TOON,side:T.FrontSide});
+const bldMesh=new T.Mesh(geomFromB(bA),toonMat);
+bldMesh.renderOrder=0;bldMesh.userData.cat='bld';scene.add(bldMesh);
+const outMat=new T.ShaderMaterial({
+  uniforms:{uPx:U.uPx,uRes:U.uRes,uColor:{value:OUTLINE},uFogCol:{value:FOGCOL},
+            uTanHalf:{value:Math.tan(FOV*Math.PI/360)},
+            uFogNear:{value:1200},uFogFar:{value:4000}},
+  vertexShader:VS_OUT,fragmentShader:FS_OUT,side:T.BackSide});
+const outMesh=new T.Mesh(geomFromB(oA),outMat);
+outMesh.renderOrder=1;outMesh.userData.cat='outline';scene.add(outMesh);
+// 窗/描边的 uRes（CSS 像素）
+U.uRes.value.set(1,1);
+
+// 车流（1 draw，12 tri/辆）
+const NCARS=Math.min(360,ROAD_STATS.segs);
+const SEGS=[];
+{
+  // 从 roadA 里抽车身用的直线段（只用 rank<=1 的长段）
+  for(const rd of roads){
+    const rank=Math.min(rd.r??2,4);
+    if(rank>2)continue;
+    const pl=(rd.p||[]).map(q=>P(q[0],q[1]));
+    for(let i=0;i<pl.length-1;i++){
+      const a=pl[i],b=pl[i+1];
+      const L=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      if(L>25&&L<400) SEGS.push({a,b,L,rank});
+    }
+  }
+}
+const carGeo=new T.BoxGeometry(4.0,1.5,1.9);carGeo.translate(0,0.75,0);
+{
+  const pa=carGeo.attributes.position, na=carGeo.attributes.normal;
+  const cc=new Float32Array(pa.count*3);
+  for(let i=0;i<pa.count;i++){
+    const ny=na.getY(i);
+    const sh=ny>0.5?1.0:(ny<-0.5?0.35:0.62);            // 顶亮 / 底暗 / 侧面中
+    cc[i*3]=sh;cc[i*3+1]=sh;cc[i*3+2]=sh;
+  }
+  carGeo.setAttribute('color',new T.BufferAttribute(cc,3));
+}
+const carMat=new T.MeshBasicMaterial({color:0xffffff,vertexColors:true});
+const cars=SEGS.length?new T.InstancedMesh(carGeo,carMat,NCARS):null;
+const carState=[];let s0=139;
+const rnd=()=>{s0=(s0*1103515245+12345)&0x7fffffff;return s0/0x7fffffff;};
+if(cars){
+  cars.instanceMatrix.setUsage(T.DynamicDrawUsage);
+  cars.frustumCulled=false;cars.userData.cat='cars';
+  const cc=new T.Color();
+  for(let i=0;i<NCARS;i++){
+    let seg=SEGS[Math.floor(rnd()*SEGS.length)];
+    for(let k=0;k<3;k++){const s2=SEGS[Math.floor(rnd()*SEGS.length)];if(s2.rank<seg.rank)seg=s2;}
+    carState.push({seg,t:rnd(),v:8+rnd()*14,dir:rnd()<0.5?1:-1});
+    const pal=[0xFF5A5A,0x4FC3F7,0xFFD166,0xF7F7F7,0x9B7BFF,0x4AE3B5];
+    cc.setHex(pal[Math.floor(rnd()*pal.length)]);
+    cars.setColorAt(i,cc);
+  }
+  if(cars.instanceColor)cars.instanceColor.needsUpdate=true;
+  scene.add(cars);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8. 渲染管线（Bloom）+ 尺寸
+// ═══════════════════════════════════════════════════════════════════════════
+let W=parseInt(qs('w',0))||0, H=parseInt(qs('h',0))||0;
+let BLOOM=qb('bloom',!OVER);
+if(OVER){
+  // 透明画布：所有片元写 alpha=1；同时补 uniform（ShaderMaterial 未赋值的 uniform 默认 0）
+  scene.traverse(o=>{const m=o.material;if(m&&m.fragmentShader&&m.fragmentShader.indexOf('uOpa')>=0){
+    m.uniforms.uOpa={value:1};m.needsUpdate=true;}});
+}
+let rtScene=null,rtA=null,rtB=null;
+const quadCam=new T.OrthographicCamera(-1,1,1,-1,0,1);
+const quadScene=new T.Scene();
+const quadGeo=new T.PlaneGeometry(2,2);
+const matDown=new T.ShaderMaterial({uniforms:{tSrc:{value:null},uTexel:{value:new T.Vector2()},
+  uThresh:{value:0.80},uKnee:{value:0.10},uRad:{value:1.12}},vertexShader:VS_QUAD,fragmentShader:FS_DOWN,depthTest:false,depthWrite:false});
+const matBlurV=new T.ShaderMaterial({uniforms:{tSrc:{value:null},uTexel:{value:new T.Vector2()},uRad:{value:1.12}},
+  vertexShader:VS_QUAD,fragmentShader:FS_BLURV,depthTest:false,depthWrite:false});
+const matComp=new T.ShaderMaterial({uniforms:{tScene:{value:null},tBloom:{value:null},uStrength:{value:0.35},
+  uExposure:{value:1.1},uAces:{value:FXACES?1:0},uSceneScale:{value:SCENE},
+  uKeepAlpha:{value:(OVER&&FXOVER==='alpha')?1:0}},
+  vertexShader:VS_QUAD,fragmentShader:FS_COMP,depthTest:false,depthWrite:false});
+const quadMesh=new T.Mesh(quadGeo,matComp);quadMesh.frustumCulled=false;quadScene.add(quadMesh);
+const blackTex=new T.DataTexture(new Uint8Array([0,0,0,255]),1,1);blackTex.needsUpdate=true;
+
+function resize(){
+  const cw=W||window.innerWidth||1280, ch=H||window.innerHeight||720;
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(cw,ch,false);
+  if(W||H){canvas.style.width=cw+'px';canvas.style.height=ch+'px';
+    document.body.style.width=cw+'px';document.body.style.height=ch+'px';
+    document.documentElement.style.height=ch+'px';}
+  const bw=renderer.domElement.width, bh=renderer.domElement.height;
+  cam.aspect=bw/bh;cam.updateProjectionMatrix();
+  U.uRes.value.set(bw,bh);
+  // 叠加层也要场景 RT：合成 pass 从它取颜色 + alpha（不能直接画到画布，否则 ACES 无处安放）
+  if(rtScene)rtScene.dispose();
+  rtScene=new T.WebGLRenderTarget(bw,bh,{minFilter:T.LinearFilter,magFilter:T.LinearFilter,
+    type:T.UnsignedByteType,depthBuffer:true,stencilBuffer:false});
+  if(BLOOM){
+    const qw=Math.max(1,Math.floor(bw/2)), qh=Math.max(1,Math.floor(bh/2));
+    if(rtA)rtA.dispose();
+    if(rtB)rtB.dispose();
+    rtA=new T.WebGLRenderTarget(qw,qh,{minFilter:T.LinearFilter,magFilter:T.LinearFilter,
+      type:T.UnsignedByteType,depthBuffer:false,stencilBuffer:false});
+    rtB=rtA.clone();
+    rtA.texture.generateMipmaps=false;rtB.texture.generateMipmaps=false;
+    matDown.uniforms.uTexel.value.set(1/qw,1/qh);
+    matBlurV.uniforms.uTexel.value.set(1/qw,1/qh);
+  }
+}
+addEventListener('resize',resize);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. 机位
+// ═══════════════════════════════════════════════════════════════════════════
+const PITCH0=qn('pitch',0.20), DIST0=qn('dist',570), TY0=qn('ty',45);
+let bestYaw=qn('yaw',NaN);
+const aerial={yaw:Number.isFinite(bestYaw)?bestYaw:4.20,pitch:PITCH0,dist:DIST0,tx:TX,ty:TY0,tz:TZ};
+// 近景：找一条主街，两侧有楼，沿街看过去
+function buildNear(){
+  let best=null,bs=-1e18;
+  for(const s of SEGS){
+    if(s.rank>1) continue;
+    const mx=(s.a[0]+s.b[0])/2, mz=(s.a[1]+s.b[1])/2;
+    if(Math.hypot(mx-TX,mz-TZ)>1200) continue;
+    let cnt=0;
+    for(const f of fp){
+      const dd=Math.hypot(f.cx-mx,f.cz-mz);
+      if(dd<34) cnt+=1;
+    }
+    let sc=cnt*2-Math.hypot(mx-TX,mz-TZ)*0.004;
+    if(sc>bs){bs=sc;best={mx,mz,ang:Math.atan2(s.b[1]-s.a[1],s.b[0]-s.a[0]),seg:s};}
+  }
+  if(!best) best={mx:TX,mz:TZ,ang:0};
+  // 选朝向：让画面"左侧"尽量是暖色家族（附录 I.4-3）
+  const leftWarm=ang=>{
+    const fx=Math.cos(ang),fz=Math.sin(ang),lx=fz,lz=-fx;
+    let w=0,c=0;
+    for(const f of fp){
+      if(Math.hypot(f.cx-best.mx,f.cz-best.mz)>70) continue;
+      if(((f.cx-best.mx)*lx+(f.cz-best.mz)*lz)>0){ if(f.warm)w++; else c++; }
+    }
+    return w-c;
+  };
+  const angB=best.ang+Math.PI;
+  const sunX=SUN.x, sunZ=SUN.z;
+  const pickScore=ang=>{
+    const fx=Math.cos(ang),fz=Math.sin(ang),lx=fz,lz=-fx;   // 画面左侧方向
+    const lit=(lx*sunX+lz*sunZ)<0?2.0:0.0;                  // 左侧楼的临街面朝右=(-left)，要它受光 ⇒ dot(left,sun)<0
+    const warm=0;
+    const lw=leftWarm(ang);
+    return lit+lw*0.25;
+  };
+  const ang=(pickScore(angB)>pickScore(best.ang))?angB:best.ang;
+  const fx=Math.cos(ang),fz=Math.sin(ang);
+  // eye = target - f*dist ⇒ (sin yaw,cos yaw)=(-fx,-fz)
+  return {yaw:Math.atan2(-fx,-fz), pitch:0.03, dist:38, tx:best.mx, ty:6.4, tz:best.mz, seg:best.seg, ang};
+}
+let nearState=buildNear();
+// 近景：把前 6 辆车放到主街上（否则镜头里一辆车都没有）
+if(cars&&carState.length){
+  let bs=null,bd=1e18;
+  for(const sg of SEGS){
+    const mx=(sg.a[0]+sg.b[0])/2, mz=(sg.a[1]+sg.b[1])/2;
+    const dd=Math.hypot(mx-nearState.tx,mz-nearState.tz);
+    if(dd<bd){bd=dd;bs=sg;}
+  }
+  if(bs){
+    // 斑马线每 40m 一条（t*L mod 40 ∈ [0,5.6]）；停车位挑在两条斑马线之间
+    const Ls=bs.L, ok=[];
+    for(let k=1;k<24;k++){
+      const s0=k*9.0, m=s0%40.0;
+      if(m>8&&m<32&&s0<Ls-8) ok.push(s0/Ls);
+    }
+    for(let i=0;i<6&&i<carState.length;i++){
+      carState[i].seg=bs;
+      carState[i].t=ok.length?ok[(i*3+1)%ok.length]:0.5;
+      carState[i].dir=(i%2)?1:-1;
+    }
+  }
+}
+// 行道树：近景主街两侧（附录 I.4-2：近景要有树/桩/店招）
+let treeCanopy=null,treeTrunk=null;
+{
+  const sg=nearState.seg;
+  if(sg){
+    const a=sg.a,b=sg.b,L=sg.L,rank=sg.rank;
+    const hw=RW[Math.min(rank,4)]/2;
+    const off=hw+SIDEW*0.55;
+    const dx=(b[0]-a[0])/L, dz=(b[1]-a[1])/L;
+    const nx=-dz, nz=dx;
+    const cnt=Math.min(44,Math.max(2,Math.floor(L/11)*2));
+    treeCanopy=new T.InstancedMesh(new T.ConeGeometry(1.1,2.8,6),
+      new T.MeshBasicMaterial({color:lin(0x3E8B57)}),cnt);
+    treeTrunk=new T.InstancedMesh(new T.BoxGeometry(0.3,1.2,0.3),
+      new T.MeshBasicMaterial({color:lin(0x6B4A32)}),cnt);
+    const m4t=new T.Matrix4();let k=0;
+    const step=11/L;
+    for(let i=1;i*11<L-6&&k<cnt;i++){
+      for(const sg2 of [1,-1]){
+        if(k>=cnt)break;
+        const t=i*step;
+        const x=a[0]+dx*L*t+nx*off*sg2, z=a[1]+dz*L*t+nz*off*sg2;
+        m4t.makeTranslation(x,1.2+1.4,z); treeCanopy.setMatrixAt(k,m4t);
+        m4t.makeTranslation(x,0.6,z);     treeTrunk.setMatrixAt(k,m4t);
+        k++;
+      }
+    }
+    treeCanopy.count=k;treeTrunk.count=k;
+    treeCanopy.instanceMatrix.needsUpdate=true;treeTrunk.instanceMatrix.needsUpdate=true;
+    treeCanopy.frustumCulled=false;treeTrunk.frustumCulled=false;
+    treeCanopy.userData.cat='tree';treeTrunk.userData.cat='tree';
+    scene.add(treeCanopy,treeTrunk);
+  }
+}
+// 近景：把主街左侧 110m 内的冷色楼改成暖家族（顶点色原位改，不重建几何）
+if(bldMesh&&nearState&&nearState.ang!==undefined&&bRec.length){
+  const arr=bldMesh.geometry.attributes.color.array;
+  const fx=Math.cos(nearState.ang), fz=Math.sin(nearState.ang), lx=fz, lz=-fx;
+  const pos=bldMesh.geometry.attributes.position.array;
+  let recol=0;
+  for(const rr of bRec){
+    const f=rr.f;
+    const dx=f.cx-nearState.tx, dz=f.cz-nearState.tz;
+    if(Math.hypot(dx,dz)>110) continue;
+    if((dx*lx+dz*lz)<=0) continue;          // 只改画面左侧
+    if(f.warm) continue;
+    const fam=FAM[3];                        // 樱花家族（暖侧）
+    const wc=fam.w[Math.floor(rnd01(f.id+'c2')*fam.w.length)%fam.w.length];
+    const rc=fam.r.clone().multiplyScalar(0.86);
+    const nrm=bldMesh.geometry.attributes.normal.array;
+    for(let v=rr.v0;v<rr.v1;v++){
+      const c=(nrm[v*3+1]>0.5)?rc:wc;          // 法线 y>0.5 = 屋顶
+      arr[v*3]=c.r; arr[v*3+1]=c.g; arr[v*3+2]=c.b;
+    }
+    f.warm=true; f.wall=wc; recol++;
+  }
+  if(recol) bldMesh.geometry.attributes.color.needsUpdate=true;
+  TR.recolorLeft=recol;
+}
+// ═══════════════════════════════════════════════════════════════════════════
+// 7.5 方向光阴影通道（独立 pass，layers=1 隔离投影者）
+// ═══════════════════════════════════════════════════════════════════════════
+const depthMat=new T.ShaderMaterial({side:T.DoubleSide,vertexShader:VS_SHADOW,fragmentShader:FS_SHADOW});
+const lightCam=new T.OrthographicCamera(-300,300,300,-300,1,1400);
+lightCam.layers.set(1);                    // 只渲染 layers=1（bld/tree/car）
+const rtShadow=new T.WebGLRenderTarget(SHADOW_SIZE,SHADOW_SIZE,{
+  minFilter:T.NearestFilter,magFilter:T.NearestFilter,type:T.UnsignedByteType,
+  depthBuffer:true,stencilBuffer:false});
+rtShadow.texture.generateMipmaps=false;
+U_SHADOW.uShadowMap.value=rtShadow.texture;
+for(const o of [bldMesh,treeCanopy,treeTrunk,cars]) if(o)o.layers.enable(1);
+const _lc=new T.Color();let _la=1;
+let shadowTick=0,shTX=1e9,shTZ=1e9,shadowPasses=0;
+// 阴影贴图只跟 target 位置有关（600m 盒），跟主相机 yaw/pitch/dist 无关：
+// 目标点不动时每 3 帧刷一次（只有车在动）；目标点移动时每帧刷。
+function renderShadow(){
+  if(!FXSHADOW)return;
+  const moved=Math.abs(cur.tx-shTX)>0.5||Math.abs(cur.tz-shTZ)>0.5;
+  if(!moved){ shadowTick++; if(shadowTick%3!==0)return; }
+  else { shadowTick=0; shTX=cur.tx; shTZ=cur.tz; }
+  lightCam.position.set(cur.tx+SUN.x*800,SUN.y*800,cur.tz+SUN.z*800);
+  lightCam.lookAt(cur.tx,0,cur.tz);
+  lightCam.updateMatrixWorld();
+  U_SHADOW.uLightVP.value.multiplyMatrices(lightCam.projectionMatrix,lightCam.matrixWorldInverse);
+  renderer.getClearColor(_lc);_la=renderer.getClearAlpha();
+  renderer.setClearColor(0xffffff,1);      // 空像素 = 远平面（打包后 ≈1）
+  scene.overrideMaterial=depthMat;
+  renderer.setRenderTarget(rtShadow);
+  renderer.render(scene,lightCam);
+  scene.overrideMaterial=null;
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(_lc,_la);
+  shadowPasses++;
+}
+
+let view=qs('view','aerial');
+let camMode=(view==='near')?'near':'aerial';
+let cur=camMode==='near'?Object.assign({},nearState):Object.assign({},aerial);
+
+// 镜头搜索：用"实际渲染 + 读像素"打分（下 1/3 必须有路网）
+function runCamSearch(){
+  const sw=320,sh=180;
+  cam.aspect=sw/sh;cam.updateProjectionMatrix();
+  const rtS=new T.WebGLRenderTarget(sw,sh,{minFilter:T.NearestFilter,magFilter:T.NearestFilter,
+    depthBuffer:true,stencilBuffer:false});
+  const buf=new Uint8Array(sw*sh*4);
+  const cats=['sky','ground','water','green','road','bld','outline','cars'];
+  const saved=new Map();
+  cats.forEach(c=>{scene.traverse(o=>{if(o.userData.cat===c){const a=[];if(o.isMesh||o.isInstancedMesh)a.push([o,o.visible]);if(o.isGroup)o.children.forEach(ch=>{if(ch.isMesh)a.push([ch,ch.visible]);});saved.set(c,a);}});});
+  const oldClear=new T.Color();renderer.getClearColor(oldClear);
+  const oldAlpha=renderer.getClearAlpha();
+  renderer.setClearColor(0xFF00FF,1);
+  const oldSize=new T.Vector2();renderer.getSize(oldSize);
+  function renderCount(show){
+    cats.forEach(c=>{const a=saved.get(c)||[];a.forEach(([o,v])=>{o.visible=show.includes(c);});});
+    // 天空不参与计数（背景 = 品红）
+    renderer.setRenderTarget(rtS);
+    renderer.clear();
+    renderer.render(scene,cam);
+    renderer.readRenderTargetPixels(rtS,0,0,sw,sh,buf);
+    let n=0, low=0;
+    for(let y=0;y<sh;y++){
+      const inLow=y<Math.floor(sh/3);        // GL 原点在左下 ⇒ y 小=画面下 1/3
+      for(let x=0;x<sw;x++){
+        const i=(y*sw+x)*4;
+        if(buf[i]>200&&buf[i+2]>200&&buf[i+1]<60) continue;   // 品红背景
+        n++;
+        if(inLow)low++;
+      }
+    }
+    return {pct:n/(sw*sh),lowPct:low/(sw*Math.floor(sh/3))};
+  }
+  const out=[];
+  for(const [tx,tz] of TARGETS){
+    for(let i=0;i<8;i++){
+      const yaw=(i+0.5)*(Math.PI/4);
+      cam.position.set(tx+Math.sin(yaw)*DIST0*Math.cos(PITCH0),TY0+Math.sin(PITCH0)*DIST0,
+                       tz+Math.cos(yaw)*DIST0*Math.cos(PITCH0));
+      cam.lookAt(tx,TY0,tz);cam.updateMatrixWorld();
+      const allR=renderCount(cats.filter(c=>c!=='sky'));
+      const roadR=renderCount(['road']);
+      const bldR=renderCount(['bld','outline']);
+      const grdR=renderCount(['ground','water','green']);
+      const score=Math.min(1,roadR.lowPct/0.16)*2.0      // 下 1/3 路网
+                 +Math.min(1,bldR.pct/0.42)*1.6           // 楼铺满
+                 +(1-Math.abs((1-allR.pct)-0.28)/0.28)*1.0   // 天空 ≤35%
+                 +Math.min(1,grdR.lowPct/0.30)*0.8
+                 -Math.max(0,(1-allR.pct)-0.40)*6;
+      out.push({tx:Math.round(tx),tz:Math.round(tz),yaw:+yaw.toFixed(3),
+        sky:+(1-allR.pct).toFixed(3),road:+roadR.pct.toFixed(3),roadLow:+roadR.lowPct.toFixed(3),
+        bld:+bldR.pct.toFixed(3),grd:+grdR.pct.toFixed(3),score:+score.toFixed(3)});
+    }
+  }
+  out.sort((a,b)=>b.score-a.score);
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(oldClear,oldAlpha);
+  renderer.setSize(oldSize.x,oldSize.y,false);
+  cam.aspect=oldSize.x/oldSize.y;cam.updateProjectionMatrix();
+  cats.forEach(c=>{const a=saved.get(c)||[];a.forEach(([o,v])=>{o.visible=v;});});
+  rtS.dispose();
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10. HUD / 主循环 / 交互
+// ═══════════════════════════════════════════════════════════════════════════
+const HUD=qb('hud',true);
+if(!HUD)document.getElementById('hud').style.display='none';
+resize();
+let camSearchRes=null;
+if(qb('camsearch',false)){
+  camSearchRes=runCamSearch();
+  const best=camSearchRes[0];
+  TX=best.tx;TZ=best.tz;aerial.tx=best.tx;aerial.tz=best.tz;aerial.yaw=best.yaw;
+  if(camMode==='aerial')cur=Object.assign({},aerial);
+}
+
+let drag=false,lx=0,ly=0;
+canvas.addEventListener('pointerdown',e=>{drag=true;lx=e.clientX;ly=e.clientY;});
+addEventListener('pointerup',()=>drag=false);
+addEventListener('pointercancel',()=>drag=false);
+addEventListener('pointermove',e=>{
+  if(!drag)return;
+  cur.yaw-=(e.clientX-lx)*0.005;
+  cur.pitch=Math.max(0.02,Math.min(1.3,cur.pitch+(e.clientY-ly)*0.004));
+  lx=e.clientX;ly=e.clientY;
+});
+canvas.addEventListener('wheel',e=>{e.preventDefault();cur.dist=Math.max(10,Math.min(3600,cur.dist*(1+Math.sign(e.deltaY)*0.09)));},{passive:false});
+addEventListener('keydown',e=>{
+  if(e.key==='1'){camMode='aerial';cur=Object.assign({},aerial);}
+  else if(e.key==='2'){camMode='near';cur=Object.assign({},nearState);}
+  else if(e.key==='m'||e.key==='M'){document.getElementById('hud').style.display=
+    document.getElementById('hud').style.display==='none'?'block':'none';}
+});
+
+const times=[];let last=performance.now(),frames=0,lastStat=0,fpsMed=0,fpsP95=0;
+const m4=new T.Matrix4(),qt=new T.Quaternion(),v3=new T.Vector3(),one=new T.Vector3(1,1,1),UP=new T.Vector3(0,1,0);
+function applyCam(c){
+  if(camMode==='near'){cam.near=0.3;cam.far=7000;}
+  else{ // 鸟瞰也要能拉近：near 随距离收缩，避免 8m 切掉近处墙面
+    cam.near=Math.max(0.3,Math.min(8,c.dist*0.02));
+    cam.far=6000;
+  }
+  cam.updateProjectionMatrix();
+  cam.position.set(c.tx+Math.sin(c.yaw)*c.dist*Math.cos(c.pitch),
+                   c.ty+Math.sin(c.pitch)*c.dist,
+                   c.tz+Math.cos(c.yaw)*c.dist*Math.cos(c.pitch));
+  cam.lookAt(c.tx,c.ty,c.tz);
+  sky.position.copy(cam.position);
+  if(shadowGround){                       // 阴影平面跟着目标点走（阴影图是目标点 ±300m 的盒）
+    shadowGround.position.set(c.tx,0.02,c.tz);
+    shadowGround.material.uniforms.uCtr.value.set(c.tx,c.tz);
+  }
+}
+function renderFrame(){
+  renderShadow();
+  if(OVER&&!OVER_COMP){                       // legacy：旧叠加路径（直接画到画布、无 ACES），仅对照用
+    renderer.setRenderTarget(null);
+    renderer.render(scene,cam);
+    return;
+  }
+  renderer.setRenderTarget(rtScene);
+  renderer.clear();
+  renderer.render(scene,cam);
+  if(BLOOM){
+    // 阈值 + 水平模糊
+    quadMesh.material=matDown;
+    matDown.uniforms.tSrc.value=rtScene.texture;
+    renderer.setRenderTarget(rtA);
+    renderer.render(quadScene,quadCam);
+    // 垂直模糊
+    quadMesh.material=matBlurV;
+    matBlurV.uniforms.tSrc.value=rtA.texture;
+    renderer.setRenderTarget(rtB);
+    renderer.render(quadScene,quadCam);
+  }
+  // 最终合成：只在这里做一次 ACES（§15 P1-a②）
+  quadMesh.material=matComp;
+  matComp.uniforms.tScene.value=rtScene.texture;
+  matComp.uniforms.tBloom.value=BLOOM?rtB.texture:blackTex;
+  matComp.uniforms.uStrength.value=BLOOM?0.35:0.0;
+  renderer.setRenderTarget(null);
+  renderer.render(quadScene,quadCam);
+}
+let firstFrameMs=0;
+function step(){
+  if(!firstFrameMs)firstFrameMs=performance.now()-T0;
+  renderer.info.reset();
+  const now=performance.now();
+  const dt=Math.min(0.05,(now-last)/1000);last=now;
+  // 车流
+  if(cars){
+    for(let i=0;i<carState.length;i++){
+      const s=carState[i];
+      s.t+=s.v*dt/s.seg.L*s.dir;
+      if(s.t>=1||s.t<=0){s.seg=SEGS[Math.floor(Math.random()*SEGS.length)];s.t=s.dir>0?0:1;}
+      const a=s.seg.a,b=s.seg.b;
+      const x=a[0]+(b[0]-a[0])*s.t,z=a[1]+(b[1]-a[1])*s.t;
+      const ang=Math.atan2((b[0]-a[0])*s.dir,(b[1]-a[1])*s.dir);
+      v3.set(x,0.16,z);qt.setFromAxisAngle(UP,ang);m4.compose(v3,qt,one);
+      cars.setMatrixAt(i,m4);
+    }
+    cars.instanceMatrix.needsUpdate=true;
+  }
+  applyCam(cur);
+  renderFrame();
+  frames++;
+  times.push(now);if(times.length>120)times.shift();
+  if(now-lastStat>420&&times.length>12&&HUD){
+    lastStat=now;
+    const d=[];for(let i=1;i<times.length;i++)d.push(times[i]-times[i-1]);d.sort((a,b)=>a-b);
+    const med=d[Math.floor(d.length*0.5)],p95=d[Math.min(d.length-1,Math.floor(d.length*0.95))];
+    fpsMed=1000/med;fpsP95=1000/p95;
+    const info=renderer.info.render;
+    const rings=RING_STATS;
+    stat.innerHTML=
+      `\n<span class="k">楼</span> ${fp.length}（近景全几何 ${nFull} · 远景剪影 ${nSlab}）· <span class="k">路</span> ${roads.length} 段 ${ROAD_STATS.segs}\n`+
+      `环处理：${rings.total} 有效 / 剔除 自交 ${rings.rejSelf} 超长边 ${rings.rejSpike} 面积 ${rings.rejArea} · 耳切失败 ${rings.earcutFail}\n`+
+      `水 ${GW_STATS.water} / 绿 ${GW_STATS.green}（滤 ${GW_STATS.rej}）· 车 ${cars?NCARS:0}\n`+
+      `tri ${(info.triangles/1000).toFixed(0)}k · draw ${info.calls} · 同屏楼 ${nFull}\n`+
+      `fps 中位 ${fpsMed.toFixed(1)} / p95 ${fpsP95.toFixed(1)}（${med.toFixed(1)} / ${p95.toFixed(1)} ms）\n`+
+      `pitch ${cur.pitch.toFixed(2)} · dist ${cur.dist.toFixed(0)} · mode ${camMode} · bloom ${BLOOM?'on':'off'} · shadow ${FXSHADOW?'on':'off'} · aces ${FXACES?'on':'off'}（exp 1.1 · scene ${SCENE}）\n`+
+      `<span class="k">renderer</span> ${REN}\n`+
+      `<span class="k">视口</span> ${renderer.domElement.width}×${renderer.domElement.height} · DPR ${DPR} · 首帧 ${firstFrameMs.toFixed(0)}ms`+
+      (camSearchRes?`\n机位搜索：试 ${camSearchRes.length} 个，最佳 score ${camSearchRes[0].score}（路下1/3 ${(camSearchRes[0].roadLow*100).toFixed(1)}% · 天 ${(camSearchRes[0].sky*100).toFixed(1)}%）`:'');
+  }
+  requestAnimationFrame(step);
+}
+resize();
+if(camMode==='aerial')applyCam(cur);
+stat.textContent='\n准备渲染…（楼 '+fp.length+' / 路 '+roads.length+'）';
+requestAnimationFrame(step);
+
+// 调试出口
+addEventListener('message',e=>{
+  const d=e.data;
+  if(!d||d.type!=='w3d:cam')return;
+  try{
+    const r=window.__w6.camFromMap(d);
+    if(e.source)e.source.postMessage({type:'w3d:camAck',cam:r,ts:performance.now()},'*');
+  }catch(err){ if(e.source)e.source.postMessage({type:'w3d:err',msg:String(err)},'*'); }
+});
+window.__w6={
+  camFromMap(m){
+    if(!m)return null;
+    const wx=(m.lon-LON0)*KX, wz=-(m.lat-LAT0)*KZ;
+    const res=156543.03392*Math.cos(m.lat*Math.PI/180)/Math.pow(2,m.zoom);
+    const pxH=canvas.clientHeight||720;
+    const pitch=Math.max(0.02,Math.min(1.2,(m.pitch!=null?m.pitch:0.35)));   // 读地图 pitch（弧度）
+    const dist=res*pxH*Math.cos(pitch)/(2*Math.tan(FOV*Math.PI/360));
+    cur.tx=wx;cur.tz=wz;cur.pitch=pitch;
+    cur.dist=Math.max(60,Math.min(4200,dist));
+    cur.ty=Math.max(4,Math.min(90,cur.dist*Math.cos(pitch)*0.02+4));
+    if(m.bearing!=null)cur.yaw=-(m.bearing*Math.PI/180);
+    camMode='aerial';applyCam(cur);
+    if(OVER&&groundDisc){groundDisc.position.set(cur.tx,0,cur.tz);groundDisc.scale.setScalar(cur.dist*1.25);}
+    return {tx:cur.tx,tz:cur.tz,dist:cur.dist,pitch:cur.pitch,yaw:cur.yaw};
+  },
+  THREE:T,scene,cam,renderer,fp,roads,gw,TARGETS,shadowGround,
+  fx:{shadows:FXSHADOW,aces:FXACES},lightCam,rtShadow,renderShadow,shadowStats:()=>({passes:shadowPasses,tick:shadowTick}),
+  over:{on:OVER,fxover:FXOVER,composite:OVER_COMP,aces:FXACES,keepAlpha:()=>matComp.uniforms.uKeepAlpha.value,
+    clearAlpha:()=>renderer.getClearAlpha()},
+  /* 读画布默认帧缓冲的 alpha 分布（同一 task 内 render 后立刻读；用于叠加层透明性取证） */
+  alphaStats(){
+    renderFrame();
+    const gl=renderer.getContext();
+    const w=renderer.domElement.width,h=renderer.domElement.height;
+    const buf=new Uint8Array(w*h*4);
+    gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,buf);
+    let a0=0,a1=0,mid=0,sum=0;
+    for(let i=3;i<buf.length;i+=4){const a=buf[i];sum+=a;if(a<8)a0++;else if(a>247)a1++;else mid++;}
+    return {w,h,alpha0:+(a0/(w*h)).toFixed(4),alpha1:+(a1/(w*h)).toFixed(4),
+      alphaMid:+(mid/(w*h)).toFixed(4),meanAlpha:+(sum/(w*h*255)).toFixed(4)};
+  },
+  mem(){let b=0,n=0;scene.traverse(o=>{const g=o.geometry;if(!g)return;for(const k in g.attributes){b+=g.attributes[k].array.byteLength;}if(g.index)b+=g.index.array.byteLength;n++;});
+    return {geomMeshes:n,geoMB:+(b/1048576).toFixed(2),firstFrameMs:+firstFrameMs.toFixed(0)};},
+  timing(){return Object.assign({},TR,{firstFrameMs:+firstFrameMs.toFixed(0)});},
+  stats(){const i=renderer.info.render;return {draw:i.calls,tri:i.triangles,
+    fpsMed:+fpsMed.toFixed(1),fpsP95:+fpsP95.toFixed(1),nFull,nSlab,
+    cam:{...cur},mode:camMode,rings:RING_STATS,road:ROAD_STATS,gw:GW_STATS};},
+  search:()=>{camSearchRes=runCamSearch();return camSearchRes.slice(0,10);},
+  applyCam,setCam(o){Object.assign(cur,o);applyCam(cur);renderFrame();},
+  setMode(m){camMode=m;cur=m==='near'?Object.assign({},nearState):Object.assign({},aerial);},
+  near:nearState,aerial,measure(){renderFrame();return renderer.info.render;},
+  vis(cat,on){scene.traverse(o=>{if(o.userData.cat===cat)o.visible=on;});},
+  setBloom(on){BLOOM=on;resize();},
+  setBloomRad(v){matDown.uniforms.uRad.value=v;matBlurV.uniforms.uRad.value=v;},
+  get bloom(){return BLOOM;}
+};
+</script></body></html>

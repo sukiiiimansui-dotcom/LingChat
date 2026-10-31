@@ -1,0 +1,372 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ADR-001 B 方案 · MapLibre + 3D 叠加（datum 对齐 v3）</title>
+<style>
+html,body{margin:0;height:100%;background:#cfe6f7;font:13px/1.45 system-ui,sans-serif;overflow:hidden}
+#map{position:absolute;inset:0}
+#over3d{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .35s linear}
+#over3d iframe{width:100%;height:100%;border:0;display:block;background:transparent}
+#hud{position:fixed;left:10px;top:10px;background:rgba(22,28,44,.84);color:#eaf6ff;padding:9px 12px;
+     border-radius:10px;white-space:pre;line-height:1.5;font-variant-numeric:tabular-nums;z-index:10;pointer-events:none}
+#hud b{color:#ffe9a8}
+#hud .ok{color:#a9ffcf}
+#hud .warn{color:#ffb0b0}
+#align{position:fixed;right:10px;bottom:10px;background:rgba(22,28,44,.86);color:#dff6ff;padding:8px 10px;
+     border-radius:10px;white-space:pre;font:12px/1.45 ui-monospace,monospace;z-index:10;pointer-events:none;display:none}
+#ctl{position:fixed;right:10px;top:10px;z-index:10;display:flex;gap:6px}
+#ctl button{background:rgba(22,28,44,.82);color:#eaf6ff;border:1px solid rgba(140,200,255,.35);
+  border-radius:8px;padding:6px 10px;font-size:12.5px;cursor:pointer}
+body.nohud #hud,body.nohud #align,body.nohud #ctl{display:none!important}
+</style></head><body>
+<div id="map"></div>
+<div id="over3d"><iframe id="eng" allow="same-origin"></iframe></div>
+<div id="hud"><b>ADR-001 · B 方案（GCJ-02→WGS-84 逆变换）</b>　拖动/滚轮 = MapLibre · 3D 单向跟随
+<span id="stat">初始化…</span></div>
+<div id="align"></div>
+<div id="ctl"><button id="tog">3D 叠加：开</button><button id="mode">模式：B</button><button id="chk">自检</button></div>
+<script type="module">
+/* 叠加层：MapLibre 管底图/手势/标签，3D 引擎（world3d7.html?overlay=1）用 iframe 叠在上面。
+ * 相机单向：每帧从 map 读 center/zoom/pitch/bearing → 转给引擎，引擎不自积分。
+ *
+ * 本文件相对最小可用版的改动（v3，2026-10-30）：
+ *  ① datum：高德瓦片是 GCJ-02，引擎 data/*.json 是 WGS-84。喂引擎前做 gcj02→wgs84 逆变换。
+ *  ② zoom→米/像素：MapLibre 的 worldSize = 512·2^z（transform._tileSize=512），
+ *     引擎 camFromMap 里按 156543.03392·cos(lat)/2^z 算（= 256·2^z 口径）⇒ **2× 差**。
+ *     这里改为量出来的 res（用 map.project 实测）再算相机距离。
+ *  ③ 相机装配：引擎的 camFromMap 把 p 同时当"偏离铅垂的倾角"（算 dist）和"仰角"（applyCam），
+ *     两处口径相反；且 pitch 被 clamp 到 1.2rad，做不出俯视。这里仍走 camFromMap 拿 tx/tz
+ *     （datum 修正后的 WGS），再用 setCam 装配与 MapLibre 同参数（fov/距离/仰角/偏航）的相机。
+ *     跨源拿不到 contentWindow 时自动退回 postMessage 的 camFromMap 路径（datum 修正照样生效）。
+ *  ④ 自检：同一屏幕像素 → map.unproject() 得 GCJ → gcj2wgs → 引擎 P() → 引擎相机投影，
+ *     与 map.project() 比像素偏差（目标 0）。
+ *
+ * 参数：?lon=&lat=（WGS-84 目标，默认=引擎城市中心）&z=&pitch=&bearing=
+ *      &engine=0|1 &cam=fit|msg &datum=0|1 &opacity=1 &hud=0 &grid=1 &align=1
+ *      &fx=shadows=0,aces=0 &fxover=alpha|opaque|legacy（原样转给引擎，见 world3d7.html 文件头）
+ */
+const ML = await import('./vendor/maplibre/maplibre-gl.mjs');
+const Q=new URLSearchParams(location.search);
+const qb=(k,d)=>{const v=Q.get(k);return v===null?d:(v==='1'||v==='true');};
+const qn=(k,d)=>{const v=Q.get(k);if(v===null||v==='')return d;const n=Number(v);return Number.isFinite(n)?n:d;};
+
+/* ═══ 1. datum：GCJ-02 ⇄ WGS-84 ═════════════════════════════════════════════
+ * 高德瓦片 = GCJ-02；引擎 data/*.json = WGS-84（OSM）。
+ * 直接叠加差 Δlon≈+357m / Δlat≈-320m（重庆渝中），zoom16 下 ≈(344,-308)px。
+ * 公式取 HANDOFF §15：dLat/dLng 多项式 → 弧度修正 → wgs = gcj - d。
+ * 一次性减法的一阶残差 ≈0.5–1m，这里再做 3 次定点迭代（残差 <1cm）。 */
+const GA=6378245.0, GEE=0.00669342162296594323;
+function _tLat(x,y){
+  let r=-100.0+2.0*x+3.0*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
+  r+=(20.0*Math.sin(6.0*x*Math.PI)+20.0*Math.sin(2.0*x*Math.PI))*2.0/3.0;
+  r+=(20.0*Math.sin(y*Math.PI)+40.0*Math.sin(y/3.0*Math.PI))*2.0/3.0;
+  r+=(160.0*Math.sin(y/12.0*Math.PI)+320*Math.sin(y*Math.PI/30.0))*2.0/3.0;
+  return r;
+}
+function _tLng(x,y){
+  let r=300.0+x+2.0*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
+  r+=(20.0*Math.sin(6.0*x*Math.PI)+20.0*Math.sin(2.0*x*Math.PI))*2.0/3.0;
+  r+=(20.0*Math.sin(x*Math.PI)+40.0*Math.sin(x/3.0*Math.PI))*2.0/3.0;
+  r+=(150.0*Math.sin(x/12.0*Math.PI)+300.0*Math.sin(x/30.0*Math.PI))*2.0/3.0;
+  return r;
+}
+function wgs2gcj(lon,lat){
+  const dLat0=_tLat(lon-105.0,lat-35.0), dLng0=_tLng(lon-105.0,lat-35.0);
+  const radLat=lat/180.0*Math.PI;
+  let magic=Math.sin(radLat); magic=1-GEE*magic*magic;
+  const sqrtMagic=Math.sqrt(magic);
+  const dLat=(dLat0*180.0)/((GA*(1-GEE))/(magic*sqrtMagic)*Math.PI);
+  const dLng=(dLng0*180.0)/(GA/sqrtMagic*Math.cos(radLat)*Math.PI);
+  return [lon+dLng,lat+dLat];
+}
+function gcj2wgs(lon,lat,iters=3){
+  let w=[lon,lat];
+  for(let i=0;i<iters;i++){
+    const g=wgs2gcj(w[0],w[1]);
+    w=[lon-(g[0]-w[0]), lat-(g[1]-w[1])];
+  }
+  return w;
+}
+const DATUM=qb('datum',true);          // false = 故意不做逆变换（对照用）
+
+/* ═══ 2. 底图（高德栅格，零配置；本机实测只有高德瓦片可取）═════════════════ */
+const TGT_W=[qn('lon',106.5895), qn('lat',29.5855)];   // WGS-84 目标（= 引擎城市中心）
+const TGT_G=wgs2gcj(TGT_W[0],TGT_W[1]);               // 瓦片坐标系里的同一位置
+const Z0=qn('z',16.3), PITCH0=qn('pitch',0), BEAR0=qn('bearing',0);
+const GRID=qb('grid',false);
+
+const style={version:8,sources:{
+    amap:{type:'raster',tiles:['https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'],
+          tileSize:256,attribution:'AMap'},
+    ...(GRID?{grid:{type:'geojson',data:(()=>{const f=[];const c=[TGT_G[0],TGT_G[1]];
+      for(let i=-12;i<=12;i++){
+        f.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:[[c[0]+i*0.0018,c[1]-0.03],[c[0]+i*0.0018,c[1]+0.03]]}});
+        f.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:[[c[0]-0.03,c[1]+i*0.0018],[c[0]+0.03,c[1]+i*0.0018]]}});
+      } return {type:'FeatureCollection',features:f};})()}}:{})},
+  layers:[
+    {id:'bg',type:'background',paint:{'background-color':'#e8eef4'}},
+    {id:'amap',type:'raster',source:'amap',paint:{'raster-opacity':1}},
+    ...(GRID?[{id:'grid',type:'line',source:'grid',paint:{'line-color':'#ff3d9a','line-width':1,'line-opacity':0.5}}]:[])
+  ]};
+const map=new ML.Map({container:'map',style,center:TGT_G.concat(),zoom:Z0,
+  pitch:PITCH0,bearing:BEAR0,attributionControl:false,logoPosition:'bottom-left'});
+
+/* ═══ 3. 引擎 iframe（懒加载；?overlay=1 透明画布、不画地面/天空）═════════════ */
+const wrap=document.getElementById('over3d'), eng=document.getElementById('eng');
+let engineOn=qb('engine',true), ENGINE=null, engineErr='';
+const t0=performance.now();
+const FORCE_OP=qb('opacity',false);
+if(qb('hud',true)===false)document.body.classList.add('nohud');
+
+/* 叠加模式的重心：引擎建楼/阴影时以 TX,TZ 为圆心做距离剔除（NEAR_FULL 1600m / FAR_CUT 3800m）。
+ * 地图拖到别处时如果不把重心告诉引擎，楼会被整体剔掉（实测：视点距城市中心 3.4km 时叠加图里一栋楼都没有）。
+ * cx/cz 是引擎本地米坐标：cx=(lon-106.55)*KX、cz=-(lat-29.55)*KZ。这里原样透传，由调用方决定。 */
+const CXQ=Q.get('cx'), CZQ=Q.get('cz'), RQ=Q.get('r');
+const ENG_SRC='./world3d7.html?overlay=1&dpr='+Math.min(devicePixelRatio||1,2)
+  +(Q.get('fx')?'&fx='+encodeURIComponent(Q.get('fx')):'')
+  +(Q.get('fxover')?'&fxover='+encodeURIComponent(Q.get('fxover')):'')
+  +(Q.get('bloom')?'&bloom='+encodeURIComponent(Q.get('bloom')):'')
+  +(CXQ!=null?'&cx='+encodeURIComponent(CXQ):'')
+  +(CZQ!=null?'&cz='+encodeURIComponent(CZQ):'')
+  +(RQ!=null?'&r='+encodeURIComponent(RQ):'');
+if(engineOn)eng.src=ENG_SRC;   // engine=0 时根本不加载（省 ~20s）
+
+/* 引擎自身在叠加层的坑（world3d7 已修，这里仍兜底）：
+ *  a) 旧引擎 `if(OVER)setClearColor(0,0)` 后面又无条件 `setClearColor(FOGHEX,1)` ⇒ 画布不透明；
+ *     world3d7 改成 `if(!OVER)` 后再设雾色，透明由引擎自己保证（这里再设一次是幂等的）。
+ *  b) html/body 背景 #cfe6f7 ⇒ iframe 不透明，必须注入透明背景。 */
+eng.addEventListener('load',()=>{
+  try{
+    const d=eng.contentDocument, w=eng.contentWindow;
+    const st=d.createElement('style');
+    st.textContent='html,body{background:transparent!important}#hud{display:none!important}';
+    d.head.appendChild(st);
+    const t=setInterval(()=>{
+      try{
+        if(!w.__w6)return;
+        clearInterval(t);
+        w.__w6.renderer.setClearColor(0x000000,0);      // 让画布真透明
+        ENGINE={w,doc:d,THREE:w.__w6.THREE,cam:w.__w6.cam,
+                canvas:w.document.getElementById('c'),w6:w.__w6};
+        probeProjection();
+        if(window.__ov)window.__ov.ready=true;
+        CAMDIRTY=true;
+      }catch(e){engineErr=String(e);}
+    },80);
+  }catch(e){engineErr='no-same-origin: '+e;}
+});
+
+/* ═══ 4. 引擎投影常量（不用抄常量：从 camFromMap 反推）═══════════════════════
+ * tx=(lon-LON0)·KX, tz=-(lat-LAT0)·KZ ⇒ 两次探测解出 LON0/KX/LAT0/KZ。 */
+const PRJ={LON0:106.55,LAT0:29.55,KX:111320*Math.cos(29.55*Math.PI/180),KZ:110540,src:'fallback'};
+function probeProjection(){
+  const w=ENGINE.w6;
+  const m={zoom:16,pitch:0.2,bearing:0};
+  const a=w.camFromMap(Object.assign({lon:106.50,lat:29.50},m));
+  const b=w.camFromMap(Object.assign({lon:106.60,lat:29.50},m));
+  const c=w.camFromMap(Object.assign({lon:106.50,lat:29.60},m));
+  const KX=(b.tx-a.tx)/0.10, LON0=106.50-a.tx/KX;
+  const KZ=-(c.tz-a.tz)/0.10, LAT0=29.50+a.tz/KZ;
+  Object.assign(PRJ,{KX,LON0,KZ,LAT0,src:'probe'});
+  PRJ.proj=(lon,lat)=>[(lon-PRJ.LON0)*PRJ.KX, -(lat-PRJ.LAT0)*PRJ.KZ];
+  PRJ.fov=ENGINE.w6.cam.fov;             // 引擎 FOV（度）
+  CAMDIRTY=true;
+}
+const P=(lon,lat)=>[(lon-PRJ.LON0)*PRJ.KX, -(lat-PRJ.LAT0)*PRJ.KZ];
+
+/* ═══ 5. zoom → 米/像素（校验 + 相机标定）══════════════════════════════════
+ * zoom → 米/像素。
+ * MapLibre 的 worldSize(px) = 512·2^z（transform._tileSize=512；本轮用"同 zoom 瓦片 mosaic 与
+ * 浏览器截图互相关 = 0.915、偏移 (0,0)"实测确认）；引擎 camFromMap 按 156543.03392·cos/2^z
+ * （= 256·2^z 口径）⇒ 同一 zoom 下差 2×。
+ * 这里直接用 512 口径解析式（精确、与 pitch 无关；pitch>0 时 map.project 的大步长差商会偏大）。 */
+const worldSize=()=>512*Math.pow(2,map.getZoom());     // MapLibre: 512·2^z px
+function resX(){          // 引擎世界米 / CSS px（东西向 = 中心横向分辨率）
+  return PRJ.KX*360/worldSize();                        //  px/度=ws/360, 米/度=KX
+}
+function resY(){          // 南北向（与 resX 差 0.71% = Mercator sec 与引擎等距圆柱 KZ 的口径差）
+  const lat=map.getCenter().lat*Math.PI/180;
+  return PRJ.KZ*360*Math.cos(lat)/worldSize();          //  Mercator: px/度=ws/(360cos lat)
+}
+function resXproj(){      // 校验：pitch=0 时小步长中心差商应与解析式一致
+  const c=map.getCenter(), d=5e-4;
+  const a=map.project([c.lng-d,c.lat]), b=map.project([c.lng+d,c.lat]);
+  return (2*d*PRJ.KX)/Math.abs(b.x-a.x);
+}
+function resYproj(){      // 同上（南北向；pitch>0 时差商偏大，别拿它当标定）
+  const c=map.getCenter(), d=5e-4;
+  const a=map.project([c.lng,c.lat-d]), b=map.project([c.lng,c.lat+d]);
+  return (2*d*PRJ.KZ)/Math.abs(b.y-a.y);
+}
+const resFormula=lat=>156543.03392*Math.cos(lat*Math.PI/180)/Math.pow(2,map.getZoom());
+
+/* ═══ 6. 相机：把 MapLibre 的 (center,zoom,pitch,bearing) 装配成引擎相机 ═════
+ * 引擎 applyCam：pos = target + (sin(yaw)·dist·cos(p), ty+sin(p)·dist, cos(yaw)·dist·cos(p))
+ * 引擎 p = 仰角；MapLibre pitch = 偏离铅垂方向的角 ⇒ p = 90° - pitch。
+ * dist 由"地面 1px = res 米"定：dist = res·pxH / (2·tan(fov/2))（俯视时严格成立）。 */
+let CAMDIRTY=true, camInfo={}, hudMax=null;
+function sendCam(){
+  const c=map.getCenter(), z=map.getZoom();
+  const g=[c.lng,c.lat];
+  const w=DATUM?gcj2wgs(g[0],g[1]):[g[0],g[1]];
+  const pitchMap=(map.getPitch()||0)*Math.PI/180;
+  const bearing=map.getBearing()||0;
+  const msg={type:'w3d:cam',lon:w[0],lat:w[1],zoom:z,bearing,pitch:pitchMap};
+  const sameOrigin=!!(ENGINE&&ENGINE.w6);
+  if(!sameOrigin){                       // 跨源退路：datum 修正后的消息照样发
+    try{eng.contentWindow&&eng.contentWindow.postMessage(msg,'*');}catch(e){}
+    return {path:'msg',w};
+  }
+  const camMode=Q.get('cam')||'fit';
+  if(camMode==='msg'){
+    try{eng.contentWindow.postMessage(msg,'*');}catch(e){}
+    return {path:'msg',w};
+  }
+  /* fit：先用引擎自己的 camFromMap 拿 tx/tz（吃的就是 datum 修正后的 WGS），再装相机 */
+  const r=ENGINE.w6.camFromMap({lon:w[0],lat:w[1],zoom:z,bearing:0,pitch:0});
+  const pxH=ENGINE.canvas.clientHeight||innerHeight||720;
+  // MapLibre 6.10 的 map.transform 不对外暴露 ⇒ 用其默认 fov 0.6435011 rad(36.87°)；
+  // 只有显式 setFov() 才会变，默认路径一致。
+  const fovRad=(map.transform&&map.transform.fovInRadians)||0.6435011087932844;
+  const fovDeg=fovRad*180/Math.PI;
+  ENGINE.cam.fov=fovDeg; ENGINE.cam.updateProjectionMatrix();   // 与 MapLibre 同 FOV，pitch>0 才能逐像素对上
+  const res=resX();
+  const dist=Math.max(20,Math.min(5200,res*pxH/(2*Math.tan(fovRad/2))));
+  const pitchE=Math.min(Math.PI/2-0.002,Math.PI/2-pitchMap);     // 俯视留 0.11°，避免 lookAt 退化
+  const yaw=-bearing*Math.PI/180;
+  ENGINE.w6.setCam({tx:r.tx,tz:r.tz,ty:0,dist,pitch:pitchE,yaw});
+  camInfo={tx:r.tx,tz:r.tz,dist,pitchE,yaw,fovDeg,res,pxH,path:'fit',w};
+  hudMax=null;
+  return camInfo;
+}
+
+/* 视图变化 → 重发（避免每帧 postMessage / 重装相机） */
+let lastKey='',sentCount=0;
+function keyOf(){
+  const c=map.getCenter();
+  return [c.lng.toFixed(7),c.lat.toFixed(7),map.getZoom().toFixed(4),
+          (map.getPitch()||0).toFixed(2),(map.getBearing()||0).toFixed(2)].join('|');
+}
+function sync(){
+  if(engineOn){
+    const k=keyOf();
+    if(CAMDIRTY||k!==lastKey){ lastKey=k; CAMDIRTY=false; sendCam(); sentCount++; }
+  }
+  // 淡入：zoom 15.2→16.2（?opacity=1 强制全不透明，量像素用）
+  const z=map.getZoom();
+  const k2=FORCE_OP?1:Math.max(0,Math.min(1,(z-15.2)/1.0));
+  wrap.style.opacity=String(engineOn?k2:0);
+  requestAnimationFrame(sync);
+}
+map.on('load',()=>{ requestAnimationFrame(sync); });
+addEventListener('resize',()=>{ CAMDIRTY=true; });   // 视口变高变矮 ⇒ dist 要按新的 pxH 重算
+
+/* ═══ 7. 自检：同一屏幕像素，MapLibre 与引擎相机各自投到哪 ═══════════════════ */
+function engineScreen(wx,wz,y){
+  const cam=ENGINE.cam, T=ENGINE.THREE;
+  cam.updateMatrixWorld(true);
+  const v=new T.Vector3(wx,y||0.14,wz).project(cam);
+  const cw=ENGINE.canvas.clientWidth||ENGINE.w.innerWidth;
+  const ch=ENGINE.canvas.clientHeight||ENGINE.w.innerHeight;
+  return {x:(v.x*0.5+0.5)*cw, y:(0.5-v.y*0.5)*ch};
+}
+const GRID9=[[.5,.5],[.10,.10],[.90,.10],[.10,.90],[.90,.90],[.50,.10],[.50,.90],[.10,.50],[.90,.50]];
+function selfCheck(){
+  if(!ENGINE||!ENGINE.w6)return {err:'engine not ready'};
+  const W=innerWidth,H=innerHeight,rows=[];
+  for(const [u,v] of GRID9){
+    const sx=u*W, sy=v*H;
+    const ll=map.unproject([sx,sy]);                    // 该像素上的瓦片经纬度（GCJ-02）
+    const ww=DATUM?gcj2wgs(ll.lng,ll.lat):[ll.lng,ll.lat];
+    const [wx,wz]=P(ww[0],ww[1]);
+    const e=engineScreen(wx,wz,0.14);
+    rows.push({sx:+sx.toFixed(1),sy:+sy.toFixed(1),lon:+ll.lng.toFixed(7),lat:+ll.lat.toFixed(7),
+               ex:+e.x.toFixed(2),ey:+e.y.toFixed(2),dx:+(e.x-sx).toFixed(2),dy:+(e.y-sy).toFixed(2)});
+  }
+  const mx=Math.max(...rows.map(r=>Math.abs(r.dx))), my=Math.max(...rows.map(r=>Math.abs(r.dy)));
+  const mh=Math.max(...rows.map(r=>Math.hypot(r.dx,r.dy)));
+  /* 对照：同一位置若不做逆变换，会偏多少（按当前 res 折算成 px） */
+  const c=map.getCenter(); const sh=wgs2gcj(c.lng,c.lat);
+  const res=resX();
+  // 不做逆变换：引擎把 GCJ 数值当 WGS 用 ⇒ 3D 层相对瓦片偏 (dx,dy)
+  // 推导：B = 与"GCJ 数值"同址的物理点，瓦片上它在 +Δ 处，3D 把它画在中心 ⇒ 3D 位移 = -Δ
+  const before={dx:+(-((sh[0]-c.lng)*PRJ.KX)/res).toFixed(1), dy:+(((sh[1]-c.lat)*PRJ.KZ)/res).toFixed(1)};
+  return {unit:'css px',viewport:[W,H],dpr:devicePixelRatio,zoom:+map.getZoom().toFixed(4),
+          datum:DATUM,rows,maxAbsDx:+mx.toFixed(2),maxAbsDy:+my.toFixed(2),maxRadius:+mh.toFixed(2),
+          beforeDatumFix:before, cam:camInfo};
+}
+function renderAlignPanel(){
+  const s=selfCheck();
+  if(s.err){document.getElementById('align').textContent='自检失败：'+s.err;return;}
+  const lines=[`datum ${s.datum?'ON (gcj02→wgs84)':'OFF (对照)'} · zoom ${s.zoom} · DPR ${s.dpr} · 视口 ${s.viewport.join('×')}`,
+    '  sx     sy     dx     dy    (px)'];
+  for(const r of s.rows)lines.push(`${String(r.sx).padStart(6)} ${String(r.sy).padStart(6)} ${(r.dx>0?'+':'')+r.dx}`.padEnd(40)+`${(r.dy>0?'+':'')+r.dy}`);
+  lines.push(`max|dx| ${s.maxAbsDx}  max|dy| ${s.maxAbsDy}  max r ${s.maxRadius} px`);
+  lines.push(`若不做逆变换：Δ=(${s.beforeDatumFix.dx}, ${s.beforeDatumFix.dy}) px @ zoom ${s.zoom}`);
+  document.getElementById('align').textContent=lines.join('\n');
+  document.getElementById('align').style.display='block';
+}
+document.getElementById('chk').onclick=renderAlignPanel;
+const ALIGN_PANEL=qb('align',false);
+if(ALIGN_PANEL){ setInterval(()=>{ if(ENGINE&&ENGINE.w6&&camInfo.path==='fit')renderAlignPanel(); },1000); }
+
+/* ═══ 8. HUD ═══════════════════════════════════════════════════════════════ */
+const statEl=document.getElementById('stat');
+setInterval(()=>{
+  const c=map.getCenter(), z=map.getZoom();
+  const w=DATUM?gcj2wgs(c.lng,c.lat):[c.lng,c.lat];
+  const sh=wgs2gcj(w[0],w[1]);
+  const dLon=(sh[0]-w[0])*PRJ.KX, dLat=(sh[1]-w[1])*PRJ.KZ;   // GCJ 相对 WGS 的偏移（米）
+  const res=resX();
+  const ratio=resFormula(w[1])/res;
+  const st=ENGINE&&ENGINE.w6?ENGINE.w6.stats():null;
+  if(ENGINE&&ENGINE.w6&&camInfo.path==='fit'){ try{ hudMax=selfCheck().maxRadius; }catch(e){} }
+  const mm=st?`tri ${(st.tri/1000).toFixed(0)}k · draw ${st.draw} · ${st.mode}`:'引擎加载中';
+  statEl.innerHTML=
+`\n瓦片坐标系 GCJ-02 ${c.lng.toFixed(6)},${c.lat.toFixed(6)} → 引擎 WGS-84 ${w[0].toFixed(6)},${w[1].toFixed(6)}  ${DATUM?'<span class="ok">逆变换 开</span>':'<span class="warn">逆变换 关（对照）</span>'}
+datum GCJ 相对 WGS：Δlon ${dLon>=0?'+':''}${dLon.toFixed(1)}m（东）/ Δlat ${dLat>=0?'+':''}${dLat.toFixed(1)}m（北）⇒ 不修正时 3D 层偏 (${(-dLon/res).toFixed(0)}, ${(dLat/res).toFixed(0)})px @ zoom ${z.toFixed(2)}
+zoom ${z.toFixed(3)} · res 实测 ${res.toFixed(5)} m/px · 引擎公式 ${resFormula(w[1]).toFixed(5)} m/px · 比 ${ratio.toFixed(3)}${Math.abs(ratio-1)>0.02?' <span class="warn">⚠ 引擎 zoom→m/px 需校正 ×'+(1/ratio).toFixed(3)+'</span>':''}
+相机 ${camInfo.path||'-'} · ${(camInfo.fovDeg||44).toFixed(1)}° · dist ${(camInfo.dist||0).toFixed(0)}m · 仰角 ${(camInfo.pitchE!=null?(camInfo.pitchE*180/Math.PI).toFixed(1):'-')}° · 同步 ${sentCount} 次
+${mm} · 自检 max|Δ| ${hudMax!=null?hudMax.toFixed(2):'-'} px（9 点）· DPR ${devicePixelRatio} · 视口 ${innerWidth}×${innerHeight}
+3D ${ENGINE&&ENGINE.w6?'已就绪':'加载中'} · 起 ${(performance.now()-t0).toFixed(0)}ms · 拖动/滚轮：底图跟手，3D 下一帧跟随${engineErr?'\n引擎集成错误 '+engineErr:''}`;
+},400);
+
+/* ═══ 9. 开关 / 回退 / 调试出口 ═════════════════════════════════════════════ */
+document.getElementById('tog').onclick=()=>{
+  engineOn=!engineOn;
+  if(engineOn&&!eng.src)eng.src=ENG_SRC;
+  if(!engineOn)wrap.style.opacity='0';
+  document.getElementById('tog').textContent='3D 叠加：'+(engineOn?'开':'关');
+  CAMDIRTY=true;
+};
+document.getElementById('mode').onclick=()=>{ location.search=engineOn?'?engine=0':'?engine=1'; };
+
+window.__ov={ map, ML, ready:false, datum:DATUM, PRJ,
+  get engine(){return ENGINE;}, get camInfo(){return camInfo;},
+  gcj2wgs, wgs2gcj, P, resX, resY, resXproj, resYproj, selfCheck, renderAlignPanel,
+  target:TGT_W, camFromMapTest(m){return ENGINE.w6.camFromMap(m);},
+  state(){
+    const s=selfCheck();
+    return {ready:!!(ENGINE&&ENGINE.w6), datum:DATUM, zoom:+map.getZoom().toFixed(4),
+      centerGcj:[+map.getCenter().lng.toFixed(7),+map.getCenter().lat.toFixed(7)],
+      pitch:map.getPitch(), bearing:map.getBearing(), dpr:devicePixelRatio,
+      viewport:[innerWidth,innerHeight], resX:+resX().toFixed(6), resY:+resY().toFixed(6),
+      resFormula:+resFormula(map.getCenter().lat).toFixed(6),
+      resRatio:+(resFormula(map.getCenter().lat)/resX()).toFixed(4),
+      prj:{LON0:PRJ.LON0,KX:PRJ.KX,LAT0:PRJ.LAT0,KZ:PRJ.KZ,src:PRJ.src,fov:PRJ.fov},
+      cam:camInfo, maxRadius:s.maxRadius, maxAbsDx:s.maxAbsDx, maxAbsDy:s.maxAbsDy,
+      beforeDatumFix:s.beforeDatumFix, engineStats:ENGINE&&ENGINE.w6?ENGINE.w6.stats():null};
+  },
+  engineInfo(){
+    if(!ENGINE)return null;
+    const st=ENGINE.w6.stats();
+    return {canvas:[ENGINE.canvas.width,ENGINE.canvas.height],
+      css:[ENGINE.canvas.clientWidth,ENGINE.canvas.clientHeight],
+      clearAlpha:ENGINE.w6.renderer.getClearAlpha(), fov:ENGINE.cam.fov,
+      near:ENGINE.cam.near, far:ENGINE.cam.far,
+      over:ENGINE.w6.over?ENGINE.w6.over:null,
+      alpha:ENGINE.w6.alphaStats?ENGINE.w6.alphaStats():null,
+      shadow:ENGINE.w6.shadowStats?ENGINE.w6.shadowStats():null,
+      hudHidden:!!document.getElementById('eng')&&!!ENGINE.doc.querySelector('style'),
+      stats:st};
+  }};
+</script></body></html>

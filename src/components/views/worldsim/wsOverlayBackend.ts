@@ -676,8 +676,9 @@ export function createOverlayBackend(): WsRenderBackend {
               heightPx: size.h,
               flatShading: (() => { try { return new URLSearchParams(location.search).get("ovlflat") !== "0"; } catch { return true; } })(),
               facadeTexture: assetFacadeTex,
-              /* `?facade=0` 关掉立面图集（A/B 用；默认开） */
+              /* `?facade=0` 关掉立面图集、`?kitbash=0` 关掉挂件（A/B 用；默认都开） */
               facadeOn: (() => { try { return new URLSearchParams(location.search).get("facade") !== "0"; } catch { return true; } })(),
+              kitbash: (() => { try { return new URLSearchParams(location.search).get("kitbash") !== "0"; } catch { return true; } })(),
             })
           : buildBldAssetLayer(THREE as Record<string, any>, assetPack, assetTex, data.places, {
               ids: data.featureIds,

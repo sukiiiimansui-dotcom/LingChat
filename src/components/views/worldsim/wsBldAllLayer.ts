@@ -56,6 +56,19 @@ export const INFILL_STEP_M = 14;
 /** 填充候选总量上限（生成侧，与单帧可见数无关；打散线序后截断即随机抽样） */
 export const INFILL_MAX = 9000;
 
+/** 填充的立面格池：底商条按哈希取一间店，内院低层按高度取一档住宅 */
+export const INFILL_SHOP_CELLS = ["cafe", "pharm", "super", "salon", "rest"];
+/** 内院低层：高度分档 → 候选立面（<9 m 低层、9~16 m 中层、>16 m 高层） */
+export const INFILL_RES_CELLS: [string[], string[], string[]] = [
+  ["house", "townhouse"],
+  ["townhouse", "apartment"],
+  ["apartment", "midrise"],
+];
+/** kitbash 挂件实例上限（全部挂件共用**一个** InstancedMesh ⇒ 只多一次 draw） */
+export const ATTACH_CAP = 3600;
+/** 挂件只给这个距离内的填充底商挂（远了看不到，白付三角） */
+export const ATTACH_INFILL_M = 180;
+
 /** 远处剔除的细杆类（>60 m 只剩一根像素宽的线，画出来就是闪烁的"细棍子"） */
 export const PROP_FAR_DROP_M = 60;
 export const PROP_FAR_DROP_KINDS = ["prop_streetlamp", "prop_sign", "prop_bench", "prop_bollard"];
@@ -93,6 +106,61 @@ const INFILL_PAL: [number, number, number][] = [
   };
   return [srgb(c[0]!), srgb(c[1]!), srgb(c[2]!)] as [number, number, number];
 });
+
+
+/* ── kitbash 挂件（治"同一个盒子"） ────────────────────────────────────────
+ * 每个挂件就是一个盒子（复用同一个单位盒几何）⇒ **全部挂件只占一次 draw**；
+ * 组合由"建筑 id 的哈希"决定：同一栋楼永远同一套挂件，不同楼互不相同。
+ * 只做两个套系：conv（便利店）与 cafe（咖啡店），其余类别暂不挂。 */
+export type KitClass = "conv" | "cafe";
+
+interface AttachSpec {
+  /** 横向尺寸占楼宽（或楼深）的比例 */
+  w: [number, number];
+  /** 竖向尺寸占楼高的比例 */
+  h: [number, number];
+  /** 凸出立面的进深（米） */
+  depth: number;
+  /** 底边离地高度（占楼高比例） */
+  y: [number, number];
+  /** 横向偏移（占楼宽比例，-0.5..0.5） */
+  x: [number, number];
+  /** 出现概率（按 id 哈希；0..1） */
+  p: number;
+  /** 最低楼高（米），低于它不挂（挂不上去/不合理） */
+  minH: number;
+  color: [number, number, number];
+}
+
+export const KIT_SPECS: Record<KitClass, AttachSpec[]> = {
+  /* 便利店：亮色招牌 + 白雨棚 + 卷帘门 + 空调外机 + 广告牌 */
+  conv: [
+    { w: [0.46, 0.62], h: [0.10, 0.14], depth: 0.22, y: [0.60, 0.70], x: [-0.10, 0.10], p: 0.85, minH: 2.6, color: [0.93, 0.30, 0.24] },
+    { w: [0.55, 0.76], h: [0.05, 0.07], depth: 0.95, y: [0.40, 0.46], x: [-0.06, 0.06], p: 0.75, minH: 2.8, color: [0.94, 0.93, 0.88] },
+    { w: [0.30, 0.42], h: [0.40, 0.50], depth: 0.10, y: [0.02, 0.06], x: [-0.20, 0.20], p: 0.55, minH: 2.6, color: [0.56, 0.59, 0.61] },
+    { w: [0.10, 0.14], h: [0.08, 0.11], depth: 0.32, y: [0.48, 0.62], x: [-0.34, 0.34], p: 0.60, minH: 3.0, color: [0.50, 0.52, 0.53] },
+    { w: [0.26, 0.36], h: [0.05, 0.07], depth: 0.80, y: [0.66, 0.78], x: [-0.30, 0.30], p: 0.35, minH: 6.0, color: [0.75, 0.73, 0.68] },
+    { w: [0.40, 0.56], h: [0.10, 0.15], depth: 0.14, y: [0.82, 0.88], x: [-0.14, 0.14], p: 0.30, minH: 3.2, color: [0.96, 0.95, 0.90] },
+  ],
+  /* 咖啡店：深色木招牌 + 条纹雨棚（深绿）+ 小阳台 + 空调 + 立牌 */
+  cafe: [
+    { w: [0.34, 0.46], h: [0.09, 0.12], depth: 0.20, y: [0.58, 0.66], x: [-0.08, 0.08], p: 0.80, minH: 2.6, color: [0.24, 0.34, 0.26] },
+    { w: [0.40, 0.58], h: [0.06, 0.08], depth: 0.75, y: [0.38, 0.44], x: [-0.05, 0.05], p: 0.65, minH: 2.8, color: [0.30, 0.42, 0.32] },
+    { w: [0.22, 0.30], h: [0.34, 0.42], depth: 0.12, y: [0.10, 0.16], x: [-0.24, 0.24], p: 0.45, minH: 2.6, color: [0.62, 0.56, 0.46] },
+    { w: [0.09, 0.12], h: [0.07, 0.10], depth: 0.30, y: [0.50, 0.64], x: [-0.32, 0.32], p: 0.50, minH: 3.0, color: [0.48, 0.50, 0.51] },
+    { w: [0.22, 0.30], h: [0.05, 0.06], depth: 0.70, y: [0.64, 0.74], x: [-0.26, 0.26], p: 0.40, minH: 5.5, color: [0.70, 0.62, 0.50] },
+    { w: [0.18, 0.24], h: [0.16, 0.22], depth: 0.16, y: [0.02, 0.06], x: [-0.34, 0.34], p: 0.45, minH: 2.4, color: [0.88, 0.86, 0.78] },
+  ],
+};
+
+/** 资产名 → 挂件套系（拿不到返回空串 = 不挂） */
+export function kitClassOf(assetName: string): KitClass | "" {
+  const m = /^bld_([a-z]+)_\d+$/.exec(String(assetName ?? ""));
+  const k = m ? m[1]! : "";
+  if (k === "cafe" || k === "pharm" || k === "super") return "conv";
+  if (k === "rest" || k === "salon") return "cafe";
+  return "";
+}
 
 export type LodTier = 0 | 1 | 2;
 
@@ -333,6 +401,14 @@ export interface BldAllDetail {
   propsFarDrop: number;
   /** 立面图集是否真的挂上了（1 = 挂上；0 = 没纹理，T1 是纯色盒） */
   facade: number;
+  /** 带立面的填充实例数 / 填充实例数（比例 = infillFacade / infill） */
+  infillFacade: number;
+  /** kitbash 挂件实例数（全部共用一个 draw） */
+  attach: number;
+  /** 「模型 + 挂件组合」口径的 top1 占比（kitbash 前后对比用；旧口径 real top1 见 repetition） */
+  identityTop1: number;
+  /** kitbash 开关（1 开 0 关） */
+  kitbash: number;
 }
 
 export interface BldAllLayer extends BldAssetLayer {
@@ -351,6 +427,8 @@ export interface BldAllOpts {
   facadeTexture?: any;
   /** `false` = 强制关掉立面图集（A/B 用；默认开） */
   facadeOn?: boolean;
+  /** `false` = 关掉 kitbash 挂件（A/B 用；默认开） */
+  kitbash?: boolean;
   /** 平面着色（A/B 用；默认开） */
   flatShading?: boolean;
 }
@@ -479,14 +557,6 @@ function uvBox(THREE: Record<string, any>, cap: number): any {
   return g;
 }
 
-/** 把一类立面的图集矩形填满某个盒子的实例属性（填充层整条不变，建层时填一次） */
-function fillUvRect(geom: any, r: FacadeUvRect, cap: number): void {
-  const attr = geom?.getAttribute?.("aUvRect");
-  if (!attr) return;
-  for (let k = 0; k < cap; k++) attr.setXYZW(k, r.u, r.v, r.du, r.dv);
-  attr.needsUpdate = true;
-}
-
 /**
  * 建 v3 资产层。几何只建一次；每帧只重摆实例。
  * 楼记录 `places` 与 v1/v2 同一份（[中心X, 中心Z, 底, 顶, 宽, 深, 旋转, 高]，stride 8）。
@@ -532,6 +602,8 @@ export function buildBldAllLayer(
   /* 立面图集（可选）：有纹理时 T1/填充的盒子换成带 UV 的盒子，侧面取样该类立面、顶面走屋面材质 */
   const facadeTex = opts.facadeTexture || null;
   const facadeOn = !!facadeTex && opts.facadeOn !== false;
+  /** kitbash 挂件：URL 上的 kitbash=0 可关（A/B） */
+  const kitbashOn = opts.kitbash !== false;
   /** 每份 bld 资产的图集矩形（没有该类立面 ⇒ null，用兜底矩形） */
   const bldRect: (FacadeUvRect | null)[] = facadeOn
     ? bldAssets.map((m) => facadeRectOf(facadeKeyOf(m.name)))
@@ -600,10 +672,15 @@ export function buildBldAllLayer(
   const boxInf = facadeOn
     ? [uvBox(THREE, INFILL_CAP), uvBox(THREE, INFILL_CAP)]
     : [boxGeom, boxGeom];
+  /* 填充的立面池：底商条按哈希选一间店，内院低层按楼高分档（同一档里再哈希二选一） */
+  const shopRects: FacadeUvRect[] = facadeOn
+    ? INFILL_SHOP_CELLS.map((c) => facadeRectOf(c) || fallbackRect)
+    : [];
+  const resRects: FacadeUvRect[] = [];
   if (facadeOn) {
-    /* 填充：底商条取底商立面，内院低层取住宅立面（整条实例缓冲一次填满，之后不变） */
-    fillUvRect(boxInf[0]!, facadeRectOf("cafe") || fallbackRect, INFILL_CAP);
-    fillUvRect(boxInf[1]!, facadeRectOf("house") || fallbackRect, INFILL_CAP);
+    for (const band of INFILL_RES_CELLS) {
+      for (const c of band) resRects.push(facadeRectOf(c) || fallbackRect);
+    }
   }
 
   const group = new THREE.Group();
@@ -659,6 +736,14 @@ export function buildBldAllLayer(
     return im;
   });
 
+  /* kitbash 挂件：一个 InstancedMesh 装所有套系的挂件（只多一次 draw） */
+  const attachMesh = new THREE.InstancedMesh(boxGeom, mat, ATTACH_CAP);
+  attachMesh.name = "ws-attach";
+  attachMesh.frustumCulled = false;
+  attachMesh.count = 0;
+  attachMesh.visible = false;
+  group.add(attachMesh);
+
   /* ── 楼：每栋挑一次模型 + 目标缩放（真实高度 1:1，横向按占地夹住） ── */
   const bldPick = new Int32Array(n).fill(-1);
   const bldScale = new Float32Array(n * 3);
@@ -695,6 +780,8 @@ export function buildBldAllLayer(
     color: [number, number, number];
     /** 立面图集模式下的中性明度抖动（0.94~1.04）：贴图自带颜色，不能再乘调色板色 */
     tint: number;
+    /** 立面格编号（0..4 店 / 0..2 住宅档）：同一栋楼永远是同一格 */
+    cell: number;
   }
   const infill: Infill[] = [];
   /** 本帧之前生成过的填充候选总数（诊断：与 `infill.length` 对比能看出是否被上限截断） */
@@ -755,6 +842,7 @@ export function buildBldAllLayer(
           kind: 0,
           color: INFILL_PAL[hs % INFILL_PAL.length]!,
           tint: 0.94 + ub(hs, 7, 100) / 1000,
+          cell: ub(hs, 16, INFILL_SHOP_CELLS.length),
         });
         /* ② 内院低层：再退 20~28 m，2~5 层；约六成采样点有（留出院子/空地的不均匀感） */
         if (infill.length >= INFILL_MAX) break;
@@ -775,6 +863,8 @@ export function buildBldAllLayer(
           kind: 1,
           color: INFILL_PAL[ub(hc, 5, INFILL_PAL.length)]!,
           tint: 0.94 + ub(hc, 7, 100) / 1000,
+          /* 内院低层按**楼高**选立面档（同一高度带里再用哈希二选一） */
+          cell: (ch > 16 ? 2 : ch > 9 ? 1 : 0) * 2 + ub(hc, 17, 2),
         });
       }
 
@@ -817,6 +907,14 @@ export function buildBldAllLayer(
   let infillProbe: { x: number; z: number; d2: number; ok: boolean }[] = [];
   let propsSeen = 0;
   let propsFarDrop = 0;
+  /** 本帧画出来且带立面的填充实例数（分母 = infTotal） */
+  let infillFacade = 0;
+  /** 本帧画出来的 kitbash 挂件数 */
+  let attachN = 0;
+  /** 「模型 + 挂件组合」口径下的 top1 占比（重复度 A/B 用） */
+  let identityTop1 = 0;
+  /** 本帧真的摆出来的填充实例（挂件挂到它们身上，也用于去重统计） */
+  const placedInfill: Infill[] = [];
   let lastT0: number[] = [];
   let lastT1: number[] = [];
   const vehCounts = new Int32Array(vehGroups.length);
@@ -1050,7 +1148,9 @@ export function buildBldAllLayer(
     /* ③ 合成填充：同样的距离筛 + 每类 cap + 三角预算 */
     infTotal = 0;
     infTris = 0;
+    infillFacade = 0;
     infCount.fill(0);
+    placedInfill.length = 0;
     if (tier < 2) {
       const infVis: { p: Infill; d2: number }[] = [];
       infillProbe = [];
@@ -1066,6 +1166,9 @@ export function buildBldAllLayer(
       infillSeen = infVis.length;
       infVis.sort((a, b) => a.d2 - b.d2);
       const canTint2 = typeof infillMeshes[0].setColorAt === "function";
+      const infUv = facadeOn
+        ? [boxInf[0]!.getAttribute("aUvRect"), boxInf[1]!.getAttribute("aUvRect")]
+        : [null, null];
       for (const it of infVis) {
         const k = it.p.kind;
         if (infCount[k]! >= INFILL_CAP) continue;
@@ -1076,6 +1179,13 @@ export function buildBldAllLayer(
         s3.set(it.p.w, it.p.h, it.p.d);
         m4.compose(v3, q, s3);
         im.setMatrixAt(infCount[k]!, m4);
+        if (facadeOn) {
+          /* 逐实例给立面格：底商条按哈希选一间店、内院低层按楼高分档 */
+          const pool = k === 0 ? shopRects : resRects;
+          const r = pool[it.p.cell % pool.length]!;
+          infUv[k]!.setXYZW(infCount[k]!, r.u, r.v, r.du, r.dv);
+          infillFacade += 1;
+        }
         if (canTint2) {
           if (facadeOn) {
             const t = it.p.tint;
@@ -1088,6 +1198,7 @@ export function buildBldAllLayer(
         infCount[k] = infCount[k]! + 1;
         infTris += 12;
         infTotal += 1;
+        if (placedInfill.length < 2100) placedInfill.push(it.p);
       }
       for (let k = 0; k < 2; k++) {
         const im = infillMeshes[k]!;
@@ -1096,10 +1207,116 @@ export function buildBldAllLayer(
         if (im.instanceMatrix) im.instanceMatrix.needsUpdate = true;
         if (im.instanceColor) im.instanceColor.needsUpdate = true;
       }
+      if (infUv[0]) infUv[0].needsUpdate = true;
+      if (infUv[1]) infUv[1].needsUpdate = true;
     }
 
     count = live + infTotal;
     drawnTris = liveTris + propTris + vehTris + infTris;
+
+    /* ④ kitbash 挂件：按「建筑 id 的哈希」给每栋楼配一套挂件（招牌/雨棚/卷帘门/空调/阳台/广告牌）。
+       全部挂件共用一个 InstancedMesh ⇒ 只多一次 draw；组合固定（同一栋楼永远同一套）。 */
+    attachN = 0;
+    identityTop1 = 0;
+    if (tier < 2) {
+      /* 去重统计（模型 + 挂件组合）**与开关无关**地算：关掉挂件时 mask=0，
+         正好就是"只按模型"的旧口径，A/B 才有可比的两组数。 */
+      const ident = new Map<string, number>();
+      let identTotal = 0;
+      const bump = (key: string): void => {
+        ident.set(key, (ident.get(key) || 0) + 1);
+        identTotal += 1;
+      };
+      const lp = (r: [number, number], h: number): number => r[0] + (r[1] - r[0]) * ((h % 97) / 97);
+      /** 给一栋楼挂一套；返回 mask（0 = 没挂，identity 统计用） */
+      const putKit = (
+        idKey: string,
+        cls: KitClass | "",
+        bx: number,
+        bz: number,
+        rot: number,
+        bw: number,
+        bd: number,
+        bh: number
+      ): number => {
+        const kit = kitbashOn && cls ? KIT_SPECS[cls] : null;
+        if (!kit) return 0;
+        /* 一栋只用**一面**立面（哈希定），挂件在那一面上从上到下排 */
+        const face = (hashId("atf|" + idKey) >>> 5) % 4;
+        const faceW = face < 2 ? bw : bd;
+        const faceOff = face < 2 ? bd * 0.5 : bw * 0.5;
+        const cr = Math.cos(rot), sr = Math.sin(rot);
+        let mask = 0;
+        for (let t = 0; t < kit.length && attachN < ATTACH_CAP; t++) {
+          const sp = kit[t]!;
+          if (bh < sp.minH) continue;
+          const hh = hashId("att|" + idKey + "|" + t);
+          if (ub(hh, 0, 1000) / 1000 >= sp.p) continue;
+          const along = Math.max(0.4, faceW * lp(sp.w, ub(hh, 4, 97)));
+          const hs = Math.max(0.06, bh * lp(sp.h, ub(hh, 8, 97)));
+          const yb = bh * lp(sp.y, ub(hh, 12, 97));
+          const xo = faceW * lp(sp.x, ub(hh, 16, 97));
+          const dep = sp.depth;
+          /* 局部坐标 → 世界（与楼的 rotY 同一套旋转） */
+          let lx = 0, lz = 0, sx = 0, sz = 0;
+          if (face === 0) { lx = xo; lz = faceOff + dep * 0.5; sx = along; sz = dep; }
+          else if (face === 1) { lx = xo; lz = -(faceOff + dep * 0.5); sx = along; sz = dep; }
+          else if (face === 2) { lz = xo; lx = faceOff + dep * 0.5; sx = dep; sz = along; }
+          else { lz = xo; lx = -(faceOff + dep * 0.5); sx = dep; sz = along; }
+          const wx = bx + lx * cr + lz * sr;
+          const wz = bz - lx * sr + lz * cr;
+          v3.set(wx, yb, wz);
+          q.setFromAxisAngle(UP, rot);
+          s3.set(sx, hs, sz);
+          m4.compose(v3, q, s3);
+          attachMesh.setMatrixAt(attachN, m4);
+          c3.setRGB(sp.color[0], sp.color[1], sp.color[2]);
+          attachMesh.setColorAt(attachN, c3);
+          attachN += 1;
+          mask |= 1 << t;
+        }
+        return mask;
+      };
+      /* ① T1 真楼里属于便利店/咖啡店的 */
+      for (let k = 0; k < t1List.length; k++) {
+        const i = t1List[k]!;
+        const p = i * PLACE_STRIDE;
+        const ai = bldPick[i]!;
+        const nm = ai >= 0 ? bldAssets[ai]!.name : "?";
+        const cls = ai >= 0 ? kitClassOf(nm) : "";
+        const mask = putKit("t1|" + String(ids[i] ?? i), cls, places[p]!, places[p + 1]!, places[p + 6]!, places[p + 4]!, places[p + 5]!, places[p + 7]!);
+        bump(nm + "#" + mask);
+      }
+      /* ② 填充：底商条按「近处才挂」的规则配一套（内院低层不挂，避免像棚子） */
+      const near2 = ATTACH_INFILL_M * ATTACH_INFILL_M;
+      for (const p of placedInfill) {
+        if (p.kind === 1) {
+          bump("infill-courtyard#0");
+          continue;
+        }
+        const dx = p.x - cx, dz = p.z - cz;
+        const dd = dx * dx + dz * dz;
+        let mask = 0;
+        if (dd <= near2) {
+          const key = Math.round(p.x) + "|" + Math.round(p.z);
+          const cls: KitClass = ub(hashId("kic|" + key), 3, 2) === 0 ? "conv" : "cafe";
+          mask = putKit("if|" + key, cls, p.x, p.z, p.rot, p.w, p.d, p.h);
+        }
+        bump("infill-shop#" + mask);
+      }
+      /* top1 占比（模型 + 挂件组合） */
+      let top = 0;
+      for (const n of ident.values()) if (n > top) top = n;
+      identityTop1 = identTotal > 0 ? Math.round((top / identTotal) * 1000) / 1000 : 0;
+      attachMesh.count = attachN;
+      attachMesh.visible = attachN > 0;
+      if (attachMesh.instanceMatrix) attachMesh.instanceMatrix.needsUpdate = true;
+      if (attachMesh.instanceColor) attachMesh.instanceColor.needsUpdate = true;
+    } else {
+      attachMesh.count = 0;
+      attachMesh.visible = false;
+    }
+    drawnTris += attachN * 12;
     } catch (e) {
       updateError = String((e as Error)?.message || e).slice(0, 160);
     }
@@ -1224,6 +1441,10 @@ export function buildBldAllLayer(
       propsSeen,
       propsFarDrop,
       facade: facadeOn ? 1 : 0,
+      infillFacade,
+      attach: attachN,
+      identityTop1,
+      kitbash: kitbashOn ? 1 : 0,
       stretched: (() => {
         let k = 0;
         for (const i of lastT0) {
@@ -1245,6 +1466,7 @@ export function buildBldAllLayer(
     for (const im of propMeshes) if (im.visible && im.count > 0) k += 1;
     for (const im of vehMeshes) if (im.visible && im.count > 0) k += 1;
     for (const im of infillMeshes) if (im.visible && im.count > 0) k += bldCountDraws;
+    if (attachMesh.visible && attachMesh.count > 0) k += 1;
     return k;
   }
 
@@ -1258,7 +1480,7 @@ export function buildBldAllLayer(
   function trisNow(): number {
     let t = 0;
     for (let i = 0; i < bldMeshes.length; i++) t += bldMeshes[i]!.count * bldAssets[i]!.tris;
-    t += t1Mesh.count * 12 + propTris + vehTris + infTris;
+    t += t1Mesh.count * 12 + propTris + vehTris + infTris + attachMesh.count * 12;
     return t;
   }
 
@@ -1276,7 +1498,7 @@ export function buildBldAllLayer(
     dispose(): void {
       try {
         for (const g of [...bldGeoms, ...propGeoms, ...vehGeoms, boxGeom, boxT1, ...boxInf]) g.dispose?.();
-        for (const im of [...bldMeshes, t1Mesh, ...propMeshes, ...vehMeshes, ...infillMeshes]) {
+        for (const im of [...bldMeshes, t1Mesh, ...propMeshes, ...vehMeshes, ...infillMeshes, attachMesh]) {
           im.dispose?.();
           if (im.parent) im.parent.remove(im);
         }

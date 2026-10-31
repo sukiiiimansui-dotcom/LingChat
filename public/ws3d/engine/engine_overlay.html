@@ -41,7 +41,8 @@ body.nohud #hud,body.nohud #align,body.nohud #ctl{display:none!important}
  *     与 map.project() 比像素偏差（目标 0）。
  *
  * 参数：?lon=&lat=（WGS-84 目标，默认=引擎城市中心）&z=&pitch=&bearing=
- *      &engine=0|1 &cam=fit|msg &datum=0|1 &opacity=1 &hud=0 &grid=1 &align=1
+ *      &engine=0|1 &cam=fit|msg &datum=0|1 &opacity=1 &hud=0 &grid=1 &align=1 &base=0|1
+ *      （base=0：不铺自带高德底图，只留透明 3D —— 供 App 的 iframe 叠加层用）
  *      &fx=shadows=0,aces=0 &fxover=alpha|opaque|legacy（原样转给引擎，见 world3d7.html 文件头）
  */
 const ML = await import('./vendor/maplibre/maplibre-gl.mjs');
@@ -86,25 +87,37 @@ function gcj2wgs(lon,lat,iters=3){
   }
   return w;
 }
-const DATUM=qb('datum',true);          // false = 故意不做逆变换（对照用）
+let DATUM=qb('datum',true);            // false = 故意不做逆变换（对照用）；宿主可经 w3d:hostview 覆盖
 
 /* ═══ 2. 底图（高德栅格，零配置；本机实测只有高德瓦片可取）═════════════════ */
 const TGT_W=[qn('lon',106.5895), qn('lat',29.5855)];   // WGS-84 目标（= 引擎城市中心）
 const TGT_G=wgs2gcj(TGT_W[0],TGT_W[1]);               // 瓦片坐标系里的同一位置
 const Z0=qn('z',16.3), PITCH0=qn('pitch',0), BEAR0=qn('bearing',0);
 const GRID=qb('grid',false);
+/* base=0：App 把本页当**纯叠加层**（它自己已经有 MapLibre 底图）。
+ * 这时不建 background/amap 两个 layer，容器与 body 也置透明 —— 否则自带底图会把宿主地图整个盖住。
+ * 默认 base=1 ⇒ 独立打开本页时的行为一个字都不变。 */
+const BASE_ON=qb('base',true);
+if(!BASE_ON){
+  document.documentElement.style.background='transparent';
+  document.body.style.background='transparent';
+  const mk=document.getElementById('map');
+  if(mk) mk.style.background='transparent';
+}
 
 const style={version:8,sources:{
-    amap:{type:'raster',tiles:['https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'],
-          tileSize:256,attribution:'AMap'},
+    ...(BASE_ON?{amap:{type:'raster',tiles:['https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'],
+          tileSize:256,attribution:'AMap'}}:{}),
     ...(GRID?{grid:{type:'geojson',data:(()=>{const f=[];const c=[TGT_G[0],TGT_G[1]];
       for(let i=-12;i<=12;i++){
         f.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:[[c[0]+i*0.0018,c[1]-0.03],[c[0]+i*0.0018,c[1]+0.03]]}});
         f.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:[[c[0]-0.03,c[1]+i*0.0018],[c[0]+0.03,c[1]+i*0.0018]]}});
       } return {type:'FeatureCollection',features:f};})()}}:{})},
   layers:[
-    {id:'bg',type:'background',paint:{'background-color':'#e8eef4'}},
-    {id:'amap',type:'raster',source:'amap',paint:{'raster-opacity':1}},
+    ...(BASE_ON?[
+      {id:'bg',type:'background',paint:{'background-color':'#e8eef4'}},
+      {id:'amap',type:'raster',source:'amap',paint:{'raster-opacity':1}},
+    ]:[]),
     ...(GRID?[{id:'grid',type:'line',source:'grid',paint:{'line-color':'#ff3d9a','line-width':1,'line-opacity':0.5}}]:[])
   ]};
 const map=new ML.Map({container:'map',style,center:TGT_G.concat(),zoom:Z0,
@@ -238,6 +251,40 @@ function sendCam(){
   hudMax=null;
   return camInfo;
 }
+
+/* ═══ 6.5 宿主驱动（App 的 iframe 叠加层走这条）══════════════════════════════
+ * App 的地图是 **Esri/WGS-84**，本页默认底图是高德/GCJ-02。宿主发来的坐标按 `datum` 字段声明：
+ *   · datum:'wgs'（App 用）⇒ 关掉 gcj2wgs，否则会多扣一次 ~400m；
+ *   · datum:'gcj' 或未给 ⇒ 保持原来的逆变换。
+ * 收到后只做 **map.jumpTo**，相机装配仍走本页已有的 `sendCam()`（fit 路径，含 FOV/距离标定）。
+ * ⚠️ 引擎侧**零自积分**：本页不累加任何速度/惯性，位置只来自这条消息或用户手势。
+ */
+let HOST_VIEWS = 0;
+let HOST_SKIPS = 0;
+let lastHost = null;
+addEventListener('message', (e) => {
+  const d = e && e.data;
+  if (!d || d.type !== 'w3d:hostview') return;
+  if (typeof d.lng !== 'number' || typeof d.lat !== 'number' || typeof d.zoom !== 'number') return;
+  if (d.datum === 'wgs') DATUM = false;
+  else if (d.datum === 'gcj') DATUM = true;
+  const pitch = typeof d.pitch === 'number' ? d.pitch : 0;
+  const bearing = typeof d.bearing === 'number' ? d.bearing : 0;
+  /* 去重：宿主静止时也会按 30Hz 发（它不知道我们变没变）。这里若与上次几乎相同就**不跳** ——
+     `map.jumpTo` 会触发 move → sendCam → 引擎整帧重渲染，静止时白烧一半帧率（实测 29.9→15fps）。 */
+  const L = lastHost;
+  if (L && Math.abs(L.lng - d.lng) < 1e-7 && Math.abs(L.lat - d.lat) < 1e-7 &&
+      Math.abs(L.zoom - d.zoom) < 1e-4 && Math.abs(L.pitch - pitch) < 1e-3 &&
+      Math.abs(L.bearing - bearing) < 1e-3) { HOST_SKIPS++; return; }
+  lastHost = { lng: d.lng, lat: d.lat, zoom: d.zoom, pitch, bearing };
+  try {
+    map.jumpTo({ center: [d.lng, d.lat], zoom: d.zoom, pitch, bearing });
+  } catch (err) { /* 地图还没 ready：下一帧宿主会再发 */ }
+  HOST_VIEWS++;
+  /* 验收探针：宿主推了多少帧（父页同源可读 `frames[0].__ov.hostViews`） */
+  try { window.__ov = window.__ov || {}; window.__ov.hostViews = HOST_VIEWS; window.__ov.hostSkips = HOST_SKIPS;
+        window.__ov.lastHostView = { lng: d.lng, lat: d.lat, zoom: d.zoom, datum: DATUM }; } catch (e) {}
+});
 
 /* 视图变化 → 重发（避免每帧 postMessage / 重装相机） */
 let lastKey='',sentCount=0;

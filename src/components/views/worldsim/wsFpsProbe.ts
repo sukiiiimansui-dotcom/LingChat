@@ -658,7 +658,24 @@ function makeHud(): HTMLElement | null {
   }
 }
 
+/**
+ * 回传开关：**默认不发**。
+ *
+ * 2026-10-31 实测：`http://127.0.0.1:8795/__wslog` 只在"本机起了量具服务"时才存在，
+ * 普通页面（含 preview 包）会被浏览器判成 `ERR_CONNECTION_REFUSED` —— 一次会话刷 2 条失败请求，
+ * 混在"瓦片 404 统计"里污染排障（MAP-QUALITY-AUDIT §10.4 就是被它带偏的）。
+ * ⇒ 只有显式带 `?fpslog=1` 才发；要看 FPS 明细时再加参数。
+ */
+function fpsLogEnabled(): boolean {
+  try {
+    return /[?&]fpslog=1\b/.test(location.search);
+  } catch {
+    return false;
+  }
+}
+
 function beacon(row: FpsReport): void {
+  if (!fpsLogEnabled()) return;
   try {
     const img = new Image();
     img.src = FPS_LOG_URL + encodeURIComponent(JSON.stringify(row));

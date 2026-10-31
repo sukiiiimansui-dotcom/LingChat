@@ -46,10 +46,21 @@
       @pick-actor="emit('pick-actor', $event)"
     />
 
+    <!-- 🧪 实验性 3D 引擎叠加层（`?engine=1`，默认关）：把 `public/ws3d/engine/engine_overlay.html`
+         当 iframe 叠在地图上。关着时组件内部 `v-if` 不产 DOM，接入前后行为一致。
+         默认关是硬要求：它现在**只做"可见"**，相机尚未与地图单向同步（阶段③）。
+         见 `wsEngineOverlay.ts` 的头部说明。 -->
+    <WsEngineOverlay v-if="showMap || showOverlay" />
+
     <!-- 🧊 叠加层宿主（`rendererLive === "overlay"`）：地图**照常在下层画**，这里只放一块
          `pointer-events:none` 的透明画布（`wsOverlayBackend` 挂进来）——
          输入全归地图，相机每帧从地图读（见 PLAN-OVERLAY-BACKEND.md）。 -->
-    <div v-if="showOverlay" ref="overlayHost" class="ws-sceneview__overlay"></div>
+    <div
+      v-if="showOverlay"
+      ref="overlayHost"
+      class="ws-sceneview__overlay"
+      :style="engineOverlayOn ? { visibility: 'hidden' } : null"
+    ></div>
 
     <!-- 3D 宿主机（`rendererLive === "three"`）：与上面那块地图**互斥**（地图会被卸载），
          three 的画布由 `wsThreeBackend` 挂进来（`init(host, …)`）。 -->
@@ -111,6 +122,8 @@
 <script setup lang="ts">
   import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
   import WsDistrictMapLibre from "./WsDistrictMapLibre.vue";
+  import WsEngineOverlay from "./WsEngineOverlay.vue";
+  import { engineOverlayOn, pushEngineHostView } from "./wsEngineOverlay";
   import type { WsDistrictPin } from "./wsActors";
 /* 只借**类型**（「我的家」的取名点形状）—— 规则在共享真源 `wsDaily.ts`，这里不实现 */
   import type { PlacePoint } from "./wsDaily";
@@ -542,6 +555,13 @@
   async function adoptMapBackend(m: unknown): Promise<void> {
     await ensureMapBackend();
     mapInstance = m;
+    /* 审计口：`?wsdebug=1` 时把地图实例挂到 window，供"样式里还剩哪些层"这类取证用
+       （`map.getStyle().layers` 只能从实例读；不加这个口，审计只能靠截图猜）。默认不挂。 */
+    try {
+      if (/[?&]wsdebug=1\b/.test(location.search)) (window as unknown as Record<string, unknown>).__wsMap = m;
+    } catch {
+      /* 隐私模式/只读 window：忽略 */
+    }
     mapBackend?.bind?.(m);
     /* 叠加层可能已经先起来了（它不等地图 ready）⇒ 实例一到就交给它，并且**它仍是台上那个**。
        🔴 这里不许把 active / liveBackend 改回 map：2026-10-18 实测 `?renderer=overlay`
@@ -741,7 +761,92 @@
     }
   );
 
+  /* 阶段③：宿主视野 → 引擎 iframe 的单向推送（≤30Hz，节流在 `pushEngineHostView` 里）。
+     读的是地图**自己的**真源（getCenter/getZoom/getPitch/getBearing），本组件不另存一份相机状态；
+     地图没就绪时整帧空转，不抛。`?engine=0` 时 `pushEngineHostView` 直接返回 false（零开销）。 */
+  let engineViewRaf = 0;
+  function startEngineViewSync(): void {
+    if (engineViewRaf) return;
+    const tick = (): void => {
+      engineViewRaf = requestAnimationFrame(tick);
+      if (!engineOverlayOn.value || !mapInstance) return;
+      const m = mapInstance as {
+        getCenter?: () => { lng: number; lat: number };
+        getZoom?: () => number;
+        getPitch?: () => number;
+        getBearing?: () => number;
+      };
+      if (typeof m.getCenter !== "function") return;
+      try {
+        const c = m.getCenter();
+        pushEngineHostView({
+          lng: c.lng,
+          lat: c.lat,
+          zoom: m.getZoom?.() ?? 0,
+          pitch: m.getPitch?.() ?? 0,
+          bearing: m.getBearing?.() ?? 0,
+        });
+      } catch {
+        /* 地图正在销毁：下一帧再试 */
+      }
+    };
+    engineViewRaf = requestAnimationFrame(tick);
+  }
+
+  /* 实验性引擎叠加层开着时，**App 自绘的 3D 必须关掉**：
+     两边都在同一机位画楼（App 走 MVT 矢量、引擎走它自己的 data/bld.json），叠在一起就是
+     实机看到的"穿模 / 断片 / 糊"。这里把后端强制切到 `map`（只留底图与标签），3D 交给 iframe。
+     关掉叠加层时**不主动改回**用户原来的选择：由用户自己点芯片决定（避免抢偏好）。 */
+  /* ⚠️ 2026-10-31 更正：早先这里是"把后端切到 map"，实测**反而制造断片** ——
+     `bld` 矢量源是 overlay 后端建的，后端一撤，样式里 `bld.ext / bld-roof / bld-equip / bld-line`
+     全变成 `source 'bld' not found`（HUD 一次报 4 条），楼与屋顶整片消失。
+     正解：**后端照常是 overlay**（地图与 bld 源都在），只把它那层画布**暂停并隐藏**，
+     3D 交给 iframe —— 同一时刻只有一套楼在上屏，也不多烧一份 GPU。 */
+  /* 单一所有权：`engine=1` 时**建筑只许引擎画**。
+     ① App 自绘 3D 后端 `pause()`（模板里那块宿主编 `visibility:hidden` 兜底）；
+     ② 样式里那 5 个 `bld-*` 层（矢量楼体/屋顶/设备/线路/底面）一并 `visibility:none` ——
+        它们与引擎画的是同一批楼，留着就是重影（"穿模"）。
+     ⚠️ 隐藏的只有**楼**：底图、道路、水系、标注、地名一律不动 ⇒ 地图本体仍在下层，
+        不是把整张地图藏了（2026-10-31 复核口径）。
+     已知取舍：引擎只画它数据范围内的楼（约 2km 级），范围外没有 3D 体块，
+        由底图 + 雾/远景兜底 —— 这是"单一所有权"的代价，记录在此。 */
+  const ENGINE_HIDDEN_LAYERS = ["bld-ext", "bld-roof", "bld-equip", "bld-line", "bld-foot", "bld"] as const;
+  function applyEngineLayerOwnership(on: boolean): void {
+    const m = mapInstance as { getLayer?: (id: string) => unknown; setLayoutProperty?: (id: string, k: string, v: unknown) => void } | null;
+    if (!m || typeof m.setLayoutProperty !== "function") return;
+    for (const id of ENGINE_HIDDEN_LAYERS) {
+      try {
+        if (typeof m.getLayer === "function" && !m.getLayer(id)) continue;
+        m.setLayoutProperty(id, "visibility", on ? "none" : "visible");
+      } catch {
+        /* 层可能还没建/已删：忽略 */
+      }
+    }
+  }
+
+  watch(
+    engineOverlayOn,
+    (on) => {
+      if (on) {
+        try { active?.pause?.(); } catch { /* 后端可能还没起来 */ }
+      } else {
+        try { active?.resume?.(); } catch { /* 同上 */ }
+      }
+      applyEngineLayerOwnership(on);
+    },
+    { immediate: true },
+  );
+  /* 地图换新/晚到时补一次（`engine=1` 下地图可能比 watcher 后到） */
+  watch(
+    () => mapInstance,
+    (m) => {
+      if (m && engineOverlayOn.value) applyEngineLayerOwnership(true);
+    },
+  );
+
   onMounted(() => {
+    /* 阶段③ 的视野推送循环：先起，地图实例到了自然开始发（`mapInstance` 为空时整帧空转） */
+    startEngineViewSync();
     /* 开局**永远先走地图**（默认后端不许变）；存了 three 的偏好在 `scene-ready` 之后自动切过去 */
     void ensureMapBackend();
     /* 🩺 `?layout=1`：把各层 rect 直接打在屏幕上（排查"HUD 不在底部"这类只在一台设备上出现的布局问题）。
@@ -843,6 +948,10 @@
   });
 
   onBeforeUnmount(() => {
+    if (engineViewRaf) {
+      cancelAnimationFrame(engineViewRaf);
+      engineViewRaf = 0;
+    }
     /* 交通设施那个定时器必须清掉：它闭包着本组件的 map/ref，卸载后再跑一次就是
        "对已经销毁的地图加图层"（本仓的卸载期异常一律不外抛，但也不许留着跑） */
     if (tfTimer) window.clearTimeout(tfTimer);

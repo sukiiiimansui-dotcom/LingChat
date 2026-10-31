@@ -414,7 +414,19 @@ export function createBldLanding(ctx: BldLandingCtx) {
         features: () => bldSourceOf(map),
         /* ┄┄┄ 有意增量 END ┄┄┄ */
         /* 上妆（高度/颜色/拆件）在这里做**一次** ⇒ HUD 的计数与画出去的是同一批要素 */
-        dress: (feats) => dressBld({ features: feats as unknown as BldFeature[] }, map),
+        dress: (feats) => {
+          /* 验收探针：**进 dress 的这一份**到底有几栋（区分"裁剪环滤空"与"落图早于取数"） */
+          try {
+            if (/[?&]wsdebug=1\b/.test(location.search)) {
+              (window as unknown as Record<string, unknown>).__wsBldDress = {
+                n: (feats as unknown as unknown[]).length,
+                storeN: (() => { try { return bldStore.features().length; } catch { return -1; } })(),
+                why,
+              };
+            }
+          } catch { /* 探针不影响落图 */ }
+          return dressBld({ features: feats as unknown as BldFeature[] }, map);
+        },
         /* 2D 降级路没有可落的图（临时降级时 map 其实还在，但那时画的是自绘那块） */
         map: () => (renderKind.value === "fallback2d" ? null : (map as BldMapLike | null)),
         /* **美术取参**：与代拍页同一份（`bldLayerSpecsFor` 内部调 `bldArtParamsOf`）——
@@ -428,7 +440,33 @@ export function createBldLanding(ctx: BldLandingCtx) {
         /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
         /* `?mvt=1`（先导）：注册成功才给模板 ⇒ 走矢量瓦片源、**不 setData**；
            开关关掉 / 注册失败 ⇒ 返回 null ⇒ 原来那条 GeoJSON 路**逐字节不变**（可逆开关的关那一侧）。 */
-        mvt: () => { const t = mvtTemplateForHost(); return t ? { template: t } : null; },
+        /* ══ MVT 取值（overlay×MVT 护栏落在这里）══════════════════════════════════
+         * `flushBldStore` 的瓦片分支**不 pick、不 dress、不 setData**（见 `wsDistrictScene.ts:804-824`）：
+         *   · `dress` 不跑 ⇒ `stats.count` 恒 0（HUD 永远显示 `真楼 0 栋`）；
+         *   · 楼完全交给矢量瓦片源 —— 而本机/真机上瓦片源没数据时，画面就"一栋楼都没有"。
+         * `wsMvtTiles.ts:31-38` 里那条"overlay 开着就不启用 MVT"的护栏**没有覆盖到这条取值路径**，
+         * 所以这里补上：
+         *   · `rendererLive === "overlay"`（three 负责画楼）⇒ 返回 null ⇒ 自动落 GeoJSON 路
+         *     ⇒ `dress` 跑、`count` 正常、three 从源取数画楼；
+         *   · overlay 关（map / three 后端）⇒ **照旧返回模板**，原路径一字节不改；
+         *   · `?mvt=1` **强制覆盖**（取证用）：仍走瓦片路，但会打一行 diag 说明
+         *     "强制 MVT：dress 不跑、count 用 raw"，免得后人再把 HUD 的 0 当 bug 查一遍。
+         */
+        mvt: () => {
+          const forced = (() => { try { return /[?&]mvt=1\b/.test(location.search || ""); } catch { return false; } })();
+          if (!forced && overlayDrawsBuildingsNow()) return null;
+          const t = mvtTemplateForHost();
+          if (!t) return null;
+          if (forced && overlayDrawsBuildingsNow()) {
+            try {
+              if (/[?&]wsdebug=1\b/.test(location.search || "")) {
+                (window as unknown as Record<string, unknown>).__wsBldMvtNote =
+                  "强制 MVT：dress 不跑，stats.count 用 raw.length（HUD 数字=瓦片要素数）";
+              }
+            } catch { /* 只给验收看 */ }
+          }
+          return { template: t };
+        },
         /* ┄┄┄ 有意增量 END ┄┄┄ */
         onNoMap: (data) => draw2d(data as { features?: BldFeature[] }),
         /* **记下"真正画出去的那批楼"**：名字层的锚点/点选降级都只认这一批 ——
@@ -562,8 +600,16 @@ export function createBldLanding(ctx: BldLandingCtx) {
           stats.bldPick = line;
           scheduleBundleHud();
         },
-        beforeDraw: (why0) => {
+        beforeDraw: (why0, data) => {
           bldFlushWhy = why0;
+          /* ══ 计数兜底（MVT 分支的唯一补救）══════════════════════════════════════
+           * 瓦片分支**不跑 dress** ⇒ `stats.count` 会永远停在 0（HUD 恒 `真楼 0 栋`）。
+           * `beforeDraw` 是两条路**都会调**的那一拍：按"真正要画的要素数"写一次 ——
+           *   · GeoJSON 路：`dress` 已写过，这里是同一个数字（幂等）；
+           *   · 瓦片路：`raw.length`（瓦片要素数），HUD 不再骗人。
+           * 只在真的变了才赋值，避免每轮落图触发无谓的响应式刷新。 */
+          const n = (data as { features?: unknown[] })?.features?.length;
+          if (typeof n === "number" && n !== stats.count) stats.count = n;
           scheduleBundleHud();
         },
       },
@@ -731,6 +777,49 @@ export function createBldLanding(ctx: BldLandingCtx) {
   let roadFlushWhy = "";
 
   /** 离线包的两条管道（**永不发 `/api/*`**：只读静态包） */
+  /* ══ 取数到货 → 落图（去抖合并）════════════════════════════════════════════
+   *
+   * **为什么必须有这一层**（2026-10-31 查实的体验级 bug）：
+   * 落图只挂在 `moveend/zoomend` 的去抖与"用户点选"上，而 `fetchCell` 的 Promise resolve
+   * **不接任何落图**。于是典型序列是：
+   *   ① 初始 `moveend` 先到 ⇒ 落图时仓库还空 ⇒ `stats.count = 0`、画面上没有楼；
+   *   ② 随后 `bldbundle` 的格子 200 到货、进仓库 —— 但**只要用户不再挪/缩**，就永远没有第二次落图。
+   * 实测见 MAP-QUALITY-AUDIT §14：5 格全部 200、HUD 仍 `真楼 0 栋`、画面 0 楼。
+   *
+   * **做法**：feed 的 `flush` 回调（= 合并+淘汰之后那一拍）改成**去抖合并 150ms** 再落图。
+   *   · 幂等：`bldFlush` 可重复跑（读仓库当下状态）；
+   *   · 并发安全：窗口期内只安排一次，已排着的不再叠加定时器；
+   *   · 记"真落了几次"供验收（`window.__wsBldFlush`，`?wsdebug=1` 才挂）。
+   */
+  const BLD_FLUSH_COALESCE_MS = 150;
+  let bldFlushTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  let bldFlushCount = 0;
+  let bldFlushLastWhy = "";
+  function scheduleBldFlush(why: string): void {
+    bldFlushLastWhy = why;
+    if (bldFlushTimer) return;
+    bldFlushTimer = setTimeout(() => {
+      bldFlushTimer = 0;
+      try {
+        bldFlush(why);
+        bldFlushCount += 1;
+        try {
+          if (/[?&]wsdebug=1\b/.test(location.search)) {
+            (window as unknown as Record<string, unknown>).__wsBldFlush = {
+              count: bldFlushCount,
+              lastWhy: bldFlushLastWhy,
+              countBld: stats.count,
+              /* feed 侧事实：`requests/ok/empty/errors` = 请求与解析；`planned/got` = 这一轮计划/落袋 */
+              feed: (() => { try { return bldFeed.facts(); } catch { return null; } })(),
+            };
+          }
+        } catch { /* 只给验收看，挂不上不影响 */ }
+      } catch {
+        /* 落图失败不许打断取数 */
+      }
+    }, BLD_FLUSH_COALESCE_MS);
+  }
+
   const bldFeed = createBundleFeed<BundleBuildingFeature>({
     /* ┄┄┄ 有意增量 BEGIN ┄┄┄ */
     parseAsync,
@@ -739,7 +828,8 @@ export function createBldLanding(ctx: BldLandingCtx) {
     store: bldStore,
     view: bundleView,
     fetchCell,
-    flush: bldFlush,
+    /* 去抖合并后再落图：取数到货也是一次落图时机（见 scheduleBldFlush 的注释） */
+    flush: (why: string) => scheduleBldFlush(why),
     /* 保留"视野外一圈"（与代拍页同式）：来回挪地图不该反复重取，也不该把刚取到的丢掉 */
     retainRadiusM: () => Math.max(2000, Math.round((bundleViewHalfMeters() || 0) * 2.2)),
     onError: (why) => {

@@ -944,6 +944,15 @@
      真源 = `useWorldWeather`（唯一真源，角标/粒子层都读它；拿不到就降级成「天气不可用」，
      **不显示晴天、不留空白**）。城市名取值器照抄孤儿页 `WorldSim.vue:875-883`：
      取 `area` 里最后一段**不是裸 adcode** 的名字（裸 adcode 给 wttr.in 查不到东西）。 */
+  /** 地图"区域名"（`WsSceneView` 只把它当显示名用；真实机位仍由地图自己的默认值决定）
+   *
+   * ⚠️ 必须声明在 `wxCity` **之前**：`wxCity` 里读 `areaLabel.value`，而 `useWorldWeather({city})`
+   * 在 setup 阶段就会调一次取值器 ⇒ 声明在后会抛
+   * `ReferenceError: Cannot access 'areaLabel' before initialization`（TDZ），
+   * 整个 `/worldsim` 页面 setup 失败、白屏。这是真实踩过的坑，别把顺序再调回去。
+   */
+  const areaLabel = computed(() => (installed.value.length ? installed.value[0].name : ""));
+
   const wxCity = computed(() => {
     const parts = String(areaLabel.value || "")
       .split(/[·・>]/)
@@ -960,8 +969,6 @@
     return installed.value.map((c) => c.name).join("、");
   });
 
-  /** 地图"区域名"（`WsSceneView` 只把它当显示名用；真实机位仍由地图自己的默认值决定） */
-  const areaLabel = computed(() => (installed.value.length ? installed.value[0].name : ""));
 
   /* 「别每次问」：跳过过一次就记住（但**常驻提示不会消失** —— 上面那条 chip 仍在，
      点它随时能回来装）。装过城市 ⇒ 本来就不会自动开。 */

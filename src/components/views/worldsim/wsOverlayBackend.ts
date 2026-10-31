@@ -184,6 +184,12 @@ export function createOverlayBackend(): WsRenderBackend {
   let assetDrawn = 0;
   let assetDrawCalls = 0;
   let assetDrawnTris = 0;
+  /** `?asseton=touch` 灰度：自检定时器 / 结论（`""` = 没跑过） */
+  let assetProbeTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  let assetProbeReason = "";
+  const assetTouchGrayscale = (() => {
+    try { return /[?&]asseton=touch\b/.test(location.search || ""); } catch { return false; }
+  })();
   /**
    * 资产档开关（`?bldassets=0|1` 显式覆盖）。
    * 2026-10-24：真机（Android WebView / Mali）上资产层会让整层不可见（桌面 virgl 正常），
@@ -200,6 +206,9 @@ export function createOverlayBackend(): WsRenderBackend {
       /* `?bldassets=3` / `?assets=all`：Blender 全量包（楼 + 设施 + 车辆），同样强制开层 */
       if (/[?&](?:bldassets=3|assets=all)\b/.test(q)) return true;
       if (/[?&]bldassets=0\b/.test(q)) return false;
+      /* 灰度（2026-10-31）：`?asseton=touch` —— 触屏也开资产层，但建层后 2s 自检可见性，
+         看不见就自动回退程序化盒子（最坏也只是回到现状，不会白屏）。默认仍关。 */
+      if (/[?&]asseton=touch\b/.test(q)) return true;
       /* 没显式指定：触屏设备默认关（真机上资产层已验证会导致整层不可见），桌面默认开 */
       const touch = (navigator.maxTouchPoints || 0) > 0;
       return !touch;
@@ -686,6 +695,20 @@ export function createOverlayBackend(): WsRenderBackend {
             });
       scene.add(layer.group);
       assetLayer = layer;
+      /* 灰度自检：`?asseton=touch` 时，建层后 2s 看它到底有没有画出三角。
+         `assetDrawnTris` 由每帧 `updateAssets` 更新；2s 内一直为 0 ⇒ 判"触屏不可见"（2026-10-24 那个 bug），
+         立刻释放资产层并留下原因，程序化盒子自动回到台前。 */
+      if (assetTouchGrayscale && !assetProbeTimer) {
+        assetProbeTimer = setTimeout(() => {
+          assetProbeTimer = 0;
+          if (assetDrawnTris > 0 || assetDrawCalls > 0) {
+            assetProbeReason = `asseton=touch 自检通过（tris ${assetDrawnTris} / draws ${assetDrawCalls}）`;
+            return;
+          }
+          assetProbeReason = "asseton=touch 自检失败：2s 内资产层 0 tris / 0 draws ⇒ 判定不可见，已回退程序化盒子";
+          try { disposeAssets(); } catch { /* 释放失败也要继续走回退 */ }
+        }, 2000);
+      }
       /* 新建的层先按**当前**透明度摆好（重建时可能正处在全资产档） */
       layer.applyFade(assetFade, assetFadeTarget === 1);
       return true;
@@ -1427,6 +1450,7 @@ export function createOverlayBackend(): WsRenderBackend {
     assetDrawn,
     assetDrawCalls,
     assetDrawnTris,
+    assetProbe: assetProbeReason,
     assetBlocked,
     assetLoadMs,
     assetError,

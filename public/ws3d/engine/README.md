@@ -83,3 +83,33 @@ cp -p "$SRC"/vendor/maplibre/{maplibre-gl,maplibre-gl-shared,maplibre-gl-worker}
 
 `~/chk/_overlay_align/P1-WORLD3D7.md`（对齐/阴影/ACES 数字与截图）
 `~/chk/_overlay_align/P2-APPASSETS.md`（本次搬运的清单与体积）
+
+---
+
+## 在 App 里怎么用（2026-10-31 · task-7 阶段②）
+
+App 端入口：`src/components/views/worldsim/WsEngineOverlay.vue` + `wsEngineOverlay.ts`
+（`WsSceneView.vue` 里 `<WsEngineOverlay v-if="showMap || showOverlay" />`，叠在地图之上）。
+
+**开关**：`?engine=1` 开并记住、`?engine=0` 关并记住、都没有时读 `localStorage['wsm:v1:engine']`，
+缺省 **关**。关着时组件 `v-if` 不产 DOM ⇒ 与接入前完全一致。
+
+**iframe 地址**：`/ws3d/engine/engine_overlay.html?base=0&hud=0`
+- `base=0`（本页新增参数）：不建 background/amap 两个图层、容器透明 —— 宿主 App 已有底图，
+  不关会把地图整个盖住；默认 `base=1`，独立打开本页行为不变。
+- `hud=0`：关掉本页自己的 HUD（App 有自己的状态栏）。
+
+**iframe 上必须双写 `pointer-events:none`**（容器 + iframe 自身）：容器上的 `pointer-events:none`
+对 iframe 内部文档不生效，只写容器的话用户在地图上一划到叠加层就断手。
+
+**阶段②的边界（如实）**：只做「叠加层可见」。引擎 iframe 内的相机仍是它自己的默认机位
+（`lon=106.5895,lat=29.5855,z=16.3`），**不跟宿主地图的 center/zoom**，所以两张图的几何与
+地物是**错位**的（偏移量级 = 两个中心的实际距离，未做像素级测量）。相机单向同步是阶段③。
+
+**实测（2026-10-31，1500×850，Chromium + virgl）**
+- `?engine=0`：`.ws-sceneview` 在、`iframe` 数 0、`[data-ws-engine]` 不存在、rAF 29.9fps；
+- `?engine=1`：iframe 1 个（`/ws3d/engine/engine_overlay.html?base=0&hud=0`，1500×850，
+  `pointer-events:none`）、`[data-ws-engine]` 存在、rAF 29.9fps（p95 14.9）；
+  引擎内部 HUD：`tri 119k · draw 11 · 楼 10723（同屏 2925）· fps 中位 21.9`。
+- 两图逐像素：48.6% 像素差异（>8/255）、平均绝对差 50.3 ⇒ 叠加层确实画上去了，
+  不是"透明没内容"。

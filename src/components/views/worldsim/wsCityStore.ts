@@ -383,6 +383,13 @@ export function createCityStore(opts: CityStoreOptions = {}): CityStore {
   const listUrl = (): string => url("cities.json");
 
   async function readList(): Promise<CityListState> {
+    /* 2026-10-31：**未配置就不请求**。默认基址是 RFC 2606 的占位域名（`example.invalid`），
+       发出去必然 `ERR_NAME_NOT_RESOLVED` —— 一次会话就脏掉"网络失败"统计（MAP-QUALITY-AUDIT §10.4）。
+       这里直接短路成一个可读的 diag 原因（**不当作错误弹窗**），引导页照旧显示"数不出来"。
+       真要下载时用 `?citybase=<url>` / 应用内保存 / `VITE_WS_CITY_PACK_BASE` 覆盖。 */
+    if (currentRef.value.from === "default" && currentRef.value.base === WS_CITY_PACK_BASE_DEFAULT) {
+      return { state: "unknown", why: "未配置城市包下载源（已跳过请求）：用 ?citybase=<url> 或应用内保存一个下载源" };
+    }
     let r: Response;
     try {
       r = await doFetch(listUrl(), { cache: "no-store" } as RequestInit);

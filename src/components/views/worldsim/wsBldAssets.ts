@@ -45,8 +45,9 @@ export type BldAssetPackVersion = 1 | 2 | 3;
 /**
  * 当前用哪一代资产包：
  *   `?bldassets=1` → v1（Kenney 贴图包）；`?bldassets=2` / `?godotbld=1` → v2（Godot）；
- *   `?bldassets=3` / `?assets=all` → v3（Blender 全量：楼 + 设施 + 车辆）；其余 → v1。
- * 参数可注入（便于单测），默认读 `location.search`；没有 location 时按 v1。
+ *   `?bldassets=3` / `?assets=all` → v3（Blender 全量：楼 + 设施 + 车辆）。
+ *   **其余 → v3**（2026-10-31 起默认；v1 需显式 `?bldassets=1`）。
+ * 参数可注入（便于单测），默认读 `location.search`；没有 location 时按 v3。
  */
 export function bldAssetVersion(search?: string): BldAssetPackVersion {
   let q = search;
@@ -59,7 +60,11 @@ export function bldAssetVersion(search?: string): BldAssetPackVersion {
   }
   if (/[?&](?:bldassets=3|assets=all)\b/.test(q)) return 3;
   if (/[?&](?:bldassets=2|godotbld=1)\b/.test(q)) return 2;
-  return 1;
+  if (/[?&]bldassets=1\b/.test(q)) return 1;
+  /* 2026-10-31：默认从 v1（Kenney 贴图包）升到 **v3（Blender 全量）** ——
+     v1 是机主反馈"旧模型"的第二条根因（`?bldassets=3` 一直在，但默认没走它）。
+     回退口保留：`?bldassets=1` / `?bldassets=2` 仍可显式点名旧包做 A/B。 */
+  return 3;
 }
 
 /** 版本 → 包目录 */

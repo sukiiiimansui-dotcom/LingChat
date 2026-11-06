@@ -458,6 +458,9 @@ import { WS_BLD_MODE_MANY, useWsBldMode } from "./wsBldMode";
 import { bldArtParamsOf, parseArtParam, type BldArtThemeLike } from "./wsArtParams";
 /* 挑选的**入参类型**（`wsBuildingPick` 的纯函数类型）；实际编排在上一行那个 store 里 */
 import type { PickBounds, PickFeature } from "./wsBuildingPick";
+/* **初始中心覆盖口**（`?lat/?lng` / `?city=<id>`）：换城市验收用。
+   解析/兜底规则在 `wsMapCenter.ts`（纯函数，可脱 DOM 单测）；宿主只接线。 */
+import { resolveInitialCenter } from "./wsMapCenter";
   /* **小区级 3D 装配的共享真源**（`wsDistrictScene.ts`，2026-09-25 切片 A 从本组件**搬家**过去）：
      `districtStyleOf`（原本地 `makeStyle`）、`bldLayerSpecsFor`（原 `bldLayerSpecs`）、
      `applyBuildingsTo` + `flushBldStore` / `flushRoadsStore`（原 `applyBuildings`/`flushBld`/`flushRoads`）。
@@ -2251,13 +2254,22 @@ import type { PickBounds, PickFeature } from "./wsBuildingPick";
                 ② 建图后**主动补几次 resize**（加载态收起/转屏/分屏都会改尺寸）。 */
     await waitForBox(host.value);
 
+    /* 初始中心：URL 覆盖口（`?lat/?lng` 优先，其次 `?city=<id>` 查城市清单 bbox 中心），
+       都没有/非法/取不到 ⇒ 历史默认（渝中）。带 `?city=` 才会发一次清单请求（2.5s 超时），
+       任何失败都静默回默认 —— 解析中心失败不能阻塞建图。 */
+    const initialCenter = await resolveInitialCenter({
+      search: typeof location !== "undefined" ? location.search : "",
+      baseUrl: import.meta.env.BASE_URL,
+    });
+
     // ③ 建图（注意：样式里**不能写 `glyphs: undefined`** —— 会让样式校验失败且零报错）
     const m = new maplibregl.Map({
       container: host.value as HTMLElement,
       /* `cv.value` 在 WebGL 路下是 null（`v-if` 关着）⇒ 不能把 null 当 canvas 传 */
       ...(cv.value ? { canvas: cv.value as HTMLCanvasElement } : {}),
       style: styleNow(),
-      center: [106.569, 29.558],
+      /* 中心：默认渝中；`?lat/?lng` 或 `?city=` 可覆盖（见 wsMapCenter.ts 的口径） */
+      center: initialCenter.center,
       /* 相机默认值取自 `wsScene.cameraDefaults`（唯一真源；数值与换源前**逐字相同** 16.4/38） */
       zoom: cameraDefaults().zoom,
       pitch: initPitch.value,

@@ -79,7 +79,6 @@ import {
 import { createFeatureStore } from "./wsFeatureStore";
 import {
   WS_BLD_VECTOR_MINZOOM,
-  bldLayersPresent,
   bldLayerSpecsFor,
   ensureBldLayers,
   flushBldStore,
@@ -388,10 +387,11 @@ export function createBldLanding(ctx: BldLandingCtx) {
    *     `source "bld" not found`；
    *   · specs 恒用 GeoJSON 版（无 `source-layer`），而 MVT 路的源是 vector ⇒ 补到 vector 源上
    *     每条层各打一条 `must specify a "source-layer"`。
-   * 这两条都是**启动竞态**（建源/建层在样式未就绪时排队，即时读 `bldLayersPresent()` 为 false）。
+   * 这两条都是**启动竞态**（建源/建层在样式未就绪时排队，即时读源/层状态会得到"缺"）。
    * 现在：源没就绪 ⇒ 登记一次性重试（`styledata` / 200ms，去重），不许静默丢；
    *       源就绪 ⇒ 按源类型选规格（vector → `mvtBldLayerSpecs`，geojson → `bldLayerSpecsFor`）。
-   * 纪律：健康时零写（先判 `bldLayersPresent`）；overlay 路径由调用方条件挡掉，不走这里。 */
+   *       判缺**按 specs 逐条**（不能只看 `bld-ext`：首载实测只落地 2/5 层，早退会漏补 3 层）。
+   * 纪律：健康时零写（5 层齐才早退）；overlay 路径由调用方条件挡掉，不走这里。 */
   let bldPatchRetry: ReturnType<typeof setTimeout> | null = null;
   let bldPatchWarned = false;
 
@@ -429,11 +429,12 @@ export function createBldLanding(ctx: BldLandingCtx) {
         if (!aliveNow()) return;
         const m2 = mapNow();
         if (!m2 || renderKind.value === "fallback2d") return;
-        const added = patchBldLayers(m2, "retry:" + why + ":" + reason, false);
-        if (!added && !bldLayersPresent(m2) && !bldPatchWarned) {
+        patchBldLayers(m2, "retry:" + why + ":" + reason, false);
+        const miss = bldMissingCount(m2);
+        if (miss > 0 && !bldPatchWarned) {
           bldPatchWarned = true;
-          /* 不静默：交回下一轮 flush/看门狗，但留一条可查痕迹（console，不污染 HUD 错误计数） */
-          console.warn("[wsBld] 补层重试后仍无 bld 源/层，交回下一轮 flush/看门狗");
+          /* 不静默：源在、但层仍缺（首载 2/5 那种）留一条可查痕迹；不污染 HUD 错误计数 */
+          console.warn(`[wsBld] 补层重试后仍缺 ${miss} 条 bld 层，交回下一轮 flush/看门狗`);
         }
       } catch { /* 下一轮事件再来 */ }
     };
@@ -443,16 +444,34 @@ export function createBldLanding(ctx: BldLandingCtx) {
     bldPatchRetry = setTimeout(() => run("timeout"), 200);
   }
 
-  /** 补层入口（幂等）：健康零写；源没就绪只登记重试；源就绪按类型补 */
+  /** 当前还缺几条 `bld` 层（按 specs 逐条判；拿不到 specs ⇒ -1 = 源还没就绪） */
+  function bldMissingCount(mm: BldMapLike | null): number {
+    if (!mm) return -1;
+    const specs = bldPatchSpecsFor(mm);
+    if (!specs) return -1;
+    let n = 0;
+    for (const l of specs) {
+      try { if (!mm.getLayer(String(l.id ?? ""))) n += 1; } catch { n += 1; }
+    }
+    return n;
+  }
+
+  /** 补层入口（幂等）：**按 specs 逐条判缺**（不能只看 `bld-ext`——首载实测只有 2/5 层落地）；
+   *  源没就绪只登记重试；补完仍缺再登记一次复核。健康时只读零写（5 次 `getLayer`）。 */
   function patchBldLayers(mm: BldMapLike | null, why: string, allowRetry = true): number {
     if (!mm) return 0;
-    if (bldLayersPresent(mm)) return 0;
     const specs = bldPatchSpecsFor(mm);
     if (!specs) {
       if (allowRetry) scheduleBldPatchRetry(why);
       return 0;
     }
-    return ensureBldLayers(mm, specs);
+    const missing = specs.filter((l) => {
+      try { return !mm.getLayer(String(l.id ?? "")); } catch { return true; }
+    });
+    if (!missing.length) return 0;                       /* 健康 ⇒ 零写 */
+    const added = ensureBldLayers(mm, missing);
+    if (allowRetry && added < missing.length) scheduleBldPatchRetry(why + ":partial");
+    return added;
   }
   /* ┄┄┄ 有意增量 END ┄┄┄ */
 
@@ -725,7 +744,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
         : true;
       if (!loaded) return false;
     } catch { return false; }
-    if (bldLayersPresent(map as unknown as BldMapLike)) return false;   /* 健康 ⇒ 纯读，零写 */
+    /* 健康 = **按 specs 逐条判缺后 5 层齐**（不能只看 `bld-ext`：首载实测出现过 2/5）；
+       齐 ⇒ 纯读零写；源在但层缺 ⇒ 走补层（规格跟随源类型）。 */
+    if (bldMissingCount(map as unknown as BldMapLike) === 0) return false;
     /* **拉锯的另一半**（2026-10-17）：叠加层是当前楼房渲染者时，它自己会结构性**拆掉** `bld*`
        （源 `bld` 保留，three 从源里取数）。看门狗若在这里建，就是"每 2s 建、每 1.2s 拆"——
        用户看到地图那套 + three 那套**叠在一起**，样式每 1.2s 变一次还伤帧率。

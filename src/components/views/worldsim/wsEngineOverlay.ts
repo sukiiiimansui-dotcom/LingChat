@@ -17,9 +17,10 @@
  * 关着的时候本模块只读一次 localStorage，模板里 `v-if` 直接不产 DOM ⇒ 行为与接入前完全一致。
  *
  * ## 现在同步到什么程度（如实写）
- * 阶段②：**只做叠加层可见**。引擎 iframe 内的相机仍停在它自己的默认城市中心（渝中），
- * 与宿主地图的 center/zoom **尚未单向同步**（那是阶段③）。所以拖动宿主地图时 3D 不会跟，
- * 这是已知且被记录的行为，不是 bug。
+ * 阶段③ 已接：宿主地图是唯一真源 —— `WsSceneView.vue` 的 rAF 每帧读地图相机
+ * （center/zoom/pitch/bearing），经 `pushEngineHostView()` 以 ≤30Hz 单向 postMessage
+ * （`w3d:hostview`，`datum:'wgs'`）推给引擎页；引擎侧只做 `map.jumpTo`，零自积分。
+ * 静止时两侧各自去重，不白烧帧。已知边界：引擎只画自身数据范围（约 2 km 级）内的楼。
  */
 
 import { ref } from "vue";
@@ -136,13 +137,27 @@ export function pushEngineHostView(v: WsEngineHostView): boolean {
   /* 视图没变就不发：宿主静止时一帧都不发，引擎那边也就不会每帧重装相机。
      （引擎侧也有一层去重，两道都在 —— 一道防"白跑 postMessage"，一道防"白跳地图"。） */
   const L = lastSent;
-  if (L && Math.abs(L.lng - v.lng) < 1e-7 && Math.abs(L.lat - v.lat) < 1e-7 &&
-      Math.abs(L.zoom - v.zoom) < 1e-4 && Math.abs(L.pitch - v.pitch) < 1e-3 &&
-      Math.abs(L.bearing - v.bearing) < 1e-3) return false;
+  if (
+    L &&
+    Math.abs(L.lng - v.lng) < 1e-7 &&
+    Math.abs(L.lat - v.lat) < 1e-7 &&
+    Math.abs(L.zoom - v.zoom) < 1e-4 &&
+    Math.abs(L.pitch - v.pitch) < 1e-3 &&
+    Math.abs(L.bearing - v.bearing) < 1e-3
+  )
+    return false;
   lastSent = { lng: v.lng, lat: v.lat, zoom: v.zoom, pitch: v.pitch, bearing: v.bearing };
   try {
     frameWindow.postMessage(
-      { type: "w3d:hostview", datum: "wgs", lng: v.lng, lat: v.lat, zoom: v.zoom, pitch: v.pitch, bearing: v.bearing },
+      {
+        type: "w3d:hostview",
+        datum: "wgs",
+        lng: v.lng,
+        lat: v.lat,
+        zoom: v.zoom,
+        pitch: v.pitch,
+        bearing: v.bearing,
+      },
       "*",
     );
     engineHostViewPushes += 1;

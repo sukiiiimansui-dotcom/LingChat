@@ -84,6 +84,8 @@ import {
   ensureBldLayers,
   flushBldStore,
   flushRoadsStore,
+  mvtArtFromLegacySpecs,
+  mvtBldLayerSpecs,
   type BldPickAnyStats,
 } from "./wsDistrictScene";
 import {
@@ -379,6 +381,79 @@ export function createBldLanding(ctx: BldLandingCtx) {
   function overlayDrawsBuildingsNow(): boolean {
     try { return rendererLive.value === "overlay"; } catch { return false; }
   }
+
+  /* ══ 补层：A（护栏）+ B（规格跟随）+ 一次性重试 ══════════════════════════════════
+   * 背景（2026-11-06 定位）：补层原来只做 `ensureBldLayers(mm, bldSpecsNow())`：
+   *   · 不建源（`ensureBldLayers` 只 addLayer），源还没就绪时每条层各打一条
+   *     `source "bld" not found`；
+   *   · specs 恒用 GeoJSON 版（无 `source-layer`），而 MVT 路的源是 vector ⇒ 补到 vector 源上
+   *     每条层各打一条 `must specify a "source-layer"`。
+   * 这两条都是**启动竞态**（建源/建层在样式未就绪时排队，即时读 `bldLayersPresent()` 为 false）。
+   * 现在：源没就绪 ⇒ 登记一次性重试（`styledata` / 200ms，去重），不许静默丢；
+   *       源就绪 ⇒ 按源类型选规格（vector → `mvtBldLayerSpecs`，geojson → `bldLayerSpecsFor`）。
+   * 纪律：健康时零写（先判 `bldLayersPresent`）；overlay 路径由调用方条件挡掉，不走这里。 */
+  let bldPatchRetry: ReturnType<typeof setTimeout> | null = null;
+  let bldPatchWarned = false;
+
+  /** 当前 `bld` 源的类型（读 style；读不到/还没有 ⇒ null） */
+  function bldSourceTypeOf(mm: BldMapLike | null): "vector" | "geojson" | null {
+    try {
+      const st = (mm as unknown as { getStyle?: () => { sources?: Record<string, { type?: string }> } }).getStyle?.();
+      const t = String(st?.sources?.bld?.type || "");
+      return t === "vector" ? "vector" : t === "geojson" ? "geojson" : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 补层规格：**跟随当前源类型**（B）。源还没建 ⇒ null（交给重试） */
+  function bldPatchSpecsFor(mm: BldMapLike | null): Array<Record<string, unknown>> | null {
+    const t = bldSourceTypeOf(mm);
+    if (t === "vector") {
+      let art: ReturnType<typeof mvtArtFromLegacySpecs>;
+      try { art = mvtArtFromLegacySpecs(bldSpecsNow()); } catch { art = undefined; }
+      return mvtBldLayerSpecs(undefined, undefined, art);
+    }
+    if (t === "geojson") return bldSpecsNow();
+    return null;
+  }
+
+  /** 一次性重试（A 的"不许静默丢"部分）：`styledata` 或 200ms 后各一次（去重） */
+  function scheduleBldPatchRetry(reason: string): void {
+    if (bldPatchRetry !== null) return;
+    const mm = mapNow();
+    if (!mm) return;
+    const run = (why: string): void => {
+      if (bldPatchRetry !== null) { clearTimeout(bldPatchRetry); bldPatchRetry = null; }
+      try {
+        if (!aliveNow()) return;
+        const m2 = mapNow();
+        if (!m2 || renderKind.value === "fallback2d") return;
+        const added = patchBldLayers(m2, "retry:" + why + ":" + reason, false);
+        if (!added && !bldLayersPresent(m2) && !bldPatchWarned) {
+          bldPatchWarned = true;
+          /* 不静默：交回下一轮 flush/看门狗，但留一条可查痕迹（console，不污染 HUD 错误计数） */
+          console.warn("[wsBld] 补层重试后仍无 bld 源/层，交回下一轮 flush/看门狗");
+        }
+      } catch { /* 下一轮事件再来 */ }
+    };
+    try {
+      (mm as unknown as { once?: (ev: string, fn: () => void) => void }).once?.("styledata", () => run("styledata"));
+    } catch { /* ignore */ }
+    bldPatchRetry = setTimeout(() => run("timeout"), 200);
+  }
+
+  /** 补层入口（幂等）：健康零写；源没就绪只登记重试；源就绪按类型补 */
+  function patchBldLayers(mm: BldMapLike | null, why: string, allowRetry = true): number {
+    if (!mm) return 0;
+    if (bldLayersPresent(mm)) return 0;
+    const specs = bldPatchSpecsFor(mm);
+    if (!specs) {
+      if (allowRetry) scheduleBldPatchRetry(why);
+      return 0;
+    }
+    return ensureBldLayers(mm, specs);
+  }
   /* ┄┄┄ 有意增量 END ┄┄┄ */
 
 
@@ -621,10 +696,10 @@ export function createBldLanding(ctx: BldLandingCtx) {
        叠加层正常时一条都不建（`specs` 也已返回空），避免建/拆拉锯。 */
     try {
       if ((forceMapBuild || !overlayDrawsBuildingsNow()) && renderKind.value !== "fallback2d") {
-        const mm = map as unknown as BldMapLike | null;
-        if (mm && !bldLayersPresent(mm)) ensureBldLayers(mm, bldSpecsNow());
+        /* 补层统一走 `patchBldLayers`：源没就绪只登记一次性重试；源就绪按源类型选规格（A+B） */
+        patchBldLayers(map as unknown as BldMapLike | null, "flush");
       }
-    } catch { /* 补层失败不阻断落图（下一次事件/看门狗再来） */ }
+    } catch { /* 补层失败不阻断落图（重试/下一次事件/看门狗再来） */ }
     /* ┄┄┄ 有意增量 END ┄┄┄ */
     /* **落图之后**才把"这一轮是哪一档"记成下一次的 prev（滞回的写回点，全局只有这一处）——
        顺序反过来（先写后落图）等于把滞回关掉，见上面那段注释。 */
@@ -661,11 +736,9 @@ export function createBldLanding(ctx: BldLandingCtx) {
     let addedLayers = 0;
     try {
       /* **先补缺层、再落图**：`applyBuildingsTo` 在源已存在时只 setData（不补层）⇒
-         "源在、层缺"那一半必须在这里补（补层用的是与首次建层同一个插入锚点）。 */
-      addedLayers = ensureBldLayers(
-        map as unknown as BldMapLike,
-        bldLayerSpecsFor(theme.value, themeTier.value, { art: WS_ART_LEVEL, mode: WS_BLD_MODE === 2 ? "parts" : "base" })
-      );
+         "源在、层缺"那一半必须在这里补（补层用的是与首次建层同一个插入锚点）。
+         规格跟随源类型（B）；源还没就绪只会登记重试，不会硬补出 source 报错（A）。 */
+      addedLayers = patchBldLayers(map as unknown as BldMapLike, "heal");
       bldFlush("heal:" + why);
       heal.runs += 1;
       heal.lastMs = Date.now() - t0;

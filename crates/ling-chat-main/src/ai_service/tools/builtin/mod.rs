@@ -43,6 +43,7 @@ use skill_files::{
 use status::{CurrentStatus, SceneStatus};
 use weather::WeatherTool;
 use web_search::WebSearchTool;
+use crate::ai_service::tools::world_map::{GetMyLocation, GetNearbyFacilities, MoveTo};
 
 /// 创建并注册所有内置聊天工具。
 pub fn built_in_registry(
@@ -75,6 +76,12 @@ pub fn built_in_registry(
     registry.register(Arc::new(CharacterSwitch))?;
     registry.register(Arc::new(CharacterGetClothes))?;
     registry.register(Arc::new(CharacterSetClothes))?;
+    // 世界模拟（P3）：三个**只读缓存状态**的工具。
+    // 权限不用改：`UserChat → scene_admin → all_tools:true`（permissions.rs）自动放行；
+    // 工具一旦注册就进 available_tools，用户在前端的「工具开关」里也能看到。
+    registry.register(Arc::new(GetMyLocation))?;
+    registry.register(Arc::new(GetNearbyFacilities))?;
+    registry.register(Arc::new(MoveTo))?;
     registry.register(Arc::new(ListSkills))?;
     registry.register(Arc::new(ReadSkill))?;
     registry.register(Arc::new(ReadMediaFileTool::new(tool_settings.clone())))?;

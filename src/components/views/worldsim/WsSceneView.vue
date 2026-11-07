@@ -543,6 +543,8 @@
   let swapping = false;
   let queued: WsRenderBackendId | null = null;
   let startupSwapDone = false;
+  /** task-16：上一份推给后端的角色内容指纹（同 → 不调 `setActors`；换后端时清空重推） */
+  let lastActorKey = "";
 
   /** 等两帧（第一帧让 Vue 把 DOM 换掉、第二帧让 GPU 真的回收上下文 —— 与 PLAN §4.2 同口径） */
   const twoFrames = (): Promise<void> =>
@@ -575,6 +577,9 @@
       active = mapBackend;
       setLiveBackend(active);
     }
+    /* task-16：后端刚就位 ⇒ 这批角色还没推给它（去重键也还没对上）⇒ 清键并立即推一次 */
+    lastActorKey = "";
+    try { active?.setActors(contractActors.value); } catch { /* 后端可能还没准备好 */ }
     if (pendingView && mapBackend) {
       mapBackend.applyView(pendingView);
       pendingView = null;
@@ -738,6 +743,10 @@
       }
     } finally {
       swapping = false;
+      /* task-16：换了后端 ⇒ 新后端手里还没有这批角色（去重键也失效）⇒ 清键并立即重推一次。
+         对 three 是同步 diff（刚 init 过，通常 no-op）；对 map 只是更新契约里的 actors 只读副本。 */
+      lastActorKey = "";
+      try { active?.setActors(contractActors.value); } catch { /* 后端可能还没准备好 */ }
       noteSwitch({ from, to: rendererLive.value, ms: Math.round(performance.now() - t0), ok, why: why || undefined });
       if (queued) {
         const q = queued;
@@ -751,7 +760,20 @@
   /* 角色与主题：宿主推什么，舞台就喂给"当前活着的那个后端"（契约里那一份是两个后端共用的） */
   watch(
     () => contractActors.value,
-    (list) => active?.setActors(list)
+    (list) => {
+      /* task-16：内容指纹去重 —— 行程活跃时上游每 200ms 会推"同一批人、只挪了零点几米"的
+         新数组；这里 key 相同就不再调后端（后端自己也做了 id diff，双保险）。
+         指针相同必然跳过；指纹用 7 位小数（与契约的坐标精度同口径）。
+         后端还没就位（active=null）时不记 key —— 等 adoptMapBackend/doSwap 就位后会主动重推。 */
+      if (!active) return;
+      let key = "";
+      for (const a of list) {
+        key += `${a.id}|${a.name}|${Number(a.lat).toFixed(7)}|${Number(a.lng).toFixed(7)}|${a.heading ?? 0}|${a.isMe ? 1 : 0}|${a.art ?? ""};`;
+      }
+      if (key === lastActorKey) return;
+      lastActorKey = key;
+      active?.setActors(list);
+    }
   );
   watch(
     () => contractTheme.value,

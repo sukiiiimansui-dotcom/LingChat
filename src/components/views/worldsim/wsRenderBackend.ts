@@ -997,4 +997,17 @@ if (typeof window !== "undefined") {
     /** 切到某个后端（**探针专用**：与点 chip 是同一条路，只是省掉找元素点它） */
     setPref: (id: string) => setRendererPref(parseRendererId(id)),
   };
+  /* task-16 验调用手：**只在 `?wsdebug=1` 时挂**（默认连这个对象都不建，零开销）。
+     用途：探针以 5Hz 推"同一批 id、只改坐标"的名单，验证 three 后端不再全量重建立绘。 */
+  try {
+    if (/(^|[?&])wsdebug=1\b/.test(location.search)) {
+      (window as unknown as { __wsActorsTick?: (list: unknown) => number }).__wsActorsTick = (list: unknown): number => {
+        const arr = Array.isArray(list) ? (list as WsRenderActor[]) : [];
+        contractActors.value = arr.map((a) => ({ ...a }));
+        return contractActors.value.length;
+      };
+    }
+  } catch {
+    /* 隐私模式/无 location：不挂 */
+  }
 }

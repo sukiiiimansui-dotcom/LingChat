@@ -62,6 +62,7 @@ import {
   type WsRenderWorld,
 } from "./wsRenderBackend";
 import { triangulateRing } from "./wsShapeTri";
+import { diffActors } from "./wsActorDiff";
 
 /** three 的地址（**运行时拼**：见文件头最后一段） */
 const THREE_PATH = "/ws3d/ws3dgl/vendor/three.min.js";
@@ -91,6 +92,12 @@ export interface WsThreeDiag {
   actorsSkipped: number;
   /** 名字对不上原型那三张立绘、按序号轮换的人数（0 = 全都对上了） */
   artFallback: number;
+  /** task-16 立绘增删改计数：`actorRebuilds` = 累计 createCharacter 次数；
+   *  `actorMoves` = 只更新位置/字段的次数；`actorDisposed` = 移除（含 name 变导致的重建）次数。
+   *  稳态判据：首帧后 `actorRebuilds` 增量 = 0，`actorMoves` 正常增长。 */
+  actorRebuilds: number;
+  actorMoves: number;
+  actorDisposed: number;
   draws: number;
   frames: number;
   colorPick: { id: string; color: string; h3d: number; hBase: number } | null;
@@ -202,7 +209,10 @@ export function createThreeBackend(): WsRenderBackend {
   let bldMesh: any = null;
   let roadMesh: any = null;
   let charMod: any = null;
-  const avatars: Array<{ obj: any; actor: WsRenderActor; ch: any }> = [];
+  const avatars: Array<{ obj: any; actor: WsRenderActor; ch: any; fallback: boolean }> = [];
+  /** task-16：`setActors` 可能 5Hz 连续进来 ⇒ 合并成"只跑最新一份"，同一时刻只有一轮 diff */
+  let actorPending: readonly WsRenderActor[] | null = null;
+  let actorPumping = false;
   let curActors: WsRenderActor[] = [];
   let curWorld: WsRenderWorld | null = null;
   let curState: WsRenderState | null = null;
@@ -224,6 +234,7 @@ export function createThreeBackend(): WsRenderBackend {
     buildings: 0, capped: 0, tris: 0, holesDropped: 0, withColor3d: 0, withH3d: 0,
     fromReal: 0, fromLevels: 0, fromKind: 0,
     roadSegs: 0, roadRanks: [], actors: 0, actorsSkipped: 0, artFallback: 0,
+    actorRebuilds: 0, actorMoves: 0, actorDisposed: 0,
     draws: 0, frames: 0, colorPick: null, errors: [],
   };
 
@@ -423,45 +434,111 @@ export function createThreeBackend(): WsRenderBackend {
     scene.add(roadMesh);
   }
 
-  /* ── 角色：2D 立绘 billboard（**原型的工厂**，一行都不重写） ─────────────────── */
-  async function rebuildActors(actors: readonly WsRenderActor[]): Promise<void> {
+  /* ── 角色：2D 立绘 billboard（**按 id diff**：对象/贴图复用，只更新位置）────────────
+   * 旧实现每次 `setActors` 把全部立绘 `dispose()` 再 `createCharacter()` 一遍；而行程活跃时
+   * 上游每 200ms 推一份新数组（`useWorldTrips` 插值时钟 → `WsCityEntry.mapPins/stageActors`
+   * → `contractActors` → `WsSceneView` 的 watch）⇒ 5 Hz × 最多 `ACTOR_CAP` 次重建。
+   * 现在：
+   *   · id 相同且 name 相同 ⇒ 只写 `av.actor` + `object3D.position`（`actorMoves + 1`，不重建）；
+   *   · id 新增 / name 变（立绘 index 由 name 决定）⇒ `createCharacter`（`actorRebuilds + 1`）；
+   *   · id 消失 ⇒ `remove` + `dispose`（`actorDisposed + 1`）。
+   * 稳态判据：首帧后 `actorRebuilds` 增量 = 0（task-16 验收）。
+   */
+  async function syncActors(actors: readonly WsRenderActor[]): Promise<void> {
     curActors = actors.map((a) => ({ ...a }));
-    for (const av of avatars) {
-      try {
-        scene?.remove(av.obj);
-        av.ch?.dispose?.();
-      } catch {
-        /* 放不掉就算了 */
-      }
-    }
-    avatars.length = 0;
-    diag.actors = 0;
-    diag.artFallback = 0;
     diag.actorsSkipped = Math.max(0, actors.length - ACTOR_CAP);
-    if (!actors.length || !scene || !frame) return;
+    if (!scene || !frame) return;
+    const want = actors.slice(0, ACTOR_CAP);
+    const diff = diffActors(avatars.map((av) => ({ id: av.actor.id, name: av.actor.name })), want);
+    /* 1) 名单里已经没有的 ⇒ 只删这几个 */
+    for (const gone of diff.removed) {
+      const i = avatars.findIndex((av) => av.actor.id === gone.id);
+      if (i < 0) continue;
+      const av = avatars[i]!;
+      try { scene.remove(av.obj); av.ch?.dispose?.(); } catch { /* 放不掉就算了 */ }
+      avatars.splice(i, 1);
+      diag.actorDisposed += 1;
+    }
+    if (!want.length) {
+      diag.actors = avatars.length;
+      return;
+    }
     try {
       if (!charMod) charMod = await import(/* @vite-ignore */ runtimeUrl(CHAR_MOD_PATH));
     } catch (e) {
       diag.errors.push("立绘模块加载失败：" + String((e as Error)?.message || e));
       return;
     }
-    for (const a of actors.slice(0, ACTOR_CAP)) {
-      try {
-        /* 立绘选哪一张：名字对得上就用原型里那一位；对不上**按名单序号轮换**，
-           而不是 `Math.max(0, indexOf)` —— 那个写法会让所有对不上名字的人**都变成第 0 个**
-           （四个角色长得一模一样，且不报错，2026-10-08 读代码时发现）。 */
-        const known = CHAR_NAMES.indexOf(a.name);
-        const idx = known >= 0 ? known : diag.actors % CHAR_NAMES.length;
-        if (known < 0) diag.artFallback++;
-        const ch = charMod.createCharacter({ kind: "billboard", assetsBase: ASSETS_BASE, index: idx });
-        const [x, z] = toLocal(frame, a.lng, a.lat);
-        ch.object3D.position.set(x, 0, z);
-        scene.add(ch.object3D);
-        avatars.push({ obj: ch.object3D, actor: a, ch });
-        diag.actors++;
-      } catch (e) {
-        diag.errors.push("立绘建不出来：" + String((e as Error)?.message || e));
+    /* await 期间可能被拆场（renderer 切换）：回来了就不要再往已销毁的 scene 里加东西 */
+    if (!scene || !frame) return;
+    /* 2) 两边都有：name 没变 ⇒ 只更新字段/位置；name 变 ⇒ 重建这一个（index 变了） */
+    for (const item of diff.kept) {
+      const i = avatars.findIndex((av) => av.actor.id === item.next.id);
+      if (i < 0) continue;
+      const av = avatars[i]!;
+      if (item.renamed) {
+        try { scene.remove(av.obj); av.ch?.dispose?.(); } catch { /* ignore */ }
+        diag.actorDisposed += 1;
+        const rebuilt = buildAvatar(item.next, want.indexOf(item.next));
+        if (rebuilt) avatars[i] = rebuilt;
+        else avatars.splice(i, 1);
+        continue;
       }
+      av.actor = { ...item.next };
+      const [x, z] = toLocal(frame, item.next.lng, item.next.lat);
+      av.obj.position.set(x, 0, z);
+      diag.actorMoves += 1;
+    }
+    /* 3) 新增 */
+    for (const a of diff.added) {
+      const av = buildAvatar(a, want.indexOf(a));
+      if (av) avatars.push(av);
+    }
+    diag.actors = avatars.length;
+    diag.artFallback = avatars.reduce((n, av) => n + (av.fallback ? 1 : 0), 0);
+  }
+
+  /** 建一个立绘（老路径的同一份实现；失败返回 null 并把原因写进 diag） */
+  function buildAvatar(
+    a: WsRenderActor,
+    orderIndex: number,
+  ): { obj: any; actor: WsRenderActor; ch: any; fallback: boolean } | null {
+    if (!scene || !frame || !charMod) return null;
+    try {
+      /* 立绘选哪一张：名字对得上就用原型里那一位；对不上**按名单序号轮换**，
+         而不是 `Math.max(0, indexOf)` —— 那个写法会让所有对不上名字的人**都变成第 0 个**
+         （四个角色长得一模一样，且不报错，2026-10-08 读代码时发现）。 */
+      const known = CHAR_NAMES.indexOf(a.name);
+      const idx = known >= 0 ? known : Math.max(0, orderIndex) % CHAR_NAMES.length;
+      const fallback = known < 0;
+      const ch = charMod.createCharacter({ kind: "billboard", assetsBase: ASSETS_BASE, index: idx });
+      const [x, z] = toLocal(frame, a.lng, a.lat);
+      ch.object3D.position.set(x, 0, z);
+      scene.add(ch.object3D);
+      diag.actorRebuilds += 1;
+      return { obj: ch.object3D, actor: { ...a }, ch, fallback };
+    } catch (e) {
+      diag.errors.push("立绘建不出来：" + String((e as Error)?.message || e));
+      return null;
+    }
+  }
+
+  /** 5Hz 连续进来的 `setActors` 合并泵：同一时刻只跑一轮 diff，永远用最新一份名单 */
+  function setActorsNow(actors: readonly WsRenderActor[]): void {
+    actorPending = actors;
+    void pumpActors();
+  }
+  async function pumpActors(): Promise<void> {
+    if (actorPumping) return;
+    actorPumping = true;
+    try {
+      while (actorPending) {
+        const list = actorPending;
+        actorPending = null;
+        await syncActors(list);
+      }
+    } finally {
+      actorPumping = false;
     }
   }
 
@@ -548,6 +625,10 @@ export function createThreeBackend(): WsRenderBackend {
       }
     }
     avatars.length = 0;
+    /* task-16：拆场时把"待合并的那一份"也丢掉，避免异步泵在拆到一半时再建立绘 */
+    actorPending = null;
+    diag.actors = 0;
+    diag.artFallback = 0;
     disposeMesh(bldMesh);
     disposeMesh(roadMesh);
     bldMesh = null;
@@ -943,7 +1024,7 @@ export function createThreeBackend(): WsRenderBackend {
           refMpp = lastMpp;
         }
         applyCameraToThree(s);
-        await rebuildActors(contractActors.value.length ? contractActors.value : s.actors);
+        await syncActors(contractActors.value.length ? contractActors.value : s.actors);
       } catch (e) {
         /* 后半段（建楼/建路/立绘）中途抛错也要**拆干净再抛**，不然舞台上留一个半死的 3D */
         const msg = "three 初始化中途失败：" + String((e as Error)?.message || e);
@@ -991,7 +1072,8 @@ export function createThreeBackend(): WsRenderBackend {
     },
 
     setActors(actors: readonly WsRenderActor[]): void {
-      void rebuildActors(actors);
+      /* task-16：不再全量重建 —— 走"合并泵 + 按 id diff"（`setActorsNow` → `syncActors`） */
+      setActorsNow(actors);
     },
 
     setSelection(sel: WsRenderSelection | null): void {
